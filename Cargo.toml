@@ -20,6 +20,9 @@ path = "src/main.rs"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
 unicode-normalization = "0.1"
+# CSS parsing: sibling repo (github.com/veripublica/styloria), path
+# dependency during development (see CLAUDE.md's styloria/CSS-checks notes).
+styloria = { path = "../styloria" }
 
 [profile.release]
 opt-level = 2

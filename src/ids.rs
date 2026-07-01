@@ -37,3 +37,8 @@ pub const OPF_034: &str = "OPF-034"; // the spine references the same manifest i
 pub const OPF_043: &str = "OPF-043"; // spine item w/ non-content media-type has no fallback
 pub const OPF_049: &str = "OPF-049"; // spine itemref idref not found in the manifest
 pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resource
+
+// --- CSS (via the styloria parser) ---
+pub const CSS_002: &str = "CSS-002"; // @font-face 'src' has an empty url()
+pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)
+pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block

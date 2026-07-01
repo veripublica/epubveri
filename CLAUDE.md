@@ -407,8 +407,9 @@ naming/decision writeup.
 (`Stylesheet`/`QualifiedRule`/`AtRule`/`Declaration`, "parse a stylesheet" + "parse a list
 of declarations" entry points), and a spec-faithful serializer are built and pushed —
 33 unit tests, `cargo fmt` clean. No selector or property-value semantics yet (by design —
-see styloria's own CLAUDE.md); epubveri doesn't depend on it yet either (that wiring, plus
-whatever CSS-specific validation rules epubveri needs on top, is still open).
+see styloria's own CLAUDE.md). **Wired into epubveri 2026-07-02** — see the dated
+"wire in styloria, real CSS checks" entry further down for that integration and the
+concrete checks built on top of it.
 
 ## Increment (d) — mini-XPath engine + Schematron (2026-07-01)
 
@@ -495,6 +496,58 @@ explicitly chose NOT to switch epubveri to a path/git dependency on `schemora` i
 that de-duplication is a deliberately deferred, separate decision. See `schemora`'s own
 `CLAUDE.md` for the extraction details and the two non-obvious XPath/Schematron correctness
 fixes (document-node vs. root-element; Schematron `context` as a match-pattern) it inherited.
+
+## Increment: wire in `styloria`, real CSS checks (2026-07-02)
+
+The `CSS` message-ID family had been stuck at 0% since the project's start — the reason
+`styloria` got built in the first place. This increment actually wires it in
+(`styloria = { path = "../styloria" }`, unlike `schemora`, which stayed un-integrated by
+explicit choice — here integrating *is* the point) and adds real checks on top of its
+phase-1 output (tokenizer + generic `Stylesheet`/`ComponentValue` tree — no selector or
+property-value grammar needed).
+
+**Scope, grounded in the real corpus** (same clean-room read-only research as every prior
+increment): `CSS-002` (`@font-face` `src` has an empty `url()`), `CSS-019` (`@font-face`
+with an empty block), `CSS-008` (a generic "CSS syntax error" catch-all), plus a generic
+`url()` resource-resolution pass (covers `@import`/`@font-face src`/`background`/etc.
+uniformly, reported as **RSC-001** — a missing resource is a missing resource regardless of
+which document type found it). New `src/css.rs`; wired into `opf::check` two ways: manifest
+items declared `text/css`, and `<style>` elements inside content documents (reusing the
+existing content-document loop). Deferred: `CSS-003`/`004` (byte-level encoding-mismatch
+warnings — a different concern from parsing structure), `CSS-001` and other property-*value*
+semantic checks (need real property grammar, deliberately not in styloria yet), `CSS-029`/
+`030` (package-document cross-referencing).
+
+**`CSS-008`'s real shape, found by testing against actual failing scenarios, not by
+guessing:** the initial "any `BadString`/`BadUrl` token" heuristic is correct but too
+narrow — none of the corpus's five `CSS-008` scenarios are tokenizer-level bad tokens; they're
+either an **unclosed rule** (`{` with no matching `}`, which silently swallows everything up
+to the next real `}` — including an entire unrelated sibling rule — as if it were the first
+rule's own content) or a **malformed declaration shape** (`span.bold: bold;` — the stray `.`
+splits the name into two tokens with no colon directly following the first). Both surface as
+"this semicolon-delimited chunk inside a rule's block doesn't parse as `ident: ...`," so
+`check_declaration_shapes` walks every rule's block (recursing into nested blocks, so this
+also reaches rules nested inside `@media` etc.) checking exactly that shape. Known,
+accepted trade-off: this can't yet distinguish "genuinely malformed" from modern CSS
+nesting syntax (`.parent { &:hover { ... } }`) — flagged as a limitation, not silently
+special-cased, since no real corpus fixture forced a decision on it either way.
+
+**A real false-positive found and fixed the same way as every prior increment's — via the
+corpus, not by inspection:** a UTF-16-encoded (real, `@charset`-declarable) stylesheet, read
+naively as UTF-8 (`String::from_utf8_lossy`), turns into byte-level garbage (stray NULs and
+`U+FFFD`s between every character) that trips the new declaration-shape check — a false
+positive caused by the wrong encoding, not by the CSS. Fixed with a small BOM-aware decoder
+(`css::decode_bytes`) used for standalone `.css` manifest items (inline `<style>` text
+doesn't need this — it's already correctly decoded by the time roxmltree hands us the
+XHTML's parsed text).
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 16.6% (58 hits) | 18.1% (**63 hits**) |
+| CSS family exact hits | 0/17 | **5/17** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary

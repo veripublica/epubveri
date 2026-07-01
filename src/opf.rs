@@ -48,14 +48,14 @@ fn percent_decode(s: &str) -> String {
 
 /// Unicode NFC normalization, so href and ZIP entry names compare equal
 /// regardless of precomposed/decomposed form.
-fn nfc(s: &str) -> String {
+pub(crate) fn nfc(s: &str) -> String {
     s.nfc().collect()
 }
 
 /// Resolve an href relative to `base_dir` into a container path.
 /// Drops fragments/queries; collapses "." and ".."; honors a leading "/";
 /// percent-decodes each segment. (Caller NFC-normalizes for comparison.)
-fn resolve(base_dir: &str, href: &str) -> String {
+pub(crate) fn resolve(base_dir: &str, href: &str) -> String {
     let href = href.split('#').next().unwrap_or(href);
     let href = href.split('?').next().unwrap_or(href);
 
@@ -81,7 +81,7 @@ fn resolve(base_dir: &str, href: &str) -> String {
 }
 
 /// True for hrefs we should not resolve against the container (remote/special).
-fn is_external(href: &str) -> bool {
+pub(crate) fn is_external(href: &str) -> bool {
     let href = href.trim();
     href.is_empty()
         || href.starts_with('#')
@@ -463,6 +463,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     }
                 }
             }
+            // Embedded CSS: inline <style> resolves relative to this
+            // content document's own location, not to any separate file.
+            if node.tag_name().name() == "style" {
+                let css_text: String = node
+                    .descendants()
+                    .filter(|n| n.is_text())
+                    .filter_map(|n| n.text())
+                    .collect();
+                crate::css::check(&css_text, &path, &dir, &name_index, report);
+            }
         }
+    }
+
+    // --- CSS resources declared in the manifest ---
+    let css_items: Vec<String> = items
+        .values()
+        .filter(|(_, mt)| mt == "text/css")
+        .map(|(path, _)| path.clone())
+        .collect();
+    for path in css_items {
+        let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
+            continue;
+        };
+        let Some(b) = ocf.read(&orig) else { continue };
+        let css_text = crate::css::decode_bytes(&b);
+        let dir = parent_dir(&path);
+        crate::css::check(&css_text, &path, &dir, &name_index, report);
     }
 }
