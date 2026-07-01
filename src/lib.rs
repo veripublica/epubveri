@@ -29,6 +29,11 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
         None => return report,
     };
     opf::check(&mut container, &opf_path, &mut report);
+    // Bound the RNG engine's pattern-interning cache (see
+    // `rng::pattern::clear_intern_cache`) to roughly one book's working set,
+    // rather than letting it grow for the life of a long-lived embedded
+    // process validating many books.
+    rng::clear_intern_cache();
     report
 }
 

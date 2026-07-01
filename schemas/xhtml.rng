@@ -1,0 +1,785 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  epubveri — EPUB XHTML content-document schema (v1 / schema-engine increment "e1").
+
+  Authored from scratch for epubveri (copyright the project owner; ships under
+  the project's dual AGPL/commercial license). NOT derived from epubcheck's or
+  W3C's XHTML/HTML5 RELAX NG schemas.
+
+  Design (see CLAUDE.md's schema-engine notes for the fuller rationale):
+    - STRICT on element vocabulary: only elements defined here are legal, so
+      obsolete/removed HTML elements (keygen, applet, marquee, frame(set),
+      isindex, basefont, center, font, acronym, tt, big, strike, ...) are
+      rejected for free, with no dedicated code.
+    - PERMISSIVE on nesting order: flow/phrasing content share pools (mixed +
+      choice), not HTML5's exact per-element nesting rules. This keeps
+      false-positive risk near zero on real-world books, at the cost of
+      missing some real HTML5 nesting violations (e.g. <p> inside <p>).
+    - Attributes: RELAX NG name classes cannot express a string-prefix
+      wildcard (no "any attribute starting with data-"), so global attributes
+      are a curated allow-list of standard HTML globals + epub:type/
+      epub:trigger, PLUS a permissive catch-all for anything else EXCEPT a
+      curated exclusion list (obsolete/removed names, and the handful of
+      attributes we give real value-level constraints so the catch-all can't
+      silently bypass them). This catches obsolete-attribute errors via the
+      exclusion while staying permissive (and false-positive-safe) on
+      data-*/aria-*/arbitrary other attributes.
+    - `epub:type`/`epub:trigger` are excluded from head/metadata elements
+      (title/meta/link/style/base): epubcheck flags epub:type there as
+      invalid, and it's cheap to encode as a real grammar constraint.
+    - SVG/MathML are accepted as opaque foreign-namespace subtrees (any
+      attributes, any children, recursive) — their own content models are out
+      of scope for this increment.
+    - Forms vocabulary (form/input/select/textarea/button/...) is out of
+      scope for v1.
+  Deliberately NOT constrained (to avoid false positives): the HTML5
+  "datetime" attribute microsyntax (not XSD-shaped; real books use forms our
+  XSD datatypes would wrongly reject), and img's `alt` (commonly omitted in
+  real books; a missing-alt check belongs in a separate warning-level,
+  hand-coded check, not a hard schema error).
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         xmlns:epub="http://www.idpf.org/2007/ops"
+         ns="http://www.w3.org/1999/xhtml"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <start><ref name="htmlEl"/></start>
+
+  <!-- ============ document skeleton ============ -->
+
+  <define name="htmlEl">
+    <element name="html">
+      <ref name="globalAttrs"/>
+      <ref name="headEl"/>
+      <ref name="bodyEl"/>
+    </element>
+  </define>
+
+  <define name="headEl">
+    <element name="head">
+      <ref name="globalAttrs"/>
+      <interleave>
+        <!-- a missing <title> is a warning in epubcheck, not a hard error;
+             keep it grammar-optional so we don't reject the whole document. -->
+        <optional><element name="title"><ref name="globalAttrsCore"/><text/></element></optional>
+        <zeroOrMore>
+          <choice>
+            <ref name="metaEl"/>
+            <ref name="linkEl"/>
+            <element name="style"><ref name="globalAttrsCore"/><text/></element>
+            <element name="base">
+              <ref name="globalAttrsCore"/>
+              <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+            </element>
+            <ref name="scriptEl"/>
+            <!-- the deprecated EPUB3 trigger element (still epubcheck-valid,
+                 with a deprecation warning) -->
+            <element name="epub:trigger"><ref name="globalAttrsCore"/></element>
+          </choice>
+        </zeroOrMore>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="scriptEl">
+    <element name="script"><ref name="globalAttrsCore"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- <meta>/<link> are also legal directly in flow content in real-world
+       usage (e.g. RDFa attributes on <link>/<meta> in <body>), so these are
+       shared with phrasingChoiceNoTime, not head-only. -->
+  <define name="metaEl">
+    <element name="meta"><ref name="globalAttrsCore"/></element>
+  </define>
+  <define name="linkEl">
+    <element name="link">
+      <ref name="globalAttrsCore"/>
+      <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="bodyEl">
+    <element name="body"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+  </define>
+
+  <!-- ============ global attributes ============ -->
+
+  <define name="langValue">
+    <choice><value type="token"></value><data type="language"/></choice>
+  </define>
+
+  <!-- globals minus epub:type/epub:trigger; used on head/metadata elements,
+       where epubcheck flags epub:type as invalid. -->
+  <define name="globalAttrsCore">
+    <optional><attribute name="id"><data type="string"/></attribute></optional>
+    <optional><attribute name="class"><data type="string"/></attribute></optional>
+    <optional><attribute name="style"><data type="string"/></attribute></optional>
+    <optional><attribute name="title"><data type="string"/></attribute></optional>
+    <optional><attribute name="lang"><ref name="langValue"/></attribute></optional>
+    <optional><attribute name="xml:lang"><ref name="langValue"/></attribute></optional>
+    <optional>
+      <attribute name="dir">
+        <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
+      </attribute>
+    </optional>
+    <optional><attribute name="tabindex"><data type="integer"/></attribute></optional>
+    <optional><attribute name="hidden"><data type="token"/></attribute></optional>
+    <optional>
+      <attribute name="translate">
+        <choice><value>yes</value><value>no</value></choice>
+      </attribute>
+    </optional>
+    <optional><attribute name="accesskey"><data type="token"/></attribute></optional>
+    <optional><attribute name="contenteditable"><data type="token"/></attribute></optional>
+    <optional><attribute name="spellcheck"><data type="token"/></attribute></optional>
+    <ref name="anyOtherAttr"/>
+  </define>
+
+  <define name="globalAttrs">
+    <ref name="globalAttrsCore"/>
+    <optional>
+      <attribute name="epub:type">
+        <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>
+      </attribute>
+    </optional>
+    <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
+  </define>
+
+  <!-- Any attribute other than the standard globals/element-specifics above,
+       explicitly excluding: (a) known-obsolete/removed attribute names, and
+       (b) the handful of names we give a real value-level constraint to
+       elsewhere (so this permissive fallback can't silently bypass them —
+       RELAX NG's choice-based attribute matching means an unconstrained
+       catch-all would otherwise make any co-existing strict pattern a no-op).
+       This is how obsolete-attribute errors are caught without an exhaustive
+       allow-list, since RELAX NG name classes can't express prefix wildcards
+       like "any data-* attribute". -->
+  <define name="anyOtherAttr">
+    <zeroOrMore>
+      <attribute>
+        <anyName ns="">
+          <except>
+            <name>typemustmatch</name>
+            <name>contextmenu</name>
+            <name>dropzone</name>
+            <name>pubdate</name>
+            <name>seamless</name>
+            <name>aria-describedat</name>
+            <name>dir</name>
+            <name>translate</name>
+            <name>lang</name>
+            <name>xml:lang</name>
+            <name>epub:type</name>
+            <name>epub:trigger</name>
+            <name>border</name>
+          </except>
+        </anyName>
+      </attribute>
+    </zeroOrMore>
+  </define>
+
+  <!-- ============ content-model pools (permissive on order/count) ============ -->
+
+  <define name="phrasingContent">
+    <mixed><zeroOrMore><ref name="phrasingChoice"/></zeroOrMore></mixed>
+  </define>
+
+  <!-- same as phrasingContent, but excludes <time> — used as <time>'s own
+       content model so <time> cannot nest inside another <time>. -->
+  <define name="phrasingContentNoTime">
+    <mixed><zeroOrMore><ref name="phrasingChoiceNoTime"/></zeroOrMore></mixed>
+  </define>
+
+  <define name="phrasingChoice">
+    <choice>
+      <ref name="timeEl"/>
+      <ref name="phrasingChoiceNoTime"/>
+    </choice>
+  </define>
+
+  <define name="phrasingChoiceNoTime">
+    <choice>
+      <ref name="aEl"/>
+      <element name="span"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="em"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="strong"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="small"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="s"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="cite"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="q">
+        <ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <ref name="phrasingContent"/>
+      </element>
+      <element name="dfn"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="abbr"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <ref name="rubyEl"/>
+      <element name="data">
+        <ref name="globalAttrs"/>
+        <attribute name="value"><data type="string"/></attribute>
+        <ref name="phrasingContent"/>
+      </element>
+      <element name="code"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="var"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="samp"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="kbd"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="sub"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="sup"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="i"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="b"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="u"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="mark"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="bdi"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="bdo"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="wbr"><ref name="globalAttrs"/></element>
+      <element name="br"><ref name="globalAttrs"/></element>
+      <element name="ins"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="del"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <ref name="imgEl"/>
+      <ref name="audioEl"/>
+      <ref name="videoEl"/>
+      <ref name="pictureEl"/>
+      <ref name="iframeEl"/>
+      <ref name="embedEl"/>
+      <ref name="objectEl"/>
+      <element name="canvas"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <ref name="svgEl"/>
+      <ref name="mathEl"/>
+      <ref name="mapEl"/>
+      <ref name="metaEl"/>
+      <ref name="linkEl"/>
+      <ref name="scriptEl"/>
+      <element name="noscript"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <ref name="formEl"/>
+      <ref name="labelEl"/>
+      <ref name="buttonEl"/>
+      <ref name="selectEl"/>
+      <ref name="textareaEl"/>
+      <ref name="datalistEl"/>
+      <ref name="outputEl"/>
+      <ref name="inputEl"/>
+      <element name="fieldset"><ref name="globalAttrs"/>
+        <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+        <optional><attribute name="form"><data type="string"/></attribute></optional>
+        <interleave>
+          <optional><element name="legend"><ref name="globalAttrs"/><ref name="phrasingContent"/></element></optional>
+          <ref name="flowContent"/>
+        </interleave>
+      </element>
+      <element name="progress"><ref name="globalAttrs"/>
+        <optional><attribute name="value"><data type="decimal"/></attribute></optional>
+        <optional><attribute name="max"><data type="decimal"/></attribute></optional>
+        <ref name="phrasingContent"/>
+      </element>
+      <element name="meter"><ref name="globalAttrs"/>
+        <optional><attribute name="value"><data type="decimal"/></attribute></optional>
+        <optional><attribute name="min"><data type="decimal"/></attribute></optional>
+        <optional><attribute name="max"><data type="decimal"/></attribute></optional>
+        <ref name="phrasingContent"/>
+      </element>
+    </choice>
+  </define>
+
+  <!-- ============ basic forms vocabulary (epubcheck accepts it in content
+       documents; kept permissive since we don't do the deeper interactive-
+       content nesting rules HTML5 defines for forms). ============ -->
+
+  <define name="formEl">
+    <element name="form"><ref name="globalAttrs"/>
+      <optional><attribute name="action"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="method"><data type="token"/></attribute></optional>
+      <optional><attribute name="enctype"><data type="token"/></attribute></optional>
+      <ref name="flowContent"/>
+    </element>
+  </define>
+  <define name="labelEl">
+    <element name="label"><ref name="globalAttrs"/>
+      <optional><attribute name="for"><data type="string"/></attribute></optional>
+      <ref name="phrasingContent"/>
+    </element>
+  </define>
+  <define name="buttonEl">
+    <element name="button"><ref name="globalAttrs"/>
+      <optional><attribute name="type"><data type="token"/></attribute></optional>
+      <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <ref name="phrasingContent"/>
+    </element>
+  </define>
+  <define name="optionEl">
+    <element name="option"><ref name="globalAttrs"/>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <optional><attribute name="selected"><data type="token"/></attribute></optional>
+      <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+  <define name="selectEl">
+    <element name="select"><ref name="globalAttrs"/>
+      <optional><attribute name="multiple"><data type="token"/></attribute></optional>
+      <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <zeroOrMore>
+        <choice>
+          <ref name="optionEl"/>
+          <element name="optgroup"><ref name="globalAttrs"/>
+            <optional><attribute name="label"><data type="string"/></attribute></optional>
+            <zeroOrMore><ref name="optionEl"/></zeroOrMore>
+          </element>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+  <define name="textareaEl">
+    <element name="textarea"><ref name="globalAttrs"/>
+      <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+  <define name="datalistEl">
+    <element name="datalist"><ref name="globalAttrs"/>
+      <mixed><zeroOrMore><ref name="optionEl"/></zeroOrMore></mixed>
+    </element>
+  </define>
+  <define name="outputEl">
+    <element name="output"><ref name="globalAttrs"/>
+      <optional><attribute name="for"><data type="string"/></attribute></optional>
+      <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <ref name="phrasingContent"/>
+    </element>
+  </define>
+  <define name="inputEl">
+    <element name="input"><ref name="globalAttrs"/>
+      <optional><attribute name="type"><data type="token"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <optional><attribute name="list"><data type="string"/></attribute></optional>
+      <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <optional><attribute name="placeholder"><data type="string"/></attribute></optional>
+      <optional><attribute name="checked"><data type="token"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="mapEl">
+    <element name="map">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <interleave>
+        <zeroOrMore>
+          <element name="area">
+            <ref name="globalAttrs"/>
+            <optional><attribute name="shape"><data type="token"/></attribute></optional>
+            <optional><attribute name="coords"><data type="string"/></attribute></optional>
+            <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+            <optional><attribute name="alt"><data type="string"/></attribute></optional>
+            <optional><attribute name="target"><data type="token"/></attribute></optional>
+          </element>
+        </zeroOrMore>
+        <ref name="flowContent"/>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="timeEl">
+    <element name="time">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+      <ref name="phrasingContentNoTime"/>
+    </element>
+  </define>
+
+  <define name="aEl">
+    <element name="a">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="target"><data type="token"/></attribute></optional>
+      <optional><attribute name="rel"><data type="string"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <ref name="phrasingContent"/>
+    </element>
+  </define>
+
+  <define name="rubyEl">
+    <element name="ruby">
+      <ref name="globalAttrs"/>
+      <mixed>
+        <zeroOrMore>
+          <choice>
+            <ref name="phrasingChoice"/>
+            <element name="rt"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+            <element name="rp"><ref name="globalAttrs"/><text/></element>
+          </choice>
+        </zeroOrMore>
+      </mixed>
+    </element>
+  </define>
+
+  <define name="imgEl">
+    <element name="img">
+      <ref name="globalAttrs"/>
+      <attribute name="src"><data type="anyURI"/></attribute>
+      <optional><attribute name="alt"><data type="string"/></attribute></optional>
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="srcset"><data type="string"/></attribute></optional>
+      <optional><attribute name="sizes"><data type="string"/></attribute></optional>
+      <optional><attribute name="usemap"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <!-- ============ tabular + sectioning + grouping (flow-only) ============ -->
+
+  <define name="liEl">
+    <element name="li"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+  </define>
+
+  <define name="olEl">
+    <element name="ol">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="start"><data type="integer"/></attribute></optional>
+      <optional><attribute name="reversed"><data type="token"/></attribute></optional>
+      <zeroOrMore><ref name="liEl"/></zeroOrMore>
+    </element>
+  </define>
+
+  <define name="ulEl">
+    <element name="ul"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl"/></zeroOrMore></element>
+  </define>
+
+  <define name="dlEl">
+    <element name="dl">
+      <ref name="globalAttrs"/>
+      <interleave>
+        <zeroOrMore>
+          <element name="dt"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+        </zeroOrMore>
+        <zeroOrMore>
+          <element name="dd"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+        </zeroOrMore>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="figureEl">
+    <element name="figure">
+      <ref name="globalAttrs"/>
+      <interleave>
+        <optional>
+          <element name="figcaption"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+        </optional>
+        <ref name="flowContent"/>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="detailsEl">
+    <element name="details">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="open"><data type="token"/></attribute></optional>
+      <interleave>
+        <optional>
+          <element name="summary"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+        </optional>
+        <ref name="flowContent"/>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="navEl">
+    <element name="nav"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+  </define>
+
+  <define name="headingEl">
+    <choice>
+      <element name="h1"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="h2"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="h3"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="h4"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="h5"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="h6"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+    </choice>
+  </define>
+
+  <define name="cellEl">
+    <choice>
+      <element name="td">
+        <ref name="globalAttrs"/>
+        <optional><attribute name="colspan"><data type="positiveInteger"/></attribute></optional>
+        <optional><attribute name="rowspan"><data type="nonNegativeInteger"/></attribute></optional>
+        <optional><attribute name="headers"><data type="string"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
+      <element name="th">
+        <ref name="globalAttrs"/>
+        <optional><attribute name="colspan"><data type="positiveInteger"/></attribute></optional>
+        <optional><attribute name="rowspan"><data type="nonNegativeInteger"/></attribute></optional>
+        <optional><attribute name="headers"><data type="string"/></attribute></optional>
+        <optional><attribute name="scope"><data type="token"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
+    </choice>
+  </define>
+
+  <define name="trEl">
+    <element name="tr"><ref name="globalAttrs"/><zeroOrMore><ref name="cellEl"/></zeroOrMore></element>
+  </define>
+
+  <define name="rowGroupOrRow">
+    <choice>
+      <element name="thead"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+      <element name="tbody"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+      <element name="tfoot"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+      <ref name="trEl"/>
+    </choice>
+  </define>
+
+  <define name="tableEl">
+    <element name="table">
+      <ref name="globalAttrs"/>
+      <!-- HTML5's obsolete-but-conforming `border` values are only "" or "1";
+           excluded from anyOtherAttr above so this is the only legal path. -->
+      <optional>
+        <attribute name="border">
+          <choice><value type="token"></value><value>1</value></choice>
+        </attribute>
+      </optional>
+      <interleave>
+        <optional>
+          <element name="caption"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+        </optional>
+        <zeroOrMore>
+          <element name="colgroup">
+            <ref name="globalAttrs"/>
+            <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
+            <zeroOrMore>
+              <element name="col">
+                <ref name="globalAttrs"/>
+                <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
+              </element>
+            </zeroOrMore>
+          </element>
+        </zeroOrMore>
+        <zeroOrMore><ref name="rowGroupOrRow"/></zeroOrMore>
+      </interleave>
+    </element>
+  </define>
+
+  <!-- ============ embedded content ============ -->
+
+  <define name="sourceEl">
+    <element name="source">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="srcset"><data type="string"/></attribute></optional>
+      <optional><attribute name="sizes"><data type="string"/></attribute></optional>
+      <optional><attribute name="media"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="trackEl">
+    <element name="track">
+      <ref name="globalAttrs"/>
+      <attribute name="src"><data type="anyURI"/></attribute>
+      <optional><attribute name="kind"><data type="token"/></attribute></optional>
+      <optional><attribute name="srclang"><data type="language"/></attribute></optional>
+      <optional><attribute name="label"><data type="string"/></attribute></optional>
+      <optional><attribute name="default"><data type="token"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="audioEl">
+    <element name="audio">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="controls"><data type="token"/></attribute></optional>
+      <optional><attribute name="autoplay"><data type="token"/></attribute></optional>
+      <optional><attribute name="loop"><data type="token"/></attribute></optional>
+      <optional><attribute name="preload"><data type="token"/></attribute></optional>
+      <interleave>
+        <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+        <zeroOrMore><ref name="trackEl"/></zeroOrMore>
+        <ref name="phrasingContent"/>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="videoEl">
+    <element name="video">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="poster"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="controls"><data type="token"/></attribute></optional>
+      <optional><attribute name="autoplay"><data type="token"/></attribute></optional>
+      <optional><attribute name="loop"><data type="token"/></attribute></optional>
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <interleave>
+        <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+        <zeroOrMore><ref name="trackEl"/></zeroOrMore>
+        <ref name="phrasingContent"/>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="pictureEl">
+    <element name="picture">
+      <ref name="globalAttrs"/>
+      <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+      <optional><ref name="imgEl"/></optional>
+    </element>
+  </define>
+
+  <define name="iframeEl">
+    <element name="iframe">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="title"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="embedEl">
+    <element name="embed">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="paramEl">
+    <element name="param">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="objectEl">
+    <element name="object">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="data"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <interleave>
+        <zeroOrMore><ref name="paramEl"/></zeroOrMore>
+        <ref name="flowContent"/>
+      </interleave>
+    </element>
+  </define>
+
+  <!-- opaque foreign-namespace subtree: any attributes, any children,
+       recursive (mirrors schemas/package.rng's looseContent/anyElement
+       idiom). SVG/MathML's own content models are out of scope. -->
+  <define name="foreignContent">
+    <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
+    <mixed><zeroOrMore><ref name="anyForeignElement"/></zeroOrMore></mixed>
+  </define>
+
+  <define name="anyForeignElement">
+    <element><anyName/><ref name="foreignContent"/></element>
+  </define>
+
+  <define name="svgEl">
+    <element name="svg" ns="http://www.w3.org/2000/svg"><ref name="foreignContent"/></element>
+  </define>
+
+  <define name="mathEl">
+    <element name="math" ns="http://www.w3.org/1998/Math/MathML">
+      <ref name="foreignContent"/>
+    </element>
+  </define>
+
+  <!-- ============ epub:switch (real sequencing: case* then default?) ============ -->
+
+  <!-- epub:case/epub:default hold a fallback rendition, which is often
+       *foreign* markup (MathML/CML/etc — the whole point of epub:switch),
+       not necessarily XHTML flow content. So their content is either
+       ordinary flow content or opaque foreign elements. -->
+  <define name="switchBranchContent">
+    <mixed>
+      <zeroOrMore>
+        <choice>
+          <ref name="flowChoice"/>
+          <ref name="anyForeignElement"/>
+        </choice>
+      </zeroOrMore>
+    </mixed>
+  </define>
+
+  <define name="epubSwitchEl">
+    <element name="epub:switch">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
+      <zeroOrMore>
+        <element name="epub:case">
+          <ref name="globalAttrs"/>
+          <attribute name="required-namespace"><data type="anyURI"/></attribute>
+          <optional><attribute name="required-version"><data type="token"/></attribute></optional>
+          <ref name="switchBranchContent"/>
+        </element>
+      </zeroOrMore>
+      <optional>
+        <element name="epub:default">
+          <ref name="globalAttrs"/>
+          <ref name="switchBranchContent"/>
+        </element>
+      </optional>
+    </element>
+  </define>
+
+  <!-- ============ flow content (phrasing ∪ block) ============ -->
+
+  <define name="blockChoice">
+    <choice>
+      <element name="p"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <element name="div"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="blockquote">
+        <ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
+      <ref name="olEl"/>
+      <ref name="ulEl"/>
+      <ref name="dlEl"/>
+      <ref name="figureEl"/>
+      <element name="hr"><ref name="globalAttrs"/></element>
+      <element name="pre"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <ref name="detailsEl"/>
+      <element name="section"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="article"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="aside"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="main"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <ref name="navEl"/>
+      <element name="header"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="footer"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="address"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <ref name="headingEl"/>
+      <element name="hgroup"><ref name="globalAttrs"/><oneOrMore><ref name="headingEl"/></oneOrMore></element>
+      <ref name="tableEl"/>
+      <ref name="epubSwitchEl"/>
+    </choice>
+  </define>
+
+  <define name="flowChoice">
+    <choice>
+      <ref name="phrasingChoice"/>
+      <ref name="blockChoice"/>
+    </choice>
+  </define>
+
+  <define name="flowContent">
+    <mixed><zeroOrMore><ref name="flowChoice"/></zeroOrMore></mixed>
+  </define>
+
+</grammar>

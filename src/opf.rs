@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::ids::*;
-use crate::ocf::Ocf;
+use crate::ocf::{parse_xml, Ocf};
 use crate::report::{Report, Severity};
 
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
@@ -82,6 +82,7 @@ fn resolve(base_dir: &str, href: &str) -> String {
 
 /// True for hrefs we should not resolve against the container (remote/special).
 fn is_external(href: &str) -> bool {
+    let href = href.trim();
     href.is_empty()
         || href.starts_with('#')
         || href.contains("://")
@@ -103,7 +104,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         }
     };
     let text = String::from_utf8_lossy(&bytes).into_owned();
-    let doc = match roxmltree::Document::parse(&text) {
+    let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
             report.push_at(
@@ -403,23 +404,42 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         );
     }
 
-    // --- broken internal references from content documents ---
+    // --- broken internal references + content-model from content documents ---
     let content_docs: Vec<String> = items
         .values()
         .filter(|(_, mt)| mt == "application/xhtml+xml")
         .map(|(path, _)| path.clone())
         .collect();
+    let xhtml_grammar = crate::rng::xhtml_grammar();
     for path in content_docs {
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
         };
         let Some(b) = ocf.read(&orig) else { continue };
         let t = String::from_utf8_lossy(&b).into_owned();
-        let Ok(d) = roxmltree::Document::parse(&t) else {
+        let Ok(d) = parse_xml(&t) else {
             continue;
         };
+
+        // Schema validation against our own XHTML content-document RNG.
+        // Additive: a non-conformant content document is reported as RSC-005.
+        if !crate::rng::validate_node(&xhtml_grammar, d.root_element()) {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "content document does not conform to the EPUB XHTML content-model schema",
+                path.clone(),
+            );
+        }
+
         let dir = parent_dir(&path);
         for node in d.descendants().filter(|n| n.is_element()) {
+            // <base href> sets a base URI for resolving *other* relative
+            // references; it isn't itself a reference to an existing
+            // resource (and may legitimately point at "./" or elsewhere).
+            if node.tag_name().name() == "base" {
+                continue;
+            }
             for attr in ["src", "href"] {
                 if let Some(v) = node.attribute(attr) {
                     if is_external(v) {

@@ -8,6 +8,19 @@ use zip::ZipArchive;
 use crate::ids::*;
 use crate::report::{Report, Severity};
 
+/// Parse an XML document, allowing a `<!DOCTYPE>` declaration. Real-world
+/// EPUB content documents commonly have one (e.g. `<!DOCTYPE html>`);
+/// roxmltree rejects any DTD by default as an extra security precaution, but
+/// it already has its own billion-laughs protection regardless of this flag,
+/// so allowing (harmless, common) DOCTYPEs through is safe.
+pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree::Error> {
+    let opts = roxmltree::ParsingOptions {
+        allow_dtd: true,
+        ..Default::default()
+    };
+    roxmltree::Document::parse_with_options(text, opts)
+}
+
 /// An opened EPUB container.
 pub struct Ocf {
     archive: ZipArchive<Cursor<Vec<u8>>>,
@@ -108,7 +121,7 @@ pub fn find_rootfile(ocf: &mut Ocf, report: &mut Report) -> Option<String> {
 
     let bytes = ocf.read(CONTAINER)?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
-    let doc = match roxmltree::Document::parse(&text) {
+    let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
             report.push_at(
@@ -151,7 +164,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     }
     let Some(bytes) = ocf.read(ENC) else { return };
     let text = String::from_utf8_lossy(&bytes).into_owned();
-    let doc = match roxmltree::Document::parse(&text) {
+    let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
             report.push_at(

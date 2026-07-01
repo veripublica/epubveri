@@ -54,6 +54,7 @@ def parse_features():
             path = os.path.join(dirpath, fn)
             base = None
             cur = None  # current scenario dict
+            table_mode = None  # "err" / "warn" while inside a Cucumber table
             with open(path, encoding="utf-8") as f:
                 lines = f.readlines()
             for raw in lines:
@@ -63,17 +64,35 @@ def parse_features():
                     base = m.group(1)
                 if line.startswith("Scenario Outline"):
                     cur = None  # skip parameterized outlines
+                    table_mode = None
                     continue
                 if line.startswith("Scenario"):
                     cur = {"file": path, "base": base, "name": None,
                            "errs": set(), "warns": set(), "clean": False}
                     scenarios.append(cur)
+                    table_mode = None
                     continue
                 if cur is None:
                     continue
                 cm = CHECK_RE.search(line)
                 if cm:
                     cur["name"] = cm.group(1)
+                # Cucumber table form: "And the following errors/warnings are
+                # reported" followed by "| ID | message |" rows — these rows
+                # don't repeat the phrase "is reported", so they need separate
+                # handling, or scenarios using this form get misparsed as
+                # having no expected errors (and can look like false clean-
+                # scenario positives once we start reporting real ones).
+                tm = re.search(r"the following (errors?|warnings?) are reported", line)
+                if tm:
+                    table_mode = "warn" if tm.group(1).startswith("warning") else "err"
+                    continue
+                if line.startswith("|"):
+                    ids = ID_RE.findall(line)
+                    if ids:
+                        cur[("warns" if table_mode == "warn" else "errs")].update(ids)
+                    continue
+                table_mode = None
                 if "is reported" in line:
                     ids = ID_RE.findall(line)
                     if "warning" in line:
@@ -106,24 +125,113 @@ def zip_dir(src_dir):
     return tmp
 
 
+EXT_MEDIA_TYPE = {
+    ".xhtml": "application/xhtml+xml", ".html": "application/xhtml+xml",
+    ".htm": "application/xhtml+xml", ".css": "text/css",
+    ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp",
+    ".otf": "application/font-sfnt", ".ttf": "application/font-sfnt",
+    ".woff": "application/font-woff", ".woff2": "font/woff2",
+    ".js": "text/javascript", ".ncx": "application/x-dtbncx+xml",
+    ".mp3": "audio/mpeg", ".mp4": "video/mp4", ".m4a": "audio/mp4",
+    ".pdf": "application/pdf", ".xml": "application/xml",
+    ".opf": "application/oebps-package+xml",
+}
+
+
+def guess_media_type(name):
+    _, ext = os.path.splitext(name)
+    return EXT_MEDIA_TYPE.get(ext.lower(), "application/octet-stream")
+
+
+def wrap_single_doc(target_full, target_name):
+    """epubcheck can check a single content document in isolation; epubveri
+    only validates full books. So for a bare content-document fixture, build a
+    minimal synthetic EPUB that includes it (plus all of its directory
+    siblings, so any relative reference it makes still resolves — avoiding
+    spurious missing-resource errors that would be an artifact of this
+    harness, not of epubveri) via a synthetic nav doc satisfying the EPUB 3
+    nav requirement, and the fixture itself as an ordinary (non-nav, non-
+    spine) manifest item, so only the content-model checks are exercised."""
+    src_dir = os.path.dirname(target_full)
+    siblings = sorted(
+        fn for fn in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, fn))
+    )
+    container_xml = (
+        '<?xml version="1.0"?>\n'
+        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'
+        '  <rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles>\n'
+        '</container>\n'
+    )
+    nav_xhtml = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">\n'
+        '<head><title>Nav</title></head>\n'
+        f'<body><nav epub:type="toc"><ol><li><a href="{target_name}">t</a></li></ol></nav></body>\n'
+        '</html>\n'
+    )
+    manifest_items = [
+        '<item id="_nav" href="_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+    ]
+    # Siblings are included so the *target*'s relative references (css,
+    # images, fonts, ...) resolve. Other bare xhtml/html siblings are separate,
+    # independent test fixtures in their own right — including them as real
+    # content documents here would make every single-doc wrap exercise the
+    # content-model check against ALL of them at once, not just the one under
+    # test, so they're demoted to an inert media type (the target itself keeps
+    # its real one).
+    for i, fn in enumerate(siblings):
+        mt = guess_media_type(fn)
+        if fn != target_name and mt == "application/xhtml+xml":
+            mt = "application/octet-stream"
+        manifest_items.append(f'<item id="f{i}" href="{fn}" media-type="{mt}"/>')
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">\n'
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
+        '    <dc:identifier id="id">urn:uuid:corpus-wrap</dc:identifier>\n'
+        '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
+        '  </metadata>\n'
+        '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
+        '  <spine><itemref idref="_nav"/></spine>\n'
+        '</package>\n'
+    )
+    fd, tmp = tempfile.mkstemp(suffix=".epub")
+    os.close(fd)
+    with zipfile.ZipFile(tmp, "w") as z:
+        zi = zipfile.ZipInfo("mimetype")
+        zi.compress_type = zipfile.ZIP_STORED
+        z.writestr(zi, "application/epub+zip")
+        z.writestr("META-INF/container.xml", container_xml)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/_nav.xhtml", nav_xhtml)
+        for fn in siblings:
+            with open(os.path.join(src_dir, fn), "rb") as fh:
+                z.writestr(f"OEBPS/{fn}", fh.read())
+    return tmp
+
+
 def resolve(s):
-    """Return (epub_path, is_temp, skip_reason)."""
+    """Return (epub_path, is_temp, skip_reason, single_doc_wrap)."""
     name = s["name"]
     if "<" in name:
-        return None, False, "outline-param"
+        return None, False, "outline-param", False
     if name.endswith(".opf"):
-        return None, False, "opf-only (no container; out of scope)"
+        return None, False, "opf-only (no container; out of scope)", False
     base = (s["base"] or "").lstrip("/")
     full = os.path.join(RES, base, name)
     if name.endswith(".epub"):
         if os.path.isfile(full):
-            return full, False, None
-        return None, False, "missing-file"
+            return full, False, None, False
+        return None, False, "missing-file", False
     if os.path.isdir(full):
-        return zip_dir(full), True, None
+        return zip_dir(full), True, None, False
     if os.path.isfile(full + ".epub"):
-        return full + ".epub", False, None
-    return None, False, "missing-file"
+        return full + ".epub", False, None, False
+    if os.path.isfile(full) and name.endswith((".xhtml", ".html", ".htm")):
+        return wrap_single_doc(full, name), True, None, True
+    return None, False, "missing-file", False
 
 
 def run(path):
@@ -152,7 +260,7 @@ def main():
     fp_examples, miss_examples = [], []
 
     for s in scenarios:
-        path, is_temp, reason = resolve(s)
+        path, is_temp, reason, single_doc_wrap = resolve(s)
         if path is None:
             skipped[reason] += 1
             continue
@@ -162,6 +270,16 @@ def main():
             if is_temp:
                 os.unlink(path)
         reported = set(ids)
+        if single_doc_wrap:
+            # epubcheck's single-document check mode never resolves
+            # cross-file references (there's no "book" to check them
+            # against); our synthetic wrap only has the target's own
+            # directory siblings, so an RSC-001 here is a wrapping-harness
+            # artifact (a dangling reference the original fixture was never
+            # meant to have resolved), not a real epubveri defect. Drop it
+            # from scoring for these scenarios specifically.
+            reported.discard("RSC-001")
+            rc = 1 if reported else 0
 
         if s["errs"]:
             n_err += 1

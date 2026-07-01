@@ -5,7 +5,7 @@
 //! leniently. Facets (minLength, pattern, enumerations via `<param>`) are not
 //! yet supported — that comes with the schemas that need them.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Datatype {
     String,
     Token,

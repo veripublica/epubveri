@@ -50,6 +50,16 @@ pub fn package_grammar() -> Grammar {
     load(PACKAGE_RNG).expect("built-in package.rng must parse")
 }
 
+/// Our own EPUB XHTML content-document RNG, embedded at build time (committed
+/// under the project license; authored from scratch — not derived from
+/// epubcheck/W3C). See `schemas/xhtml.rng` for the scope/design notes.
+pub const XHTML_RNG: &str = include_str!("../../schemas/xhtml.rng");
+
+/// Load the built-in XHTML content-document grammar.
+pub fn xhtml_grammar() -> Grammar {
+    load(XHTML_RNG).expect("built-in xhtml.rng must parse")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,5 +167,96 @@ mod tests {
     fn container_grammar_rejects_extra_attribute() {
         let xml = CVALID.replace("<rootfiles>", "<rootfiles bogus=\"x\">");
         assert!(!ok(&container_grammar(), &xml));
+    }
+
+    const XHTML_NS_DECLS: &str = concat!(
+        "xmlns=\"http://www.w3.org/1999/xhtml\" ",
+        "xmlns:epub=\"http://www.idpf.org/2007/ops\""
+    );
+
+    fn xhtml_doc(body: &str) -> String {
+        format!(
+            "<html {XHTML_NS_DECLS}><head><title>T</title><meta charset=\"utf-8\"/></head>\
+             <body>{body}</body></html>"
+        )
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_valid_content_doc() {
+        let xml = xhtml_doc("<p epub:type=\"chapter\">Hello <em>world</em>.</p>");
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_obsolete_element() {
+        let xml = xhtml_doc("<keygen/>");
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_obsolete_attribute() {
+        let xml = xhtml_doc("<p contextmenu=\"x\">hi</p>");
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_style_in_body() {
+        let xml = xhtml_doc("<style>p{color:red}</style>");
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_epub_switch_case_then_default() {
+        let xml = xhtml_doc(concat!(
+            "<epub:switch><epub:case required-namespace=\"http://www.w3.org/1998/Math/MathML\">",
+            "<p>case</p></epub:case><epub:default><p>default</p></epub:default></epub:switch>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_epub_switch_default_before_case() {
+        let xml = xhtml_doc(concat!(
+            "<epub:switch><epub:default><p>default</p></epub:default>",
+            "<epub:case required-namespace=\"http://www.w3.org/1998/Math/MathML\">",
+            "<p>case</p></epub:case></epub:switch>"
+        ));
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_epub_switch_multiple_defaults() {
+        let xml = xhtml_doc(concat!(
+            "<epub:switch><epub:default><p>a</p></epub:default>",
+            "<epub:default><p>b</p></epub:default></epub:switch>"
+        ));
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_time_nested_in_time() {
+        let xml = xhtml_doc("<p><time>outer<time>inner</time></time></p>");
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_invalid_table_border() {
+        let xml = xhtml_doc("<table border=\"5\"><tr><td>x</td></tr></table>");
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_valid_table_border() {
+        let xml = xhtml_doc("<table border=\"1\"><tr><td>x</td></tr></table>");
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_epub_type_on_meta() {
+        let xml = "<html ".to_string()
+            + XHTML_NS_DECLS
+            + "><head><title>T</title>\
+               <meta epub:type=\"toc\" charset=\"utf-8\"/></head><body/></html>";
+        assert!(!ok(&xhtml_grammar(), &xml));
     }
 }

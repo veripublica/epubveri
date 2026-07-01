@@ -302,9 +302,95 @@ decision — author our own XHTML RNG, revisit provenance for that one schema sp
 or accept hand-coded+package-schema as the structural tier for now.
 
 **Remaining increments:** (d) **Schematron** (small XPath subset) for package rules — this
-is what would actually lift package RSC-005 coverage; (e) the **XHTML content-model**
-(magnitude decision above; engine groundwork — `Ref`+memoization — is in place; may need
-**hash-consing** for interleave at scale + XSD facets).
+is what would actually lift package RSC-005 coverage; ~~(e) the XHTML content-model~~ —
+**done, see below.**
+
+## Increment (e1) — XHTML content-model schema + engine hash-consing fix (2026-07-01)
+
+**Owner decision:** author our own XHTML content-document RNG from scratch (not an upstream
+W3C/IDPF schema), continuing the "author our own schemas" provenance principle. Built
+`schemas/xhtml.rng`: strict on element vocabulary (only defined elements are legal, so
+obsolete/removed HTML elements — `keygen`, `applet`, `marquee`, `frame(set)`, etc. — are
+rejected for free by omission), permissive on nesting order (shared `flowContent`/
+`phrasingContent` pools via `mixed`/`choice`, not HTML5's exact per-element nesting rules —
+trades some precision for near-zero false-positive risk). Covers document skeleton,
+sectioning/heading, grouping/flow, phrasing/inline, tables, embedded content (img/audio/
+video/picture/iframe/embed/object/canvas), a basic forms vocabulary (form/input/button/
+select/textarea/label/fieldset/output/datalist — epubcheck accepts these in content
+documents, contrary to an initial assumption that forms were out of scope), `<script>`/
+`<noscript>`/the deprecated `epub:trigger` element, image maps (`<map>`/`<area>`), and
+`epub:switch`/`epub:case`/`epub:default` (real sequencing: `case*` then optional `default`,
+enforced structurally; branch content allows both ordinary flow content and opaque foreign
+markup, since case/default commonly hold non-XHTML fallback rendering like MathML/CML).
+SVG/MathML embeds stay opaque (any attributes/children, recursive) — not modeling their own
+content models. RELAX NG name classes can't express string-prefix wildcards (no "any
+`data-*` attribute", no "any hyphenated custom-element name"), so global attributes use a
+curated allow-list plus a permissive catch-all that excludes a small obsolete/removed-name
+blocklist (this is how obsolete-attribute errors are still caught without an exhaustive
+allow-list). Wired into `opf::check`'s existing content-document loop (mirrors the OPF/
+`package.rng` wiring): a non-conformant content document reports **RSC-005**.
+
+**A genuine, serious bug surfaced and fixed en route: exponential blowup in the derivative
+engine.** Ordinary pretty-printed prose (15-20 sibling elements under a `mixed`/`<interleave>`
+pattern — exactly what `flowContent`/`phrasingContent` are) made `src/rng/derive.rs` hang
+(a 20-paragraph synthetic chapter timed out at >8s). Root cause (traced by hand, confirmed
+via isolated microbenchmarks with *no* schema recursion involved): every insignificant
+whitespace text node is handled via `choice(cur, text_deriv(cur, s))`, and without pattern
+canonicalization, two independently-built-but-structurally-identical `Pattern` trees never
+compare equal, so the tree doubles at every whitespace node. **Fixed via hash-consing**
+(`src/rng/pattern.rs`): `Pattern`/`NameClass`/`Datatype` gained manual/derived `Hash`+`Eq`
+(Rc children compared by *pointer*, not recursively — valid since children are always
+interned before their parent is built), a `thread_local` intern table canonicalizes every
+constructed pattern, and `choice()` now short-circuits `choice(a, a) -> a` via `Rc::ptr_eq`.
+Result: the same 20-paragraph case that timed out now runs in ~4ms; 2000 paragraphs run in
+~50ms (roughly linear, not exponential). `clear_intern_cache()` is called at the end of
+`validate_bytes` to bound memory in long-lived embedded use. This was flagged as a future
+risk in the original phase-1 notes above ("may need hash-consing... at scale") — it turned
+out to bite at ~15-20 events, not just "at scale," making the fix a hard prerequisite for
+shipping *any* `<mixed>`-based schema, not an optimization.
+
+**Two more pre-existing (not introduced this session) bugs surfaced by finally exercising
+content documents at scale, both fixed:** (1) `roxmltree::Document::parse` rejects *any*
+`<!DOCTYPE>` by default (an extra security precaution on top of its own built-in
+billion-laughs protection) — and **131 of 136** real-world-style content-document fixtures
+in the corpus have one, so content documents were being silently skipped entirely (no
+broken-reference check, and now no schema check either) until switched to
+`parse_with_options` with `allow_dtd: true` (new shared `ocf::parse_xml` helper, used by all
+4 call sites). (2) The broken-reference check treated `<base href>` as a checkable resource
+reference (it isn't — it sets a base URI) and didn't trim whitespace-only `href`/`src`
+values before the emptiness check; both fixed in `opf.rs`.
+
+**Measurement-harness work (`scripts/corpus.py`, not shipped code):** epubcheck's corpus
+includes ~160 bare single-content-document fixtures (epubcheck's single-file check mode) that
+the harness previously skipped entirely (no book to wrap them in). Added `wrap_single_doc`:
+synthesizes a minimal book (synthetic nav + the target doc + its directory siblings, so
+relative refs resolve) so these are measurable too. Also fixed a real parser gap: Cucumber's
+table form (`the following errors are reported` / `| ID | message |` rows) wasn't captured,
+silently misclassifying some error-expecting scenarios as "should stay clean." Documented,
+accepted limitation: single-doc wraps can't see resources outside the fixture's own
+directory (epubcheck's single-file mode never needed them either), so **RSC-001 is excluded
+from scoring specifically for single-doc-wrapped scenarios** — a harness-scoping choice, not
+a silenced product defect.
+
+**Final honest numbers** (708 corpus scenarios; 83 skipped as out-of-scope/missing):
+
+| metric | before (e1) | after (e1) |
+|---|---|---|
+| should-error cases scored | 217 | 325 |
+| detection recall | 13.8% | 18.8% |
+| exact-ID recall | 13.4% (29 hits) | 16.3% (**53 hits**) |
+| should-be-clean cases scored | 181 | 282 |
+| false positives | 0 | **1** (0.4%) |
+| RSC family exact hits | 13/116 | 37/203 |
+
+The 1 remaining false positive (`custom-elements-valid.xhtml`) is a known, accepted RELAX NG
+limitation: name classes can't express "any element name containing a hyphen" (HTML5 custom
+elements), the same class of limitation as "any `data-*` attribute" — not fixable without
+either a broad permissive fallback (defeats obsolete-element detection) or per-name
+enumeration (unbounded). `HTM`/`CSS`/`MED` families stayed at 0 — confirmed **not**
+grammar-shaped (encoding/doctype/entity checks, CSS parsing, fixed-layout viewport
+meta-tag parsing) — this increment's honest target was always the content-model-shaped
+`RSC-005` subset, and that's where the movement is (13 → 37 exact hits).
 
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary

@@ -1,3 +1,4 @@
 /target
 /corpus
 /tests/fixtures/*.epub
+__pycache__/

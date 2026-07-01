@@ -16,6 +16,7 @@ use super::derive::Grammar;
 use super::pattern::*;
 
 const RNG_NS: &str = "http://relaxng.org/ns/structure/1.0";
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
 fn is_rng(n: Node) -> bool {
     n.is_element() && n.tag_name().namespace() == Some(RNG_NS)
@@ -181,10 +182,17 @@ impl Loader {
         ns: &str,
     ) -> Result<NameClass, String> {
         if let Some((pfx, local)) = name.split_once(':') {
-            let uri = node
-                .lookup_namespace_uri(Some(pfx))
-                .ok_or_else(|| format!("unknown namespace prefix '{pfx}'"))?;
-            Ok(qname(uri, local))
+            // roxmltree's `lookup_namespace_uri` doesn't resolve the
+            // implicit, pre-bound `xml:` prefix (it's not a declared
+            // namespace in the document), so it's special-cased here.
+            let uri = if pfx == "xml" {
+                XML_NS.to_string()
+            } else {
+                node.lookup_namespace_uri(Some(pfx))
+                    .ok_or_else(|| format!("unknown namespace prefix '{pfx}'"))?
+                    .to_string()
+            };
+            Ok(qname(&uri, local))
         } else {
             let ns = if is_attr { "" } else { ns };
             Ok(qname(ns, name))
