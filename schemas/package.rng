@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  epubveri — EPUB package-document (OPF) schema.
+
+  Authored from scratch for epubveri (copyright the project owner; ships under
+  the project's dual AGPL/commercial license). NOT derived from epubcheck's or
+  W3C's schema files.
+
+  Deliberately PERMISSIVE: it pins the package skeleton (package > metadata,
+  manifest, spine; manifest items carry id/href/media-type; spine itemrefs carry
+  idref) but allows any attributes, foreign elements, and loose metadata so it
+  does not false-positive on the wide variety of valid real-world packages.
+  Finer constraints (required dc metadata, vocabularies, refines) are handled by
+  the hand-coded checks today and will move to Schematron later.
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         ns="http://www.idpf.org/2007/opf"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <start>
+    <element name="package">
+      <ref name="anyAttributes"/>
+      <attribute name="version"><data type="string"/></attribute>
+      <interleave>
+        <element name="metadata"><ref name="looseContent"/></element>
+        <element name="manifest">
+          <ref name="anyAttributes"/>
+          <oneOrMore>
+            <choice>
+              <element name="item">
+                <ref name="anyAttributes"/>
+                <attribute name="id"><data type="string"/></attribute>
+                <attribute name="href"><data type="string"/></attribute>
+                <attribute name="media-type"><data type="string"/></attribute>
+              </element>
+              <ref name="foreignElement"/>
+            </choice>
+          </oneOrMore>
+        </element>
+        <element name="spine">
+          <ref name="anyAttributes"/>
+          <oneOrMore>
+            <choice>
+              <element name="itemref">
+                <ref name="anyAttributes"/>
+                <attribute name="idref"><data type="string"/></attribute>
+              </element>
+              <ref name="foreignElement"/>
+            </choice>
+          </oneOrMore>
+        </element>
+        <!-- guide, collection, bindings, foreign top-level children -->
+        <zeroOrMore><ref name="otherPackageChild"/></zeroOrMore>
+      </interleave>
+    </element>
+  </start>
+
+  <!-- any attribute, any namespace -->
+  <define name="anyAttributes">
+    <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
+  </define>
+
+  <!-- fully permissive mixed content: any attributes, any child elements, text -->
+  <define name="looseContent">
+    <ref name="anyAttributes"/>
+    <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
+  </define>
+
+  <define name="anyElement">
+    <element><anyName/><ref name="looseContent"/></element>
+  </define>
+
+  <define name="foreignElement">
+    <element>
+      <anyName><except><nsName ns="http://www.idpf.org/2007/opf"/></except></anyName>
+      <ref name="looseContent"/>
+    </element>
+  </define>
+
+  <!-- any package child that is not metadata/manifest/spine -->
+  <define name="otherPackageChild">
+    <element>
+      <anyName>
+        <except>
+          <name>metadata</name>
+          <name>manifest</name>
+          <name>spine</name>
+        </except>
+      </anyName>
+      <ref name="looseContent"/>
+    </element>
+  </define>
+
+</grammar>

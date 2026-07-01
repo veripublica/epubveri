@@ -1,0 +1,25 @@
+[package]
+name = "epubveri"
+version = "0.0.0"
+edition = "2021"
+description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alternative to epubcheck (measurement spike)."
+license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
+publish = false
+
+[lib]
+name = "epubveri"
+path = "src/lib.rs"
+
+[[bin]]
+name = "epubveri"
+path = "src/main.rs"
+
+[dependencies]
+# Pure-Rust only (no C deps): zip's "deflate" feature uses flate2 -> miniz_oxide (Rust),
+# bzip2/zstd (C backends) are left disabled via default-features = false.
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+roxmltree = "0.20"
+unicode-normalization = "0.1"
+
+[profile.release]
+opt-level = 2
