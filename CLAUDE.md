@@ -126,12 +126,15 @@ During dev, if epublift needs epubveri before it's on crates.io, use a temporary
   owner's anti-rip-off armor (see "Owner context").
 
 ### Repo setup checklist (when the repo is created)
-- [ ] `LICENSE` → full AGPL-3.0 text
-- [ ] `LICENSE-COMMERCIAL.md` → short "contact for commercial use" note
-- [ ] `Cargo.toml` → `license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"`
-- [ ] `CONTRIBUTING.md` + a CLA → in place **before** accepting any contribution
-- [ ] README stating the dual-license model plainly
-- [ ] Pure-Rust only, **no C dependencies** (consistent with epublift's philosophy)
+- [x] `LICENSE` → full AGPL-3.0 text (done 2026-07-01, official gnu.org text)
+- [x] `LICENSE-COMMERCIAL.md` → short "contact for commercial use" note (done 2026-07-01)
+- [x] `Cargo.toml` → `license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"`
+- [x] `CONTRIBUTING.md` → in place, states no external contributions until CLA
+      mechanism exists (done 2026-07-01) — the CLA mechanism itself is still open
+- [x] README stating the dual-license model plainly (done 2026-07-01)
+- [x] Pure-Rust only, **no C dependencies** (consistent with epublift's philosophy)
+
+**Repo live:** `github.com/veripublica/epubveri`, public, pushed 2026-07-01.
 
 ---
 
@@ -304,12 +307,18 @@ is what would actually lift package RSC-005 coverage; (e) the **XHTML content-mo
 **hash-consing** for interleave at scale + XSD facets).
 
 ## Open / not-yet-decided
-- **Preliminary trademark clearance** for `veripublica` + `epubveri` — **US (USPTO)
-  and EU (EUIPO) only** (owner has no Turkey plans) — **before any public launch**.
-  Registries/domains were checked, but a real mark search is still owed. Not a lawyer;
-  get qualified IP review.
-- Register the names once greenlit: `veripublica` GitHub org + `epubveri` repo;
-  reserve crates.io/npm placeholders; grab `epubveri-wasm`; consider `.com`/`.io`.
+- **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
+  clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
+  books as a pre-public-launch gate, but the owner decided to skip it — a real
+  search takes too long and costs money he doesn't want to spend right now.
+  The repo went public on GitHub (`github.com/veripublica/epubveri`) without
+  it. Residual risk (not a lawyer): if a prior conflicting mark exists, a
+  future objection/rebrand is possible. Don't re-raise this unless the owner
+  brings it up again (e.g. before a bigger launch, funding, or trademark
+  registration push) — it's a decided tradeoff, not an oversight.
+- **DONE (2026-07-01):** `veripublica` GitHub org + `epubveri` repo created
+  and pushed — public, AGPL-3.0 detected by GitHub. Still open: reserve
+  crates.io/npm placeholders, grab `epubveri-wasm`, consider `.com`/`.io`.
 - CLA mechanism (DCO sign-off vs a full CLA doc/service).
 - Exact WASM packaging + npm publish flow.
 - **Test-corpus handling — NOT a license question about our code.** We write a
