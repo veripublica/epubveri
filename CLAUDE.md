@@ -392,6 +392,25 @@ grammar-shaped (encoding/doctype/entity checks, CSS parsing, fixed-layout viewpo
 meta-tag parsing) — this increment's honest target was always the content-model-shaped
 `RSC-005` subset, and that's where the movement is (13 → 37 exact hits).
 
+## Sibling project: `styloria` (2026-07-01)
+
+To move the `CSS` family off 0%, the owner decided (same session as increment e1) to build
+a **real, pure-Rust CSS3 parser** — but as its **own standalone repo**,
+`github.com/veripublica/styloria`, not a module inside epubveri. Reasoning: some users may
+want to download and use *only* the CSS parser, independent of EPUB validation. Same dual
+`AGPL-3.0-only OR LicenseRef-veripublica-Commercial` license + CLA model as epubveri; scoped
+as a **general-purpose** CSS3 parser/serializer (CSS Syntax Level 3 tokenizer + core
+grammar), not EPUB-specific. epubveri will eventually take a normal crate dependency on it
+(path/git dependency until it's published). See `styloria`'s own `CLAUDE.md` for the full
+naming/decision writeup.
+
+**Phase 1 done (2026-07-01):** the CSS Syntax Level 3 tokenizer, core-grammar parser
+(`Stylesheet`/`QualifiedRule`/`AtRule`/`Declaration`, "parse a stylesheet" + "parse a list
+of declarations" entry points), and a spec-faithful serializer are built and pushed —
+33 unit tests, `cargo fmt` clean. No selector or property-value semantics yet (by design —
+see styloria's own CLAUDE.md); epubveri doesn't depend on it yet either (that wiring, plus
+whatever CSS-specific validation rules epubveri needs on top, is still open).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
