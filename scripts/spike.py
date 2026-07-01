@@ -32,7 +32,7 @@ CONTAINER = (
 )
 
 def opf(version='3.0', uid='pub-id', ident=True, title=True, lang=True,
-        manifest=None, spine=None, spine_toc=None):
+        modified=True, manifest=None, spine=None, spine_toc=None):
     md = ['  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">']
     if ident:
         md.append('    <dc:identifier id="pub-id">urn:uuid:12345</dc:identifier>')
@@ -40,6 +40,8 @@ def opf(version='3.0', uid='pub-id', ident=True, title=True, lang=True,
         md.append('    <dc:title>Test Book</dc:title>')
     if lang:
         md.append('    <dc:language>en</dc:language>')
+    if modified:
+        md.append('    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>')
     md.append('  </metadata>')
     if manifest is None:
         manifest = [

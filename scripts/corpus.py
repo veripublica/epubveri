@@ -192,6 +192,7 @@ def wrap_single_doc(target_full, target_name):
         '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
         '    <dc:identifier id="id">urn:uuid:corpus-wrap</dc:identifier>\n'
         '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
+        '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
         '  </metadata>\n'
         '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
         '  <spine><itemref idref="_nav"/></spine>\n'
@@ -212,15 +213,45 @@ def wrap_single_doc(target_full, target_name):
     return tmp
 
 
+def wrap_opf_file(full, name):
+    """Wrap a bare .opf fixture (epubcheck's single-file package-document
+    check mode) in a minimal synthetic book: mimetype + container.xml
+    pointing straight at it. Package/Schematron-level checks (id
+    uniqueness, unique-identifier resolution, dcterms:modified, ...) only
+    need the OPF itself; manifest items it references won't exist in this
+    minimal wrap (same harness limitation as wrap_single_doc), so RSC-001
+    from these is excluded from scoring the same way."""
+    with open(full, encoding="utf-8") as f:
+        opf_content = f.read()
+    container_xml = (
+        '<?xml version="1.0"?>\n'
+        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'
+        f'  <rootfiles><rootfile full-path="{name}" '
+        'media-type="application/oebps-package+xml"/></rootfiles>\n'
+        '</container>\n'
+    )
+    fd, tmp = tempfile.mkstemp(suffix=".epub")
+    os.close(fd)
+    with zipfile.ZipFile(tmp, "w") as z:
+        zi = zipfile.ZipInfo("mimetype")
+        zi.compress_type = zipfile.ZIP_STORED
+        z.writestr(zi, "application/epub+zip")
+        z.writestr("META-INF/container.xml", container_xml)
+        z.writestr(name, opf_content)
+    return tmp
+
+
 def resolve(s):
     """Return (epub_path, is_temp, skip_reason, single_doc_wrap)."""
     name = s["name"]
     if "<" in name:
         return None, False, "outline-param", False
-    if name.endswith(".opf"):
-        return None, False, "opf-only (no container; out of scope)", False
     base = (s["base"] or "").lstrip("/")
     full = os.path.join(RES, base, name)
+    if name.endswith(".opf"):
+        if os.path.isfile(full):
+            return wrap_opf_file(full, name), True, None, True
+        return None, False, "opf-only (missing file)", False
     if name.endswith(".epub"):
         if os.path.isfile(full):
             return full, False, None, False

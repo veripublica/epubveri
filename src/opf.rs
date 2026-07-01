@@ -159,6 +159,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         );
     }
 
+    // Schematron rules our own RNG can't express (id uniqueness,
+    // unique-identifier resolution, dcterms:modified cardinality, @refines
+    // targets). Same additive pattern, reported as RSC-005.
+    for message in crate::schematron::run(&crate::schematron::package_schema(), &doc) {
+        report.push_at(RSC_005, Severity::Error, message, opf_path);
+    }
+
     // --- required metadata ---
     let metadata = pkg
         .children()

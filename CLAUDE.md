@@ -301,9 +301,8 @@ effort (it is why epubcheck uses W3C's). So increment (e) is a genuine magnitude
 decision — author our own XHTML RNG, revisit provenance for that one schema specifically,
 or accept hand-coded+package-schema as the structural tier for now.
 
-**Remaining increments:** (d) **Schematron** (small XPath subset) for package rules — this
-is what would actually lift package RSC-005 coverage; ~~(e) the XHTML content-model~~ —
-**done, see below.**
+**Remaining increments:** ~~(d) Schematron~~ and ~~(e) the XHTML content-model~~ — **both
+done, see below.**
 
 ## Increment (e1) — XHTML content-model schema + engine hash-consing fix (2026-07-01)
 
@@ -410,6 +409,92 @@ of declarations" entry points), and a spec-faithful serializer are built and pus
 33 unit tests, `cargo fmt` clean. No selector or property-value semantics yet (by design —
 see styloria's own CLAUDE.md); epubveri doesn't depend on it yet either (that wiring, plus
 whatever CSS-specific validation rules epubveri needs on top, is still open).
+
+## Increment (d) — mini-XPath engine + Schematron (2026-07-01)
+
+**Research first, same session:** before designing this, read the *real* epubcheck source
+(the full repo is cloned into gitignored `corpus/epubcheck/` for test fixtures, so its actual
+`.sch` schema files are there too — `src/main/resources/com/adobe/epubcheck/schema/`. Read
+only for understanding, never copied — same clean-room stance as `schemas/*.rng`). Finding:
+individual rules (id uniqueness, unique-identifier resolution, dcterms:modified cardinality,
+`@refines` target existence, ...) are each simple — but real epubcheck writes them in
+**XPath 2.0** (`matches()`/`tokenize()`/`resolve-uri()`/`lower-case()`, plus Schematron's
+`is-a`/`<param>` templating), which is a much bigger engine than "a small XPath subset"
+implied. **Owner's call: build the real XPath *1.0* core anyway** (not a shortcut of
+hand-coding the rules directly in Rust) — path expressions/axes/predicates, node-set↔string↔
+number↔boolean coercion (including the existential node-set comparison semantics real rules
+lean on, e.g. `$id-set[@id = current()/@id]`), `count`/`normalize-space`/`string`/`contains`/
+`starts-with`/`substring`/`concat`/`lower-case`/`upper-case`, variables via `<let>`,
+`current()` — explicitly **without** `matches()`/`tokenize()`/`resolve-uri()` (deferred).
+
+**Built:** `src/xpath/` (`lexer.rs`/`ast.rs`/`parser.rs`/`eval.rs`) and `src/schematron/`
+(loader + executor for `<schema>`/`<pattern>`/`<rule>`/`<let>`/`<assert>`/`<report>`), wired
+into `opf::check` alongside `package_grammar()`, reporting **RSC-005** (same catch-all
+epubcheck itself uses for nearly all Schematron findings). Own-authored `schemas/package.sch`
+covers: id-uniqueness, unique-identifier→dc:identifier resolution, dcterms:modified occurring
+exactly once (EPUB 3 only — scoped via `starts-with(@version,'3')`, since EPUB 2 packages
+don't have it), and `@refines` fragment-target existence.
+
+**Two real, non-obvious bugs found and fixed via TDD against the actual rule shapes:**
+(1) **XPath's document-node vs. root-element distinction.** `/opf:package` must match a root
+`<opf:package>` element directly — but naively seeding path evaluation with "root element,
+then search its children" (which is correct for every *other* step) never finds a root
+element matching its own name, since `/foo` really means "the document-node's child named
+foo," and the document-node is a level *above* the actual root element in XPath's data model.
+Fixed by special-casing only the first step's `Child` axis of an absolute path (every other
+axis, crucially the `DescendantOrSelf` that `//` desugars to, behaves normally). (2) Real
+Schematron `context` is a *match pattern* (XSLT-style), not an ordinary XPath expression —
+`context="opf:package[@unique-identifier]"` legitimately matches the document's own root
+element, which a literal `//opf:package` search never would. Implemented via walking every
+node and checking the step sequence *backwards* through its ancestor chain
+(`matches_context_pattern`), not via forward path-navigation.
+
+**A measurement-harness gap, not a product bug, cost real accuracy until fixed:** epubcheck's
+corpus has real per-rule test scenarios for id-uniqueness/unique-identifier/etc., but they
+check a *bare `.opf` file* (epubcheck's single-file package-check mode) — `scripts/corpus.py`
+was unconditionally skipping every `.opf`-suffixed scenario as "opf-only, out of scope."
+Added `wrap_opf_file` (mirrors the earlier `wrap_single_doc` for bare `.xhtml`) so these are
+measurable too — without it, the numbers below would have looked exactly like a no-op,
+masking real, verified-working coverage.
+
+**One more, subtler false-positive class, found and fixed the same way as the DOCTYPE gap in
+increment e1:** the new dcterms:modified-count rule is a genuine EPUB 3 requirement, but our
+own `scripts/spike.py` and `scripts/corpus.py` synthetic fixture generators (predating this
+rule) didn't declare one — so it flagged our *own* "valid" test fixtures. Fixed by adding a
+`dcterms:modified` meta element to both generators (the fixtures were incomplete, not the
+rule wrong) — a reminder that this project's synthetic fixtures need to keep pace with new
+checks, not just real books.
+
+**Honest numbers** (708 corpus scenarios; wrapping now covers OPF-only scenarios too, so
+denominators grew *again*, honestly, same as every prior increment):
+
+| metric | before (d) | after (d) |
+|---|---|---|
+| should-error cases scored | 325 | 349 |
+| exact-ID recall | 16.3% (53 hits) | 16.6% (**58 hits**) |
+| should-be-clean cases scored | 282 | 296 |
+| false positives | 1 | **1** (same known gap — see below) |
+| RSC family exact hits | 37/203 | 41/216 |
+
+The 1 remaining false positive (`custom-elements-valid.xhtml`) is the same RELAX NG
+limitation noted in increment e1 (can't express "any hyphenated custom-element name") —
+unrelated to this increment. `matches()`/`tokenize()`/`resolve-uri()`-dependent real rules
+(dcterms:modified's exact date-format regex, `@refines`-as-relative-URL) and any
+content-document-level Schematron (title-non-empty, `epub:switch`-deprecated,
+`http-equiv`+`charset` both declared, aria cross-reference rules, ...) are explicitly
+deferred — this increment's honest target was the four package-level, XPath-1.0-reachable
+rules, and that's where the movement is.
+
+## Second sibling project: `schemora` (2026-07-02)
+
+Same reasoning as `styloria`'s split: the `src/xpath/` + `src/schematron/` engine built for
+increment (d) is general-purpose (not EPUB-specific), so the owner had it extracted into its
+own repo, `github.com/veripublica/schemora`, same dual-license/CLA model. **epubveri keeps
+its own copy of `src/xpath`/`src/schematron` and `schemas/package.sch` for now** — the owner
+explicitly chose NOT to switch epubveri to a path/git dependency on `schemora` immediately;
+that de-duplication is a deliberately deferred, separate decision. See `schemora`'s own
+`CLAUDE.md` for the extraction details and the two non-obvious XPath/Schematron correctness
+fixes (document-node vs. root-element; Schematron `context` as a match-pattern) it inherited.
 
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary

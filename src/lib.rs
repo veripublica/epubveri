@@ -11,6 +11,8 @@ pub mod ocf;
 pub mod opf;
 pub mod report;
 pub mod rng;
+pub mod schematron;
+pub mod xpath;
 
 use std::path::Path;
 
