@@ -1142,6 +1142,109 @@ dedicated error codes to target.
 | OPF family exact hits | 13/139 | **16/139** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: D-vocabularies family (2026-07-02)
+
+Research turn: the `RSC-005` catch-all's 251 miss scenarios broken down by
+originating feature file. The three largest are `05-package-document` (34),
+`08-layout` (20), and `D-vocabularies` (28) — all Schematron-shaped (no new
+parser/engine needed, just more rules in `schemas/package.sch`), unlike the
+much larger `content-document-xhtml`/`svg` pool (54), which needs a genuinely
+deeper, stricter per-element HTML5/SVG content model — a bigger, lower-ROI
+undertaking, left alone for now. Of the three, `D-vocabularies` is the most
+self-contained single topic and was scoped as this increment; `08-layout`
+(rendition:* properties) and the remaining `05-package-document` structural
+rules are named as the next two natural increments.
+
+**meta-properties-vocab.feature (22 scenarios):** a closed set of
+`meta[@property]` values, each with its own refines-target-type rule and a
+"cannot be declared more than once per refined expression" cardinality rule
+— `authority`/`term` (must refine `dc:subject`, need a companion pair),
+`belongs-to-collection` (must refine another `belongs-to-collection` meta or
+be primary), `collection-type` (must refine `belongs-to-collection`),
+`display-seq`/`file-as`/`group-position` (cardinality only, any target),
+`identifier-type` (must refine `dc:identifier` or `dc:source`), `role` (must
+refine `dc:creator`/`contributor`/`publisher`, no cardinality limit),
+`source-of` (must refine `dc:source`, value must be exactly `"pagination"`),
+`title-type` (must refine `dc:title`). Plus `media-overlays-vocab.feature`'s
+`media:active-class`/`media:playback-active-class` cardinality (2 scenarios,
+same shape, extending the existing refines/single-name rules from the
+CSS-029/030 increment) and `metadata-link-vocab.feature`'s `link[rel=record]`
+(must not have `refines`) / `link[rel=voicing]` (must have `refines`) (2
+scenarios) — 26 new `<pattern>` blocks in `schemas/package.sch` total.
+
+**A real, load-bearing engine gap found via the corpus, not by
+inspection:** every "strip an optional leading `#` from `@refines`" `<let>`
+used `substring(str, 1 + number(starts-with(str, '#')))` — but
+epubveri's XPath 1.0 *core* engine has no `number()` function (confirmed
+by reading `src/xpath/eval.rs`'s function dispatch, which explicitly falls
+back unknown functions to an empty node-set, "non-fatal" by design). An
+empty node-set coerced to a number is `NaN`, so `1 + NaN` stayed `NaN`,
+`substring` degraded to "return the whole string," and `$target-id` kept
+its leading `#` — silently failing every "must refine X" assertion on
+otherwise-valid fixtures (`metadata-meta-authority-valid.opf` and five
+siblings), a real false-positive class only the corpus caught. Fixed by
+dropping the `number()` wrapper entirely: `BinOp::Add`'s own evaluator
+already calls `.to_number()` on both operands (confirmed in the same
+file), so `1 + starts-with(...)` coerces the boolean correctly without
+needing the missing function at all.
+
+**`media:duration`** (part of `media-overlays-vocab.feature`, 1 scenario):
+not Schematron — hand-coded in `opf.rs` alongside the existing
+metadata-scanning block, reusing `smil::parse_clock_value` unchanged
+(already correctly rejects the fixture's three invalid values: a
+comma-decimal separator, a 4-digit minutes field, and a bogus `mon` unit).
+
+**Reserved vocabulary prefixes, new `OPF-007`** (`vocabularies.feature`, 1
+scenario covering both a bare `.opf` and a bare `.xhtml` fixture): a
+`prefix`/`epub:prefix` declaration must not redeclare one of EPUB's default
+vocabulary prefixes (`a11y`/`dcterms`/`marc`/`media`/`onix`/`rendition`/
+`schema`/`xsd` at the package level, `msv`/`prism` confirmed via the
+content-document fixture) to a *different* URI — hand-coded in `opf.rs`
+(`check_reserved_prefixes`, a small `name: URI` mini-grammar parser, called
+on both the package's own `prefix` attribute and each content document's
+root-element `epub:prefix`). **A second real false positive found via the
+corpus:** the first version warned on any reserved-name redeclaration at
+all, but a real, valid fixture (`prefix-mapping-reserved-valid.{opf,xhtml}`)
+explicitly redeclares all 10 prefixes to their own correct default URIs —
+"which is allowed," per the fixture's own comment. Fixed by recording each
+prefix's real default URI (extracted straight from that valid fixture) and
+only warning when the declared URI *differs* from it.
+
+**A real, corpus-wide measurement-harness gap found via the same false
+positive, not guessed:** `scripts/corpus.py`'s scenario parser only
+recognized the Gherkin keyword `Scenario:`, never its real, standard
+synonym `Example:` — used by exactly two feature files (`cli.feature`,
+out of this project's scope, and `D-vocabularies/vocabularies.feature`,
+directly in scope). Missing it meant `cur` (the in-progress scenario dict)
+was never reset at those boundaries, so every scenario's `errs`/`warns`
+silently accumulated into whatever scenario followed, corrupting scoring
+past that point in the file (this is why the OPF-007 scenario's `expected`
+set showed unrelated `OPF-028`/`RSC-005` entries bled in from earlier
+scenarios). Fixed by treating `line.startswith("Example:")` the same as
+`Scenario:` (careful to match only the singular form — `Examples:`, plural,
+is the unrelated Scenario Outline parameter-table keyword, confirmed via a
+`grep` for both spellings before writing the fix) — this widened the
+measured corpus from 960 to 981 scenarios, a real, honest increase in what's
+being scored, not a change to the product.
+
+**Deliberately out of scope, named rather than silently dropped:** the SVG
+content-document variant of the `epub:prefix` check (SVG root elements
+aren't looped over for this yet, same gap as CSS-029/030's SVG deferral);
+`role`'s exact message wording for its 3-way refines list wasn't
+independently re-verified against a dedicated fixture beyond the one tested
+(`metadata-meta-role-refines-disallowed-error.opf`, confirmed working).
+
+**Honest numbers** (scenario count grew 960 → 981 from the `Example:` fix,
+same honest-denominator-growth pattern as every prior harness-gap fix):
+
+| metric | before | after |
+|---|---|---|
+| scenarios measured | 960 | 981 |
+| exact-ID recall | 26.8% (157 hits) | 31.2% (**186 hits**) |
+| RSC family exact hits | 75/377 | **102/379** |
+| OPF family exact hits | 16/139 | **18/148** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

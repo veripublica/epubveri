@@ -31,6 +31,7 @@ pub const RSC_005: &str = "RSC-005";
 pub const RSC_017: &str = "RSC-017"; // a deprecated construct is used (e.g. epub:switch)
 
 // --- OPF package document (dedicated codes, used verbatim) ---
+pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared
 pub const OPF_001: &str = "OPF-001"; // error parsing the EPUB version
 pub const OPF_002: &str = "OPF-002"; // the OPF file was not found in the EPUB
 pub const OPF_030: &str = "OPF-030"; // the unique-identifier was not found

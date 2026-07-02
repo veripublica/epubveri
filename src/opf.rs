@@ -104,6 +104,59 @@ fn dom_id_order(d: &roxmltree::Document) -> HashMap<String, usize> {
     order
 }
 
+/// Default-vocabulary prefixes EPUB reserves, and the exact URI each is
+/// reserved for - the union of every (name, URI) pair confirmed by the
+/// real corpus fixtures, both the package-level ones (EPUB 3 appendix D.2
+/// default package-metadata vocabularies) and the two content-document
+/// ones from a separate fixture (msv, prism), applied uniformly to both
+/// attribute locations rather than guessing at a context-specific split
+/// beyond what's evidenced. Redeclaring a reserved prefix to its own
+/// correct default URI is explicitly allowed (confirmed via
+/// `prefix-mapping-reserved-valid.{opf,xhtml}`) - only an override to a
+/// *different* URI is a violation.
+const RESERVED_PREFIXES: &[(&str, &str)] = &[
+    ("a11y", "http://www.idpf.org/epub/vocab/package/a11y/#"),
+    ("dcterms", "http://purl.org/dc/terms/"),
+    ("marc", "http://id.loc.gov/vocabulary/"),
+    ("media", "http://www.idpf.org/epub/vocab/overlays/#"),
+    (
+        "onix",
+        "http://www.editeur.org/ONIX/book/codelists/current.html#",
+    ),
+    ("rendition", "http://www.idpf.org/vocab/rendition/#"),
+    ("schema", "http://schema.org/"),
+    ("xsd", "http://www.w3.org/2001/XMLSchema#"),
+    ("msv", "http://www.idpf.org/epub/vocab/structure/magazine/#"),
+    (
+        "prism",
+        "http://www.prismstandard.org/specifications/3.0/PRISM_CV_Spec_3.0.htm#",
+    ),
+];
+
+/// OPF-007: a `prefix` (or `epub:prefix`) attribute redeclares one of the
+/// reserved default-vocabulary prefixes above to a *different* URI. One
+/// warning per occurrence (the corpus counts "once for each reserved
+/// prefix", not deduplicated).
+fn check_reserved_prefixes(prefix_attr: &str, path: &str, report: &mut Report) {
+    let tokens: Vec<&str> = prefix_attr.split_whitespace().collect();
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        let name = tokens[i].trim_end_matches(':');
+        let uri = tokens[i + 1];
+        if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| *n == name) {
+            if uri != *default_uri {
+                report.push_at(
+                    OPF_007,
+                    Severity::Warning,
+                    format!("the '{name}' prefix is reserved and must not be redeclared"),
+                    path.to_string(),
+                );
+            }
+        }
+        i += 2;
+    }
+}
+
 pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
@@ -140,6 +193,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             opf_path,
         );
         return;
+    }
+    if let Some(prefix) = pkg.attribute("prefix") {
+        check_reserved_prefixes(prefix, opf_path, report);
     }
 
     // --- version ---
@@ -221,6 +277,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         };
         media_active_class = meta_property_text("media:active-class");
         media_playback_active_class = meta_property_text("media:playback-active-class");
+
+        // media:duration values must be valid SMIL3 clock values - reuses
+        // the same clock-value grammar the Media Overlays checks already
+        // use for clipBegin/clipEnd (src/smil.rs).
+        for n in md.children().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && n.attribute("property") == Some("media:duration")
+        }) {
+            let text = elem_text(n);
+            if crate::smil::parse_clock_value(&text).is_none() {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("media:duration value '{text}' must be a valid SMIL3 clock value"),
+                    opf_path,
+                );
+            }
+        }
         opf_dc_type = md
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "type")
@@ -717,6 +792,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             continue;
         };
         crate::htm::check_dom(&d, &path, is_epub3, report);
+
+        if let Some(prefix) = d
+            .root_element()
+            .attribute(("http://www.idpf.org/2007/ops", "prefix"))
+        {
+            check_reserved_prefixes(prefix, &path, report);
+        }
 
         // EDUPUB: microdata attributes aren't allowed in an edupub content
         // document (applies to every content doc uniformly, nav docs

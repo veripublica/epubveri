@@ -70,7 +70,14 @@ def parse_features():
                     cur = None  # skip parameterized outlines
                     table_mode = None
                     continue
-                if line.startswith("Scenario"):
+                # "Example:" is a real Gherkin synonym for "Scenario:" (used
+                # e.g. in vocabularies.feature) - matching only the exact
+                # singular keyword, since "Examples:" (plural) is the
+                # unrelated Scenario Outline parameter-table keyword. Two
+                # feature files use it; missing it let assertions bleed
+                # across scenario boundaries (cur never reset), silently
+                # corrupting scoring for every scenario after the first.
+                if line.startswith("Scenario") or line.startswith("Example:"):
                     cur = {"file": path, "base": base, "name": None,
                            "errs": set(), "warns": set(), "clean": False}
                     scenarios.append(cur)

@@ -75,4 +75,196 @@
         >the "<value-of select="normalize-space(@property)"/>" property must define a single class name</assert>
     </rule>
   </pattern>
+
+  <!-- D.3 Meta properties vocabulary — refines-target-type and cardinality
+       rules for the fixed set of meta[@property] values the EPUB 3
+       "Meta properties vocabulary" defines. Each property refines either a
+       plain Dublin Core element (checked via a namespace-qualified
+       existence test, e.g. //dc:subject[@id=...] — our XPath 1.0 core has
+       no local-name() function) or another meta property (checked by the
+       target's own @property) — a @refines value may or may not have a
+       leading '#' in the wild, so every target lookup strips one optional
+       leading '#' before resolving @id. -->
+
+  <pattern id="meta-authority-must-refine-subject">
+    <rule context="opf:meta[normalize-space(@property) = 'authority']">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="@refines and //dc:subject[normalize-space(@id) = $target-id]"
+        >Property "authority" must refine a "subject" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-authority-needs-term">
+    <rule context="opf:meta[normalize-space(@property) = 'authority']">
+      <assert test="//opf:meta[normalize-space(@property) = 'term'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >A term property must be associated with each authority property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-authority-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'authority']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'authority'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >Only one pair of authority and term properties may be defined for the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-term-must-refine-subject">
+    <rule context="opf:meta[normalize-space(@property) = 'term']">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="@refines and //dc:subject[normalize-space(@id) = $target-id]"
+        >Property "term" must refine a "subject" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-term-needs-authority">
+    <rule context="opf:meta[normalize-space(@property) = 'term']">
+      <assert test="//opf:meta[normalize-space(@property) = 'authority'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >An authority property must be associated with each term property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-term-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'term']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'term'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >Only one pair of authority and term properties may be defined for the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-belongs-to-collection-refines">
+    <rule context="opf:meta[normalize-space(@property) = 'belongs-to-collection'][@refines]">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="//opf:meta[normalize-space(@id) = $target-id]/@property = 'belongs-to-collection'"
+        >Property "belongs-to-collection" can only refine other "belongs-to-collection" properties</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-collection-type-must-refine">
+    <rule context="opf:meta[normalize-space(@property) = 'collection-type']">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="@refines and //opf:meta[normalize-space(@id) = $target-id]/@property = 'belongs-to-collection'"
+        >Property "collection-type" must refine a "belongs-to-collection" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-collection-type-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'collection-type']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'collection-type'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >"collection-type" cannot be declared more than once to refine the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-display-seq-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'display-seq']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'display-seq'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >"display-seq" cannot be declared more than once to refine the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-file-as-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'file-as']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'file-as'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >"file-as" cannot be declared more than once to refine the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-group-position-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'group-position']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'group-position'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >"group-position" cannot be declared more than once to refine the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-identifier-type-must-refine">
+    <rule context="opf:meta[normalize-space(@property) = 'identifier-type']">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="@refines and (//dc:identifier[normalize-space(@id) = $target-id] or //dc:source[normalize-space(@id) = $target-id])"
+        >Property "identifier-type" must refine an "identifier" or "source" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-identifier-type-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'identifier-type']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'identifier-type'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >"identifier-type" cannot be declared more than once to refine the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-role-must-refine">
+    <rule context="opf:meta[normalize-space(@property) = 'role']">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="@refines and (//dc:creator[normalize-space(@id) = $target-id] or //dc:contributor[normalize-space(@id) = $target-id] or //dc:publisher[normalize-space(@id) = $target-id])"
+        >"role" must refine a "creator", "contributor", or "publisher" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-source-of-value">
+    <rule context="opf:meta[normalize-space(@property) = 'source-of']">
+      <assert test="normalize-space(.) = 'pagination'"
+        >The "source-of" property must have the value "pagination"</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-source-of-must-refine-source">
+    <rule context="opf:meta[normalize-space(@property) = 'source-of']">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="@refines and //dc:source[normalize-space(@id) = $target-id]"
+        >The "source-of" property must refine a "source" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-source-of-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'source-of']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'source-of'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >"source-of" cannot be declared more than once to refine the same expression</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-title-type-must-refine">
+    <rule context="opf:meta[normalize-space(@property) = 'title-type']">
+      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
+      <assert test="@refines and //dc:title[normalize-space(@id) = $target-id]"
+        >Property "title-type" must refine a "title" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="meta-title-type-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'title-type']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'title-type'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >"title-type" cannot be declared more than once to refine the same expression</assert>
+    </rule>
+  </pattern>
+
+  <!-- D.4 Metadata link vocabulary -->
+
+  <pattern id="link-record-no-refines">
+    <rule context="opf:link[contains(concat(' ', normalize-space(@rel), ' '), ' record ')]">
+      <assert test="not(@refines)"
+        >a "record" link must not have a "refines" attribute</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="link-voicing-needs-refines">
+    <rule context="opf:link[contains(concat(' ', normalize-space(@rel), ' '), ' voicing ')]">
+      <assert test="@refines"
+        >a "voicing" link must have a "refines" attribute</assert>
+    </rule>
+  </pattern>
+
+  <!-- D.8 Media Overlays vocabulary — active-class/playback-active-class
+       cardinality (single-class-name and no-refines are already checked
+       above, from the CSS-029/030 increment). -->
+
+  <pattern id="media-active-class-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'media:active-class']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'media:active-class'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >the "media:active-class" property must not occur more than one time</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="media-playback-active-class-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'media:playback-active-class']">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'media:playback-active-class'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+        >the "media:playback-active-class" property must not occur more than one time</assert>
+    </rule>
+  </pattern>
 </schema>
