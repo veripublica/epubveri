@@ -929,6 +929,65 @@ entirely — target-id exact recall is now **32/32 = 100%** (up from 30/32).
 Overall exact-ID recall 22.9% → 23.2% (134 → 136 hits), OPF family 11/139 →
 13/139, false positives held at 1 (same known RELAX NG gap).
 
+## Increment: font obfuscation validation, PKG-026 (2026-07-02)
+
+Owner's choice: fonts. Real corpus research showed this was narrower than
+originally scoped when "fonts" was first floated as an option (byte-level
+font-file-signature checking) — the actual, corpus-backed check is
+**PKG-026**: an obfuscated resource declared in `META-INF/encryption.xml`
+under the IDPF font-obfuscation algorithm (`http://www.idpf.org/2008/
+embedding`) must have a manifest-declared media-type that's a real font
+Core Media Type — purely a *declared-type* check, not a byte-signature one
+(no corpus scenario tests file-signature validation). `OPF-090`
+(non-preferred-but-valid Core Media Type usage, which also covers non-font
+types like JS in its own fixture) is a separate, general resource-hygiene
+concern, not font/obfuscation-specific — named as out of scope rather than
+folded in.
+
+**Implemented in `src/opf.rs`** (needs the manifest's id→(path,
+media-type) map, `items`, which only exists inside `opf::check` —
+`ocf::check_encryption` runs *before* the OPF is parsed, so this couldn't
+live there): `check_font_obfuscation`, called at the end of `opf::check`.
+Walks every `EncryptedData` entry (matches both the corpus's unprefixed
+and `enc:`-prefixed XML forms for free, since `roxmltree`'s
+`tag_name().name()` returns the local name regardless of namespace
+prefix) whose `EncryptionMethod/@Algorithm` is the IDPF embedding
+algorithm, resolves its `CipherReference/@URI`, and checks the resolved
+resource's manifest media-type against a `FONT_CORE_MEDIA_TYPES` set
+assembled from every real media-type string the corpus's font fixtures
+actually use (not guessed): the modern preferred types (`font/otf`,
+`font/ttf`, `font/woff`, `font/woff2`) plus non-preferred-but-valid legacy
+aliases (`application/font-sfnt`, `application/font-woff`,
+`application/x-font-ttf`, `application/x-font-woff`,
+`application/vnd.ms-opentype`) and `image/svg+xml` for SVG fonts.
+Deliberately excluded `application/vnd.dafont`, which the corpus uses only
+to demonstrate that *remote* resources are exempt from core-type checks —
+an unrelated rule, not a real accepted font type.
+
+**A real, non-obvious detail confirmed via the fixtures, not assumed:**
+`CipherReference/@URI` is relative to the **OCF container root**, not the
+OPF's own directory — the fixtures' `package.opf` lives at
+`EPUB/package.opf`, but the cipher reference reads
+`URI="EPUB/obfuscated-font.otf"`, the full container-relative path.
+Resolved with an empty base directory rather than `opf_path`'s parent, the
+one resource-resolution call site in this file that doesn't use the OPF's
+own directory as its base.
+
+Added one new `scripts/spike.py` regression fixture (an obfuscated font
+declared as `application/xml`) as a permanent local check, since this
+increment — unlike smaller pure-function modules — has no natural home for
+inline `#[cfg(test)]` unit tests (it needs a full OCF + manifest context,
+same convention already used for MED-016 and similar cross-referencing
+checks).
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 23.2% (136 hits) | 23.6% (**138 hits**) |
+| PKG family exact hits | 10/37 | **12/37** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

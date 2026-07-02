@@ -216,6 +216,27 @@ def fixtures():
     )
     fx.append(('encryption.epub', 'RSC-004',
                put(base_entries(), 'META-INF/encryption.xml', enc_xml)))
+
+    # obfuscated font resource declared with a non-font media-type -> PKG-026
+    obfuscated_font_opf = opf(manifest=[
+        '    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+        '    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>',
+        '    <item id="font" href="font.otf" media-type="application/xml"/>',
+    ])
+    obfuscation_xml = (
+        '<?xml version="1.0"?>\n'
+        '<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" '
+        'xmlns:enc="http://www.w3.org/2001/04/xmlenc#">\n'
+        '  <enc:EncryptedData>\n'
+        '    <enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>\n'
+        '    <enc:CipherData><enc:CipherReference URI="OEBPS/font.otf"/></enc:CipherData>\n'
+        '  </enc:EncryptedData>\n'
+        '</encryption>\n'
+    )
+    e = put(base_entries(), 'OEBPS/content.opf', obfuscated_font_opf)
+    e = put(e, 'META-INF/encryption.xml', obfuscation_xml)
+    e = put(e, 'OEBPS/font.otf', b'\x00' * 16)
+    fx.append(('obfuscated_font_bad_type.epub', 'PKG-026', e))
     return fx
 
 

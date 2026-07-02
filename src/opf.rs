@@ -977,4 +977,82 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             }
         }
     }
+
+    check_font_obfuscation(ocf, &items, &name_index, report);
+}
+
+/// Recognized font Core Media Types, assembled from every real media-type
+/// string used across the corpus's font-related fixtures (not guessed):
+/// the modern, preferred IANA-registered types plus the non-preferred but
+/// still-valid legacy aliases, and SVG (which reuses the existing SVG core
+/// type for SVG fonts).
+const FONT_CORE_MEDIA_TYPES: [&str; 10] = [
+    "font/otf",
+    "font/ttf",
+    "font/woff",
+    "font/woff2",
+    "application/font-sfnt",
+    "application/font-woff",
+    "application/x-font-ttf",
+    "application/x-font-woff",
+    "application/vnd.ms-opentype",
+    "image/svg+xml",
+];
+const OBFUSCATION_ALGORITHM: &str = "http://www.idpf.org/2008/embedding";
+
+/// A resource obfuscated with the IDPF font-obfuscation algorithm must
+/// declare a font Core Media Type in the manifest. `ocf::check_encryption`
+/// (which runs before the OPF is even parsed) already reports every
+/// encrypted resource as RSC-004; this is additive, and needs the
+/// manifest's id -> (path, media-type) map, so it can only run here.
+fn check_font_obfuscation(
+    ocf: &mut Ocf,
+    items: &HashMap<String, (String, String)>,
+    name_index: &HashMap<String, String>,
+    report: &mut Report,
+) {
+    const ENC: &str = "META-INF/encryption.xml";
+    let Some(bytes) = ocf.read(ENC) else { return };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let Ok(doc) = parse_xml(&text) else { return };
+
+    for enc_data in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "EncryptedData")
+    {
+        let algorithm = enc_data
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "EncryptionMethod")
+            .and_then(|n| n.attribute("Algorithm"));
+        if algorithm != Some(OBFUSCATION_ALGORITHM) {
+            continue;
+        }
+        let Some(uri) = enc_data
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "CipherReference")
+            .and_then(|n| n.attribute("URI"))
+        else {
+            continue;
+        };
+        // CipherReference URI is relative to the OCF container root, not
+        // the OPF's own directory (confirmed via the real fixtures: the
+        // OPF lives at "EPUB/package.opf" but the cipher reference reads
+        // "EPUB/obfuscated-font.otf", the full container-relative path).
+        let resolved = nfc(&resolve("", uri));
+        if !name_index.contains_key(&resolved) {
+            continue; // a missing resource is already reported elsewhere (RSC-001/004)
+        }
+        let media_type = items
+            .values()
+            .find(|(path, _)| nfc(path) == resolved)
+            .map(|(_, mt)| mt.as_str());
+        if !media_type.is_some_and(|mt| FONT_CORE_MEDIA_TYPES.contains(&mt)) {
+            report.push_at(
+                PKG_026,
+                Severity::Error,
+                format!("obfuscated resource '{uri}' is not a font Core Media Type"),
+                ENC,
+            );
+        }
+    }
 }

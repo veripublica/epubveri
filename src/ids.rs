@@ -16,6 +16,7 @@
 pub const PKG_004: &str = "PKG-004"; // corrupted/unreadable ZIP header (not a usable OCF)
 pub const PKG_006: &str = "PKG-006"; // mimetype entry missing or not first in the archive
 pub const PKG_007: &str = "PKG-007"; // mimetype compressed, or contents != application/epub+zip
+pub const PKG_026: &str = "PKG-026"; // font-obfuscated resource isn't a font Core Media Type
 
 // --- Resources / generic ---
 pub const RSC_001: &str = "RSC-001"; // a referenced file could not be found
