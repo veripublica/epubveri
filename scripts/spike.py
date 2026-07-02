@@ -35,7 +35,7 @@ def opf(version='3.0', uid='pub-id', ident=True, title=True, lang=True,
         modified=True, manifest=None, spine=None, spine_toc=None):
     md = ['  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">']
     if ident:
-        md.append('    <dc:identifier id="pub-id">urn:uuid:12345</dc:identifier>')
+        md.append('    <dc:identifier id="pub-id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>')
     if title:
         md.append('    <dc:title>Test Book</dc:title>')
     if lang:

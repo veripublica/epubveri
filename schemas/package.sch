@@ -58,6 +58,116 @@
     </rule>
   </pattern>
 
+  <pattern id="opf-refines-must-be-relative">
+    <rule context="*[@refines]">
+      <assert test="not(contains(@refines, '://'))"
+        >@refines must be a relative URL</assert>
+    </rule>
+  </pattern>
+
+  <!-- "should use a fragment identifier" is a warning with its own code
+       (RSC-017), not RSC-005 - the schematron::run() call site in opf.rs
+       maps every finding to RSC-005/Error uniformly, so this is
+       hand-coded in opf.rs instead (same reason OPF-086's rendition:
+       spread-portrait check is hand-coded, not Schematron). -->
+
+  <!-- 5.4 The package element -->
+  <!-- "metadata must come before manifest" needs sibling-order comparison,
+       which our XPath 1.0 core doesn't support (no preceding-sibling::
+       axis) - hand-coded in opf.rs instead (a plain child-index compare). -->
+
+  <!-- 5.5.2 Metadata values -->
+
+  <pattern id="opf-identifier-not-empty">
+    <rule context="dc:identifier">
+      <assert test="string-length(normalize-space(.)) &gt; 0"
+        >dc:identifier must be a string with length at least 1</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-language-not-empty">
+    <rule context="dc:language">
+      <assert test="string-length(normalize-space(.)) &gt; 0"
+        >dc:language must be a string with length at least 1</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-title-not-empty">
+    <rule context="dc:title">
+      <assert test="string-length(normalize-space(.)) &gt; 0"
+        >dc:title must be a string with length at least 1</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-value-not-empty">
+    <rule context="opf:meta[@property]">
+      <assert test="string-length(normalize-space(.)) &gt; 0"
+        >a meta element's value must be a string with length at least 1</assert>
+    </rule>
+  </pattern>
+
+  <!-- 5.5.4.4 The dc:date element -->
+
+  <pattern id="opf-date-cardinality">
+    <rule context="opf:metadata[dc:date]">
+      <assert test="count(dc:date) = 1"
+        >element "dc:date" not allowed here (only one dc:date element is allowed)</assert>
+    </rule>
+  </pattern>
+
+  <!-- 5.5.5 The meta element -->
+
+  <pattern id="opf-meta-property-not-empty">
+    <rule context="opf:meta">
+      <assert test="string-length(normalize-space(@property)) &gt; 0"
+        >value of attribute "property" is invalid (must not be empty)</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-property-single-token">
+    <rule context="opf:meta[@property]">
+      <assert test="not(contains(normalize-space(@property), ' '))"
+        >only one value must be specified for the "property" attribute</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-scheme-single-token">
+    <rule context="opf:meta[@scheme]">
+      <assert test="not(contains(normalize-space(@scheme), ' '))"
+        >only one value must be specified for the "scheme" attribute</assert>
+    </rule>
+  </pattern>
+
+  <!-- an unprefixed, unknown "scheme" value is OPF-027, not RSC-005 -
+       hand-coded in opf.rs for the same reason as above. -->
+
+  <!-- 5.5.7 The link element -->
+
+  <pattern id="opf-link-properties-not-empty">
+    <rule context="opf:link[@properties]">
+      <assert test="string-length(normalize-space(@properties)) &gt; 0"
+        >value of attribute "properties" is invalid (must not be empty)</assert>
+    </rule>
+  </pattern>
+
+  <!-- 5.8 Collections -->
+
+  <pattern id="opf-collection-manifest-not-toplevel">
+    <rule context="opf:package/opf:collection[normalize-space(@role) = 'manifest']">
+      <assert test="false()"
+        >a manifest collection must be the child of another collection</assert>
+    </rule>
+  </pattern>
+
+  <!-- 5.9.3 NCX -->
+
+  <pattern id="opf-legacy-ncx-toc-required">
+    <rule context="opf:package[opf:manifest/opf:item[normalize-space(@media-type) = 'application/x-dtbncx+xml']]/opf:spine[not(@toc)]">
+      <assert test="false()"
+        >the spine "toc" attribute must be set when an NCX document is present</assert>
+    </rule>
+  </pattern>
+
   <!-- media:active-class / media:playback-active-class name the CSS class
        a reading system applies to the currently active/playing
        media-overlay element - a single, unqualified class name, not

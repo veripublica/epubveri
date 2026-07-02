@@ -16,6 +16,7 @@
 pub const PKG_004: &str = "PKG-004"; // corrupted/unreadable ZIP header (not a usable OCF)
 pub const PKG_006: &str = "PKG-006"; // mimetype entry missing or not first in the archive
 pub const PKG_007: &str = "PKG-007"; // mimetype compressed, or contents != application/epub+zip
+pub const PKG_010: &str = "PKG-010"; // an href contains unencoded spaces
 pub const PKG_026: &str = "PKG-026"; // font-obfuscated resource isn't a font Core Media Type
 
 // --- Resources / generic ---
@@ -28,7 +29,13 @@ pub const RSC_004: &str = "RSC-004"; // a resource is encrypted; its content is 
                                      // a malformed manifest <item> (missing id/href/media-type); a duplicate manifest
                                      // id; and a missing EPUB 3 navigation document.
 pub const RSC_005: &str = "RSC-005";
+pub const RSC_006: &str = "RSC-006"; // a remote resource is referenced from an HTML "a" element
+pub const RSC_007: &str = "RSC-007"; // a package metadata link points to a resource that can't be found
+pub const RSC_008: &str = "RSC-008"; // a remote resource is used but not declared in the manifest
+pub const RSC_011: &str = "RSC-011"; // a hyperlinked document isn't listed in the spine
+pub const RSC_012: &str = "RSC-012"; // an NCX content src fragment identifier doesn't resolve
 pub const RSC_017: &str = "RSC-017"; // a deprecated construct is used (e.g. epub:switch)
+pub const RSC_020: &str = "RSC-020"; // a href contains unencoded spaces (not a valid IRI)
 
 // --- OPF package document (dedicated codes, used verbatim) ---
 pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared
@@ -44,6 +51,26 @@ pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't applicati
 pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no print-source is identified
 pub const OPF_086: &str = "OPF-086"; // usage of a deprecated rendition property or value
 pub const OPF_077: &str = "OPF-077"; // the Data Navigation Document is referenced from the spine
+pub const OPF_003: &str = "OPF-003"; // a container resource isn't listed in the manifest (usage)
+pub const OPF_014: &str = "OPF-014"; // a content property (remote-resources/scripted/svg) is used but not declared
+pub const OPF_015: &str = "OPF-015"; // a content property is declared but not needed
+pub const OPF_018: &str = "OPF-018"; // a content property is declared but not needed (warning variant)
+pub const OPF_025: &str = "OPF-025"; // an attribute value must be a single token, not a list
+pub const OPF_026: &str = "OPF-026"; // a meta property name is not well-formed
+pub const OPF_027: &str = "OPF-027"; // an unknown/unprefixed value is used for a known-vocabulary attribute
+pub const OPF_040: &str = "OPF-040"; // fallback references an unknown manifest id
+pub const OPF_045: &str = "OPF-045"; // fallback references its own item id
+pub const OPF_048: &str = "OPF-048"; // package is missing its required unique-identifier attribute
+pub const OPF_065: &str = "OPF-065"; // a refines chain forms a cycle
+pub const OPF_070: &str = "OPF-070"; // a collection role used as a URL is not a valid URL
+pub const OPF_074: &str = "OPF-074"; // two manifest items represent the same resource
+pub const OPF_085: &str = "OPF-085"; // a urn:uuid: dc:identifier isn't a valid UUID
+pub const OPF_091: &str = "OPF-091"; // a manifest item href must not have a fragment identifier
+pub const OPF_092: &str = "OPF-092"; // a language tag is empty/whitespace or not well-formed
+pub const OPF_093: &str = "OPF-093"; // a local link is missing its required media-type attribute
+pub const OPF_096: &str = "OPF-096"; // non-linear content isn't reachable from the reading order
+pub const OPF_098: &str = "OPF-098"; // a link target must not reference a manifest item id
+pub const OPF_099: &str = "OPF-099"; // a manifest item references the package document itself
 
 // --- CSS (via the styloria parser) ---
 pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi' property

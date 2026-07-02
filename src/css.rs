@@ -295,6 +295,44 @@ fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>) {
     }
 }
 
+/// Every `url()` reference anywhere in a stylesheet (rule preludes,
+/// declaration blocks, `@import` targets, nested blocks) - shared by
+/// `check`'s own resource-resolution pass and, in `opf.rs`, the
+/// remote-resources content-property scan (OPF-014/018), so a document's
+/// remote references aren't just its raw attribute values but also its
+/// own CSS.
+pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
+    let mut urls = Vec::new();
+    for rule in &sheet.rules {
+        match rule {
+            Rule::Qualified(q) => {
+                collect_urls(&q.prelude, &mut urls);
+                collect_urls(&q.block.values, &mut urls);
+            }
+            Rule::At(a) => {
+                // @namespace's "url(...)" declares an XML namespace URI
+                // for selectors (e.g. `@namespace xlink
+                // url('http://www.w3.org/1999/xlink')`) - it's never a
+                // fetchable resource reference, unlike every other at-rule
+                // that can carry a url().
+                if a.name.eq_ignore_ascii_case("namespace") {
+                    continue;
+                }
+                collect_urls(&a.prelude, &mut urls);
+                if let Some(block) = &a.block {
+                    collect_urls(&block.values, &mut urls);
+                }
+                if a.name.eq_ignore_ascii_case("import") {
+                    if let Some(target) = import_target(&a.prelude) {
+                        urls.push(target);
+                    }
+                }
+            }
+        }
+    }
+    urls
+}
+
 /// Class names used as selectors in a stylesheet's top-level qualified
 /// rules — e.g. `.foo, .bar { ... }` yields `{"foo", "bar"}`. Only
 /// top-level rule preludes are scanned, not nested at-rule blocks (the

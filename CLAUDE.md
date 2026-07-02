@@ -1303,6 +1303,171 @@ a single, narrow case, not a reason to touch the engine's return type.
 | OPF family exact hits | 18/148 | **23/148** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: finish 05-package-document, all 76 remaining scenarios (2026-07-02)
+
+Owner's explicit choice: finish all of `05-package-document.feature`'s
+remaining misses in one increment rather than splitting further. Research
+revealed this was much larger than the earlier "34 RSC-005-only" estimate
+— 76 scenarios once dedicated codes (OPF-092, OPF-014/015/018, OPF-096,
+RSC-006/007/008/011/012, etc.) were counted too, spanning 7 genuinely
+distinct sub-areas (labeled clusters A-G during planning), the largest
+being a new "does this content document use remote resources / scripting
+/ embedded SVG" cross-reference — comparable in scope to the original CSS
+or Media Overlays increments.
+
+**A: language tags (OPF-092, new).** `xml:lang`/`link[@hreflang]`/
+`dc:language`'s own text must have no leading/trailing whitespace and,
+once trimmed, be empty or a plausible BCP-47 tag — no regex needed since
+the corpus's only real failure mode is a single-letter primary subtag
+("a-value"), which real BCP-47 never allows.
+
+**B: small package-metadata rules** (~14 Schematron patterns + hand-coded
+`OPF-065`/`OPF-085`): empty dc:identifier/language/title/meta values,
+multiple dc:date, meta property/scheme NMTOKEN shape, metadata-before-
+manifest element order, `package/@unique-identifier` missing (new
+`OPF-048`), a general **`@refines` cycle detector** (new `OPF-065`, real
+graph-cycle DFS over every `id`→refines-target edge in the whole
+document, not scoped to any one property), and a `urn:uuid:` UUID-syntax
+check (new `OPF-085`). Deferred, named not dropped: `OPF-053`/the exact
+ISO-8601 `dcterms:modified` format (needs real date-regex, which the
+XPath engine still doesn't have).
+
+**C: link element rules** (new `OPF-098`/`OPF-093`, reused `RSC-007`):
+a `link/@href` must not be a fragment-only reference to a manifest item's
+own id (`OPF-098`); a link to a **local** resource needs a `media-type`
+(`OPF-093`, remote links may omit it); a link to a missing local resource
+is `RSC-007` (warning). **Scoped to metadata-level `<link>` only** after
+a real false positive: a `<link>` inside a `<collection>` (e.g. a
+`role="preview"` collection indexing existing manifest resources) follows
+different rules and legitimately omits `media-type`/reuses already-
+declared resources - confirmed via `preview-embedded-valid`.
+
+**D: manifest item / href / fallback rules** (new `OPF-099/074/040/045`,
+`RSC-020`/`PKG-010`/`OPF-091`): self-referencing manifest items, two
+items resolving to the same resource, unencoded spaces, fragment
+identifiers on manifest hrefs, broken/self-referencing `fallback` chains,
+the obsolete EPUB 2 `fallback-style` attribute (scoped to EPUB 3 only -
+see below), and unknown `item/@properties` values.
+
+**E: remote-resources/scripted/svg cross-reference (`OPF-014/015/018`,
+new) — the largest cluster.** For every content document, three booleans
+are computed by scanning its own DOM (plus its associated CSS, reusing
+the CSS-029/030 increment's stylesheet-collection code and a new
+`css::stylesheet_urls`): `has_remote` (any `src`/`href`/`data`/`poster`
+or CSS `url()` pointing at a genuine `http(s)://` URL), `has_script` (a
+`<script>` with no/JS-family `type`, or an interactive form control), and
+`has_svg` (an embedded `<svg>`). Cross-referenced against the item's own
+declared `properties`: used-but-undeclared is uniformly `OPF-014`;
+declared-but-unused is `OPF-018`/Warning for remote-resources but
+`OPF-015`/Error for scripted/svg (confirmed per-property, not assumed
+uniform). Also covers a hyperlink to a remote **image** (`RSC-006`, wrong
+construct - should be embedded) and a remote resource used anywhere
+(content doc, standalone CSS, or a media-overlay SMIL file) but not
+declared as its own manifest item at all (`RSC-008`).
+
+**A real, load-bearing predicate bug found via the corpus, not by
+inspection:** the existing `is_external()` helper means "don't try to
+resolve this as a local container path" - correctly including
+fragment-only refs, `data:`, `mailto:`, `tel:`. But "is this genuinely a
+remote resource in use" is a *narrower* question, and reusing
+`is_external()` for it produced real false positives: a CSS `filter:
+url(#filter)` (a same-document SVG filter reference) and an `@namespace
+xlink url('http://www.w3.org/1999/xlink')` (a namespace URI, not a
+fetchable resource) both got misread as "uses a remote resource". Fixed
+by adding a new, narrower `is_remote_url()` (only `http://`/`https://`)
+for every remote-resource-*detection* site, while leaving every
+resolution-*skipping* site on the original `is_external()` unchanged; and
+by excluding CSS `@namespace` from `stylesheet_urls()`'s collection
+entirely. A related bug, found the same way: a remote URL can carry a
+fragment (`https://x/y#glyph`, a real SVG-font-glyph reference) while its
+manifest item declares the bare URL - fixed with a `strip_url_fragment`
+helper applied before every remote-URL comparison.
+
+**A second real, load-bearing bug: EPUB2 has no `properties` concept at
+all.** The whole cluster-E cross-reference and the `fallback-style`
+obsolescence check both need to be scoped to `is_epub3` - an EPUB 2
+content document legitimately uses `<script>` with no properties concept
+in play at all, and `fallback-style` is a valid *EPUB 2* OPF attribute,
+only obsolete in EPUB 3. Both confirmed as real false positives via real
+epub2-context corpus fixtures (`ops-xhtml-script-valid`,
+`fallback-valid.opf`) before being fixed.
+
+**F: spine reachability (new `RSC-011`/`OPF-096`).** A book-wide pass
+collects every content document's outbound local `<a href>` targets
+(including the nav). `RSC-011`: any target not listed in the spine at
+all. `OPF-096`: any `linear="no"` spine item not reachable via any
+hyperlink or the nav. A real false positive found via the corpus: a
+hyperlink to the **package document itself** (a CFI-style
+self-reference, confirmed via `nav-cfi-valid`) isn't a content document
+that could ever be "in the spine" - excluded explicitly.
+
+**G: collection/legacy/NCX rules** (new `OPF-070`, extended `src/ncx.rs`
+for `RSC-012`): a `collection/@role` used as a URL must have valid
+percent-encoding; a `role="manifest"` collection must not be top-level
+(Schematron); duplicate `guide/reference` entries (`RSC-017`, once per
+offending entry, not once per pair); the legacy "NCX present requires
+spine `toc`" rule (Schematron); and NCX `<content src="target#frag">`
+fragments must resolve to a real id in the target document (`RSC-012`,
+new, caches each distinct target doc's id set since a real book can have
+many navPoints into the same document).
+
+**A genuine engine-architecture limitation found via the corpus, not
+guessed:** the XPath 1.0 core has no `preceding-sibling::` axis at all -
+attempting to load a Schematron pattern using it doesn't silently no-op,
+it **panics at startup** (the `built-in package.sch must parse` assertion
+fires), crashing every single scenario until found. The
+"metadata-before-manifest" element-order rule was rewritten as a plain
+hand-coded child-index compare in `opf.rs` instead.
+
+**Three more small vocabulary gaps found the same way:** manifest
+`item/@properties` values from EPUB Dictionaries & Glossaries
+(`dictionary`, `search-key-map`) and EPUB Indexes (`glossary`, `index`) -
+extension specs not implemented, but their property names are real and
+were false-positiving `OPF-027` on otherwise-valid fixtures; and a
+custom, package-declared-prefix property (e.g. `ex2:itemprop`) was also
+wrongly flagged - any token containing `:` is now exempted from the
+known-property check (custom vocabulary prefixes are always allowed).
+
+**A measurement-harness bug found the same way, not guessed:**
+`scripts/corpus.py`'s `wrap_single_doc`/`wrap_opf_file`/`wrap_smil_file`
+synthetic identifier was the literal string `"urn:uuid:corpus-wrap"` -
+not a real UUID, so it started false-positiving the brand-new `OPF-085`
+check on every single-document-wrapped scenario. Fixed by dropping the
+`urn:uuid:` prefix entirely (`"corpus-wrap"`, matching the NCX `dtb:uid`
+side too). Also widened the existing `single_doc_wrap` RSC-001/RSC-007
+scoring exclusion to cover `RSC-011`, `RSC-008`, and `OPF-014` - the
+synthetic wrap's nav hyperlinks to the target (so the harness has a
+reason to include it) but deliberately keeps it out of the synthetic
+spine, and never declares any `properties` on the target's own synthetic
+manifest item - both are real, correct findings on the synthetic
+wrapping itself, not defects in the fixture under test. Same fix applied
+to `scripts/spike.py`'s own synthetic identifier (`urn:uuid:12345` →
+a real-shaped UUID).
+
+**Deliberately deferred sub-scenarios, named not silently dropped:** a
+content document referencing a remote resource only *transitively*
+(embedding a local SVG file that itself contains a remote font
+reference) - no SVG-content parser exists to trace into it
+(`package-remote-font-in-svg-missing-property-error`); the exact
+`link/@properties` known-value vocabulary (`OPF-027` for
+`link-rel-record-properties-undefined-error`) - no confirmed valid
+example exists in the corpus to derive the real vocabulary from safely.
+
+**Honest numbers** (all 76 targeted scenarios hit exactly except the two
+named deferrals above; false positives held at 1, the same pre-existing
+RELAX NG gap):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 35.0% (209 hits) | **48.4% (289 hits)** |
+| RSC family exact hits | 122/379 | **154/379** |
+| OPF family exact hits | 23/148 | **69/148** |
+| PKG family exact hits | 12/37 | **19/37** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
+With this, `05-package-document.feature` is effectively **done** for
+this project's current scope, aside from the two named deferrals above.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

@@ -91,6 +91,28 @@ pub(crate) fn is_external(href: &str) -> bool {
         || href.starts_with("tel:")
 }
 
+/// True only for a genuine remote fetch (http/https) - unlike
+/// `is_external` above (which also covers fragment-only, `data:`,
+/// `mailto:`, `tel:` - anything that isn't a local container path, for
+/// resolution-skipping purposes), this is the narrower predicate the
+/// remote-resources/scripted/svg content-property checks need: a CSS
+/// `filter: url(#id)` or an `<a href="mailto:...">` isn't "using a
+/// remote resource" just because it isn't locally resolvable.
+pub(crate) fn is_remote_url(href: &str) -> bool {
+    let href = href.trim();
+    href.starts_with("http://") || href.starts_with("https://")
+}
+
+/// Strip a `#fragment` from a remote URL before comparing it against the
+/// manifest's own declared hrefs - a remote resource can legitimately be
+/// referenced with a fragment (e.g. an SVG font glyph, `https://x/y#g`)
+/// while its manifest item declares the bare URL (`https://x/y`);
+/// confirmed via a real corpus fixture where the two would otherwise fail
+/// to match and produce a false RSC-008.
+fn strip_url_fragment(url: &str) -> String {
+    url.split('#').next().unwrap_or(url).to_string()
+}
+
 /// Maps every `id` attribute in a document to its element's document-order
 /// index, for reading-order comparisons (media-overlay text order vs. the
 /// content doc's DOM order; the nav toc's fragment order vs. the same).
@@ -179,6 +201,258 @@ fn check_itemref_rendition_conflicts(props: &str, path: &str, report: &mut Repor
     }
 }
 
+/// Known manifest `item/@properties` values ("cover-image" is handled
+/// separately above, since it has its own cardinality/media-type rules).
+const KNOWN_ITEM_PROPERTIES: &[&str] = &[
+    "mathml",
+    "nav",
+    "remote-resources",
+    "scripted",
+    "svg",
+    "switch",
+    "data-nav",
+    // EPUB Dictionaries & Glossaries 1.0 and EPUB Indexes 1.0 (separate
+    // extension specs, not implemented, but their manifest properties are
+    // real and shouldn't misfire OPF-027 on otherwise-valid fixtures).
+    "dictionary",
+    "search-key-map",
+    "glossary",
+    "index",
+];
+
+const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+
+/// OPF-092: a language tag (`xml:lang`, `link/@hreflang`, or `dc:language`'s
+/// own text) must not have leading/trailing whitespace, and - once trimmed
+/// - must be empty (allowed) or a syntactically plausible BCP-47 tag. No
+/// regex needed: the only real failure mode confirmed by the corpus is a
+/// single-letter primary subtag ("a-value"), which real BCP-47 never
+/// allows (a language subtag is ISO 639, always 2-8 letters).
+fn is_valid_lang_tag(raw: &str) -> bool {
+    if raw != raw.trim() {
+        return false;
+    }
+    if raw.is_empty() {
+        return true;
+    }
+    let mut subtags = raw.split('-');
+    let Some(first) = subtags.next() else {
+        return false;
+    };
+    if first.len() < 2 || !first.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return false;
+    }
+    subtags.all(|s| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+}
+
+/// Walks the whole OPF for every `xml:lang` attribute, `link/@hreflang`,
+/// and `dc:language`'s own text, checking each against `is_valid_lang_tag`
+/// (OPF-092).
+fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(lang) = n.attribute((XML_NS, "lang")) {
+            if !is_valid_lang_tag(lang) {
+                report.push_at(
+                    OPF_092,
+                    Severity::Error,
+                    format!("language tag '{lang}' is not well-formed"),
+                    opf_path,
+                );
+            }
+        }
+        if n.tag_name().name() == "link" {
+            if let Some(hreflang) = n.attribute("hreflang") {
+                if !is_valid_lang_tag(hreflang) {
+                    report.push_at(
+                        OPF_092,
+                        Severity::Error,
+                        format!("hreflang value '{hreflang}' is not well-formed"),
+                        opf_path,
+                    );
+                }
+            }
+        }
+        if n.tag_name().name() == "language" {
+            let text: String = n
+                .descendants()
+                .filter(|t| t.is_text())
+                .filter_map(|t| t.text())
+                .collect::<String>()
+                .trim()
+                .to_string();
+            if !text.is_empty() && !is_valid_lang_tag(&text) {
+                report.push_at(
+                    OPF_092,
+                    Severity::Error,
+                    format!("dc:language value '{text}' is not well-formed"),
+                    opf_path,
+                );
+            }
+        }
+    }
+}
+
+/// OPF-065: a `@refines` chain must not form a cycle. General over every
+/// element with both `@id` and `@refines` in the whole document (not
+/// specific to any one property) - builds an id -> refines-target-id
+/// edge map, then DFS-walks from each node with cycle detection (bounded
+/// by the visited set, same style as the existing OPF-043 fallback-chain
+/// cycle guard).
+fn check_refines_cycles(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    let edges: HashMap<String, String> = doc
+        .descendants()
+        .filter(|n| n.is_element())
+        .filter_map(|n| {
+            let id = n.attribute("id")?.trim().to_string();
+            let refines = n.attribute("refines")?.trim();
+            let target = refines.strip_prefix('#')?.to_string();
+            Some((id, target))
+        })
+        .collect();
+
+    let mut reported = HashSet::new();
+    for start in edges.keys() {
+        if reported.contains(start) {
+            continue;
+        }
+        let mut seen = Vec::new();
+        let mut cur = start.as_str();
+        loop {
+            if seen.iter().any(|s: &String| s == cur) {
+                if seen.first().map(|s| s.as_str()) == Some(start.as_str()) {
+                    for id in &seen {
+                        reported.insert(id.clone());
+                    }
+                    report.push_at(
+                        OPF_065,
+                        Severity::Error,
+                        "a chain of \"refines\" attributes forms a cycle",
+                        opf_path,
+                    );
+                }
+                break;
+            }
+            seen.push(cur.to_string());
+            match edges.get(cur) {
+                Some(next) => cur = next,
+                None => break,
+            }
+        }
+    }
+}
+
+/// OPF-085: a `dc:identifier` starting with `urn:uuid:` must be followed
+/// by a syntactically valid UUID (8-4-4-4-12 hex groups).
+fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    for n in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
+    {
+        let text: String = n
+            .descendants()
+            .filter(|t| t.is_text())
+            .filter_map(|t| t.text())
+            .collect::<String>()
+            .trim()
+            .to_string();
+        let Some(uuid) = text.strip_prefix("urn:uuid:") else {
+            continue;
+        };
+        let groups: Vec<&str> = uuid.split('-').collect();
+        let valid = groups.len() == 5
+            && [8, 4, 4, 4, 12]
+                .iter()
+                .zip(&groups)
+                .all(|(len, g)| g.len() == *len && g.chars().all(|c| c.is_ascii_hexdigit()));
+        if !valid {
+            report.push_at(
+                OPF_085,
+                Severity::Warning,
+                format!("dc:identifier '{text}' does not look like a valid UUID"),
+                opf_path,
+            );
+        }
+    }
+}
+
+/// A meta property/scheme value is well-formed if it's a bare NCName, or
+/// a `prefix:reference` pair where both halves are non-empty NCNames -
+/// approximated here as "non-empty and alphanumeric/hyphen/underscore/
+/// colon, with a non-empty reference part after any colon" (no real
+/// NCName Unicode-category checking, which the corpus doesn't exercise).
+fn is_well_formed_ncname_or_prefixed(value: &str) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    match value.split_once(':') {
+        Some((prefix, reference)) => {
+            !prefix.is_empty()
+                && !reference.is_empty()
+                && !reference.contains(':')
+                && value
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || matches!(c, ':' | '-' | '_' | '.'))
+        }
+        None => value
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.')),
+    }
+}
+
+/// Small per-`<meta>` checks that need their own dedicated code/severity
+/// rather than the uniform RSC-005/Error every Schematron finding gets:
+/// RSC-017 ("should use a fragment identifier") when `@refines` is a
+/// non-empty, non-fragment, non-absolute reference; OPF-027 when
+/// `@scheme` has no `prefix:` part; OPF-026 when `@property` isn't a
+/// well-formed (possibly prefixed) NCName.
+fn check_meta_property_scheme_shape(
+    doc: &roxmltree::Document,
+    opf_path: &str,
+    report: &mut Report,
+) {
+    for n in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "meta")
+    {
+        if let Some(refines) = n.attribute("refines") {
+            let refines = refines.trim();
+            if !refines.is_empty() && !refines.starts_with('#') && !refines.contains("://") {
+                report.push_at(
+                    RSC_017,
+                    Severity::Warning,
+                    "@refines should use a fragment identifier pointing to its manifest item",
+                    opf_path,
+                );
+            }
+        }
+        if let Some(scheme) = n.attribute("scheme") {
+            let scheme = scheme.trim();
+            if !scheme.is_empty() && !scheme.contains(':') {
+                report.push_at(
+                    OPF_027,
+                    Severity::Error,
+                    format!("unknown scheme value '{scheme}' (must be prefixed)"),
+                    opf_path,
+                );
+            }
+        }
+        if let Some(property) = n.attribute("property") {
+            let property = property.trim();
+            if !property.is_empty()
+                && !property.contains(' ')
+                && !is_well_formed_ncname_or_prefixed(property)
+            {
+                report.push_at(
+                    OPF_026,
+                    Severity::Error,
+                    format!("meta property '{property}' is not well-formed"),
+                    opf_path,
+                );
+            }
+        }
+    }
+}
+
 /// OPF-007: a `prefix` (or `epub:prefix`) attribute redeclares one of the
 /// reserved default-vocabulary prefixes above to a *different* URI. One
 /// warning per occurrence (the corpus counts "once for each reserved
@@ -200,6 +474,130 @@ fn check_reserved_prefixes(prefix_attr: &str, path: &str, report: &mut Report) {
             }
         }
         i += 2;
+    }
+}
+
+/// OPF-070: a `collection/@role` used as a URL (contains "://") must have
+/// valid percent-encoding - every `%` must be followed by exactly 2 hex
+/// digits. Not full RFC 3986 validation, just the one failure mode the
+/// corpus exercises (a trailing, incomplete "%").
+fn check_collection_roles(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    for n in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "collection")
+    {
+        let Some(role) = n.attribute("role") else {
+            continue;
+        };
+        if !role.contains("://") {
+            continue;
+        }
+        let bytes = role.as_bytes();
+        let mut i = 0;
+        let mut valid = true;
+        while i < bytes.len() {
+            if bytes[i] == b'%' {
+                let hex_ok = i + 2 < bytes.len()
+                    && (bytes[i + 1] as char).is_ascii_hexdigit()
+                    && (bytes[i + 2] as char).is_ascii_hexdigit();
+                if !hex_ok {
+                    valid = false;
+                    break;
+                }
+                i += 3;
+            } else {
+                i += 1;
+            }
+        }
+        if !valid {
+            report.push_at(
+                OPF_070,
+                Severity::Warning,
+                format!("collection role '{role}' is not a valid URL"),
+                opf_path,
+            );
+        }
+    }
+}
+
+/// RSC-017, once per offending entry (confirmed via the corpus: two
+/// duplicate `reference`s report "2 times", one per entry, not one per
+/// pair): `guide/reference` entries must not duplicate the same
+/// `type`+`href` combination.
+fn check_guide_duplicates(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    let refs: Vec<_> = doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "reference")
+        .collect();
+    for (i, r) in refs.iter().enumerate() {
+        if r.attribute("type").is_none() {
+            continue;
+        }
+        let dup_exists = refs.iter().enumerate().any(|(j, other)| {
+            j != i
+                && other.attribute("type") == r.attribute("type")
+                && other.attribute("href") == r.attribute("href")
+        });
+        if dup_exists {
+            report.push_at(
+                RSC_017,
+                Severity::Warning,
+                "duplicate \"reference\" elements with the same \"type\" and \"href\" attributes",
+                opf_path,
+            );
+        }
+    }
+}
+
+/// RSC-012: an NCX `<content src="target#fragment">`'s fragment must
+/// resolve to a real `id` in the target content document. Reads each
+/// distinct target doc once, caching its id set (a real book can have
+/// many navPoints pointing to the same doc).
+fn check_ncx_content_fragments(
+    ncx_doc: &roxmltree::Document,
+    ncx_path: &str,
+    ocf: &mut Ocf,
+    name_index: &HashMap<String, String>,
+    report: &mut Report,
+) {
+    let dir = parent_dir(ncx_path);
+    let mut id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    for n in ncx_doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "content")
+    {
+        let Some(src) = n.attribute("src") else {
+            continue;
+        };
+        let Some((target, frag)) = src.split_once('#') else {
+            continue;
+        };
+        if frag.is_empty() || is_external(src) {
+            continue;
+        }
+        let resolved = nfc(&resolve(&dir, target));
+        if !id_cache.contains_key(&resolved) {
+            let ids = name_index
+                .get(&resolved)
+                .cloned()
+                .and_then(|orig| ocf.read(&orig))
+                .map(|b| {
+                    let text = String::from_utf8_lossy(&b).into_owned();
+                    parse_xml(&text)
+                        .map(|d| dom_id_order(&d))
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default();
+            id_cache.insert(resolved.clone(), ids);
+        }
+        if !id_cache[&resolved].contains_key(frag) {
+            report.push_at(
+                RSC_012,
+                Severity::Error,
+                format!("fragment identifier '{frag}' is not defined in '{target}'"),
+                ncx_path,
+            );
+        }
     }
 }
 
@@ -243,6 +641,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     if let Some(prefix) = pkg.attribute("prefix") {
         check_reserved_prefixes(prefix, opf_path, report);
     }
+    check_lang_tags(&doc, opf_path, report);
+    check_refines_cycles(&doc, opf_path, report);
+    check_uuid_identifiers(&doc, opf_path, report);
+    check_meta_property_scheme_shape(&doc, opf_path, report);
+    check_collection_roles(&doc, opf_path, report);
+    check_guide_duplicates(&doc, opf_path, report);
 
     // --- version ---
     let version = pkg.attribute("version").unwrap_or("");
@@ -303,6 +707,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     let metadata = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "metadata");
+    // 5.4: the metadata element must come before the manifest element.
+    // A plain child-index compare, hand-coded because our XPath 1.0 core
+    // has no preceding-sibling:: axis to express this in Schematron.
+    {
+        let element_children: Vec<_> = pkg.children().filter(|n| n.is_element()).collect();
+        let metadata_pos = element_children
+            .iter()
+            .position(|n| n.tag_name().name() == "metadata");
+        let manifest_pos = element_children
+            .iter()
+            .position(|n| n.tag_name().name() == "manifest");
+        if let (Some(m), Some(mf)) = (metadata_pos, manifest_pos) {
+            if mf < m {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "the \"metadata\" element must come before the \"manifest\" element",
+                    opf_path,
+                );
+            }
+        }
+    }
     if let Some(md) = metadata {
         let elem_text = |n: roxmltree::Node| -> String {
             n.descendants()
@@ -483,6 +909,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     );
                 }
             }
+        } else {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "<package> is missing the required attribute \"unique-identifier\"",
+                opf_path,
+            );
+            report.push_at(
+                OPF_048,
+                Severity::Error,
+                "<package> is missing its required unique-identifier attribute",
+                opf_path,
+            );
         }
 
         // --- Media Overlays duration sum (MED-016) ---
@@ -552,11 +991,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // Data Navigation Document(s) (properties="data-nav"): (resolved path,
     // media-type), for the Region-Based Navigation checks below.
     let mut data_nav_items: Vec<(String, String)> = Vec::new();
+    // resolved+NFC'd item path -> its declared `properties` attribute
+    // (raw string), for the remote-resources/scripted/svg cross-reference
+    // below (OPF-014/018).
+    let mut item_properties: HashMap<String, String> = HashMap::new();
+    // raw href -> media-type, for every manifest item whose href is
+    // itself a remote URL - used by the RSC-006/RSC-008 cross-reference
+    // below (is a remote reference from a content doc actually declared
+    // as its own manifest item, and if so, is it an image referenced via
+    // a plain hyperlink rather than an embedding element).
+    let mut remote_manifest: HashMap<String, String> = HashMap::new();
     let manifest = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest");
     if let Some(mn) = manifest {
         let mut seen = HashSet::new();
+        // resolved+NFC'd resource path -> first manifest item id that
+        // declared it, for the OPF-074 duplicate-resource check below.
+        let mut resource_seen: HashMap<String, String> = HashMap::new();
+        let mut cover_image_count = 0usize;
+        let opf_own_name = nfc(opf_path);
         for item in mn
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "item")
@@ -586,7 +1040,110 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     opf_path,
                 );
             }
-            let resolved = resolve(&base_dir, href);
+            if href.contains(' ') {
+                report.push_at(
+                    RSC_020,
+                    Severity::Error,
+                    format!("manifest item href '{href}' contains unencoded spaces"),
+                    opf_path,
+                );
+            }
+            if href.contains('#') {
+                report.push_at(
+                    OPF_091,
+                    Severity::Error,
+                    format!("manifest item href '{href}' must not have a fragment identifier"),
+                    opf_path,
+                );
+            }
+            // resolve()'s query-stripping and path-segment handling are
+            // meant for container-relative paths; applied to an absolute
+            // remote URL, they'd garble it (and remote resources can
+            // legitimately differ only by query string, e.g.
+            // "...?type=flash" vs "...?type=mp4" - confirmed via a real
+            // corpus fixture where treating those as "the same resource"
+            // would be a false OPF-074). So self-reference/duplicate/
+            // space-in-name only make sense for local items.
+            let resolved = if is_remote_url(href) {
+                remote_manifest.insert(href.to_string(), mt.to_string());
+                href.to_string()
+            } else if is_external(href) {
+                href.to_string()
+            } else {
+                resolve(&base_dir, href)
+            };
+            let resolved_nfc = nfc(&resolved);
+            if !is_external(href) {
+                if resolved.contains(' ') {
+                    report.push_at(
+                        PKG_010,
+                        Severity::Warning,
+                        format!("resource '{resolved}' has a space in its name"),
+                        opf_path,
+                    );
+                }
+                if resolved_nfc == opf_own_name {
+                    report.push_at(
+                        OPF_099,
+                        Severity::Error,
+                        format!("manifest item '{id}' references the package document itself"),
+                        opf_path,
+                    );
+                }
+                if let Some(first_id) = resource_seen.get(&resolved_nfc) {
+                    report.push_at(
+                        OPF_074,
+                        Severity::Error,
+                        format!(
+                            "manifest item '{id}' represents the same resource as item '{first_id}'"
+                        ),
+                        opf_path,
+                    );
+                } else {
+                    resource_seen.insert(resolved_nfc.clone(), id.to_string());
+                }
+            }
+            if let Some(props) = item.attribute("properties") {
+                item_properties.insert(resolved_nfc.clone(), props.to_string());
+                for token in props.split_whitespace() {
+                    if token == "cover-image" {
+                        cover_image_count += 1;
+                        if !mt.starts_with("image/") {
+                            report.push_at(
+                                OPF_012,
+                                Severity::Error,
+                                "the \"cover-image\" property must only be used on an image",
+                                opf_path,
+                            );
+                        }
+                    } else if !token.contains(':') && !KNOWN_ITEM_PROPERTIES.contains(&token) {
+                        report.push_at(
+                            OPF_027,
+                            Severity::Error,
+                            format!("unknown manifest item property '{token}'"),
+                            opf_path,
+                        );
+                    }
+                }
+            }
+            if is_epub3 && item.attribute("fallback-style").is_some() {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "the \"fallback-style\" attribute is an obsolete EPUB 2 construct",
+                    opf_path,
+                );
+            }
+            if let Some(fb) = item.attribute("fallback").map(str::trim) {
+                if fb == id {
+                    report.push_at(
+                        OPF_045,
+                        Severity::Error,
+                        format!("item '{id}' cannot fall back to itself"),
+                        opf_path,
+                    );
+                }
+            }
             if item
                 .attribute("properties")
                 .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"))
@@ -615,6 +1172,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             }
             items.insert(id.to_string(), (resolved, mt.to_string()));
         }
+        if cover_image_count > 1 {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "the \"cover-image\" property must occur at most once in the manifest",
+                opf_path,
+            );
+        }
     } else {
         report.push_at(
             RSC_005,
@@ -622,6 +1187,64 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             "OPF is missing the <manifest> element",
             opf_path,
         );
+    }
+    for target in fallback_map.values() {
+        if !items.contains_key(target) {
+            report.push_at(
+                OPF_040,
+                Severity::Error,
+                format!("fallback references unknown manifest item id '{target}'"),
+                opf_path,
+            );
+        }
+    }
+
+    // --- 5.5.7 The link element ---
+    // Scoped to metadata-level links only - a <link> inside a <collection>
+    // (e.g. a "preview"/"manifest"-role collection indexing existing
+    // manifest resources) follows different rules and legitimately omits
+    // media-type/points at real resources without these checks applying
+    // (confirmed via a real corpus fixture, preview-embedded-valid).
+    for link in metadata
+        .into_iter()
+        .flat_map(|md| md.children())
+        .filter(|n| n.is_element() && n.tag_name().name() == "link")
+    {
+        let Some(href) = link.attribute("href") else {
+            continue;
+        };
+        let href = href.trim();
+        if let Some(frag) = href.strip_prefix('#') {
+            if items.contains_key(frag) {
+                report.push_at(
+                    OPF_098,
+                    Severity::Error,
+                    "a link target must not reference a manifest item id",
+                    opf_path,
+                );
+            }
+            continue;
+        }
+        if is_external(href) {
+            continue;
+        }
+        let resolved = resolve(&base_dir, href);
+        if !name_index.contains_key(&nfc(&resolved)) {
+            report.push_at(
+                RSC_007,
+                Severity::Warning,
+                format!("link references a missing resource '{href}'"),
+                opf_path,
+            );
+        }
+        if link.attribute("media-type").is_none() {
+            report.push_at(
+                OPF_093,
+                Severity::Error,
+                "a link to a local resource must declare a media-type",
+                opf_path,
+            );
+        }
     }
 
     // content-doc resolved-path -> its declared overlay's resolved-path
@@ -640,6 +1263,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // content-doc resolved-path (NFC) -> reading-order position, for the
     // nav toc's spine-order check (NAV-011).
     let mut spine_order: HashMap<String, usize> = HashMap::new();
+    // resolved+NFC'd paths of every itemref explicitly marked
+    // linear="no", for the OPF-096 reachability check below.
+    let mut non_linear_paths: Vec<String> = Vec::new();
     // content-doc resolved-path -> whether it's fixed-layout, for the
     // region-based nav's NAV-009 target cross-check below.
     let mut fixed_layout_docs: HashMap<String, bool> = HashMap::new();
@@ -693,6 +1319,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                         ),
                         Some((path, mt)) => {
                             spine_order.entry(nfc(path)).or_insert(position);
+                            if ir.attribute("linear").map(str::trim) == Some("no") {
+                                non_linear_paths.push(nfc(path));
+                            }
                             // Core content-document media types valid in the
                             // spine without a fallback; otherwise walk the
                             // 'fallback' chain (bounded, in case of a cycle)
@@ -799,6 +1428,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             if let Some(b) = ocf.read(&orig) {
                                 let ncx_text = String::from_utf8_lossy(&b).into_owned();
                                 crate::ncx::check(&ncx_text, ncx_path, uid_text, report);
+                                if let Ok(ncx_doc) = parse_xml(&ncx_text) {
+                                    check_ncx_content_fragments(
+                                        &ncx_doc,
+                                        ncx_path,
+                                        ocf,
+                                        &name_index,
+                                        report,
+                                    );
+                                }
                             }
                         }
                     }
@@ -874,6 +1512,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // Whether the (required) toc nav has an epub:type="page-list" nav -
     // for the EDUPUB pagination-source cross-check after this loop.
     let mut has_page_list_nav = false;
+    // Every local content-doc target hyperlinked from *any* content
+    // document (including the nav) - for RSC-011 (a hyperlink target not
+    // listed in the spine) and OPF-096 (a linear="no" spine item not
+    // reachable via any hyperlink or the nav).
+    let mut hyperlink_targets: HashSet<String> = HashSet::new();
     for path in content_docs {
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
@@ -1125,6 +1768,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             }
         }
 
+        // remote-resources/scripted/svg detection (OPF-014/018) - a
+        // direct scan only: a document that references a remote resource
+        // *transitively* (e.g. via a local SVG file that itself embeds a
+        // remote font) isn't traced, since this project has no SVG-
+        // content parser. Named, accepted limitation.
+        let mut has_remote = false;
+        let mut has_script = false;
+        let mut has_svg = false;
+        let mut has_switch = false;
+        let mut remote_refs: HashSet<String> = HashSet::new();
+        let mut remote_link_refs: HashSet<String> = HashSet::new();
         for node in d.descendants().filter(|n| n.is_element()) {
             // <base href> sets a base URI for resolving *other* relative
             // references; it isn't itself a reference to an existing
@@ -1132,9 +1786,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             if node.tag_name().name() == "base" {
                 continue;
             }
-            for attr in ["src", "href"] {
+            for attr in ["src", "href", "data", "poster"] {
                 if let Some(v) = node.attribute(attr) {
+                    if is_remote_url(v) {
+                        remote_refs.insert(strip_url_fragment(v));
+                        // A plain hyperlink to a remote resource doesn't
+                        // trigger the remote-resources property - it's
+                        // navigation, not an embedded dependency (and
+                        // hyperlinking to an image specifically is its
+                        // own separate defect, RSC-006, below).
+                        if node.tag_name().name() == "a" && attr == "href" {
+                            remote_link_refs.insert(strip_url_fragment(v));
+                        } else {
+                            has_remote = true;
+                        }
+                    }
                     if is_external(v) {
+                        continue;
+                    }
+                    if attr == "data" || attr == "poster" {
                         continue;
                     }
                     let resolved = resolve(&dir, v);
@@ -1147,6 +1817,39 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                         );
                     }
                 }
+            }
+            if node.tag_name().name() == "switch"
+                && node.tag_name().namespace() == Some("http://www.idpf.org/2007/ops")
+            {
+                has_switch = true;
+            }
+            if node.tag_name().name() == "a" {
+                if let Some(href) = node.attribute("href") {
+                    if !is_external(href) {
+                        hyperlink_targets.insert(nfc(&resolve(&dir, href)));
+                    }
+                }
+            }
+            if node.tag_name().name() == "script" {
+                let script_type = node.attribute("type").unwrap_or("");
+                if script_type.is_empty()
+                    || script_type.eq_ignore_ascii_case("text/javascript")
+                    || script_type.eq_ignore_ascii_case("application/javascript")
+                    || script_type.eq_ignore_ascii_case("module")
+                {
+                    has_script = true;
+                }
+            }
+            if matches!(
+                node.tag_name().name(),
+                "input" | "button" | "select" | "textarea"
+            ) {
+                has_script = true;
+            }
+            if node.tag_name().name() == "svg"
+                && node.tag_name().namespace() == Some("http://www.w3.org/2000/svg")
+            {
+                has_svg = true;
             }
             // Embedded CSS: inline <style> resolves relative to this
             // content document's own location, not to any separate file.
@@ -1162,6 +1865,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     .entry(path.clone())
                     .or_default()
                     .extend(crate::css::selector_class_names(&sheet));
+                for u in crate::css::stylesheet_urls(&sheet) {
+                    if is_remote_url(&u) {
+                        has_remote = true;
+                        remote_refs.insert(strip_url_fragment(&u));
+                    }
+                }
             }
             // A linked stylesheet also counts as this document's own CSS
             // (for the CSS-029/030 media-overlay class cross-reference
@@ -1184,11 +1893,130 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                                     .entry(path.clone())
                                     .or_default()
                                     .extend(crate::css::selector_class_names(&sheet));
+                                for u in crate::css::stylesheet_urls(&sheet) {
+                                    if is_remote_url(&u) {
+                                        has_remote = true;
+                                        remote_refs.insert(strip_url_fragment(&u));
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
+        }
+
+        // Content-model properties (remote-resources/scripted/svg/switch)
+        // are an EPUB 3 manifest-item concept; EPUB 2 has no `properties`
+        // attribute at all, so a legitimate EPUB 2 <script> or similar
+        // must not be held to this rule (confirmed via a real epub2
+        // corpus fixture using <script> validly with no properties
+        // concept in play).
+        if is_epub3 {
+            let declared = item_properties
+                .get(&nfc(&path))
+                .cloned()
+                .unwrap_or_default();
+            let declared_tokens: Vec<&str> = declared.split_whitespace().collect();
+            // "used but undeclared" is uniformly OPF-014/Error across all
+            // three properties; "declared but unused" differs per property -
+            // remote-resources is OPF-018/Warning, scripted/svg are
+            // OPF-015/Error (confirmed via each property's own dedicated
+            // corpus fixture, not assumed uniform).
+            for (used, name, unused_id, unused_sev) in [
+                (has_remote, "remote-resources", OPF_018, Severity::Warning),
+                (has_script, "scripted", OPF_015, Severity::Error),
+                (has_svg, "svg", OPF_015, Severity::Error),
+            ] {
+                let declared_here = declared_tokens.contains(&name);
+                if used && !declared_here {
+                    report.push_at(
+                        OPF_014,
+                        Severity::Error,
+                        format!(
+                            "content document uses {name} but doesn't declare the \"{name}\" property"
+                        ),
+                        path.clone(),
+                    );
+                } else if declared_here && !used {
+                    report.push_at(
+                        unused_id,
+                        unused_sev,
+                        format!(
+                            "the \"{name}\" property is declared but doesn't appear to be needed"
+                        ),
+                        path.clone(),
+                    );
+                }
+            }
+            if has_switch && !declared_tokens.contains(&"switch") {
+                report.push_at(
+                    OPF_014,
+                    Severity::Error,
+                    "content document uses epub:switch but doesn't declare the \"switch\" property",
+                    path.clone(),
+                );
+            }
+        }
+
+        // RSC-008: a remote resource referenced from this content
+        // document isn't declared as its own manifest item at all
+        // (EPUB 3 requires every resource, including remote ones, to
+        // have a manifest entry). RSC-006: a hyperlink (<a href>, not an
+        // embedding element) points to a remote resource that *is*
+        // declared, but as an image - hyperlinking to an image directly
+        // is the wrong construct (should be embedded, e.g. via <img>).
+        for r in &remote_refs {
+            if !remote_manifest.contains_key(r) {
+                report.push_at(
+                    RSC_008,
+                    Severity::Error,
+                    format!("remote resource '{r}' is not declared in the manifest"),
+                    path.clone(),
+                );
+            }
+        }
+        for r in &remote_link_refs {
+            if remote_manifest
+                .get(r)
+                .is_some_and(|mt| mt.starts_with("image/"))
+            {
+                report.push_at(
+                    RSC_006,
+                    Severity::Error,
+                    format!("remote image '{r}' is referenced from an \"a\" element"),
+                    path.clone(),
+                );
+            }
+        }
+    }
+
+    // --- Spine reachability (RSC-011/OPF-096) ---
+    let opf_own_name_nfc = nfc(opf_path);
+    for target in &hyperlink_targets {
+        if *target == opf_own_name_nfc {
+            // A hyperlink to the package document itself (e.g. a CFI-style
+            // self-reference) isn't a content document that could ever be
+            // "in the spine" - confirmed via a real corpus fixture.
+            continue;
+        }
+        if !spine_order.contains_key(target) && name_index.contains_key(target) {
+            report.push_at(
+                RSC_011,
+                Severity::Error,
+                format!("'{target}' is hyperlinked but not listed in the spine"),
+                opf_path,
+            );
+        }
+    }
+    for path in &non_linear_paths {
+        if !hyperlink_targets.contains(path) {
+            report.push_at(
+                OPF_096,
+                Severity::Error,
+                format!("non-linear content '{path}' is not reachable from the reading order"),
+                opf_path,
+            );
         }
     }
 
@@ -1264,6 +2092,39 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         let css_text = crate::css::decode_bytes(&b);
         let dir = parent_dir(&path);
         crate::css::check(&css_text, &path, &dir, &name_index, Some(&b), report);
+        // RSC-008: a standalone (manifest-declared) stylesheet can
+        // reference a remote resource without any content document ever
+        // linking to it - still needs its own manifest item. OPF-014: and
+        // the stylesheet's *own* manifest item needs "remote-resources"
+        // declared, same as a content document or SMIL overlay would.
+        let sheet = styloria::Parser::parse_stylesheet(&css_text);
+        let mut css_has_remote = false;
+        for u in crate::css::stylesheet_urls(&sheet) {
+            if is_remote_url(&u) {
+                css_has_remote = true;
+                let u = strip_url_fragment(&u);
+                if !remote_manifest.contains_key(&u) {
+                    report.push_at(
+                        RSC_008,
+                        Severity::Error,
+                        format!("remote resource '{u}' is not declared in the manifest"),
+                        path.clone(),
+                    );
+                }
+            }
+        }
+        if css_has_remote
+            && !item_properties
+                .get(&nfc(&path))
+                .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"))
+        {
+            report.push_at(
+                OPF_014,
+                Severity::Error,
+                "stylesheet uses a remote resource but doesn't declare the \"remote-resources\" property",
+                path.clone(),
+            );
+        }
     }
 
     // --- Media Overlays (SMIL) ---
@@ -1296,6 +2157,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             &media_type_index,
             report,
         );
+
+        // OPF-014: a media overlay referencing a remote resource
+        // (typically <audio src>) needs its own manifest item to
+        // declare "remote-resources", same as a content document.
+        if let Ok(smil_doc) = parse_xml(&smil_text) {
+            let has_remote_audio = smil_doc.descendants().any(|n| {
+                n.is_element()
+                    && matches!(n.tag_name().name(), "audio" | "text")
+                    && n.attribute("src").is_some_and(is_remote_url)
+            });
+            if has_remote_audio
+                && !item_properties
+                    .get(&overlay_path)
+                    .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"))
+            {
+                report.push_at(
+                    OPF_014,
+                    Severity::Error,
+                    "media overlay uses a remote resource but doesn't declare the \"remote-resources\" property",
+                    path.clone(),
+                );
+            }
+        }
 
         // MED-015: this overlay's <text> targets, in SMIL sequence order,
         // should appear in the same relative order as the ids they name in
