@@ -47,6 +47,8 @@ pub const CSS_003: &str = "CSS-003"; // a stylesheet is UTF-16 encoded
 pub const CSS_004: &str = "CSS-004"; // @charset value isn't utf-8 or utf-16
 pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)
 pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block
+pub const CSS_029: &str = "CSS-029"; // well-known media-overlay class used but its property isn't declared (usage)
+pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has no matching CSS selector
 
 // --- Media Overlays (SMIL) ---
 pub const MED_005: &str = "MED-005"; // <audio> resource is not a Core Media Type

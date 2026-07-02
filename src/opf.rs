@@ -188,10 +188,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // override this via their own 'properties'), used for the viewport/
     // viewBox checks below.
     let mut package_fixed_layout = false;
+    // media:active-class / media:playback-active-class: the CSS class a
+    // reading system applies to the active/playing media-overlay element,
+    // used for the CSS-029/030 cross-referencing pass below.
+    let mut media_active_class: Option<String> = None;
+    let mut media_playback_active_class: Option<String> = None;
     let metadata = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "metadata");
     if let Some(md) = metadata {
+        let meta_property_text = |property: &str| -> Option<String> {
+            md.children()
+                .find(|n| {
+                    n.is_element()
+                        && n.tag_name().name() == "meta"
+                        && n.attribute("property") == Some(property)
+                })
+                .map(|n| {
+                    n.descendants()
+                        .filter(|t| t.is_text())
+                        .filter_map(|t| t.text())
+                        .collect::<String>()
+                        .trim()
+                        .to_string()
+                })
+        };
+        media_active_class = meta_property_text("media:active-class");
+        media_playback_active_class = meta_property_text("media:playback-active-class");
+
         package_fixed_layout = md
             .children()
             .filter(|n| {
@@ -597,7 +621,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         .filter(|(_, mt)| mt == "application/xhtml+xml")
         .map(|(path, _)| path.clone())
         .collect();
+    // Which content docs are XHTML (as opposed to e.g. SVG) - the
+    // CSS-029/030 cross-referencing pass below only has CSS-collection
+    // support for XHTML docs (SVG's own <style>/xml-stylesheet forms are a
+    // deliberately deferred, separate extension), so it must not treat an
+    // SVG doc's absence from `doc_class_names` as "no CSS found."
+    let xhtml_doc_paths: HashSet<String> = content_docs.iter().cloned().collect();
     let xhtml_grammar = crate::rng::xhtml_grammar();
+    // content-doc resolved-path -> CSS class names used in its own
+    // associated stylesheets (inline <style> + linked <link
+    // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
+    let mut doc_class_names: HashMap<String, HashSet<String>> = HashMap::new();
     for path in content_docs {
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
@@ -830,6 +864,90 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     .filter_map(|n| n.text())
                     .collect();
                 crate::css::check(&css_text, &path, &dir, &name_index, None, report);
+                let sheet = styloria::Parser::parse_stylesheet(&css_text);
+                doc_class_names
+                    .entry(path.clone())
+                    .or_default()
+                    .extend(crate::css::selector_class_names(&sheet));
+            }
+            // A linked stylesheet also counts as this document's own CSS
+            // (for the CSS-029/030 media-overlay class cross-reference
+            // below) - its own findings are already reported separately
+            // via the manifest text/css loop further down.
+            if node.tag_name().name() == "link"
+                && node.attribute("rel").is_some_and(|r| {
+                    r.split_whitespace()
+                        .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                })
+            {
+                if let Some(href) = node.attribute("href") {
+                    if !is_external(href) {
+                        let resolved = resolve(&dir, href);
+                        if let Some(orig) = name_index.get(&nfc(&resolved)).cloned() {
+                            if let Some(b) = ocf.read(&orig) {
+                                let css_text = crate::css::decode_bytes(&b);
+                                let sheet = styloria::Parser::parse_stylesheet(&css_text);
+                                doc_class_names
+                                    .entry(path.clone())
+                                    .or_default()
+                                    .extend(crate::css::selector_class_names(&sheet));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Media-overlay active-class CSS cross-referencing (CSS-029/030) ---
+    const WELL_KNOWN_ACTIVE_CLASS: &str = "-epub-media-overlay-active";
+    const WELL_KNOWN_PLAYBACK_CLASS: &str = "-epub-media-overlay-playing";
+
+    // CSS-029 (usage): a well-known class name is used as a CSS selector
+    // somewhere, but its corresponding property isn't declared at all.
+    for (well_known, declared) in [
+        (WELL_KNOWN_ACTIVE_CLASS, media_active_class.is_some()),
+        (
+            WELL_KNOWN_PLAYBACK_CLASS,
+            media_playback_active_class.is_some(),
+        ),
+    ] {
+        if declared {
+            continue;
+        }
+        for (doc_path, classes) in &doc_class_names {
+            if classes.contains(well_known) {
+                report.push_at(
+                    CSS_029,
+                    Severity::Info,
+                    format!("well-known media-overlay class '{well_known}' is used but not declared in the package metadata"),
+                    doc_path.clone(),
+                );
+            }
+        }
+    }
+
+    // CSS-030: a declared property has no matching CSS selector in the
+    // content document its media overlay actually applies to.
+    let empty_classes: HashSet<String> = HashSet::new();
+    for doc_path in content_doc_overlay
+        .keys()
+        .filter(|p| xhtml_doc_paths.contains(p.as_str()))
+    {
+        let classes = doc_class_names.get(doc_path).unwrap_or(&empty_classes);
+        for (property_name, declared_class) in [
+            ("media:active-class", &media_active_class),
+            ("media:playback-active-class", &media_playback_active_class),
+        ] {
+            if let Some(name) = declared_class {
+                if !classes.contains(name.as_str()) {
+                    report.push_at(
+                        CSS_030,
+                        Severity::Error,
+                        format!("{property_name} '{name}' has no matching CSS selector in this content document"),
+                        doc_path.clone(),
+                    );
+                }
             }
         }
     }

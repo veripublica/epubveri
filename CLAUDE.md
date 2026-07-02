@@ -988,6 +988,63 @@ checks).
 | PKG family exact hits | 10/37 | **12/37** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: media-overlay active-class CSS cross-referencing, CSS-029/030 (2026-07-02)
+
+Owner's choice: CSS-029/030, the last real piece of the `CSS` family. These
+cross-reference the package's `media:active-class`/`media:playback-active-class`
+metadata properties (the CSS class a reading system applies to the
+currently active/playing media-overlay element) against the actual CSS
+class selectors defined in each content document's own stylesheets.
+
+**Implemented:** `css::selector_class_names` (new, in `src/css.rs`) walks a
+stylesheet's top-level qualified-rule preludes for `Token::Delim('.')`
+immediately followed by `Token::Ident(name)` — a class selector, at the
+token level, since styloria's phase-1 output has no selector grammar (same
+"scan the raw prelude tokens" approach `check_font_face`'s `src` lookup
+already used). Wired into `opf.rs`'s existing `content_docs` loop, which
+now also collects each doc's CSS class names from both inline `<style>`
+(reusing the parse already happening there for `css::check`) and any
+linked `<link rel="stylesheet">` (new — resolved and read the same way the
+existing manifest `text/css` loop does). A cross-referencing pass after
+that loop reports **CSS-029** (`Severity::Info`, usage-level, same
+convention as MED-015/NCX-006/HTM-055/060: a well-known class name
+`-epub-media-overlay-active`/`-playing` is used as a selector somewhere but
+its property isn't declared at all) and **CSS-030** (`Severity::Error`: a
+declared property has no matching selector in the specific content
+document its media overlay applies to).
+
+Also added two small, closely-related bonus rules to `schemas/package.sch`
+(own-authored, confirmed via 4 real corpus fixtures, no new XPath engine
+work needed): `media:active-class`/`media:playback-active-class` must not
+have a `refines` attribute, and their text must be a single class name (no
+whitespace) — both reported as `RSC-005`, epubcheck's own catch-all for
+this class of package-metadata constraint.
+
+**A real false positive found via the corpus, not by inspection:** the
+CSS-030 cross-referencing pass initially treated *any* content doc absent
+from the newly-built `doc_class_names` map as "no CSS found" — but that
+map is only ever populated for **XHTML** content docs (SVG's own
+`<style>`/`xml-stylesheet` forms are a separate, deferred extension, named
+below), so an SVG content doc with a legitimate, valid media-overlay
+association was wrongly flagged as missing CSS it was never checked for at
+all. Fixed by capturing `xhtml_doc_paths` before the content-doc loop
+consumes the XHTML-only list, and gating the CSS-030 pass on it — an SVG
+doc is now correctly skipped rather than treated as "checked and failed."
+
+**Deliberately out of scope, named rather than silently dropped:** the SVG
+content-document variant of this whole check (`mediaoverlays-active-class-
+svg-*`) — SVG top-level content documents aren't looped over for
+CSS-checking at all yet.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 23.6% (138 hits) | 24.8% (**145 hits**) |
+| CSS family exact hits | 11/20 | **14/20** |
+| RSC family exact hits | 65/377 | **69/377** (the 4 bonus refines/multiple-class-name scenarios) |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

@@ -16,7 +16,7 @@
 //!   core grammar represents a nested rule's `{ ... }` as an ordinary
 //!   `ComponentValue::Block` that the walk below already recurses into.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use styloria::{ComponentValue, Parser, Rule, Token};
 
@@ -295,9 +295,63 @@ fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>) {
     }
 }
 
+/// Class names used as selectors in a stylesheet's top-level qualified
+/// rules — e.g. `.foo, .bar { ... }` yields `{"foo", "bar"}`. Only
+/// top-level rule preludes are scanned, not nested at-rule blocks (the
+/// real media-overlay class fixtures this supports are flat, unnested
+/// CSS); a class selector is a `Token::Delim('.')` immediately followed
+/// by `Token::Ident(name)` in the raw prelude token stream — styloria's
+/// phase-1 output has no selector grammar, so this is a token-level scan,
+/// same style as `collect_urls` above.
+pub(crate) fn selector_class_names(sheet: &styloria::Stylesheet) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for rule in &sheet.rules {
+        if let Rule::Qualified(q) = rule {
+            for pair in q.prelude.windows(2) {
+                if let [ComponentValue::Token(Token::Delim('.')), ComponentValue::Token(Token::Ident(name))] =
+                    pair
+                {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selector_class_names_basic() {
+        let sheet = Parser::parse_stylesheet(".foo { color: red; }");
+        assert_eq!(
+            selector_class_names(&sheet),
+            HashSet::from(["foo".to_string()])
+        );
+    }
+
+    #[test]
+    fn selector_class_names_comma_list() {
+        let sheet = Parser::parse_stylesheet(".foo, .bar { color: red; }");
+        assert_eq!(
+            selector_class_names(&sheet),
+            HashSet::from(["foo".to_string(), "bar".to_string()])
+        );
+    }
+
+    #[test]
+    fn selector_class_names_no_class() {
+        let sheet = Parser::parse_stylesheet("body { color: red; } #id { color: blue; }");
+        assert!(selector_class_names(&sheet).is_empty());
+    }
+
+    #[test]
+    fn selector_class_names_empty_stylesheet() {
+        let sheet = Parser::parse_stylesheet("");
+        assert!(selector_class_names(&sheet).is_empty());
+    }
 
     fn run(css: &str, name_index: &HashMap<String, String>) -> Vec<&'static str> {
         let mut report = Report::new();

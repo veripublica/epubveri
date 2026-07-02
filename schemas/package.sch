@@ -57,4 +57,22 @@
         >@refines target "<value-of select="$refines-target"/>" does not exist</assert>
     </rule>
   </pattern>
+
+  <!-- media:active-class / media:playback-active-class name the CSS class
+       a reading system applies to the currently active/playing
+       media-overlay element - a single, unqualified class name, not
+       refining anything else. -->
+  <pattern id="media-active-class-no-refines">
+    <rule context="opf:meta[normalize-space(@property) = 'media:active-class' or normalize-space(@property) = 'media:playback-active-class']">
+      <assert test="not(@refines)"
+        >the "<value-of select="normalize-space(@property)"/>" property must not have a refines attribute</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="media-active-class-single-name">
+    <rule context="opf:meta[normalize-space(@property) = 'media:active-class' or normalize-space(@property) = 'media:playback-active-class']">
+      <assert test="not(contains(normalize-space(.), ' '))"
+        >the "<value-of select="normalize-space(@property)"/>" property must define a single class name</assert>
+    </rule>
+  </pattern>
 </schema>
