@@ -295,6 +295,25 @@ fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>) {
     }
 }
 
+/// Just the target(s) of top-level `@import` rules, not every `url()` in
+/// the sheet (unlike `stylesheet_urls` below) - used where callers need
+/// to tell "this points at another stylesheet to also parse" apart from
+/// an ordinary resource reference like `background: url(x.png)` (e.g.
+/// `opf.rs`'s SVG active-class CSS scan, CSS-029/030, which needs to
+/// merge an `@import`ed sheet's own selector class names, not just note
+/// its existence as a used resource).
+pub(crate) fn import_targets(sheet: &styloria::Stylesheet) -> Vec<String> {
+    let mut urls = Vec::new();
+    for rule in &sheet.rules {
+        if let Rule::At(a) = rule {
+            if a.name.eq_ignore_ascii_case("import") {
+                collect_urls(&a.prelude, &mut urls);
+            }
+        }
+    }
+    urls
+}
+
 /// Every `url()` reference anywhere in a stylesheet (rule preludes,
 /// declaration blocks, `@import` targets, nested blocks) - shared by
 /// `check`'s own resource-resolution pass and, in `opf.rs`, the

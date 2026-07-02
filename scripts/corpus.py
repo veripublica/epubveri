@@ -341,6 +341,14 @@ def wrap_smil_file(full, name):
         '    <dc:identifier id="id">corpus-wrap</dc:identifier>\n'
         '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
         '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
+        # epubveri checks that a publication using media-overlay attributes
+        # declares both a global and a per-overlay media:duration meta
+        # (RSC-005 if either is missing) - without these the wrap itself
+        # would spuriously fail that check, a harness artifact rather than
+        # a defect in the fixture under test (same reasoning as the
+        # synthetic NCX wrap_single_doc adds for EPUB 2 scenarios).
+        '    <meta property="media:duration">1s</meta>\n'
+        '    <meta property="media:duration" refines="#mo">1s</meta>\n'
         '  </metadata>\n'
         '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
         '  <spine>' + "".join(spine_items) + '</spine>\n'

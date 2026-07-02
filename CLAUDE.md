@@ -1526,6 +1526,92 @@ engine or is_external/is_remote_url surprises).
 | RSC family exact hits | 154/379 | **166/379** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: finish 09-media-overlays, all 10 remaining scenarios (2026-07-02)
+
+Owner's choice: close out the 10 remaining misses in
+`epub3/09-media-overlays/media-overlays.feature` rather than start a new
+family. All grounded in real corpus fixtures (clean-room, read-only, same
+stance as every prior increment).
+
+**`src/smil.rs`**: a bare `<meta>` directly inside `<head>` (must be
+wrapped in a `<metadata>` element) → RSC-005; a `<par>` may contain at
+most one `<text>` child, confirmed the *first* is processed normally and
+every one after it is RSC-005 "not allowed here" (not deduplicated per
+`<par>`); `clipBegin`/`clipEnd` values that fail to *parse* now report
+RSC-005 (previously silently skipped — the existing code comment and unit
+test `clock_value_syntax_errors_from_the_real_corpus` already anticipated
+this gap, it just wasn't wired to a `report.push_at` yet); `epub:textref`
+on `<seq>`/`<par>` is now collected (`check()`'s return type grew to
+`(text_targets, textref_targets)`) and cross-referenced by the caller in
+`opf.rs` against the target document's real ids, the same RSC-012 shape
+already used for NCX `<content src>` fragments; new **`OPF-088`**
+(usage/Info) for an `epub:type` token that's neither in a generously-
+inclusive EPUB Structural Semantics vocabulary list nor custom-prefixed
+(any token containing `:` is exempt, same convention as the OPF-027
+item-property prefix exemption) — biased toward inclusion in the
+vocabulary list since this is Info-level, so a false negative is far
+safer than a false positive.
+
+**`src/opf.rs`**: a `media-overlay` attribute's target manifest item must
+itself be `application/smil+xml` (RSC-005); a `media-overlay` attribute
+is only allowed on an item whose *own* type is a content-document type —
+confirmed both `application/xhtml+xml` *and* `image/svg+xml` qualify (the
+existing `mediaoverlays-svg-valid` fixture uses exactly this pattern and
+must stay clean), only a genuinely non-content type is the violation
+(RSC-005); once any item declares a `media-overlay`, a package-level
+global (non-`refines`) `media:duration` must exist (RSC-005 "global...
+not set"), and each distinct referenced overlay id needs its own
+`refines`-scoped one (RSC-005 "item... not set", confirmed fired once per
+missing overlay id, not once per referencing content doc) — both
+distinct from the pre-existing MED-016 total-vs-sum check, which only
+compares values once *both* sides are already known to exist and so
+never covered either "not defined at all" case.
+
+**CSS-030's SVG variant** (`mediaoverlays-active-class-svg-style-not-
+found-error`), explicitly deferred in the earlier CSS-029/030 increment:
+new `collect_svg_class_names` in `opf.rs`, reached only for SVG top-level
+content documents that declare a `media-overlay`. To include SVG without
+regressing the 4 already-passing SVG "valid" fixtures (which must keep
+finding their real CSS class), all 4 real linking mechanisms those
+fixtures use had to work: inline `<style>` and linked `<link
+rel="stylesheet">` (both reuse existing per-doc CSS handling), `@import
+url(...)` inside a `<style>` block (new `css::import_targets` - narrower
+than the existing `stylesheet_urls`, which mixes *every* `url()` in a
+sheet together and so can't safely be treated as "also parse this as a
+nested stylesheet" without conflating it with e.g. `background:
+url(x.png)`), and a top-level `<?xml-stylesheet type="text/css"
+href="..."?>` processing instruction (confirmed `roxmltree::Node::pi()`
+exposes `target`/`value`; PIs are siblings of the root *element* at the
+document level, found via `doc.root().children()`, not
+`root_element().children()` - a small hand-rolled scan pulls `href="..."`
+out of the PI's pseudo-attribute value string).
+
+**A real harness-only regression found and fixed during verification, not
+a product bug:** `scripts/corpus.py`'s `wrap_smil_file` (used for the 3
+bare-`.smil` scenarios in this batch) synthesizes a minimal package that
+declares `media-overlay` on every wrapped content item but had no
+`media:duration` meta at all — meaning the brand-new global/per-item
+duration-not-defined checks above immediately flagged the wrap itself on
+every bare-SMIL scenario, including the three that must stay clean
+(`minimal.smil`, `epubtype-valid.smil`, `epubtype-prefix-declared-
+valid.smil`). Fixed at the harness root, same precedent as the earlier
+synthetic-NCX fix for EPUB 2 wraps: `wrap_smil_file`'s synthesized OPF now
+also declares a matching global + refines-scoped `media:duration`.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 50.3% (300 hits) | **51.9% (310 hits)** |
+| RSC family exact hits | 166/379 | **174/379** |
+| OPF family exact hits | 69/148 | **70/148** |
+| CSS family exact hits | 14/20 | **15/20** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
+With this, `09-media-overlays.feature` is effectively **done** for this
+project's current scope - all 10 targeted scenarios hit exactly, plus 12
+adjacent already-passing scenarios spot-checked with no regressions.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

@@ -481,6 +481,100 @@ fn check_reserved_prefixes(prefix_attr: &str, path: &str, report: &mut Report) {
 /// valid percent-encoding - every `%` must be followed by exactly 2 hex
 /// digits. Not full RFC 3986 validation, just the one failure mode the
 /// corpus exercises (a trailing, incomplete "%").
+/// Reads and parses a (possibly remote/missing, silently skipped) local
+/// stylesheet, returning the CSS class names used in its selectors -
+/// shared by the SVG active-class scan below for both `<link
+/// rel="stylesheet">` targets and `@import`/`<?xml-stylesheet?>` targets.
+fn read_stylesheet_classes(
+    href: &str,
+    dir: &str,
+    name_index: &HashMap<String, String>,
+    ocf: &mut Ocf,
+) -> HashSet<String> {
+    if is_external(href) {
+        return HashSet::new();
+    }
+    let resolved = resolve(dir, href);
+    let Some(orig) = name_index.get(&nfc(&resolved)).cloned() else {
+        return HashSet::new();
+    };
+    let Some(b) = ocf.read(&orig) else {
+        return HashSet::new();
+    };
+    let text = crate::css::decode_bytes(&b);
+    let sheet = styloria::Parser::parse_stylesheet(&text);
+    crate::css::selector_class_names(&sheet)
+}
+
+/// Extracts the `href="..."` pseudo-attribute from a `<?xml-stylesheet
+/// ...?>` processing instruction's value string (e.g. `type="text/css"
+/// href="styles.css"`) - a tiny hand-rolled scan rather than a full
+/// XML-attribute parser, since it's one attribute in one fixed,
+/// well-known position.
+fn extract_pi_href(value: &str) -> Option<String> {
+    let start = value.find("href=")? + 5;
+    let quote = value.as_bytes().get(start).copied()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let rest = &value[start + 1..];
+    let end = rest.find(quote as char)?;
+    Some(rest[..end].to_string())
+}
+
+/// Collects CSS class names used by an SVG top-level content document's
+/// own stylesheets - the 4 real linking mechanisms SVG uses (confirmed
+/// via real corpus fixtures): inline `<style>`, linked `<link
+/// rel="stylesheet">`, `@import` inside a `<style>` block, and a
+/// top-level `<?xml-stylesheet?>` processing instruction. Only reached
+/// for SVG docs that declare a `media-overlay` (the CSS-029/030
+/// cross-reference is the only reason SVG's own CSS matters at all).
+fn collect_svg_class_names(
+    doc: &roxmltree::Document,
+    dir: &str,
+    name_index: &HashMap<String, String>,
+    ocf: &mut Ocf,
+) -> HashSet<String> {
+    let mut classes = HashSet::new();
+
+    for pi in doc.root().children().filter(|n| n.is_pi()) {
+        if let Some(p) = pi.pi() {
+            if p.target == "xml-stylesheet" {
+                if let Some(href) = p.value.and_then(extract_pi_href) {
+                    classes.extend(read_stylesheet_classes(&href, dir, name_index, ocf));
+                }
+            }
+        }
+    }
+
+    for node in doc.descendants().filter(|n| n.is_element()) {
+        if node.tag_name().name() == "style" {
+            let css_text: String = node
+                .descendants()
+                .filter(|n| n.is_text())
+                .filter_map(|n| n.text())
+                .collect();
+            let sheet = styloria::Parser::parse_stylesheet(&css_text);
+            classes.extend(crate::css::selector_class_names(&sheet));
+            for import_url in crate::css::import_targets(&sheet) {
+                classes.extend(read_stylesheet_classes(&import_url, dir, name_index, ocf));
+            }
+        }
+        if node.tag_name().name() == "link"
+            && node.attribute("rel").is_some_and(|r| {
+                r.split_whitespace()
+                    .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+            })
+        {
+            if let Some(href) = node.attribute("href") {
+                classes.extend(read_stylesheet_classes(href, dir, name_index, ocf));
+            }
+        }
+    }
+
+    classes
+}
+
 fn check_collection_roles(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
     for n in doc
         .descendants()
@@ -1165,6 +1259,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 );
             }
             if let Some(mo) = item.attribute("media-overlay") {
+                if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        "the media-overlay attribute is only allowed on EPUB Content Documents",
+                        opf_path,
+                    );
+                }
                 media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
             }
             if let Some(fb) = item.attribute("fallback") {
@@ -1196,6 +1298,64 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 format!("fallback references unknown manifest item id '{target}'"),
                 opf_path,
             );
+        }
+    }
+    // A media-overlay attribute's target item must itself be a Media
+    // Overlay Document (application/smil+xml).
+    for (_, overlay_id) in &media_overlay_attrs {
+        if let Some((_, mt)) = items.get(overlay_id) {
+            if mt != "application/smil+xml" {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!(
+                        "media-overlay target '{overlay_id}' must be of the \"application/smil+xml\" type"
+                    ),
+                    opf_path,
+                );
+            }
+        }
+    }
+    // 9.3.5.2: once any content document declares a media-overlay, (a) a
+    // global (non-refines) media:duration must exist for the whole
+    // publication, and (b) each distinct overlay id referenced must have
+    // its own refines-scoped media:duration. Distinct from the existing
+    // MED-016 total-vs-sum check below, which only compares values once
+    // both sides are already known to exist.
+    if let Some(md) = metadata {
+        let has_global_duration = md.children().any(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && n.attribute("property") == Some("media:duration")
+                && n.attribute("refines").is_none()
+        });
+        if !media_overlay_attrs.is_empty() && !has_global_duration {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "the global media:duration meta element not set",
+                opf_path,
+            );
+        }
+        let overlay_ids: HashSet<&str> = media_overlay_attrs
+            .iter()
+            .map(|(_, id)| id.as_str())
+            .collect();
+        for overlay_id in overlay_ids {
+            let has_item_duration = md.children().any(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attribute("property") == Some("media:duration")
+                    && n.attribute("refines").map(|r| r.trim_start_matches('#')) == Some(overlay_id)
+            });
+            if !has_item_duration {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("the item media:duration meta element not set for '{overlay_id}'"),
+                    opf_path,
+                );
+            }
         }
     }
 
@@ -2025,6 +2185,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         crate::edupub::check_page_list(has_pagination_source, has_page_list_nav, opf_path, report);
     }
 
+    // SVG top-level content documents that declare a media-overlay also
+    // need their own CSS scanned for the CSS-029/030 cross-reference
+    // below (deferred in the original CSS-029/030 increment - only
+    // scanned here, not in the main XHTML content_docs loop above, since
+    // that's the only reason SVG's own CSS matters at all).
+    let svg_doc_paths: HashSet<String> = items
+        .values()
+        .filter(|(_, mt)| mt == "image/svg+xml")
+        .map(|(path, _)| nfc(path))
+        .collect();
+    for doc_path in svg_doc_paths
+        .iter()
+        .filter(|p| content_doc_overlay.contains_key(p.as_str()))
+    {
+        let Some(orig) = name_index.get(doc_path).cloned() else {
+            continue;
+        };
+        let Some(b) = ocf.read(&orig) else { continue };
+        let text = String::from_utf8_lossy(&b).into_owned();
+        let Ok(d) = parse_xml(&text) else { continue };
+        let dir = parent_dir(doc_path);
+        doc_class_names
+            .entry(doc_path.clone())
+            .or_default()
+            .extend(collect_svg_class_names(&d, &dir, &name_index, ocf));
+    }
+
     // --- Media-overlay active-class CSS cross-referencing (CSS-029/030) ---
     const WELL_KNOWN_ACTIVE_CLASS: &str = "-epub-media-overlay-active";
     const WELL_KNOWN_PLAYBACK_CLASS: &str = "-epub-media-overlay-playing";
@@ -2058,7 +2245,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     let empty_classes: HashSet<String> = HashSet::new();
     for doc_path in content_doc_overlay
         .keys()
-        .filter(|p| xhtml_doc_paths.contains(p.as_str()))
+        .filter(|p| xhtml_doc_paths.contains(p.as_str()) || svg_doc_paths.contains(p.as_str()))
     {
         let classes = doc_class_names.get(doc_path).unwrap_or(&empty_classes);
         for (property_name, declared_class) in [
@@ -2149,7 +2336,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         let smil_text = String::from_utf8_lossy(&b).into_owned();
         let dir = parent_dir(&path);
         let overlay_path = nfc(&path);
-        let targets = crate::smil::check(
+        let (targets, textref_targets) = crate::smil::check(
             &smil_text,
             &path,
             &dir,
@@ -2157,6 +2344,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             &media_type_index,
             report,
         );
+
+        // RSC-012: epub:textref fragments must resolve to a real id in
+        // their target document - same shape as the NCX <content src>
+        // fragment check, reusing the same id_cache-per-target pattern.
+        {
+            let mut id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+            for (target, frag) in &textref_targets {
+                if !id_cache.contains_key(target) {
+                    let ids = name_index
+                        .get(target)
+                        .cloned()
+                        .and_then(|orig| ocf.read(&orig))
+                        .map(|b| {
+                            let text = String::from_utf8_lossy(&b).into_owned();
+                            parse_xml(&text)
+                                .map(|d| dom_id_order(&d))
+                                .unwrap_or_default()
+                        })
+                        .unwrap_or_default();
+                    id_cache.insert(target.clone(), ids);
+                }
+                if !id_cache[target].contains_key(frag) {
+                    report.push_at(
+                        RSC_012,
+                        Severity::Error,
+                        format!("epub:textref fragment '{frag}' is not defined in '{target}'"),
+                        path.clone(),
+                    );
+                }
+            }
+        }
 
         // OPF-014: a media overlay referencing a remote resource
         // (typically <audio src>) needs its own manifest item to

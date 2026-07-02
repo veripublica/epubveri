@@ -51,6 +51,7 @@ pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resourc
 pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't application/xhtml+xml
 pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no print-source is identified
 pub const OPF_086: &str = "OPF-086"; // usage of a deprecated rendition property or value
+pub const OPF_088: &str = "OPF-088"; // epub:type value isn't in the default vocabulary (usage)
 pub const OPF_077: &str = "OPF-077"; // the Data Navigation Document is referenced from the spine
 pub const OPF_003: &str = "OPF-003"; // a container resource isn't listed in the manifest (usage)
 pub const OPF_014: &str = "OPF-014"; // a content property (remote-resources/scripted/svg) is used but not declared

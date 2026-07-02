@@ -15,13 +15,18 @@ use crate::opf::{is_external, nfc, resolve};
 use crate::report::{Report, Severity};
 
 const CORE_AUDIO_TYPES: [&str; 2] = ["audio/mpeg", "audio/mp4"];
+const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
-/// Parses and checks one SMIL overlay document. Returns the `(content-doc
-/// path, fragment id)` pairs referenced by its `<text src="...#id">`
-/// elements, which the caller (`opf::check`) cross-references against the
-/// package manifest's `media-overlay` attributes (MED-010/011/012/013) —
-/// that check needs the whole-package view, not just one file in
-/// isolation, so it can't live here.
+/// Parses and checks one SMIL overlay document. Returns `(text_targets,
+/// textref_targets)`: `text_targets` is the `(content-doc path, fragment
+/// id)` pairs referenced by `<text src="...#id">` elements, which the
+/// caller (`opf::check`) cross-references against the package manifest's
+/// `media-overlay` attributes (MED-010/011/012/013); `textref_targets` is
+/// the same shape for `<seq>`/`<par>` `epub:textref` attributes, which the
+/// caller resolves against the target document's real ids (RSC-012, the
+/// same shape as the NCX `<content src>` fragment check). Both need the
+/// whole-package view (reading another file's DOM), so neither check can
+/// finish here.
 pub(crate) fn check(
     smil_xml: &str,
     smil_path: &str,
@@ -29,12 +34,30 @@ pub(crate) fn check(
     name_index: &HashMap<String, String>,
     media_types: &HashMap<String, String>,
     report: &mut Report,
-) -> Vec<(String, String)> {
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
     let mut text_targets = Vec::new();
+    let mut textref_targets = Vec::new();
     let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
-        return text_targets;
+        return (text_targets, textref_targets);
     };
     let root = doc.root_element();
+    // 9.2.2.2: the head container may only hold a <metadata> element (not
+    // a bare <meta>, which must be wrapped in one).
+    if let Some(head) = root
+        .children()
+        .find(|n| n.is_element() && n.tag_name().name() == "head")
+    {
+        for child in head.children().filter(|n| n.is_element()) {
+            if child.tag_name().name() == "meta" {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "element \"meta\" not allowed here (must be inside a \"metadata\" element)",
+                    smil_path,
+                );
+            }
+        }
+    }
     if let Some(body) = root
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "body")
@@ -49,7 +72,165 @@ pub(crate) fn check(
             &mut text_targets,
         );
     }
-    text_targets
+
+    // 9.3.2.2: epub:textref on <seq>/<par> - a fragment reference to a
+    // sectioning element in the target content document, resolved by the
+    // caller the same way NCX <content src> fragments are (RSC-012).
+    for n in doc.descendants().filter(|n| {
+        n.is_element()
+            && matches!(n.tag_name().name(), "seq" | "par")
+            && n.attribute((EPUB_NS, "textref")).is_some()
+    }) {
+        let textref = n.attribute((EPUB_NS, "textref")).unwrap();
+        if is_external(textref) {
+            continue;
+        }
+        if let Some((path_part, frag)) = textref.split_once('#') {
+            if !frag.is_empty() {
+                textref_targets.push((nfc(&resolve(base_dir, path_part)), frag.to_string()));
+            }
+        }
+    }
+
+    // 9.3.3: epub:type values must be in the default vocabulary unless
+    // custom-prefixed (any token containing ':' - not validated against
+    // the package's own declared epub:prefix mapping, same "prefixed =
+    // always allowed" exemption already used for manifest item
+    // properties, OPF-027).
+    for n in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
+    {
+        let value = n.attribute((EPUB_NS, "type")).unwrap();
+        for token in value.split_whitespace() {
+            if !token.contains(':') && !is_default_vocab_type(token) {
+                report.push_at(
+                    OPF_088,
+                    Severity::Info,
+                    format!("epub:type value '{token}' is not in the default vocabulary"),
+                    smil_path,
+                );
+            }
+        }
+    }
+
+    (text_targets, textref_targets)
+}
+
+/// A generously-inclusive allowlist of real EPUB Structural Semantics
+/// vocabulary terms - this is a usage-level (Info) finding, so a false
+/// negative (missing a real term) is far safer than a false positive
+/// (flagging one), hence biased toward inclusion.
+fn is_default_vocab_type(token: &str) -> bool {
+    const KNOWN: &[&str] = &[
+        "abstract",
+        "acknowledgments",
+        "afterword",
+        "answer",
+        "answers",
+        "appendix",
+        "aside",
+        "assessment",
+        "assessments",
+        "backlink",
+        "backmatter",
+        "bibliography",
+        "biblioentry",
+        "bodymatter",
+        "bridgehead",
+        "chapter",
+        "colophon",
+        "concludingsentence",
+        "conclusion",
+        "contributors",
+        "copyright-page",
+        "cover",
+        "credit",
+        "credits",
+        "dedication",
+        "division",
+        "endnote",
+        "endnotes",
+        "epigraph",
+        "epilogue",
+        "errata",
+        "example",
+        "footnote",
+        "footnotes",
+        "foreword",
+        "fulltitlepage",
+        "glossary",
+        "glossdef",
+        "glossref",
+        "glossterm",
+        "halftitlepage",
+        "imprimatur",
+        "imprint",
+        "index",
+        "index-editor-note",
+        "index-entry",
+        "index-entry-list",
+        "index-group",
+        "index-headnotes",
+        "index-legend",
+        "index-locator",
+        "index-locator-list",
+        "index-locator-range",
+        "index-term",
+        "index-term-categories",
+        "index-term-category",
+        "index-xref-preferred",
+        "index-xref-related",
+        "introduction",
+        "keyword",
+        "landmarks",
+        "learning-objective",
+        "learning-objectives",
+        "learning-outcome",
+        "learning-outcomes",
+        "learning-resource",
+        "learning-resources",
+        "learning-standard",
+        "learning-standards",
+        "list",
+        "list-item",
+        "loa",
+        "loi",
+        "lot",
+        "lov",
+        "marginalia",
+        "notice",
+        "noteref",
+        "ordinal",
+        "other-credits",
+        "pagebreak",
+        "page-list",
+        "part",
+        "practice",
+        "practice-answer",
+        "preamble",
+        "preface",
+        "prologue",
+        "pullquote",
+        "qna",
+        "question",
+        "revision-history",
+        "seriespage",
+        "subchapter",
+        "subtitle",
+        "table",
+        "table-cell",
+        "table-row",
+        "tip",
+        "titlepage",
+        "toc",
+        "toc-brief",
+        "topic-sentence",
+        "translator-note",
+        "volume",
+        "warning",
+    ];
+    KNOWN.contains(&token)
 }
 
 /// Walks `<body>`/`<seq>`/`<par>` nesting. `<par>` may only contain
@@ -65,6 +246,10 @@ fn check_container(
     text_targets: &mut Vec<(String, String)>,
 ) {
     let is_par = node.tag_name().name() == "par";
+    // A <par> may contain at most one <text> child - confirmed the first
+    // is processed normally and every one after it is RSC-005 "not
+    // allowed here" instead.
+    let mut text_seen = 0;
     for child in node.children().filter(|n| n.is_element()) {
         match (is_par, child.tag_name().name()) {
             (false, "seq") | (false, "par") => {
@@ -79,7 +264,17 @@ fn check_container(
                 );
             }
             (true, "text") => {
-                check_text(child, smil_path, base_dir, name_index, report, text_targets);
+                text_seen += 1;
+                if text_seen > 1 {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        "element \"text\" not allowed here (a <par> may only contain one)",
+                        smil_path,
+                    );
+                } else {
+                    check_text(child, smil_path, base_dir, name_index, report, text_targets);
+                }
             }
             (true, "audio") => {
                 check_audio(child, smil_path, base_dir, name_index, media_types, report);
@@ -219,6 +414,18 @@ fn check_audio(
         }
     }
 
+    for attr_name in ["clipBegin", "clipEnd"] {
+        if let Some(v) = node.attribute(attr_name) {
+            if parse_clock_value(v).is_none() {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("{attr_name} value '{v}' is not a valid SMIL clock value"),
+                    smil_path,
+                );
+            }
+        }
+    }
     let begin = node.attribute("clipBegin").and_then(parse_clock_value);
     let end = node.attribute("clipEnd").and_then(parse_clock_value);
     if let (Some(b), Some(e)) = (begin, end) {
@@ -353,7 +560,7 @@ mod tests {
         media_types: &HashMap<String, String>,
     ) -> (Vec<&'static str>, Vec<(String, String)>) {
         let mut report = Report::new();
-        let targets = check(
+        let (targets, _textref_targets) = check(
             smil,
             "content.smil",
             "OEBPS",
@@ -542,5 +749,78 @@ mod tests {
         assert_eq!(parse_clock_value(".5s"), None);
         // "00:00:10.999ms" - mixes full-clock and timecount syntax
         assert_eq!(parse_clock_value("00:00:10.999ms"), None);
+    }
+
+    #[test]
+    fn invalid_clock_value_syntax_reports_rsc005() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body><par id="p"><text src="c.xhtml#t"/><audio src="c.mp3" clipBegin="10m" clipEnd="0:00:60.000"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert_eq!(findings, vec![RSC_005, RSC_005]);
+    }
+
+    #[test]
+    fn bare_meta_in_head_reports_rsc005() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <head><meta name="foo" content="bar"/></head>
+            <body><par id="p"><text src="c.xhtml#t"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert_eq!(findings, vec![RSC_005]);
+    }
+
+    #[test]
+    fn par_with_two_text_children_reports_rsc005_once() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body><par id="p"><text src="c.xhtml#t1"/><text src="c.xhtml#t2"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let (findings, targets) = run(smil, &names, &HashMap::new());
+        assert_eq!(findings, vec![RSC_005]);
+        assert_eq!(targets.len(), 1);
+    }
+
+    #[test]
+    fn textref_fragment_is_collected() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+            <body><seq epub:textref="c.xhtml#sec1"><par id="p"><text src="c.xhtml#t"/><audio src="c.mp3"/></par></seq></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let mut report = Report::new();
+        let (_targets, textref_targets) = check(
+            smil,
+            "content.smil",
+            "OEBPS",
+            &names,
+            &HashMap::new(),
+            &mut report,
+        );
+        assert_eq!(
+            textref_targets,
+            vec![("OEBPS/c.xhtml".to_string(), "sec1".to_string())]
+        );
+    }
+
+    #[test]
+    fn unknown_epubtype_reports_usage() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+            <body epub:type="chapter unknown"><par id="p"><text src="c.xhtml#t"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert_eq!(findings, vec![OPF_088]);
+    }
+
+    #[test]
+    fn custom_prefixed_epubtype_is_allowed() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+            <body epub:type="aside my:sidebar"><par id="p" epub:type="my:title"><text src="c.xhtml#t"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert!(!findings.contains(&OPF_088));
     }
 }
