@@ -193,10 +193,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // used for the CSS-029/030 cross-referencing pass below.
     let mut media_active_class: Option<String> = None;
     let mut media_playback_active_class: Option<String> = None;
+    // This rendition's own dc:type text, and whether a print-source for
+    // pagination is identified (dc:source + a meta[property=source-of]
+    // refining it to "pagination") - both used by the EDUPUB checks below.
+    let mut opf_dc_type: Option<String> = None;
+    let mut has_pagination_source = false;
     let metadata = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "metadata");
     if let Some(md) = metadata {
+        let elem_text = |n: roxmltree::Node| -> String {
+            n.descendants()
+                .filter(|t| t.is_text())
+                .filter_map(|t| t.text())
+                .collect::<String>()
+                .trim()
+                .to_string()
+        };
         let meta_property_text = |property: &str| -> Option<String> {
             md.children()
                 .find(|n| {
@@ -204,17 +217,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                         && n.tag_name().name() == "meta"
                         && n.attribute("property") == Some(property)
                 })
-                .map(|n| {
-                    n.descendants()
-                        .filter(|t| t.is_text())
-                        .filter_map(|t| t.text())
-                        .collect::<String>()
-                        .trim()
-                        .to_string()
-                })
+                .map(elem_text)
         };
         media_active_class = meta_property_text("media:active-class");
         media_playback_active_class = meta_property_text("media:playback-active-class");
+        opf_dc_type = md
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "type")
+            .map(elem_text);
+        has_pagination_source = md
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "source")
+            .filter_map(|n| n.attribute("id"))
+            .any(|source_id| {
+                md.children().any(|n| {
+                    n.is_element()
+                        && n.tag_name().name() == "meta"
+                        && n.attribute("property") == Some("source-of")
+                        && n.attribute("refines").map(|r| r.trim_start_matches('#'))
+                            == Some(source_id)
+                        && elem_text(n) == "pagination"
+                })
+            });
 
         package_fixed_layout = md
             .children()
@@ -353,6 +377,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     let mut fallback_map: HashMap<String, String> = HashMap::new();
     let mut nav_present = false;
     let mut nav_path: Option<String> = None;
+    // Data Navigation Document(s) (properties="data-nav"): (resolved path,
+    // media-type), for the Region-Based Navigation checks below.
+    let mut data_nav_items: Vec<(String, String)> = Vec::new();
     let manifest = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest");
@@ -395,6 +422,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 nav_present = true;
                 nav_path = Some(resolved.clone());
             }
+            if item
+                .attribute("properties")
+                .is_some_and(|p| p.split_whitespace().any(|t| t == "data-nav"))
+            {
+                data_nav_items.push((resolved.clone(), mt.to_string()));
+            }
             if !is_external(href) && !name_index.contains_key(&nfc(&resolved)) {
                 report.push(
                     RSC_001,
@@ -435,6 +468,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // content-doc resolved-path (NFC) -> reading-order position, for the
     // nav toc's spine-order check (NAV-011).
     let mut spine_order: HashMap<String, usize> = HashMap::new();
+    // content-doc resolved-path -> whether it's fixed-layout, for the
+    // region-based nav's NAV-009 target cross-check below.
+    let mut fixed_layout_docs: HashMap<String, bool> = HashMap::new();
     let spine = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "spine");
@@ -529,6 +565,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             } else {
                                 package_fixed_layout
                             };
+                            fixed_layout_docs.insert(nfc(path), is_fixed_layout);
                             if let Some(orig) = name_index.get(&nfc(path)).cloned() {
                                 if let Some(b) = ocf.read(&orig) {
                                     let t = String::from_utf8_lossy(&b).into_owned();
@@ -604,6 +641,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         );
     }
 
+    // --- Data Navigation Document (EPUB Region-Based Navigation) ---
+    if data_nav_items.len() > 1 {
+        report.push_at(
+            RSC_005,
+            Severity::Error,
+            "the manifest must not include more than one Data Navigation Document",
+            opf_path,
+        );
+    }
+    let data_nav_path: Option<String> = data_nav_items.first().map(|(path, _)| nfc(path));
+    if let Some((path, mt)) = data_nav_items.first() {
+        if mt != "application/xhtml+xml" {
+            report.push_at(
+                OPF_012,
+                Severity::Error,
+                "the Data Navigation Document must be an XHTML content document",
+                opf_path,
+            );
+        }
+        if spine_order.contains_key(&nfc(path)) {
+            report.push_at(
+                OPF_077,
+                Severity::Warning,
+                "the Data Navigation Document must not be referenced from the spine",
+                opf_path,
+            );
+        }
+    }
+
     // --- EPUB 3 navigation document ---
     // epubcheck enforces this via its package Schematron and reports RSC-005.
     if is_epub3 && !nav_present {
@@ -632,6 +698,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // associated stylesheets (inline <style> + linked <link
     // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
     let mut doc_class_names: HashMap<String, HashSet<String>> = HashMap::new();
+    // Whether the (required) toc nav has an epub:type="page-list" nav -
+    // for the EDUPUB pagination-source cross-check after this loop.
+    let mut has_page_list_nav = false;
     for path in content_docs {
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
@@ -648,6 +717,50 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             continue;
         };
         crate::htm::check_dom(&d, &path, is_epub3, report);
+
+        // EDUPUB: microdata attributes aren't allowed in an edupub content
+        // document (applies to every content doc uniformly, nav docs
+        // included - no fixture suggests otherwise).
+        if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
+            crate::edupub::check_content_doc(&d, &path, report);
+        }
+
+        let nfc_path = nfc(&path);
+        if nav_path.as_deref() == Some(path.as_str()) {
+            has_page_list_nav = d.descendants().any(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "nav"
+                    && n.attribute(("http://www.idpf.org/2007/ops", "type")) == Some("page-list")
+            });
+        } else if data_nav_path.as_deref() == Some(nfc_path.as_str()) {
+            // Region-Based Navigation: validate the Data Navigation
+            // Document's own nav elements and, for the region-based one,
+            // its content model + fixed-layout target cross-check.
+            if let Some(region_nav) = crate::regionnav::check_data_nav_doc(&d, &path, report) {
+                crate::regionnav::check_content_model(region_nav, &path, report);
+                let dir_here = parent_dir(&path);
+                for href in crate::regionnav::collect_targets(region_nav) {
+                    if is_external(&href) {
+                        continue;
+                    }
+                    let target = nfc(&resolve(&dir_here, &href));
+                    if fixed_layout_docs.get(&target) == Some(&false) {
+                        report.push_at(
+                            NAV_009,
+                            Severity::Error,
+                            format!(
+                                "region-based nav target '{href}' is not a fixed-layout document"
+                            ),
+                            path.clone(),
+                        );
+                    }
+                }
+            }
+        } else {
+            // Region-based navigation belongs only in the Data Navigation
+            // Document - anywhere else it's misplaced (HTM-052).
+            crate::regionnav::check_misplaced(&d, &path, report);
+        }
 
         // Schema validation against our own XHTML content-document RNG.
         // Additive: a non-conformant content document is reported as RSC-005.
@@ -897,6 +1010,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 }
             }
         }
+    }
+
+    // --- EDUPUB pagination source / page-list cross-check (NAV-003/OPF-066) ---
+    if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
+        crate::edupub::check_page_list(has_pagination_source, has_page_list_nav, opf_path, report);
     }
 
     // --- Media-overlay active-class CSS cross-referencing (CSS-029/030) ---

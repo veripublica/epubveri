@@ -107,8 +107,12 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     Some(ocf)
 }
 
-/// Parse `META-INF/container.xml` and return the OPF full-path (RSC-002/003/005).
-pub fn find_rootfile(ocf: &mut Ocf, report: &mut Report) -> Option<String> {
+/// Parse `META-INF/container.xml` and return every OPF full-path
+/// (RSC-002/003/005). Usually a single rootfile, but a multi-rendition
+/// package (e.g. an EDUPUB publication with a reflowable + a fixed-layout
+/// rendition) legitimately declares more than one — each is validated as
+/// its own, independent OPF.
+pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     const CONTAINER: &str = "META-INF/container.xml";
     if !ocf.has(CONTAINER) {
         report.push(
@@ -116,10 +120,12 @@ pub fn find_rootfile(ocf: &mut Ocf, report: &mut Report) -> Option<String> {
             Severity::Error,
             "Required META-INF/container.xml is missing",
         );
-        return None;
+        return Vec::new();
     }
 
-    let bytes = ocf.read(CONTAINER)?;
+    let Some(bytes) = ocf.read(CONTAINER) else {
+        return Vec::new();
+    };
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let doc = match parse_xml(&text) {
         Ok(d) => d,
@@ -130,29 +136,33 @@ pub fn find_rootfile(ocf: &mut Ocf, report: &mut Report) -> Option<String> {
                 format!("META-INF/container.xml is not well-formed XML: {e}"),
                 CONTAINER,
             );
-            return None;
+            return Vec::new();
         }
     };
 
-    // RSC-003: need a <rootfile> with the OPF media type and a full-path.
-    let rootfile = doc.descendants().find(|n| {
-        n.is_element()
-            && n.tag_name().name() == "rootfile"
-            && n.attribute("media-type") == Some("application/oebps-package+xml")
-    });
-    match rootfile.and_then(|n| n.attribute("full-path")) {
-        Some(p) if !p.is_empty() => Some(p.to_string()),
-        _ => {
-            report.push_at(
-                RSC_003,
-                Severity::Error,
-                "container.xml has no <rootfile> with media-type \
-                 'application/oebps-package+xml' and a full-path (OPF location)",
-                CONTAINER,
-            );
-            None
-        }
+    // RSC-003: need at least one <rootfile> with the OPF media type and a full-path.
+    let paths: Vec<String> = doc
+        .descendants()
+        .filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "rootfile"
+                && n.attribute("media-type") == Some("application/oebps-package+xml")
+        })
+        .filter_map(|n| n.attribute("full-path"))
+        .filter(|p| !p.is_empty())
+        .map(String::from)
+        .collect();
+
+    if paths.is_empty() {
+        report.push_at(
+            RSC_003,
+            Severity::Error,
+            "container.xml has no <rootfile> with media-type \
+             'application/oebps-package+xml' and a full-path (OPF location)",
+            CONTAINER,
+        );
     }
+    paths
 }
 
 /// If `META-INF/encryption.xml` is present, report each encrypted resource as

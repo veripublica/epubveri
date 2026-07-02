@@ -1045,6 +1045,103 @@ CSS-checking at all yet.
 | RSC family exact hits | 65/377 | **69/377** (the 4 bonus refines/multiple-class-name scenarios) |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: EDUPUB + Region-Based Navigation extension profiles (2026-07-02)
+
+Owner's choice: close out the two extension-profile families every prior
+increment had deliberately deferred (NAV-003/009, HTM-051/052). Research
+surfaced a real, material scope discovery worth recording: EDUPUB's
+"multiple renditions" scenarios need genuine **multi-rootfile support** —
+`ocf::find_rootfile` returned a single OPF path and `lib.rs::validate_bytes`
+called `opf::check` exactly once. The owner explicitly chose to build this
+architecture change too rather than defer it.
+
+**Architecture change:** `ocf::find_rootfile` → `ocf::find_rootfiles`,
+collecting every `<rootfile>` with the OPF media-type (RSC-003 only if the
+result is empty, unchanged behavior otherwise). `lib.rs::validate_bytes`
+loops `opf::check` once per rootfile into the same `Report`. A normal
+single-rootfile book is just the `len() == 1` case — no regression (25/25
+spike fixtures + all prior corpus hits held steady).
+
+**Region-Based Navigation** (`epub-region-nav/region-nav-publication.feature`,
+7/7 scenarios hit exactly): new `src/regionnav.rs`. Triggered by a manifest
+item with `properties="data-nav"` (the "Data Navigation Document"):
+**OPF-012** (not `application/xhtml+xml`), **OPF-077** (referenced from the
+spine), **RSC-005** (more than one data-nav item; a `<nav>` inside it with
+no `epub:type`). For the one `<nav epub:type="region-based">`: **HTM-052**
+if region-based navigation is found *outside* the data-nav document
+(confirmed via the real fixture: an ordinary content doc, not an
+element/media-type mismatch as the scenario title alone suggested);
+**NAV-009** if an `<a href>` target isn't fixed-layout (reuses a new
+`fixed_layout_docs: HashMap<String, bool>` map, captured during the
+existing spine loop alongside the `is_fixed_layout` computation the HTM
+viewport checks already do per itemref); and the region-based nav's own
+content model (**RSC-005** ×N + **RSC-017** warning), fully reverse-
+engineered from one richly-annotated fixture and cross-checked line-by-line
+against its inline comments: the `<nav>` must contain exactly one `<ol>`;
+each `<li>`'s first element child must be `<a>` or `<span>`; a `<span>`
+must contain exactly two `<a>` elements; an `<a>` may be followed by at
+most one more child, which must be an `<ol>` (nested sub-regions); an `<a>`
+containing actual text (not just e.g. a `<meta>` annotation) is RSC-017,
+not an error.
+
+**A real bug found via the corpus, not by inspection:** the content-model
+check's first version, on finding the container-level violation ("must
+contain exactly one child ol"), returned immediately without walking the
+`<ol>` at all — but the real fixture (`<h1>` stray sibling *next to* a
+single, otherwise-valid `<ol>`) expects *both* the container-level RSC-005
+*and* every violation found inside that `<ol>`, not one or the other.
+Fixed by still locating and walking whichever `<ol>` is present regardless
+of the container check's outcome — after the fix, the fixture produces
+exactly 7× RSC-005 + 1× RSC-017, matching the corpus precisely.
+
+**EDUPUB** (`epub-edupub/edupub-publication.feature`, all targeted
+scenarios hit exactly): new `src/edupub.rs`. Triggered by
+`<dc:type>edupub</dc:type>`, either in a single-rendition book's own OPF or
+in `META-INF/metadata.xml` (confirmed as a real, separate publication-level
+metadata file used only for multi-rendition packages, via
+`edupub-multiple-renditions-valid`). **HTM-051** (warning): an
+`itemscope`-rooted HTML5 microdata item in an edupub content document —
+confirmed via the corpus to key off `itemscope` alone, not `itemtype`/
+`itemprop` independently (the real fixture has one `itemscope` element and
+a separate `itemprop`-only element, a property *of* that same item rather
+than a second item, and expects exactly one finding, not two). **NAV-003**
+/ **OPF-066**: a print-source for pagination (`dc:source` + a
+`meta[property=source-of]` refining it to `pagination`) and a
+`epub:type="page-list"` nav must both be present or both be absent — one
+without the other fires whichever code names the missing half.
+
+**Multi-rendition `dc:type` cardinality (2× RSC-005), a second real bug
+found via the corpus:** the first version required `metadata.xml` to
+*always* have its own `dc:type` whenever present, which false-positived on
+every ordinary (non-edupub) multi-rendition package — confirmed via
+`renditions-basic-valid`/`renditions-mapping-multiple-nav-valid`, two
+formerly-passing scenarios that broke the moment multi-rootfile support
+started actually checking their second OPF. Re-examining the real
+"publication-level dc:type missing" fixture showed *why*: its
+`metadata.xml` has `dc:type` commented out, but **both** renditions still
+declare `edupub` — proving the trigger isn't "metadata.xml always needs a
+dc:type" but "the publication is edupub if *either* metadata.xml *or* any
+rendition says so; once it is, every level must declare it, and whichever
+doesn't gets its own RSC-005." Rewritten `edupub::check_multi_rendition_dc_type`
+around that rule fixes both new false positives while still hitting both
+real corpus error scenarios (publication-level and rendition-level) exactly.
+
+**Deliberately out of scope:** the full EDUPUB conformance suite beyond
+the four checks above (sectioning rules, accessibility metadata, etc.) —
+the corpus only exercises those indirectly via `-valid` fixtures with no
+dedicated error codes to target.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 24.8% (145 hits) | 26.8% (**157 hits**) |
+| NAV family exact hits | 3/5 | **5/5** (100%) |
+| HTM family exact hits | 24/31 | **26/31** |
+| RSC family exact hits | 69/377 | **75/377** |
+| OPF family exact hits | 13/139 | **16/139** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

@@ -7,12 +7,14 @@
 //! (RelaxNG/Schematron) is intentionally out of scope for now.
 
 pub mod css;
+pub mod edupub;
 pub mod htm;
 pub mod ids;
 pub mod layout;
 pub mod ncx;
 pub mod ocf;
 pub mod opf;
+pub mod regionnav;
 pub mod report;
 pub mod rng;
 pub mod schematron;
@@ -31,11 +33,19 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
         None => return report,
     };
     ocf::check_encryption(&mut container, &mut report);
-    let opf_path = match ocf::find_rootfile(&mut container, &mut report) {
-        Some(p) => p,
-        None => return report,
-    };
-    opf::check(&mut container, &opf_path, &mut report);
+    let opf_paths = ocf::find_rootfiles(&mut container, &mut report);
+    // Usually a single rootfile; a multi-rendition package (e.g. EDUPUB
+    // with a reflowable + fixed-layout rendition) legitimately declares
+    // more than one, each validated as its own, independent OPF.
+    for opf_path in &opf_paths {
+        opf::check(&mut container, opf_path, &mut report);
+    }
+    // Checked once for the whole publication (not per-rendition): the
+    // multi-rendition dc:type cardinality cross-check reads
+    // META-INF/metadata.xml, which no single opf::check call ever sees.
+    if opf_paths.len() > 1 {
+        edupub::check_multi_rendition_dc_type(&mut container, &opf_paths, &mut report);
+    }
     // Bound the RNG engine's pattern-interning cache (see
     // `rng::pattern::clear_intern_cache`) to roughly one book's working set,
     // rather than letting it grow for the life of a long-lived embedded

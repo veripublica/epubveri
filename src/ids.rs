@@ -39,6 +39,9 @@ pub const OPF_034: &str = "OPF-034"; // the spine references the same manifest i
 pub const OPF_043: &str = "OPF-043"; // spine item w/ non-content media-type has no fallback
 pub const OPF_049: &str = "OPF-049"; // spine itemref idref not found in the manifest
 pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resource
+pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't application/xhtml+xml
+pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no print-source is identified
+pub const OPF_077: &str = "OPF-077"; // the Data Navigation Document is referenced from the spine
 
 // --- CSS (via the styloria parser) ---
 pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi' property
@@ -65,6 +68,8 @@ pub const MED_017: &str = "MED-017"; // scheme-based fragment on an XHTML media-
 pub const MED_018: &str = "MED-018"; // invalid SVG fragment identifier on a media-overlay text target
 
 // --- Navigation document ---
+pub const NAV_003: &str = "NAV-003"; // edupub publication with a pagination source but no page-list nav
+pub const NAV_009: &str = "NAV-009"; // region-based nav target isn't a fixed-layout document
 pub const NAV_010: &str = "NAV-010"; // external link in a toc/page-list/landmarks nav
 pub const NAV_011: &str = "NAV-011"; // toc nav link order doesn't match reading order
 
@@ -91,3 +96,7 @@ pub const HTM_054: &str = "HTM-054"; // custom attribute uses a reserved (w3.org
 pub const HTM_055: &str = "HTM-055"; // a discouraged element (base/embed/rp) is used (usage)
 pub const HTM_058: &str = "HTM-058"; // content document isn't UTF-8 encoded
 pub const HTM_061: &str = "HTM-061"; // an invalid data-* attribute name
+
+// --- Extension profiles: EDUPUB, Region-Based Navigation ---
+pub const HTM_051: &str = "HTM-051"; // HTML5 microdata attribute in an edupub content document
+pub const HTM_052: &str = "HTM-052"; // region-based nav found outside the Data Navigation Document
