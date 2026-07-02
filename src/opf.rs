@@ -91,6 +91,19 @@ pub(crate) fn is_external(href: &str) -> bool {
         || href.starts_with("tel:")
 }
 
+/// Maps every `id` attribute in a document to its element's document-order
+/// index, for reading-order comparisons (media-overlay text order vs. the
+/// content doc's DOM order; the nav toc's fragment order vs. the same).
+fn dom_id_order(d: &roxmltree::Document) -> HashMap<String, usize> {
+    let mut order = HashMap::new();
+    for (i, n) in d.descendants().filter(|n| n.is_element()).enumerate() {
+        if let Some(id) = n.attribute("id") {
+            order.entry(id.to_string()).or_insert(i);
+        }
+    }
+    order
+}
+
 pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
@@ -167,6 +180,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     }
 
     // --- required metadata ---
+    // The package's actual identifier text (the dc:identifier named by
+    // unique-identifier), used later for the NCX dtb:uid cross-check.
+    let mut package_identifier_text: Option<String> = None;
     let metadata = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "metadata");
@@ -204,18 +220,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             );
         }
         if let Some(uid) = pkg.attribute("unique-identifier").map(str::trim) {
-            if !identifiers
+            let matching = identifiers
                 .iter()
-                .any(|n| n.attribute("id").map(str::trim) == Some(uid))
-            {
-                report.push_at(
-                    OPF_030,
-                    Severity::Error,
-                    format!(
-                        "package unique-identifier '{uid}' does not match any dc:identifier id"
-                    ),
-                    opf_path,
-                );
+                .find(|n| n.attribute("id").map(str::trim) == Some(uid));
+            match matching {
+                Some(n) => {
+                    package_identifier_text = Some(
+                        n.descendants()
+                            .filter(|t| t.is_text())
+                            .filter_map(|t| t.text())
+                            .collect::<String>(),
+                    );
+                }
+                None => {
+                    report.push_at(
+                        OPF_030,
+                        Severity::Error,
+                        format!(
+                            "package unique-identifier '{uid}' does not match any dc:identifier id"
+                        ),
+                        opf_path,
+                    );
+                }
             }
         }
 
@@ -282,6 +308,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // core-media-type fallback-chain resolution.
     let mut fallback_map: HashMap<String, String> = HashMap::new();
     let mut nav_present = false;
+    let mut nav_path: Option<String> = None;
     let manifest = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest");
@@ -316,13 +343,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     opf_path,
                 );
             }
+            let resolved = resolve(&base_dir, href);
             if item
                 .attribute("properties")
                 .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"))
             {
                 nav_present = true;
+                nav_path = Some(resolved.clone());
             }
-            let resolved = resolve(&base_dir, href);
             if !is_external(href) && !name_index.contains_key(&nfc(&resolved)) {
                 report.push(
                     RSC_001,
@@ -360,6 +388,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         .collect();
 
     // --- spine ---
+    // content-doc resolved-path (NFC) -> reading-order position, for the
+    // nav toc's spine-order check (NAV-011).
+    let mut spine_order: HashMap<String, usize> = HashMap::new();
     let spine = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "spine");
@@ -377,7 +408,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             );
         }
         let mut spine_seen: HashSet<&str> = HashSet::new();
-        for ir in refs {
+        for (position, ir) in refs.into_iter().enumerate() {
             match ir.attribute("idref").map(str::trim) {
                 None => report.push_at(
                     RSC_005,
@@ -401,7 +432,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             format!("spine itemref idref '{idref}' was not found in the manifest"),
                             opf_path,
                         ),
-                        Some((_, mt)) => {
+                        Some((path, mt)) => {
+                            spine_order.entry(nfc(path)).or_insert(position);
                             // Core content-document media types valid in the
                             // spine without a fallback; otherwise walk the
                             // 'fallback' chain (bounded, in case of a cycle)
@@ -457,7 +489,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     format!("spine 'toc' idref '{toc}' was not found in the manifest"),
                     opf_path,
                 ),
-                Some((_, mt)) => {
+                Some((ncx_path, mt)) => {
                     if mt != NCX {
                         report.push_at(
                             OPF_050,
@@ -465,6 +497,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             format!("spine 'toc' references '{toc}' with media-type '{mt}'; an NCX ({NCX}) is expected"),
                             opf_path,
                         );
+                    } else if let Some(uid_text) = &package_identifier_text {
+                        if let Some(orig) = name_index.get(&nfc(ncx_path)).cloned() {
+                            if let Some(b) = ocf.read(&orig) {
+                                let ncx_text = String::from_utf8_lossy(&b).into_owned();
+                                crate::ncx::check(&ncx_text, ncx_path, uid_text, report);
+                            }
+                        }
                     }
                 }
             },
@@ -580,6 +619,115 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         }
 
         let dir = parent_dir(&path);
+
+        // --- Navigation document checks (NAV-010/011) ---
+        if nav_path.as_deref() == Some(path.as_str()) {
+            // NAV-010: external links inside the required toc/page-list/
+            // landmarks nav elements aren't allowed (links to remote
+            // resources are fine in other, custom nav types).
+            for nav_el in d
+                .descendants()
+                .filter(|n| n.is_element() && n.tag_name().name() == "nav")
+            {
+                let nav_type = nav_el.attribute((EPUB_NS, "type"));
+                if !matches!(
+                    nav_type,
+                    Some("toc") | Some("page-list") | Some("landmarks")
+                ) {
+                    continue;
+                }
+                for a in nav_el
+                    .descendants()
+                    .filter(|n| n.is_element() && n.tag_name().name() == "a")
+                {
+                    if let Some(href) = a.attribute("href") {
+                        if is_external(href) {
+                            report.push_at(
+                                NAV_010,
+                                Severity::Error,
+                                format!("external link '{href}' in a toc/page-list/landmarks nav"),
+                                path.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+
+            // NAV-011: the toc nav's links, in nav order, should match
+            // reading order - spine order first, then (for links into the
+            // same document) DOM order, with a fragment-less link ("the
+            // whole document") sorting before any fragment into it. Scored
+            // as adjacent-pair inversions, not "any disorder = 1 finding"
+            // (confirmed against the real corpus: a single spine-order
+            // mistake reports once, two fragment-order mistakes report
+            // twice).
+            if let Some(toc_nav) = d.descendants().find(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "nav"
+                    && n.attribute((EPUB_NS, "type")) == Some("toc")
+            }) {
+                let mut id_order_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+                // (spine_idx, dom_idx): dom_idx is 0 for a fragment-less
+                // link ("the whole document") and real-fragment-index + 1
+                // otherwise, so it always sorts before any real fragment
+                // into the same document without needing a separate flag.
+                let mut keys: Vec<(usize, usize)> = Vec::new();
+                for a in toc_nav
+                    .descendants()
+                    .filter(|n| n.is_element() && n.tag_name().name() == "a")
+                {
+                    let Some(href) = a.attribute("href") else {
+                        continue;
+                    };
+                    if is_external(href) {
+                        continue;
+                    }
+                    let (path_part, frag) = match href.split_once('#') {
+                        Some((p, f)) => (p, Some(f)),
+                        None => (href, None),
+                    };
+                    let resolved_nfc = nfc(&resolve(&dir, path_part));
+                    let Some(&spine_idx) = spine_order.get(&resolved_nfc) else {
+                        continue;
+                    };
+                    let dom_idx = match frag {
+                        None => 0,
+                        Some(f) => {
+                            if !id_order_cache.contains_key(&resolved_nfc) {
+                                let order = name_index
+                                    .get(&resolved_nfc)
+                                    .and_then(|orig| ocf.read(orig))
+                                    .and_then(|b| {
+                                        let t = String::from_utf8_lossy(&b).into_owned();
+                                        parse_xml(&t).ok().map(|d2| dom_id_order(&d2))
+                                    })
+                                    .unwrap_or_default();
+                                id_order_cache.insert(resolved_nfc.clone(), order);
+                            }
+                            // Missing ids are already caught elsewhere as
+                            // broken references; skip this link here
+                            // rather than letting it break the comparison.
+                            match id_order_cache[&resolved_nfc].get(f) {
+                                Some(&idx) => idx + 1,
+                                None => continue,
+                            }
+                        }
+                    };
+                    keys.push((spine_idx, dom_idx));
+                }
+                for w in keys.windows(2) {
+                    if w[0] > w[1] {
+                        report.push_at(
+                            NAV_011,
+                            Severity::Warning,
+                            "toc nav link order does not match reading order",
+                            path.clone(),
+                        );
+                    }
+                }
+            }
+        }
+
         for node in d.descendants().filter(|n| n.is_element()) {
             // <base href> sets a base URI for resolving *other* relative
             // references; it isn't itself a reference to an existing
@@ -686,12 +834,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             let Some(b) = ocf.read(&orig) else { continue };
             let t = String::from_utf8_lossy(&b).into_owned();
             let Ok(d) = parse_xml(&t) else { continue };
-            let mut id_order: HashMap<String, usize> = HashMap::new();
-            for (i, n) in d.descendants().filter(|n| n.is_element()).enumerate() {
-                if let Some(id) = n.attribute("id") {
-                    id_order.entry(id.to_string()).or_insert(i);
-                }
-            }
+            let id_order = dom_id_order(&d);
             // Ids the SMIL references but the doc doesn't have are already
             // separately caught as broken references elsewhere - skip them
             // here rather than letting a missing id break the comparison.

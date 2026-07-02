@@ -60,3 +60,11 @@ pub const MED_015: &str = "MED-015"; // SMIL <text> order doesn't match the cont
 pub const MED_016: &str = "MED-016"; // media:duration total doesn't match the sum of overlay durations
 pub const MED_017: &str = "MED-017"; // scheme-based fragment on an XHTML media-overlay text target
 pub const MED_018: &str = "MED-018"; // invalid SVG fragment identifier on a media-overlay text target
+
+// --- Navigation document ---
+pub const NAV_010: &str = "NAV-010"; // external link in a toc/page-list/landmarks nav
+pub const NAV_011: &str = "NAV-011"; // toc nav link order doesn't match reading order
+
+// --- NCX (EPUB 2 table of contents) ---
+pub const NCX_001: &str = "NCX-001"; // dtb:uid doesn't match the package's dc:identifier
+pub const NCX_006: &str = "NCX-006"; // an empty docTitle/navLabel text element

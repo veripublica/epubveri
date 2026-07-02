@@ -725,6 +725,64 @@ product):
 | RSC family exact hits | 41/216 | **65/374** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: NAV and NCX validation (2026-07-02)
+
+Owner's choice this round: the `NAV` (0/5) and `NCX` (0/2) message families —
+both small (7 corpus scenarios total, a smaller upside than prior increments)
+but clean, well-understood slices. No NCX content validation existed at all
+before this (the NCX file was only checked for existence + media-type via the
+spine `toc` attribute, `OPF-050`) — genuinely new territory, same shape as
+building `src/smil.rs` for SMIL.
+
+**Implemented, all confirmed against real corpus fixtures, including exact
+occurrence counts:**
+- **New `src/ncx.rs`**: `<meta name="dtb:uid" content="X">` vs the package's
+  actual `dc:identifier` text (not just its `id` attribute — needed capturing
+  the identifier's real text content in `opf.rs`, which wasn't tracked
+  before) → **NCX-001**. Empty `<docTitle><text>` or `<navLabel><text>` →
+  **NCX-006** (usage-level, mapped to `Severity::Info`, same convention as
+  MED-015) — applied the `is_text()`-filtered extraction from the start
+  (the `Node::text()`-on-comments gap fixed last increment).
+- **NAV-010** (external link inside a `toc`/`page-list`/`landmarks` nav —
+  custom nav types are exempt, confirmed via the fixture's own comment):
+  added to the existing `content_docs` loop in `opf.rs`, gated on the doc
+  being the actual nav doc (`nav_path`, newly captured alongside the
+  existing `nav_present` flag). Namespace-checks the `epub:type` attribute
+  via `node.attribute((EPUB_NS, "type"))` (roxmltree's namespaced-attribute
+  lookup) rather than a bare local-name match.
+- **NAV-011** (`toc` nav links, in nav order, not matching reading order):
+  two variants sharing one code — wrong **spine** order, and wrong **DOM**
+  order for fragments into the same document (a fragment-less link must sort
+  before any fragment into that document). Built a comparison key per link,
+  `(spine_index, dom_index)` — `dom_index` is `0` for a fragment-less link
+  and `real_index + 1` otherwise, so plain tuple ordering handles the
+  "fragment-less sorts first" rule for free, no separate flag needed.
+  Counted **adjacent-pair inversions**, not "any disorder = one finding" —
+  confirmed against the corpus this is the right granularity (a single
+  spine-order mistake reports once; two fragment-order mistakes report
+  twice, exactly matching real epubcheck's own counts). `spine_order`
+  (content-doc path -> reading-order position) captured during the existing
+  spine `<itemref>` loop.
+- Extracted `dom_id_order` (id -> DOM-order-index map) as a shared helper in
+  `opf.rs`, since NAV-011 needed the exact same computation MED-015 already
+  built inline last increment — genuine reuse, not premature abstraction.
+
+**Explicitly out of scope, named rather than silently dropped:** NAV-003
+("edupub publication missing a page list") and NAV-009 ("region-based nav
+not pointing to fixed-layout documents") both belong to optional EPUB
+*extension profiles* (EDUPUB, region-based navigation) layered on top of
+core EPUB 3 — not worth one-off profile-detection machinery for 1 scenario
+each.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 18.2% (105 hits) | 19.0% (**110 hits**) |
+| NAV family exact hits | 0/5 | **3/5** (both targeted codes hit; the 2 misses are the out-of-scope EDUPUB/region-nav items) |
+| NCX family exact hits | 0/2 | **2/2** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
