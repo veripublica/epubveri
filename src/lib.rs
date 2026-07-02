@@ -15,6 +15,7 @@ pub mod ncx;
 pub mod ocf;
 pub mod opf;
 pub mod regionnav;
+pub mod renditions;
 pub mod report;
 pub mod rng;
 pub mod schematron;
@@ -45,6 +46,7 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
     // META-INF/metadata.xml, which no single opf::check call ever sees.
     if opf_paths.len() > 1 {
         edupub::check_multi_rendition_dc_type(&mut container, &opf_paths, &mut report);
+        renditions::check(&mut container, &mut report);
     }
     // Bound the RNG engine's pattern-interning cache (see
     // `rng::pattern::clear_intern_cache`) to roughly one book's working set,

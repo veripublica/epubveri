@@ -1468,6 +1468,64 @@ RELAX NG gap):
 With this, `05-package-document.feature` is effectively **done** for
 this project's current scope, aside from the two named deferrals above.
 
+## Increment: EPUB Multiple-Rendition Publications 1.0 (2026-07-02)
+
+Next family named at the end of "Sırada ne kaldı?":
+`epub-multiple-renditions/multiple-rendition-publication.feature`, 13
+scenarios (not the 8 originally estimated). The general (non-EDUPUB-
+specific) Multiple-Rendition spec, reachable thanks to the multi-rootfile
+architecture (`ocf::find_rootfiles`) built for the EDUPUB increment.
+Genuinely new surface area: `META-INF/container.xml`'s `<links>` element
+(a Rendition Mapping Document reference, entirely separate from
+`<rootfiles>`) had never been parsed before, and `rendition:*` selection
+attributes on `<rootfile>` elements are a new namespaced-attribute
+concept at the container level.
+
+**Implemented in new `src/renditions.rs`**, called once from
+`lib.rs::validate_bytes` when `opf_paths.len() > 1` (the same gating
+convention as `edupub::check_multi_rendition_dc_type`, since everything
+here is about the publication as a whole, not any one rendition's OPF):
+- **`META-INF/metadata.xml`**: new **`RSC-019`** (warning) if the file is
+  missing entirely from a multi-rendition publication; `RSC-005` if
+  present but its `dcterms:modified` doesn't occur exactly once.
+  Deliberately not routed through `schemas/package.sch` - that schema is
+  scoped to `opf:package` documents, and metadata.xml's root is a
+  different element in the `http://www.idpf.org/2013/metadata` namespace
+  entirely.
+- **Rendition selection attributes**: every `rendition:*`-namespaced
+  attribute on a `<rootfile>` is a selection attribute - only `media`
+  and `layout` are real (confirmed via the spec), anything else is
+  `RSC-005`; `rendition:media`'s value is validated with a lightweight
+  "contains both `(` and `)`" check (not a full CSS media-query parser -
+  the corpus's one invalid case, `"syntaxerror"`, has neither). A
+  non-first `<rootfile>` with no selection attribute at all is new
+  **`RSC-017`** usage (the first rootfile is the default rendition and
+  needs none).
+- **Rendition Mapping Document** (optional - only checked when
+  `container.xml` actually declares one via `<links><link
+  rel="mapping">`, confirmed the `href` is container-root-relative, like
+  `full-path`, not `META-INF`-relative): `RSC-005` for more than one
+  mapping link, a non-`application/xhtml+xml` media-type, a missing
+  `<meta name="epub.multiple.renditions.version" content="1.0">`, not
+  exactly one `<nav epub:type="resource-map">`, or any other `<nav>`
+  lacking an `epub:type` at all (custom-prefixed types like `foo:bar`
+  are fine, confirmed via the real valid fixture).
+
+All 13 targeted scenarios matched exactly on the first implementation
+attempt - no false positives or bugs found this round, a rare clean
+pass for an increment this size (the design was fully nailed down
+during research, since every rule here is a plain attribute/cardinality
+check with no ambiguous edge cases like prior increments' Schematron-
+engine or is_external/is_remote_url surprises).
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 48.4% (289 hits) | **50.3% (300 hits)** |
+| RSC family exact hits | 154/379 | **166/379** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

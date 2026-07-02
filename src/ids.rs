@@ -35,6 +35,7 @@ pub const RSC_008: &str = "RSC-008"; // a remote resource is used but not declar
 pub const RSC_011: &str = "RSC-011"; // a hyperlinked document isn't listed in the spine
 pub const RSC_012: &str = "RSC-012"; // an NCX content src fragment identifier doesn't resolve
 pub const RSC_017: &str = "RSC-017"; // a deprecated construct is used (e.g. epub:switch)
+pub const RSC_019: &str = "RSC-019"; // a multi-rendition publication has no META-INF/metadata.xml
 pub const RSC_020: &str = "RSC-020"; // a href contains unencoded spaces (not a valid IRI)
 
 // --- OPF package document (dedicated codes, used verbatim) ---
