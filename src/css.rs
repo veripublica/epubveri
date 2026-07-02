@@ -43,6 +43,14 @@ pub(crate) fn decode_bytes(bytes: &[u8]) -> String {
     }
 }
 
+/// True if `bytes` starts with a UTF-16 byte-order mark (big- or
+/// little-endian). Shared by `decode_bytes` above and by `htm.rs`'s
+/// HTM-058 (non-UTF-8 content document) check.
+pub(crate) fn has_utf16_bom(bytes: &[u8]) -> bool {
+    bytes.len() >= 2
+        && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE))
+}
+
 fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
     let units = bytes.chunks_exact(2).map(|c| {
         if big_endian {
@@ -70,9 +78,7 @@ pub(crate) fn check(
     // <style> block's encoding is already resolved as part of its XHTML
     // document by the time we see its text, so `raw_bytes` is `None` there.
     if let Some(bytes) = raw_bytes {
-        let is_utf16 = bytes.len() >= 2
-            && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE));
-        if is_utf16 {
+        if has_utf16_bom(bytes) {
             report.push_at(
                 CSS_003,
                 Severity::Warning,

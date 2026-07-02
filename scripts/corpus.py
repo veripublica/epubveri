@@ -148,7 +148,7 @@ def guess_media_type(name):
     return EXT_MEDIA_TYPE.get(ext.lower(), "application/octet-stream")
 
 
-def wrap_single_doc(target_full, target_name):
+def wrap_single_doc(target_full, target_name, version="3.0"):
     """epubcheck can check a single content document in isolation; epubveri
     only validates full books. So for a bare content-document fixture, build a
     minimal synthetic EPUB that includes it (plus all of its directory
@@ -156,7 +156,14 @@ def wrap_single_doc(target_full, target_name):
     spurious missing-resource errors that would be an artifact of this
     harness, not of epubveri) via a synthetic nav doc satisfying the EPUB 3
     nav requirement, and the fixture itself as an ordinary (non-nav, non-
-    spine) manifest item, so only the content-model checks are exercised."""
+    spine) manifest item, so only the content-model checks are exercised.
+    `version` defaults to 3.0 but is set to 2.0 for scenarios that
+    originate from an `epub2/` feature file — real corpus fixtures found
+    this matters: several checks (e.g. the XHTML content-model's obsolete-
+    DOCTYPE rule, HTM-004) are EPUB3-only, and an EPUB2-context fixture
+    legitimately uses constructs (like the XHTML 1.1 DTD doctype) that
+    would otherwise wrongly get EPUB3 rules applied via a version="3.0"
+    wrap."""
     src_dir = os.path.dirname(target_full)
     siblings = sorted(
         fn for fn in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, fn))
@@ -190,17 +197,35 @@ def wrap_single_doc(target_full, target_name):
         if fn != target_name and mt == "application/xhtml+xml":
             mt = "application/octet-stream"
         manifest_items.append(f'<item id="f{i}" href="{fn}" media-type="{mt}"/>')
+    # EPUB 2 requires a spine 'toc' (NCX) attribute - without one, an
+    # otherwise-clean epub2-context wrap would spuriously fail with "EPUB 2
+    # spine is missing the required toc attribute", a harness artifact
+    # from the wrap being minimal, not a real defect in the fixture.
+    toc_attr = ""
+    if version.startswith("2"):
+        manifest_items.append('<item id="ncx" href="_toc.ncx" media-type="application/x-dtbncx+xml"/>')
+        toc_attr = ' toc="ncx"'
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
-        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">\n'
+        f'<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">\n'
         '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
         '    <dc:identifier id="id">urn:uuid:corpus-wrap</dc:identifier>\n'
         '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
         '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
         '  </metadata>\n'
         '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
-        '  <spine><itemref idref="_nav"/></spine>\n'
+        f'  <spine{toc_attr}><itemref idref="_nav"/></spine>\n'
         '</package>\n'
+    )
+    toc_ncx = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">\n'
+        '  <head><meta name="dtb:uid" content="urn:uuid:corpus-wrap"/></head>\n'
+        '  <docTitle><text>Corpus wrap</text></docTitle>\n'
+        '  <navMap><navPoint id="np1" playOrder="1">'
+        f'<navLabel><text>t</text></navLabel><content src="{target_name}"/>'
+        '</navPoint></navMap>\n'
+        '</ncx>\n'
     )
     fd, tmp = tempfile.mkstemp(suffix=".epub")
     os.close(fd)
@@ -211,6 +236,8 @@ def wrap_single_doc(target_full, target_name):
         z.writestr("META-INF/container.xml", container_xml)
         z.writestr("OEBPS/content.opf", opf)
         z.writestr("OEBPS/_nav.xhtml", nav_xhtml)
+        if version.startswith("2"):
+            z.writestr("OEBPS/_toc.ncx", toc_ncx)
         for fn in siblings:
             with open(os.path.join(src_dir, fn), "rb") as fh:
                 z.writestr(f"OEBPS/{fn}", fh.read())
@@ -349,7 +376,8 @@ def resolve(s):
     if os.path.isfile(full + ".epub"):
         return full + ".epub", False, None, False
     if os.path.isfile(full) and name.endswith((".xhtml", ".html", ".htm")):
-        return wrap_single_doc(full, name), True, None, True
+        version = "2.0" if "/epub2/" in (s["file"] or "") else "3.0"
+        return wrap_single_doc(full, name, version), True, None, True
     if os.path.isfile(full) and name.endswith(".smil"):
         return wrap_smil_file(full, name), True, None, True
     return None, False, "missing-file", False

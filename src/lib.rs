@@ -7,6 +7,7 @@
 //! (RelaxNG/Schematron) is intentionally out of scope for now.
 
 pub mod css;
+pub mod htm;
 pub mod ids;
 pub mod layout;
 pub mod ncx;

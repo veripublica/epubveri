@@ -840,6 +840,76 @@ two increments ago.
 (XML/encoding/doctype: HTM-001/003/004/009/058) and cluster 3 (misc
 attribute checks: HTM-007/054/055/061) — the next natural slice of `HTM`.
 
+## Increment: HTM family, remaining two clusters (2026-07-02)
+
+Finished the `HTM` family's two deferred clusters from the previous increment.
+`roxmltree` exposes no structured API for the XML declaration's version,
+DOCTYPE entities, or a document's original encoding (confirmed by reading its
+public API) — those needed small hand-written raw byte/text scanners
+(`src/htm.rs`'s `check_raw`), same "no new dependency" style as `smil.rs`'s
+clock-value parser and `layout.rs`'s viewport grammar. The rest
+(`check_dom`) works off the already-parsed document.
+
+**Implemented, all 16 targeted codes confirmed hit at least once against real
+corpus fixtures:** HTM-001 (XML declaration `version="1.1"`), HTM-003 (an
+entity declared `SYSTEM`/`PUBLIC` in the DOCTYPE internal subset — a purely
+literal internal entity is valid), HTM-004 (a DOCTYPE with a `PUBLIC`
+identifier at all), HTM-009 (the OPF's own DOCTYPE, see below), HTM-058
+(non-UTF-8 content document, via a BOM check), HTM-054 (a custom attribute's
+namespace host is/ends with `w3.org`/`idpf.org`), HTM-055 (a `<base>`/
+`<embed>`/`<rp>` element — usage-level), HTM-007 (an `ssml:ph` attribute with
+a blank value), HTM-061 (an invalid `data-*` attribute name — empty, starts
+with `-`, or contains an uppercase letter after the prefix).
+
+**Two real, corpus-driven precision fixes made *during* verification, not
+guessed up front:**
+1. **HTM-004's real scope is EPUB3-only.** The initial implementation
+   flagged the XHTML 1.1 DTD doctype (`<!DOCTYPE html PUBLIC "-//W3C//DTD
+   XHTML 1.1//EN" ...>`) unconditionally — but dozens of real EPUB2 corpus
+   fixtures use exactly this doctype as their *standard, expected* XHTML 1.1
+   content-document template (EPUB2's OPS/XHTML content model is XHTML
+   1.1-DTD-based; only EPUB3 moved away from it). Fixed by threading
+   `is_epub3` into `check_raw`/`check_dom` and early-returning when false —
+   applied to all of `htm.rs`'s content-document checks, since they're all
+   confirmed from the same `epub3/06-content-document/content-document-
+   xhtml.feature` corpus section.
+2. **HTM-009's real rule is a DOCTYPE root-name mismatch, not "any DOCTYPE at
+   all."** Confirmed via two real, deliberately-paired corpus fixtures: the
+   legacy OEB 1.2 **Package** doctype (`<!DOCTYPE package PUBLIC "...OEB 1.2
+   Package//EN" ...>`) is explicitly valid — its root name "package" matches
+   the OPF's own root element — while an `<!DOCTYPE html PUBLIC "...OEB 1.2
+   **Document**//EN" ...>` is invalid (root name "html" doesn't match
+   "package"). Rewrote `check_opf_doctype` to extract and compare the
+   DOCTYPE's declared root name instead of a blanket presence check.
+
+**A real measurement-harness gap found the same way, not guessed:**
+`scripts/corpus.py`'s `wrap_single_doc` always wrapped bare content-document
+fixtures as `version="3.0"`, even for scenarios that originate from an
+`epub2/` feature-file directory — meaning a genuinely EPUB2-context fixture
+(like the XHTML 1.1 DTD doctype ones above) got EPUB3 rules wrongly applied
+via the wrap itself, independent of fix (1). Fixed by having `resolve()`
+pass `version="2.0"` when the scenario's originating feature file path
+contains `/epub2/`. This surfaced a second-order gap: an EPUB2 wrap without
+an NCX spuriously failed "EPUB 2 spine is missing the required toc
+attribute" (a harness artifact, not a real defect) — fixed at the root by
+having `wrap_single_doc` synthesize a minimal valid NCX (with a matching
+`dtb:uid` and non-empty labels, avoiding *new* NCX-001/006 false positives
+too) whenever it wraps as EPUB2, rather than suppressing the resulting
+finding in the scoring logic.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 21.0% (123 hits) | 22.9% (**134 hits**) |
+| HTM family exact hits | 13/31 | **24/31** (all 16 targeted codes hit at least once; the 5 remaining misses are HTM-051/052, the deliberately out-of-scope EDUPUB/region-nav items) |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
+With this, the `HTM` family is effectively **done** for this project's
+current scope (core EPUB 3 content-document conformance) — the only gap
+left is the EDUPUB/region-nav extension-profile pair, consistent with the
+same scope line already drawn for NAV-003/009.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

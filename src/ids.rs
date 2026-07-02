@@ -77,3 +77,14 @@ pub const HTM_056: &str = "HTM-056"; // viewport content is missing the width or
 pub const HTM_057: &str = "HTM-057"; // viewport width/height value fails the format grammar
 pub const HTM_059: &str = "HTM-059"; // viewport width or height key appears more than once
 pub const HTM_060: &str = "HTM-060"; // extra viewport meta, or viewport on a reflowable doc (usage)
+
+// --- XML/encoding/doctype, misc attributes ---
+pub const HTM_001: &str = "HTM-001"; // XML declaration has version="1.1" (only 1.0 is allowed)
+pub const HTM_003: &str = "HTM-003"; // an entity is declared SYSTEM/PUBLIC (external)
+pub const HTM_004: &str = "HTM-004"; // a DOCTYPE has a PUBLIC identifier (obsolete)
+pub const HTM_007: &str = "HTM-007"; // ssml:ph attribute with an empty/blank value
+pub const HTM_009: &str = "HTM-009"; // the OPF document has a DOCTYPE
+pub const HTM_054: &str = "HTM-054"; // custom attribute uses a reserved (w3.org/idpf.org) namespace
+pub const HTM_055: &str = "HTM-055"; // a discouraged element (base/embed/rp) is used (usage)
+pub const HTM_058: &str = "HTM-058"; // content document isn't UTF-8 encoded
+pub const HTM_061: &str = "HTM-061"; // an invalid data-* attribute name

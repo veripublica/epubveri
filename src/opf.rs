@@ -117,6 +117,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         }
     };
     let text = String::from_utf8_lossy(&bytes).into_owned();
+    crate::htm::check_opf_doctype(&text, opf_path, report);
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
@@ -595,10 +596,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             continue;
         };
         let Some(b) = ocf.read(&orig) else { continue };
-        let t = String::from_utf8_lossy(&b).into_owned();
+        // BOM-aware decode: a UTF-16-encoded content document read as
+        // plain UTF-8 turns into byte-level garbage that fails to parse
+        // as XML at all, silently skipping every check below - not just
+        // HTM-058 (same fix `css::decode_bytes` already got for
+        // stylesheets, reused here rather than duplicated).
+        let t = crate::css::decode_bytes(&b);
+        crate::htm::check_raw(&b, &t, &path, is_epub3, report);
         let Ok(d) = parse_xml(&t) else {
             continue;
         };
+        crate::htm::check_dom(&d, &path, is_epub3, report);
 
         // Schema validation against our own XHTML content-document RNG.
         // Additive: a non-conformant content document is reported as RSC-005.
