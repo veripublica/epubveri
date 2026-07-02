@@ -419,7 +419,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "itemref")
             .collect();
-        if refs.is_empty() {
+        // linear defaults to "yes" when absent; only an explicit "no"
+        // (whitespace-trimmed) marks an itemref non-linear. A spine that's
+        // empty, or where every itemref is explicitly non-linear, has no
+        // linear resources at all.
+        if refs
+            .iter()
+            .all(|ir| ir.attribute("linear").map(str::trim) == Some("no"))
+        {
             report.push_at(
                 OPF_033,
                 Severity::Error,

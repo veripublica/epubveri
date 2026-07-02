@@ -910,6 +910,25 @@ current scope (core EPUB 3 content-document conformance) — the only gap
 left is the EDUPUB/region-nav extension-profile pair, consistent with the
 same scope line already drawn for NAV-003/009.
 
+## Fix: OPF-033 for an all-non-linear spine (2026-07-02)
+
+A small, previously-diagnosed bug: the spine "no linear resources" check
+(`OPF-033`) only ever checked whether the `<spine>` had zero `<itemref>`
+elements — but a spine where *every* itemref is explicitly marked
+`linear="no"` also has no linear resources, and real epubcheck reports the
+same code for that case (confirmed via two real corpus fixtures,
+`spine-no-linear-itemref-error.opf` and `spine-linear-all-no-error.opf` —
+the latter using `linear=" no "` with surrounding whitespace, which the
+fix trims before comparing). Fixed by checking `refs.iter().all(|ir| ...
+== "no")` instead of `refs.is_empty()` — the `all()` form still correctly
+covers the empty-spine case too (vacuously true), so no separate branch is
+needed.
+
+**Honest numbers:** the two previously-listed "in-scope misses" are gone
+entirely — target-id exact recall is now **32/32 = 100%** (up from 30/32).
+Overall exact-ID recall 22.9% → 23.2% (134 → 136 hits), OPF family 11/139 →
+13/139, false positives held at 1 (same known RELAX NG gap).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
