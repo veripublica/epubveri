@@ -267,4 +267,105 @@
         >the "media:playback-active-class" property must not occur more than one time</assert>
     </rule>
   </pattern>
+
+  <!-- 8.2/8.3 Layout Rendering Control — rendition:layout/orientation/
+       spread/flow are always package-global properties (never used with
+       @refines, unlike the D.3 metadata-refinement properties above), each
+       with a closed enum of valid values and a "declared only once"
+       cardinality rule. Confirmed via real corpus fixtures
+       (epub3/08-layout/files/rendition-*-global-*.opf). -->
+
+  <pattern id="rendition-layout-value">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:layout']">
+      <assert test="normalize-space(.) = 'reflowable' or normalize-space(.) = 'pre-paginated'"
+        >The value of the "rendition:layout" property must be "reflowable" or "pre-paginated"</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-layout-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:layout'][not(@refines)]">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:layout'][not(@refines)]) = 1"
+        >The "rendition:layout" property must not occur more than one time as a global value</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-layout-no-refines">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:layout']">
+      <assert test="not(@refines)"
+        >the "rendition:layout" property must not be used with a "refines" attribute</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-orientation-value">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:orientation']">
+      <assert test="normalize-space(.) = 'auto' or normalize-space(.) = 'landscape' or normalize-space(.) = 'portrait'"
+        >The value of the "rendition:orientation" property must be "auto", "landscape", or "portrait"</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-orientation-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:orientation'][not(@refines)]">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:orientation'][not(@refines)]) = 1"
+        >The "rendition:orientation" property must not occur more than one time as a global value</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-orientation-no-refines">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:orientation']">
+      <assert test="not(@refines)"
+        >the "rendition:orientation" property must not be used with a "refines" attribute</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-spread-value">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:spread']">
+      <assert test="normalize-space(.) = 'auto' or normalize-space(.) = 'none' or normalize-space(.) = 'landscape' or normalize-space(.) = 'portrait' or normalize-space(.) = 'both'"
+        >The value of the "rendition:spread" property must be "auto", "none", "landscape", "portrait", or "both"</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-spread-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:spread'][not(@refines)]">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:spread'][not(@refines)]) = 1"
+        >The "rendition:spread" property must not occur more than one time as a global value</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-spread-no-refines">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:spread']">
+      <assert test="not(@refines)"
+        >the "rendition:spread" property must not be used with a "refines" attribute</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-flow-value">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:flow']">
+      <assert test="normalize-space(.) = 'auto' or normalize-space(.) = 'paginated' or normalize-space(.) = 'scrolled-continuous' or normalize-space(.) = 'scrolled-doc'"
+        >The value of the "rendition:flow" property must be "auto", "paginated", "scrolled-continuous", or "scrolled-doc"</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-flow-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:flow'][not(@refines)]">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:flow'][not(@refines)]) = 1"
+        >The "rendition:flow" property must not occur more than one time as a global value</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="rendition-flow-no-refines">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:flow']">
+      <assert test="not(@refines)"
+        >the "rendition:flow" property must not be used with a "refines" attribute</assert>
+    </rule>
+  </pattern>
+
+  <!-- rendition:viewport (deprecated) cardinality; the deprecated-usage
+       warning (OPF-086, every occurrence) and syntax check are hand-coded
+       in opf.rs since they reuse the layout.rs viewport-grammar parser. -->
+  <pattern id="rendition-viewport-cardinality">
+    <rule context="opf:meta[normalize-space(@property) = 'rendition:viewport'][not(@refines)]">
+      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:viewport'][not(@refines)]) = 1"
+        >The "rendition:viewport" property must not occur more than one time as a global value</assert>
+    </rule>
+  </pattern>
 </schema>

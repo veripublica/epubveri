@@ -133,6 +133,52 @@ const RESERVED_PREFIXES: &[(&str, &str)] = &[
     ),
 ];
 
+/// The 4 rendition:X (layout/orientation/spread/flow) spine-override
+/// families, plus page-spread-* (which also accepts an unprefixed form,
+/// confirmed via `rendition-page-spread-itemref-unprefixed-valid.opf`):
+/// more than one token sharing the same family in a single itemref's
+/// `properties` is RSC-005 "mutually exclusive", regardless of which
+/// specific values conflict (confirmed via the real fixtures - each uses
+/// a different value pair, but the shape is always "count > 1"). Also
+/// flags the itemref-override form of the deprecated `rendition:spread`
+/// "portrait" value (OPF-086), same as the global-value check in
+/// `schemas/package.sch`.
+fn check_itemref_rendition_conflicts(props: &str, path: &str, report: &mut Report) {
+    let tokens: Vec<&str> = props.split_whitespace().collect();
+    for kind in ["layout", "orientation", "spread", "flow"] {
+        let prefix = format!("rendition:{kind}-");
+        if tokens.iter().filter(|t| t.starts_with(&prefix)).count() > 1 {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                format!("rendition:{kind} spine override values are mutually exclusive"),
+                path.to_string(),
+            );
+        }
+    }
+    if tokens
+        .iter()
+        .filter(|t| t.starts_with("page-spread-") || t.starts_with("rendition:page-spread-"))
+        .count()
+        > 1
+    {
+        report.push_at(
+            RSC_005,
+            Severity::Error,
+            "page-spread-* spine override values are mutually exclusive",
+            path.to_string(),
+        );
+    }
+    if tokens.iter().any(|t| *t == "rendition:spread-portrait") {
+        report.push_at(
+            OPF_086,
+            Severity::Warning,
+            "the \"portrait\" value of the \"rendition:spread\" property is deprecated",
+            path.to_string(),
+        );
+    }
+}
+
 /// OPF-007: a `prefix` (or `epub:prefix`) attribute redeclares one of the
 /// reserved default-vocabulary prefixes above to a *different* URI. One
 /// warning per occurrence (the corpus counts "once for each reserved
@@ -275,6 +321,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 })
                 .map(elem_text)
         };
+        // rendition:spread's "portrait" value is deprecated as a global
+        // value (a warning, so hand-coded here rather than via
+        // Schematron - crate::schematron::run's caller below maps every
+        // finding to RSC-005/Error uniformly, which doesn't fit a
+        // deprecation warning with its own dedicated code).
+        if meta_property_text("rendition:spread").as_deref() == Some("portrait") {
+            report.push_at(
+                OPF_086,
+                Severity::Warning,
+                "the \"portrait\" value of the \"rendition:spread\" property is deprecated",
+                opf_path,
+            );
+        }
         media_active_class = meta_property_text("media:active-class");
         media_playback_active_class = meta_property_text("media:playback-active-class");
 
@@ -292,6 +351,44 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     RSC_005,
                     Severity::Error,
                     format!("media:duration value '{text}' must be a valid SMIL3 clock value"),
+                    opf_path,
+                );
+            }
+        }
+        // rendition:viewport is deprecated - every occurrence is flagged
+        // (not deduplicated), and its value must still parse under the
+        // same "key=value,key=value" grammar the fixed-layout viewport
+        // checks already use (src/layout.rs).
+        for n in md.children().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && n.attribute("property") == Some("rendition:viewport")
+        }) {
+            report.push_at(
+                OPF_086,
+                Severity::Warning,
+                "the \"rendition:viewport\" property is deprecated",
+                opf_path,
+            );
+            let text = elem_text(n);
+            let syntax_ok = text
+                .split(',')
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .all(|piece| match piece.split_once('=') {
+                    Some((key, value)) if !key.trim().is_empty() && !value.trim().is_empty() => {
+                        let key = key.trim();
+                        let value = value.trim();
+                        !matches!(key, "width" | "height")
+                            || crate::layout::is_valid_viewport_value(key, value)
+                    }
+                    _ => false,
+                });
+            if !syntax_ok {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("The value of the \"rendition:viewport\" property must be of the form 'width=w,height=h' ('{text}')"),
                     opf_path,
                 );
             }
@@ -627,6 +724,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
 
                             // --- Fixed-layout viewport/viewBox checks ---
                             let props = ir.attribute("properties").unwrap_or("");
+                            check_itemref_rendition_conflicts(props, opf_path, report);
                             let is_fixed_layout = if props
                                 .split_whitespace()
                                 .any(|p| p == "rendition:layout-reflowable")

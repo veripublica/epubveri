@@ -1245,6 +1245,64 @@ same honest-denominator-growth pattern as every prior harness-gap fix):
 | OPF family exact hits | 16/139 | **18/148** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: 08-layout (rendition:* properties) (2026-07-02)
+
+Next natural increment named at the end of D-vocabularies:
+`08-layout.feature`'s 20 miss scenarios, covering `rendition:layout`,
+`rendition:orientation`, `rendition:spread`, `rendition:flow`, and
+`rendition:viewport` (deprecated). Same shape as D-vocabularies — all
+Schematron-reachable via the existing XPath 1.0 engine — and highly
+templated: 4 of the 5 properties share an identical 4-rule pattern
+(unknown-value, global-duplicate, refines-error, itemref-conflict),
+confirmed via real fixture pairs. The content-document-level viewport/
+viewBox checks this feature file also exercises (HTM-046/047/048/056/
+057/059/060) were already implemented in an earlier increment and stayed
+untouched here.
+
+**Implemented:** 13 new `<pattern>` blocks in `schemas/package.sch` for
+the 4 properties' unknown-value/duplicate/refines-error rules (enum
+values confirmed empirically from the real fixtures: layout =
+reflowable/pre-paginated; orientation = auto/landscape/portrait; spread =
+auto/none/landscape/portrait/both; flow = auto/paginated/
+scrolled-continuous/scrolled-doc), plus `rendition:viewport`'s own
+duplicate-cardinality pattern. `check_itemref_rendition_conflicts` (new,
+`src/opf.rs`) handles the itemref-override side: for each of
+layout/orientation/spread/flow, more than one `properties` token sharing
+the same `rendition:X-` prefix is a conflict (a *count*, not specific
+named pairs — confirmed the real fixtures each use a different value
+pair but the same general shape), plus `page-spread-*`'s own conflict
+check (accepting both the `rendition:`-prefixed and unprefixed forms,
+confirmed via `rendition-page-spread-itemref-unprefixed-valid`).
+`rendition:viewport` itself (deprecated) is hand-coded in `opf.rs`: new
+`OPF-086` fires on every occurrence (not deduplicated), and its value is
+syntax-checked by reusing `is_valid_viewport_value` from `src/layout.rs`
+(newly made `pub(crate)`) rather than duplicating the grammar.
+
+**A real, non-obvious limitation of the Schematron engine found via the
+corpus, not by inspection:** `rendition:spread`'s `"portrait"` value is
+separately deprecated (its own `OPF-086` warning, on top of being a
+valid enum value) — the natural way to express this is a Schematron
+`<report>` pattern (fires when true, the inverse of `<assert>`). But
+`opf::check`'s call site for `crate::schematron::run(...)` maps *every*
+returned finding to `RSC-005`/`Severity::Error` uniformly (`for message
+in ... { report.push_at(RSC_005, Severity::Error, message, opf_path); }`)
+— fine for every pattern so far, since they were all genuinely RSC-005,
+but wrong for a warning with its own dedicated code. Rather than
+extending the schematron engine to carry per-pattern severity/ID (a
+larger, separate architecture change), this one check was written as a
+small hand-coded `opf.rs` check instead (same file, right next to the
+`media:active-class`/`rendition:viewport` scans) — the pragmatic fix for
+a single, narrow case, not a reason to touch the engine's return type.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 31.2% (186 hits) | 35.0% (**209 hits**) |
+| RSC family exact hits | 102/379 | **122/379** |
+| OPF family exact hits | 18/148 | **23/148** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

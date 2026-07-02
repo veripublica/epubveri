@@ -42,6 +42,7 @@ pub const OPF_049: &str = "OPF-049"; // spine itemref idref not found in the man
 pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resource
 pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't application/xhtml+xml
 pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no print-source is identified
+pub const OPF_086: &str = "OPF-086"; // usage of a deprecated rendition property or value
 pub const OPF_077: &str = "OPF-077"; // the Data Navigation Document is referenced from the spine
 
 // --- CSS (via the styloria parser) ---

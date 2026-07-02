@@ -150,7 +150,7 @@ fn check_viewport_content(content: &str, path: &str, report: &mut Report) {
     }
 }
 
-fn is_valid_viewport_value(key: &str, value: &str) -> bool {
+pub(crate) fn is_valid_viewport_value(key: &str, value: &str) -> bool {
     if (key == "width" && value == "device-width") || (key == "height" && value == "device-height")
     {
         return true;
