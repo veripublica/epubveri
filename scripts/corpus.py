@@ -208,15 +208,18 @@ def wrap_single_doc(target_full, target_name, version="3.0"):
         '<item id="_nav" href="_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
     ]
     # Siblings are included so the *target*'s relative references (css,
-    # images, fonts, ...) resolve. Other bare xhtml/html siblings are separate,
-    # independent test fixtures in their own right — including them as real
-    # content documents here would make every single-doc wrap exercise the
-    # content-model check against ALL of them at once, not just the one under
-    # test, so they're demoted to an inert media type (the target itself keeps
-    # its real one).
+    # images, fonts, ...) resolve. Other bare xhtml/html/svg siblings are
+    # separate, independent test fixtures in their own right — including
+    # them as real content documents here would make every single-doc wrap
+    # exercise the content-model check against ALL of them at once, not
+    # just the one under test, so they're demoted to an inert media type
+    # (the target itself keeps its real one). svg was added to this
+    # demotion alongside xhtml/html once SVG got its own content-model
+    # checks (foreignObject/title/vocabulary) - the shared `files/`
+    # directories hold dozens of independent `.svg` fixtures.
     for i, fn in enumerate(siblings):
         mt = guess_media_type(fn)
-        if fn != target_name and mt == "application/xhtml+xml":
+        if fn != target_name and mt in ("application/xhtml+xml", "image/svg+xml"):
             mt = "application/octet-stream"
         manifest_items.append(f'<item id="f{i}" href="{fn}" media-type="{mt}"/>')
     # EPUB 2 requires a spine 'toc' (NCX) attribute - without one, an

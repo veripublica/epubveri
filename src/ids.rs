@@ -42,6 +42,7 @@ pub const RSC_016: &str = "RSC-016"; // a malformed or unknown XML entity refere
 pub const RSC_017: &str = "RSC-017"; // a deprecated construct is used (e.g. epub:switch)
 pub const RSC_019: &str = "RSC-019"; // a multi-rendition publication has no META-INF/metadata.xml
 pub const RSC_020: &str = "RSC-020"; // a URL is not conforming (spaces, unparseable host, missing slashes)
+pub const RSC_025: &str = "RSC-025"; // SVG content-model violation (usage)
 
 // --- OPF package document (dedicated codes, used verbatim) ---
 pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared

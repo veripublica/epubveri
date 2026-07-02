@@ -1797,6 +1797,123 @@ content model with its encoding-equivalence table) and the still-larger
 scenarios not yet scoped in detail) remain the natural next slice of this
 family.
 
+## Increment: Cluster G - SVG foreignObject/title + MathML annotation content models (2026-07-02)
+
+Closed out Cluster G, the 11 scenarios explicitly deferred from the
+previous increment as needing real schema-engineering. All grounded in the
+real corpus's error *and* valid fixtures (clean-room, read-only) - several
+rules here only resolve by diffing matched valid/invalid pairs, not from a
+single fixture.
+
+**SVG `foreignObject` (3 scenarios) - reused the existing schema, no engine
+changes.** Real finding: the errors are ordinary XHTML content-model/
+attribute violations surfacing inside `foreignObject` (`element "body" not
+allowed here`, `element "title" not allowed here`, `attribute "href" not
+allowed here`). Mechanism: `roxmltree::Node::range()` (the `positions`
+feature is already a default feature of our `roxmltree` dependency) gives
+the exact original-text byte span of any node, so `foreignObject`'s inner
+XML can be reconstructed verbatim, wrapped in a synthetic
+`<html>...<body>{inner}</body></html>` that carries forward every
+namespace binding from the real document's root (so prefixed content still
+resolves), re-parsed, and validated via the **already-built**
+`crate::rng::xhtml_grammar()` - zero RNG engine changes. New `src/svg.rs`.
+**EPUB3-only**: a real EPUB2 fixture (`svg-foreignObject-switch-valid.xhtml`,
+titled "body allowed inside foreignObject") explicitly permits a bare
+`<body>` there, unlike EPUB3's own error fixture for the identical shape -
+same EPUB2/EPUB3 content-model split precedent used elsewhere in this
+project.
+
+**A real gap found via this reuse, not guessed:** `schemas/xhtml.rng`'s
+attribute handling is a deliberately permissive global catch-all (not a
+per-element attribute allowlist - see `anyOtherAttr`'s own design comment),
+so `href` on a `<p>` isn't actually caught by the flow-content grammar at
+all. Added a small, narrow, real HTML5 rule alongside the reuse: `href` is
+only valid on `a`/`area`/`link`/`base`; any other XHTML-namespaced element
+carrying it is `RSC-005`.
+
+**SVG `title` (2 scenarios) - NOT flow-content, a real fixture proves it.**
+`svg-title-content-valid.xhtml` shows a bare `<body>` and even a **whole
+embedded `<html>` document** are valid title content - far more permissive
+than `foreignObject`. So `title`'s rule is a plain recursive namespace
+check (any descendant not in the XHTML namespace -> `RSC-005`, "elements
+from namespace X are not allowed") plus the same narrow `href` rule above -
+confirmed via a fixture where only a *nested* `<svg>` inside an otherwise-fine
+XHTML `<body>` is flagged, never the `<body>` itself.
+
+**SVG generic vocabulary (1 scenario, usage-level).** `svg-invalid-usage.xhtml`
+wants unrecognized SVG elements reported as `Severity::Info` (new `RSC-025`) -
+SVG conformance is deliberately non-blocking, unlike XHTML's. A curated,
+generously-inclusive real SVG 1.1 element allowlist; walks every top-level
+`<svg>` subtree, stopping at `foreignObject`/`title` boundaries (their own
+rules apply) and only ever looking at SVG-namespaced children (so foreign
+content like embedded RDF in `<metadata>` is never touched). Confirmed
+against `svg-regression-valid.xhtml` (SVG's own `<a xlink:href>` with
+`rel`/`target` - a false-positive precedent the fixture's own comment
+already calls out) and `svg-rdf-valid.xhtml`.
+
+**MathML (5 scenarios) - reverse-engineered from 5 error + 8 valid
+fixtures.** New `src/mathml.rs`. A `<math>` element's own content (outside
+`annotation`/`annotation-xml`) must be Presentation MathML - a curated
+allowlist walk, stopping recursion at the first violation (confirmed: the
+real fixture reports exactly one finding per invalid subtree, not one per
+nested element inside it too). `annotation-xml`'s `encoding` attribute must
+be one of a closed, real enumeration (Content/Presentation/XHTML/SVG
+variants); an unrecognized value is `RSC-005` and **short-circuits every
+other check** for that element (the fixture expects exactly one finding,
+not a cascade). `name` is required, and constrained to exactly
+`"contentequiv"`, **only** when `encoding` is a Content-MathML value -
+confirmed via a real fixture where an XHTML-encoded annotation omits `name`
+entirely and is valid. When `encoding` is Presentation-MathML, the
+annotation's own content must also be Presentation MathML (reuses the same
+allowlist walk). Deliberately left unenforced, confirmed safe by a real
+fixture: the inverse (Content-MathML encoding with presentation content)
+and xhtml/svg-encoding content-type mismatches - one valid fixture nests a
+`<math>` *inside* an xhtml-encoded annotation despite its own comment
+suggesting real epubcheck's Schematron might otherwise object, and no
+scenario here enforces that.
+
+**A real, corpus-wide harness regression found and fixed, not a product
+bug:** the new SVG checks, once wired in, needed a second pass over
+standalone top-level SVG content documents (`image/svg+xml`) - the existing
+per-content-doc loop is scoped to `application/xhtml+xml` only, so a bare
+`.svg` file (like `content-svg-use-href-no-fragment-error`'s `cover.svg`)
+never went through it at all. Added a dedicated loop over `svg_doc_paths`
+(already computed for the CSS-029/030 cross-reference) running vocabulary/
+foreignObject/title/`<use>`-fragment checks. This immediately surfaced a
+real `scripts/corpus.py` gap: `wrap_single_doc`'s "include all directory
+siblings so relative refs resolve" convention already demoted other bare
+`.xhtml`/`.html` siblings to an inert media type (since the shared `files/`
+directories hold dozens of independent, unrelated fixtures) - but never
+extended that demotion to `.svg` siblings, since SVG had no content-model
+checks before this increment. Once it did, every single-doc-wrapped
+scenario in a `06-content-document/files/` directory started sweeping in
+every *other* unrelated `.svg` fixture in that same folder as if it were
+part of the same book, producing a flood of unrelated findings. Fixed by
+extending the existing xhtml/html demotion to also cover `image/svg+xml`.
+
+**Two real, narrow bugs found via testing, not by inspection:** (1)
+`roxmltree::Node::ancestors()` includes the node **itself** as its first
+item (confirmed by reading its source) - the top-level-`<svg>`-root filter
+(`!ancestors().any(is an svg)`) matched every `<svg>` against itself and
+silently excluded all of them; fixed with `.skip(1)`. (2) the presentation-
+MathML walk's first version still recursed into an already-rejected
+element's children, producing 3 findings (`apply`, then its own nested
+`csymbol`/`ci`) where the real fixture expects exactly 1 - fixed by not
+recursing past the first violation in a subtree.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 59.4% (352 hits) | **61.4% (364 hits)** |
+| within target-family spot-check (11 Cluster G scenarios + adjacent valid) | 72/85 | **all 11 hit exactly, 18 adjacent valid fixtures confirmed clean** |
+| RSC family exact hits | 209/377 | **222/377** |
+| false positives | 2 | 2 (same two known, unrelated gaps - the RELAX NG hyphenated-custom-element limitation and the epubcheck-acknowledged single-document-mode limitation) |
+
+With this, `content-document-xhtml`/`svg`'s Cluster G is **done**. The
+remaining, not-yet-scoped tail of this family (~54 more scenarios, per the
+prior increment's estimate) is the next natural slice.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

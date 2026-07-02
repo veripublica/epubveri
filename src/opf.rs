@@ -1756,6 +1756,45 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             );
         }
 
+        // --- SVG content models: foreignObject (flow content, reused via
+        // wrap+reparse), title (namespace-only), generic vocabulary
+        // (RSC-025/usage) ---
+        for svg_root in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "svg"
+                && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+                && !n.ancestors().skip(1).any(|a| {
+                    a.tag_name().name() == "svg"
+                        && a.tag_name().namespace() == Some(crate::svg::SVG_NS)
+                })
+        }) {
+            crate::svg::check_vocabulary(svg_root, &path, report);
+        }
+        for fo in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "foreignObject"
+                && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+        }) {
+            crate::svg::check_foreign_object(fo, &t, d.root_element(), &path, is_epub3, report);
+        }
+        for svg_title in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "title"
+                && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+        }) {
+            crate::svg::check_title_content(svg_title, &path, report);
+        }
+
+        // --- MathML content model: Presentation-only at the top level,
+        // annotation-xml encoding/name/content validation ---
+        for math_el in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "math"
+                && n.tag_name().namespace() == Some(crate::mathml::MATHML_NS)
+        }) {
+            crate::mathml::check_math_element(math_el, &path, report);
+        }
+
         // <title> present but empty, or missing entirely.
         match d
             .descendants()
@@ -2944,6 +2983,62 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             .entry(doc_path.clone())
             .or_default()
             .extend(collect_svg_class_names(&d, &dir, &name_index, ocf));
+    }
+
+    // Standalone top-level SVG content documents (`image/svg+xml`) never
+    // go through the XHTML content_docs loop above (which is scoped to
+    // `application/xhtml+xml` only), so its SVG content-model checks -
+    // generic vocabulary (RSC-025), foreignObject/title content models -
+    // would otherwise never run on a bare SVG document at all (confirmed
+    // via a real fixture: `content-svg-use-href-no-fragment-error`'s
+    // standalone `cover.svg`).
+    for doc_path in &svg_doc_paths {
+        let Some(orig) = name_index.get(doc_path).cloned() else {
+            continue;
+        };
+        let Some(b) = ocf.read(&orig) else { continue };
+        let text = String::from_utf8_lossy(&b).into_owned();
+        let Ok(d) = parse_xml(&text) else { continue };
+        crate::svg::check_vocabulary(d.root_element(), doc_path, report);
+        for fo in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "foreignObject"
+                && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+        }) {
+            crate::svg::check_foreign_object(
+                fo,
+                &text,
+                d.root_element(),
+                doc_path,
+                is_epub3,
+                report,
+            );
+        }
+        for svg_title in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "title"
+                && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+        }) {
+            crate::svg::check_title_content(svg_title, doc_path, report);
+        }
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "use")
+        {
+            let href = n
+                .attribute("href")
+                .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
+            if let Some(v) = href {
+                if !is_external(v) && !v.contains('#') {
+                    report.push_at(
+                        RSC_015,
+                        Severity::Error,
+                        format!("\"use\" element's href '{v}' has no fragment identifier"),
+                        doc_path.clone(),
+                    );
+                }
+            }
+        }
     }
 
     // --- Media-overlay active-class CSS cross-referencing (CSS-029/030) ---

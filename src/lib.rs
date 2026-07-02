@@ -11,6 +11,7 @@ pub mod edupub;
 pub mod htm;
 pub mod ids;
 pub mod layout;
+pub mod mathml;
 pub mod ncx;
 pub mod ocf;
 pub mod opf;
@@ -20,6 +21,7 @@ pub mod report;
 pub mod rng;
 pub mod schematron;
 pub mod smil;
+pub mod svg;
 pub mod url;
 pub mod xpath;
 
