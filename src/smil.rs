@@ -139,7 +139,40 @@ fn check_text(
         return;
     }
     if let Some(f) = frag {
+        check_fragment_scheme(path_part, f, smil_path, report);
         text_targets.push((resolved_nfc, f.to_string()));
+    }
+}
+
+/// A media-overlay `<text>` target's fragment is expected to be a plain id
+/// on XHTML targets, or a plain id / the SVG `svgView(...)` view-fragment
+/// form on SVG targets. `xpointer(...)`-style scheme-based fragments on
+/// XHTML (confirmed via the real corpus fixture
+/// `mediaoverlays-textref-fragment-schemebased-warning`) and anything else
+/// on SVG (confirmed via `mediaoverlays-textref-svg-fragment-invalid-warning`,
+/// e.g. `#box=0,0,50,50`) are warned about, not hard errors.
+fn check_fragment_scheme(path_part: &str, frag: &str, smil_path: &str, report: &mut Report) {
+    let lower = path_part.to_ascii_lowercase();
+    if lower.ends_with(".xhtml") || lower.ends_with(".html") || lower.ends_with(".htm") {
+        if frag.contains('(') {
+            report.push_at(
+                MED_017,
+                Severity::Warning,
+                format!("scheme-based fragment '{frag}' should be a plain id"),
+                smil_path,
+            );
+        }
+    } else if lower.ends_with(".svg") {
+        let is_plain_id = !frag.contains(['(', '=', ',']);
+        let is_svg_view = frag.starts_with("svgView(");
+        if !is_plain_id && !is_svg_view {
+            report.push_at(
+                MED_018,
+                Severity::Warning,
+                format!("invalid SVG fragment identifier '{frag}'"),
+                smil_path,
+            );
+        }
     }
 }
 
@@ -440,6 +473,47 @@ mod tests {
         </smil>"#;
         let (findings, _) = run(smil, &HashMap::new(), &HashMap::new());
         assert_eq!(findings, vec![RSC_001, RSC_001]);
+    }
+
+    #[test]
+    fn xpointer_fragment_on_xhtml_warns() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body><par id="p"><text src="c.xhtml#xpointer(id('c01'))"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert!(findings.contains(&MED_017));
+    }
+
+    #[test]
+    fn invalid_svg_fragment_warns() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body><par id="p"><text src="c.svg#box=0,0,50,50"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.svg", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert!(findings.contains(&MED_018));
+    }
+
+    #[test]
+    fn svg_view_fragment_is_valid() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body><par id="p"><text src="c.svg#svgView(viewBox(0,200,1000,1000))"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.svg", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert!(!findings.contains(&MED_018));
+    }
+
+    #[test]
+    fn plain_id_fragment_is_valid() {
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body><par id="p"><text src="c.xhtml#c01"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let (findings, _) = run(smil, &names, &HashMap::new());
+        assert!(!findings.contains(&MED_017));
+        assert!(!findings.contains(&MED_018));
     }
 
     #[test]

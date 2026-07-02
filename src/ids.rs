@@ -27,6 +27,7 @@ pub const RSC_004: &str = "RSC-004"; // a resource is encrypted; its content is 
                                      // a malformed manifest <item> (missing id/href/media-type); a duplicate manifest
                                      // id; and a missing EPUB 3 navigation document.
 pub const RSC_005: &str = "RSC-005";
+pub const RSC_017: &str = "RSC-017"; // a deprecated construct is used (e.g. epub:switch)
 
 // --- OPF package document (dedicated codes, used verbatim) ---
 pub const OPF_001: &str = "OPF-001"; // error parsing the EPUB version
@@ -39,7 +40,10 @@ pub const OPF_049: &str = "OPF-049"; // spine itemref idref not found in the man
 pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resource
 
 // --- CSS (via the styloria parser) ---
+pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi' property
 pub const CSS_002: &str = "CSS-002"; // @font-face 'src' has an empty url()
+pub const CSS_003: &str = "CSS-003"; // a stylesheet is UTF-16 encoded
+pub const CSS_004: &str = "CSS-004"; // @charset value isn't utf-8 or utf-16
 pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)
 pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block
 
@@ -52,3 +56,7 @@ pub const MED_011: &str = "MED-011"; // content doc is referenced by more than o
 pub const MED_012: &str = "MED-012"; // content doc is referenced by the wrong overlay
 pub const MED_013: &str = "MED-013"; // content doc declares an overlay that doesn't reference it
 pub const MED_014: &str = "MED-014"; // <audio src> has a URL fragment (use clipBegin/clipEnd instead)
+pub const MED_015: &str = "MED-015"; // SMIL <text> order doesn't match the content doc's DOM order
+pub const MED_016: &str = "MED-016"; // media:duration total doesn't match the sum of overlay durations
+pub const MED_017: &str = "MED-017"; // scheme-based fragment on an XHTML media-overlay text target
+pub const MED_018: &str = "MED-018"; // invalid SVG fragment identifier on a media-overlay text target

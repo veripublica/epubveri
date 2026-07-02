@@ -41,7 +41,7 @@ TARGET_IDS = {
 }
 
 ID_RE = re.compile(r"\b([A-Z]{2,4}-\d{2,4})\b")
-CHECK_RE = re.compile(r"checking (?:EPUB|document|the EPUB)\s+'([^']+)'")
+CHECK_RE = re.compile(r"checking (?:EPUB|document|file|the EPUB)\s+'([^']+)'")
 LOCATED_RE = re.compile(r"located at\s+'([^']+)'")
 
 
@@ -220,8 +220,10 @@ def wrap_opf_file(full, name):
     uniqueness, unique-identifier resolution, dcterms:modified, ...) only
     need the OPF itself; manifest items it references won't exist in this
     minimal wrap (same harness limitation as wrap_single_doc), so RSC-001
-    from these is excluded from scoring the same way."""
-    with open(full, encoding="utf-8") as f:
+    from these is excluded from scoring the same way. Read as raw bytes,
+    not decoded text - some fixtures are deliberately non-UTF-8 (encoding
+    tests), and the bytes get written straight into the zip either way."""
+    with open(full, "rb") as f:
         opf_content = f.read()
     container_xml = (
         '<?xml version="1.0"?>\n'
@@ -396,23 +398,36 @@ def main():
             reported.discard("RSC-001")
             rc = 1 if reported else 0
 
-        if s["errs"]:
+        # A scenario can expect only a *warning* (no "errs"), e.g. MED-016
+        # or CSS-003/019 — these were previously falling through to the
+        # "should stay clean" bucket below (since that branch only checked
+        # s["errs"]), which silently mis-scored them as false positives the
+        # moment the corresponding check started actually firing. Score
+        # errs+warns together here; only genuinely expectation-free
+        # scenarios fall to the clean bucket. `rc` (the CLI's exit code) is
+        # error-only by design (`Report::is_valid`), so the "detection
+        # recall (flagged any error)" sub-metric still only means something
+        # for scenarios that expect an actual error - it's simply not
+        # incremented for warning-only ones, while exact-ID recall (the
+        # more important number) still counts them correctly either way.
+        expected = s["errs"] | s["warns"]
+        if expected:
             n_err += 1
-            for e in s["errs"]:
+            for e in expected:
                 exp_family[family(e)] += 1
-            if rc == 1:
+            if s["errs"] and rc == 1:
                 n_detect += 1
-            hit = s["errs"] & reported
+            hit = expected & reported
             if hit:
                 n_exact += 1
                 for e in hit:
                     hit_family[family(e)] += 1
-            if s["errs"] & TARGET_IDS:
+            if expected & TARGET_IDS:
                 n_inscope += 1
                 if hit:
                     n_inscope_exact += 1
                 elif len(miss_examples) < 12:
-                    miss_examples.append((s["name"], sorted(s["errs"]), ids or ["(none)"]))
+                    miss_examples.append((s["name"], sorted(expected), ids or ["(none)"]))
         elif s["clean"]:
             n_clean += 1
             if rc == 0:

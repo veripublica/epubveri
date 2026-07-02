@@ -218,6 +218,44 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 );
             }
         }
+
+        // --- Media Overlays duration sum (MED-016) ---
+        // Package-metadata-only: sum every `refines`-scoped media:duration
+        // value and compare against the single un-refined total, 1s
+        // tolerance. Silently skipped (no finding) if the total is absent
+        // or any part fails to parse, to avoid false positives on
+        // partial/malformed data.
+        let duration_metas: Vec<_> = md
+            .children()
+            .filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attribute("property") == Some("media:duration")
+            })
+            .collect();
+        let total = duration_metas
+            .iter()
+            .find(|n| n.attribute("refines").is_none())
+            .and_then(|n| n.text())
+            .and_then(crate::smil::parse_clock_value);
+        let parts: Option<Vec<f64>> = duration_metas
+            .iter()
+            .filter(|n| n.attribute("refines").is_some())
+            .map(|n| n.text().and_then(crate::smil::parse_clock_value))
+            .collect();
+        if let (Some(total), Some(parts)) = (total, parts) {
+            if !parts.is_empty() {
+                let sum: f64 = parts.iter().sum();
+                if (total - sum).abs() > 1.0 {
+                    report.push_at(
+                        MED_016,
+                        Severity::Warning,
+                        "media:duration total does not match the sum of overlay durations",
+                        opf_path,
+                    );
+                }
+            }
+        }
     } else {
         report.push_at(
             RSC_005,
@@ -240,6 +278,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // content-doc resolved-path -> declared media-overlay manifest id (raw,
     // resolved to an overlay path once the full manifest is known below).
     let mut media_overlay_attrs: Vec<(String, String)> = Vec::new();
+    // manifest id -> its declared 'fallback' manifest id, for spine
+    // core-media-type fallback-chain resolution.
+    let mut fallback_map: HashMap<String, String> = HashMap::new();
     let mut nav_present = false;
     let manifest = pkg
         .children()
@@ -291,6 +332,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             }
             if let Some(mo) = item.attribute("media-overlay") {
                 media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
+            }
+            if let Some(fb) = item.attribute("fallback") {
+                fallback_map.insert(id.to_string(), fb.trim().to_string());
             }
             items.insert(id.to_string(), (resolved, mt.to_string()));
         }
@@ -358,11 +402,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             opf_path,
                         ),
                         Some((_, mt)) => {
-                            // Core content-document media types valid in the spine
-                            // without a fallback. (We do not yet trace fallback
-                            // chains, so this only flags the no-fallback common case.)
-                            let is_core = mt == "application/xhtml+xml" || mt == "image/svg+xml";
-                            if !is_core {
+                            // Core content-document media types valid in the
+                            // spine without a fallback; otherwise walk the
+                            // 'fallback' chain (bounded, in case of a cycle)
+                            // looking for one that resolves to a core type.
+                            let is_core =
+                                |mt: &str| mt == "application/xhtml+xml" || mt == "image/svg+xml";
+                            let mut covered = is_core(mt);
+                            let mut cur = idref;
+                            let mut hops = 0;
+                            while !covered && hops < 10 {
+                                let Some(next) = fallback_map.get(cur) else {
+                                    break;
+                                };
+                                let Some((_, next_mt)) = items.get(next.as_str()) else {
+                                    break;
+                                };
+                                covered = is_core(next_mt);
+                                cur = next.as_str();
+                                hops += 1;
+                            }
+                            if !covered {
                                 report.push_at(
                                     OPF_043,
                                     Severity::Warning,
@@ -457,6 +517,68 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             );
         }
 
+        // <title> present but empty.
+        if let Some(title) = d
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "title")
+        {
+            // `Node::text()` returns content for comment nodes too, not
+            // just text nodes - filter to real text first, or a title
+            // containing only a comment (e.g. `<title><!--x--></title>`)
+            // would be mistaken for having real content.
+            let text: String = title
+                .descendants()
+                .filter(|n| n.is_text())
+                .filter_map(|n| n.text())
+                .collect();
+            if text.trim().is_empty() {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "\"title\" must not be empty",
+                    path.clone(),
+                );
+            }
+        }
+
+        // Both an http-equiv Content-Type meta and a charset meta declared.
+        let has_http_equiv_content_type = d.descendants().any(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && n.attribute("http-equiv")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+        });
+        let has_charset_meta = d.descendants().any(|n| {
+            n.is_element() && n.tag_name().name() == "meta" && n.attribute("charset").is_some()
+        });
+        if has_http_equiv_content_type && has_charset_meta {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
+                path.clone(),
+            );
+        }
+
+        // epub:switch is deprecated - a separate, additive signal alongside
+        // whatever structural case/default sequencing schemas/xhtml.rng
+        // already enforces on it. Namespace-checked: SVG has its own,
+        // unrelated native <switch> element (conditional rendering), which
+        // a local-name-only match would misidentify as epub:switch.
+        const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
+        for _ in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "switch"
+                && n.tag_name().namespace() == Some(EPUB_NS)
+        }) {
+            report.push_at(
+                RSC_017,
+                Severity::Warning,
+                "The \"epub:switch\" element is deprecated",
+                path.clone(),
+            );
+        }
+
         let dir = parent_dir(&path);
         for node in d.descendants().filter(|n| n.is_element()) {
             // <base href> sets a base URI for resolving *other* relative
@@ -489,7 +611,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     .filter(|n| n.is_text())
                     .filter_map(|n| n.text())
                     .collect();
-                crate::css::check(&css_text, &path, &dir, &name_index, report);
+                crate::css::check(&css_text, &path, &dir, &name_index, None, report);
             }
         }
     }
@@ -507,7 +629,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         let Some(b) = ocf.read(&orig) else { continue };
         let css_text = crate::css::decode_bytes(&b);
         let dir = parent_dir(&path);
-        crate::css::check(&css_text, &path, &dir, &name_index, report);
+        crate::css::check(&css_text, &path, &dir, &name_index, Some(&b), report);
     }
 
     // --- Media Overlays (SMIL) ---
@@ -540,6 +662,54 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             &media_type_index,
             report,
         );
+
+        // MED-015: this overlay's <text> targets, in SMIL sequence order,
+        // should appear in the same relative order as the ids they name in
+        // the referenced content document's own DOM. Grouped by content
+        // doc (an overlay typically covers one), order preserved within
+        // each group; only checked once a doc has 2+ referenced ids (a
+        // single id is trivially "in order").
+        let mut doc_groups: HashMap<String, Vec<String>> = HashMap::new();
+        for (content_doc_path, frag) in &targets {
+            doc_groups
+                .entry(content_doc_path.clone())
+                .or_default()
+                .push(frag.clone());
+        }
+        for (content_doc_path, frags) in &doc_groups {
+            if frags.len() < 2 {
+                continue;
+            }
+            let Some(orig) = name_index.get(content_doc_path).cloned() else {
+                continue;
+            };
+            let Some(b) = ocf.read(&orig) else { continue };
+            let t = String::from_utf8_lossy(&b).into_owned();
+            let Ok(d) = parse_xml(&t) else { continue };
+            let mut id_order: HashMap<String, usize> = HashMap::new();
+            for (i, n) in d.descendants().filter(|n| n.is_element()).enumerate() {
+                if let Some(id) = n.attribute("id") {
+                    id_order.entry(id.to_string()).or_insert(i);
+                }
+            }
+            // Ids the SMIL references but the doc doesn't have are already
+            // separately caught as broken references elsewhere - skip them
+            // here rather than letting a missing id break the comparison.
+            let indices: Vec<usize> = frags
+                .iter()
+                .filter_map(|f| id_order.get(f).copied())
+                .collect();
+            let in_order = indices.windows(2).all(|w| w[0] <= w[1]);
+            if !in_order && indices.len() >= 2 {
+                report.push_at(
+                    MED_015,
+                    Severity::Info,
+                    "media overlay <text> order does not match the content document's DOM order",
+                    path.clone(),
+                );
+            }
+        }
+
         for (content_doc_path, _frag) in targets {
             referenced_by
                 .entry(content_doc_path)

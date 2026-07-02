@@ -61,9 +61,39 @@ pub(crate) fn check(
     css_path: &str,
     base_dir: &str,
     name_index: &HashMap<String, String>,
+    raw_bytes: Option<&[u8]>,
     report: &mut Report,
 ) {
     let sheet = Parser::parse_stylesheet(css);
+
+    // Encoding checks only make sense for a standalone CSS file — an inline
+    // <style> block's encoding is already resolved as part of its XHTML
+    // document by the time we see its text, so `raw_bytes` is `None` there.
+    if let Some(bytes) = raw_bytes {
+        let is_utf16 = bytes.len() >= 2
+            && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE));
+        if is_utf16 {
+            report.push_at(
+                CSS_003,
+                Severity::Warning,
+                "stylesheet is UTF-16 encoded",
+                css_path,
+            );
+        }
+        if let Some(charset) = sheet.rules.iter().find_map(|r| match r {
+            Rule::At(a) if a.name.eq_ignore_ascii_case("charset") => charset_value(&a.prelude),
+            _ => None,
+        }) {
+            if !charset.eq_ignore_ascii_case("utf-8") && !charset.eq_ignore_ascii_case("utf-16") {
+                report.push_at(
+                    CSS_004,
+                    Severity::Error,
+                    format!("@charset value '{charset}' is not utf-8 or utf-16"),
+                    css_path,
+                );
+            }
+        }
+    }
 
     let mut bad_tokens = 0usize;
     let mut urls: Vec<String> = Vec::new();
@@ -116,6 +146,15 @@ pub(crate) fn check(
     }
 }
 
+fn charset_value(prelude: &[ComponentValue]) -> Option<String> {
+    prelude.iter().find_map(|v| match v {
+        ComponentValue::Token(Token::String(s)) => Some(s.to_string()),
+        _ => None,
+    })
+}
+
+const FLAGGED_PROPERTIES: [&str; 2] = ["direction", "unicode-bidi"];
+
 fn is_effectively_empty(values: &[ComponentValue]) -> bool {
     values
         .iter()
@@ -137,7 +176,8 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
         let mut iter = chunk
             .iter()
             .filter(|v| !matches!(v, ComponentValue::Token(Token::Whitespace)));
-        let malformed = match iter.next() {
+        let first = iter.next();
+        let malformed = match first {
             None => false,
             Some(ComponentValue::Token(Token::Ident(_))) => {
                 !matches!(iter.next(), Some(ComponentValue::Token(Token::Colon)))
@@ -146,6 +186,18 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
         };
         if malformed {
             report.push_at(CSS_008, Severity::Error, "CSS syntax error", css_path);
+        } else if let Some(ComponentValue::Token(Token::Ident(name))) = first {
+            if FLAGGED_PROPERTIES
+                .iter()
+                .any(|p| name.eq_ignore_ascii_case(p))
+            {
+                report.push_at(
+                    CSS_001,
+                    Severity::Error,
+                    format!("use of the '{name}' property is not recommended"),
+                    css_path,
+                );
+            }
         }
         // A malformed chunk can still contain a nested block (e.g. an
         // unclosed rule swallowing a whole well-formed sibling rule) —
@@ -243,12 +295,67 @@ mod tests {
 
     fn run(css: &str, name_index: &HashMap<String, String>) -> Vec<&'static str> {
         let mut report = Report::new();
-        check(css, "style.css", "OEBPS", name_index, &mut report);
+        check(css, "style.css", "OEBPS", name_index, None, &mut report);
+        report.messages.iter().map(|m| m.id).collect()
+    }
+
+    fn run_bytes(bytes: &[u8]) -> Vec<&'static str> {
+        let text = decode_bytes(bytes);
+        let mut report = Report::new();
+        check(
+            &text,
+            "style.css",
+            "OEBPS",
+            &HashMap::new(),
+            Some(bytes),
+            &mut report,
+        );
         report.messages.iter().map(|m| m.id).collect()
     }
 
     fn empty_index() -> HashMap<String, String> {
         HashMap::new()
+    }
+
+    #[test]
+    fn direction_property_flagged() {
+        let findings = run("body { direction: rtl; }", &empty_index());
+        assert!(findings.contains(&CSS_001));
+    }
+
+    #[test]
+    fn unicode_bidi_property_flagged() {
+        let findings = run("body { unicode-bidi: bidi-override; }", &empty_index());
+        assert!(findings.contains(&CSS_001));
+    }
+
+    #[test]
+    fn utf16_stylesheet_warns() {
+        let css = "body { color: red; }";
+        let mut be_bytes = vec![0xFE, 0xFF];
+        for c in css.encode_utf16() {
+            be_bytes.extend_from_slice(&c.to_be_bytes());
+        }
+        let findings = run_bytes(&be_bytes);
+        assert!(findings.contains(&CSS_003));
+    }
+
+    #[test]
+    fn utf8_stylesheet_no_encoding_warning() {
+        let findings = run_bytes(b"body { color: red; }");
+        assert!(!findings.contains(&CSS_003));
+    }
+
+    #[test]
+    fn non_utf8_16_charset_errors() {
+        let findings = run_bytes(b"@charset \"ISO-8859-1\";\nbody { color: red; }");
+        assert!(findings.contains(&CSS_004));
+    }
+
+    #[test]
+    fn utf8_charset_is_fine() {
+        let findings = run_bytes(b"@charset \"utf-8\";\nbody { color: red; }");
+        assert!(!findings.contains(&CSS_004));
     }
 
     #[test]

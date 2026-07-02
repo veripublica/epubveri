@@ -630,6 +630,101 @@ worked; only the harness was blind to them).
 | MED family exact hits | 0/10 | **8/13** (all 8 targeted codes hit; the 5 misses are explicitly out of scope — 3 deferred, 2 unrelated `<picture>`/image checks sharing the `MED` prefix) |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: deferred sub-parts (2026-07-02)
+
+Worked through the "deferred sub-parts" basket named in the CSS and Media Overlays
+increments, rather than starting a new family (`HTM`) or a new area (fonts) —
+owner's explicit choice. Same clean-room, corpus-grounded approach as every prior
+increment.
+
+**Implemented, all confirmed against real corpus fixtures:**
+- **CSS-001** (use of the `direction`/`unicode-bidi` property): turned out to be a
+  plain property-*name* match, not the property-value semantics originally assumed
+  when this was deferred — reused the existing `check_declaration_shapes` walk in
+  `src/css.rs`, one extra branch.
+- **CSS-003** (stylesheet is UTF-16 encoded) / **CSS-004** (`@charset` value isn't
+  utf-8/utf-16): `css::check` gained an `Option<&[u8]>` parameter, `Some` only from
+  the standalone-`.css`-manifest-item call site (encoding is a file concept — inline
+  `<style>` text is already decoded as part of its XHTML document by the time we see
+  it, so that call site passes `None`).
+- **MED-016** (package `media:duration` total must equal the sum of `refines`-scoped
+  overlay durations, 1s tolerance): pure package-metadata arithmetic, no SMIL parsing
+  needed (confirmed via the real fixture being a **bare `.opf`**) — reuses
+  `smil::parse_clock_value`. Skipped silently if the total is absent or any part
+  fails to parse, to avoid false positives on partial data.
+- **MED-017/018** (scheme-based fragment on an XHTML `<text>` target / invalid SVG
+  fragment identifier): `smil::check_text` classifies the fragment by the target's
+  extension — `(` anywhere in an XHTML target's fragment (e.g. `#xpointer(id('c01'))`)
+  or, for SVG, anything that isn't a plain id or `svgView(...)`.
+- **MED-015** (SMIL `<text>` order must match the referenced content document's DOM
+  order): grouped an overlay's targets by content doc (order preserved), built an
+  `id -> DOM-index` map for that doc, and checked the referenced-id-subsequence is
+  non-decreasing. Mapped to `Severity::Info` since epubcheck's "usage" severity has
+  no equivalent in our `Severity` enum yet (only Error/Warning/Info).
+- **Three content-document checks**, added to the existing `content_docs` loop in
+  `opf.rs` (same `d: roxmltree::Document` already parsed there, additive):
+  empty `<title>` (RSC-005), both an `http-equiv="Content-Type"` meta and a `charset`
+  meta present (RSC-005), and any `<epub:switch>` element present (**RSC-017**, a
+  new message ID — separate from and additional to the structural case/default
+  sequencing `schemas/xhtml.rng` already enforces on it).
+- **Confirmed already working, no action needed:** `aria-describedat` (an
+  obsolete/removed ARIA attribute) was already caught by `schemas/xhtml.rng`'s
+  existing obsolete-attribute blocklist.
+- **Explicitly out of scope, named rather than silently dropped:** a real DPUB-ARIA
+  role taxonomy (which roles are valid on which elements, which are deprecated) is a
+  genuinely separate, larger undertaking — not a "deferred sub-part" of anything
+  already built.
+
+**Three real bugs found via testing against the actual fixtures, not by
+inspection:**
+1. **`Node::text()` returns content for comment nodes too, not just text nodes** — a
+   roxmltree API surprise. The new title-empty check's first draft used
+   `.descendants().filter_map(|n| n.text())` (no `is_text()` filter), so
+   `<title><!--empty--></title>` was read as having real text ("empty", the
+   comment's own content) and the check silently never fired. Fixed by filtering to
+   `is_text()` first, matching how the existing `<style>` text-extraction code
+   already did it correctly.
+2. **SVG has its own, unrelated native `<switch>` element** (conditional rendering),
+   which the new epub:switch-deprecated check's local-name-only match
+   misidentified as `epub:switch` — a real false positive on two real SVG fixtures.
+   Fixed by also checking the element's namespace equals the EPUB ops namespace
+   (`http://www.idpf.org/2007/ops`).
+3. **`scripts/corpus.py`'s `CHECK_RE` only matched "checking EPUB/document/the EPUB"
+   — never "checking file"**, the step verb real epubcheck uses for the large
+   majority of bare `.opf` fixtures (248 of 272 total occurrences) plus a handful of
+   bare `.xhtml`/`.svg`/`.smil` ones. This silently hid **252 scenarios** from every
+   prior increment's measurement — a pure undercount (conservative, not inflated),
+   but a real gap since it's exactly why MED-016 (whose only real fixture is a bare
+   `.opf`) showed zero signal at first. Fixing the regex also surfaced a
+   `wrap_opf_file` bug (assumed UTF-8, crashed on a real UTF-16-encoded `.opf`
+   encoding-test fixture — fixed to read raw bytes) and a genuine, separate
+   scoring bug: scenarios expecting only a **warning** (`errs` empty, `warns`
+   non-empty) were falling through to the "should stay clean" bucket, since the
+   scoring loop only checked `s["errs"]` — meaning MED-016/CSS-003 looked like false
+   positives the moment they started actually firing. Fixed by scoring
+   `s["errs"] | s["warns"]` together (detection-recall's `rc`-based sub-metric stays
+   error-only by definition, since `Report::is_valid()` is errors-only).
+
+**A real, pre-existing gap found the same way, unplanned but fixed since it was
+directly surfaced:** `OPF-043`'s spine fallback check flagged a spine item with a
+non-core media type even when it had a **valid** `fallback` attribute pointing to a
+core-type item — the code's own comment already admitted "we do not yet trace
+fallback chains." Fixed by walking the `fallback` chain (bounded to 10 hops against
+cycles) looking for a core type.
+
+**Honest numbers** (scenario count jumped 708 → 960 because of the `CHECK_RE` fix
+above — a real, deliberate widening of what's measured, not a change in the
+product):
+
+| metric | before | after |
+|---|---|---|
+| scenarios measured | 708 | 960 |
+| exact-ID recall | 20.3% (73 hits) | 18.2% (**105 hits**, on the larger, more honest denominator) |
+| CSS family exact hits | 5/17 | **11/20** |
+| MED family exact hits | 8/13 | **12/16** |
+| RSC family exact hits | 41/216 | **65/374** |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
