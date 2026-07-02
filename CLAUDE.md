@@ -1914,6 +1914,72 @@ With this, `content-document-xhtml`/`svg`'s Cluster G is **done**. The
 remaining, not-yet-scoped tail of this family (~54 more scenarios, per the
 prior increment's estimate) is the next natural slice.
 
+## Increment: content-document-xhtml/svg family finished (CSS split + ARIA) (2026-07-02)
+
+Re-measured before starting the next slice, since the prior increment's
+"~54 more scenarios" estimate turned out stale. Real state: `content-
+document-svg.feature` was already 100%, `content-document-xhtml.feature`
+was 83/84 (only the deliberately out-of-scope `aria-roles-li-deprecated-
+warning` DPUB-ARIA scenario missing), and `content-document-css.feature`
+had 2 real misses left. Closed both remaining gaps rather than moving to
+an unrelated family.
+
+**CSS RSC-001/007/008 split (2 scenarios).** The exact same split already
+established for XHTML content-doc references (RSC-001 = manifest-declared
+resource whose file is missing; RSC-007 = undeclared and absent; RSC-008 =
+undeclared but the file genuinely exists) had never been applied to CSS's
+own `url()`/`@import` resolution, which still reported a blanket RSC-001
+for everything missing. Confirmed via three distinctly-named real
+fixtures (`content-css-import-not-present-error` - declared, missing,
+already correctly RSC-001; `content-css-import-not-declared-error` -
+undeclared, present, needs RSC-008; `content-css-url-not-present-error` -
+undeclared, absent, needs RSC-007) that the same three-way split applies
+uniformly to every CSS `url()` construct, not just `@import`. `css::check`
+gained a new `manifest_paths: &HashSet<String>` parameter (computed once
+in `opf.rs::check` alongside the existing `name_index`) to distinguish
+manifest declaration from container file existence - both existing call
+sites updated. Two of `css.rs`'s own unit tests (synthetic, no manifest
+context) had their expected ID corrected from `RSC-001` to `RSC-007` -
+same "fixture must keep pace with the now-correct rule" precedent as
+several earlier increments.
+
+**Deprecated DPUB-ARIA roles (1 scenario, the last remaining item in
+`content-document-xhtml.feature`).** Real corpus finding: every other
+ARIA/DPUB-ARIA scenario in the whole feature file is a "-valid" fixture
+that already stays clean with no role-validity check at all (role
+attribute values aren't restricted by the schema today) - `aria-roles-
+li-deprecated-warning` is the *only* negative assertion in the entire
+cluster. Rather than building the fuller "which roles are valid on which
+host elements" taxonomy the scenario's title suggested (`aria-roles-li`),
+no fixture anywhere actually tests per-element role validity - only that
+`doc-endnote`/`doc-biblioentry` are deprecated, confirmed regardless of
+host element (the real fixture fires the warning on both a `<li>` and a
+`<div>` carrying the same role). Implementing the wider taxonomy would
+have been guessing rather than following evidence, so this stayed
+narrowly scoped to exactly what's tested - a two-entry deprecated-role
+list, checked on any element's `role` attribute, `RSC-017`/Warning per
+occurrence.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 61.4% (364 hits) | **61.9% (367 hits)** |
+| `content-document-xhtml.feature` | 83/84 | **84/84 (100%)** |
+| `content-document-svg.feature` | 100% | 100% (unchanged) |
+| `content-document-css.feature` | 10/12 | **12/12 (100%)** |
+| CSS family exact hits | 18/19 | **18/19** (unchanged - both fixes were RSC-001/007/008/RSC-017, not new CSS-prefixed codes) |
+| RSC family exact hits | 222/377 | **226/377** |
+| false positives | 2 | 2 (same two known, unrelated gaps) |
+
+With this, the `content-document-xhtml`/`svg`/`css` family is **fully
+done** - the only miss anywhere in these three feature files is the one
+false positive shared with every other increment (the pre-existing RELAX
+NG hyphenated-custom-element-name limitation). The next natural slice is
+a genuinely different family: `epub3/03-resources` (56 misses),
+`epub3/04-ocf` (26), `navigation-document.feature` (19), or
+`epub-dictionaries` (17+9) - all unscoped so far.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

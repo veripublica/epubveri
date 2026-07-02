@@ -69,6 +69,7 @@ pub(crate) fn check(
     css_path: &str,
     base_dir: &str,
     name_index: &HashMap<String, String>,
+    manifest_paths: &HashSet<String>,
     raw_bytes: Option<&[u8]>,
     report: &mut Report,
 ) {
@@ -140,14 +141,46 @@ pub(crate) fn check(
         if is_external(&url) {
             continue;
         }
-        let resolved = resolve(base_dir, &url);
-        if !name_index.contains_key(&nfc(&resolved)) {
-            report.push_at(
-                RSC_001,
-                Severity::Error,
-                format!("references a missing resource '{url}'"),
-                css_path,
-            );
+        let resolved = nfc(&resolve(base_dir, &url));
+        let declared = manifest_paths.contains(&resolved);
+        let present = name_index.contains_key(&resolved);
+        // Real corpus finding, mirrors the same RSC-001/007/008 split
+        // already established for XHTML content-doc references: RSC-001
+        // is only for a manifest-*declared* resource whose file is
+        // missing; an *undeclared* target is RSC-008 if the file still
+        // genuinely exists in the container, or RSC-007 if it doesn't
+        // exist at all - confirmed via three distinctly-named real
+        // fixtures (`content-css-import-not-present-error`,
+        // `content-css-import-not-declared-error`,
+        // `content-css-url-not-present-error`), and applies uniformly to
+        // every CSS url() construct (`@import`, `background`, etc.), not
+        // just `@import`.
+        match (declared, present) {
+            (true, false) => {
+                report.push_at(
+                    RSC_001,
+                    Severity::Error,
+                    format!("references a missing resource '{url}'"),
+                    css_path,
+                );
+            }
+            (false, true) => {
+                report.push_at(
+                    RSC_008,
+                    Severity::Error,
+                    format!("resource '{url}' is not declared in the manifest"),
+                    css_path,
+                );
+            }
+            (false, false) => {
+                report.push_at(
+                    RSC_007,
+                    Severity::Error,
+                    format!("references a missing resource '{url}'"),
+                    css_path,
+                );
+            }
+            (true, true) => {}
         }
     }
 }
@@ -426,7 +459,15 @@ mod tests {
 
     fn run(css: &str, name_index: &HashMap<String, String>) -> Vec<&'static str> {
         let mut report = Report::new();
-        check(css, "style.css", "OEBPS", name_index, None, &mut report);
+        check(
+            css,
+            "style.css",
+            "OEBPS",
+            name_index,
+            &HashSet::new(),
+            None,
+            &mut report,
+        );
         report.messages.iter().map(|m| m.id).collect()
     }
 
@@ -438,6 +479,7 @@ mod tests {
             "style.css",
             "OEBPS",
             &HashMap::new(),
+            &HashSet::new(),
             Some(bytes),
             &mut report,
         );
@@ -554,16 +596,58 @@ mod tests {
     }
 
     #[test]
-    fn missing_import_target() {
+    fn missing_import_target_undeclared_and_absent() {
+        // Real corpus finding: an undeclared *and* absent target is
+        // RSC-007, not RSC-001 (RSC-001 is only for a manifest-declared
+        // resource whose file is missing - see the tests below).
         let findings = run("@import \"missing.css\";", &empty_index());
-        assert!(findings.contains(&RSC_001));
+        assert!(findings.contains(&RSC_007));
     }
 
     #[test]
     fn missing_background_url_nested_in_media() {
         let css = "@media screen { body { background: url(missing.png); } }";
         let findings = run(css, &empty_index());
-        assert!(findings.contains(&RSC_001));
+        assert!(findings.contains(&RSC_007));
+    }
+
+    #[test]
+    fn import_target_declared_but_file_missing_is_rsc001() {
+        let mut manifest_paths = HashSet::new();
+        manifest_paths.insert("OEBPS/missing.css".to_string());
+        let mut report = Report::new();
+        check(
+            "@import \"missing.css\";",
+            "style.css",
+            "OEBPS",
+            &empty_index(),
+            &manifest_paths,
+            None,
+            &mut report,
+        );
+        let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec![RSC_001]);
+    }
+
+    #[test]
+    fn import_target_undeclared_but_file_present_is_rsc008() {
+        let mut name_index = HashMap::new();
+        name_index.insert(
+            "OEBPS/present.css".to_string(),
+            "OEBPS/present.css".to_string(),
+        );
+        let mut report = Report::new();
+        check(
+            "@import \"present.css\";",
+            "style.css",
+            "OEBPS",
+            &name_index,
+            &HashSet::new(),
+            None,
+            &mut report,
+        );
+        let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec![RSC_008]);
     }
 
     #[test]

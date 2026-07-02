@@ -1652,6 +1652,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         );
     }
 
+    // Manifest-declared resource paths (nfc-normalized) - used by
+    // `css::check` to distinguish RSC-001 (declared but missing) from
+    // RSC-007/RSC-008 (undeclared, missing vs. still present).
+    let manifest_paths: HashSet<String> = items.values().map(|(p, _)| nfc(p)).collect();
+
     // --- broken internal references + content-model from content documents ---
     let content_docs: Vec<String> = items
         .values()
@@ -2090,6 +2095,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             path.clone(),
                         );
                     }
+                }
+            }
+        }
+
+        // Deprecated DPUB-ARIA roles - confirmed via the real corpus's
+        // only negative ARIA-role scenario (every other ARIA/DPUB-ARIA
+        // fixture is a "-valid" one that just needs to stay clean, which
+        // it already does without any role-validity check at all - no
+        // scenario tests "which roles are valid on which host elements",
+        // so that fuller taxonomy isn't attempted here, only what's
+        // actually evidenced). `doc-endnote`/`doc-biblioentry` are
+        // deprecated regardless of host element (the real fixture fires
+        // on both a `<li>` and a `<div>` carrying the same role).
+        const DEPRECATED_ARIA_ROLES: &[&str] = &["doc-endnote", "doc-biblioentry"];
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.has_attribute("role"))
+        {
+            for token in n.attribute("role").unwrap().split_whitespace() {
+                if DEPRECATED_ARIA_ROLES.contains(&token) {
+                    report.push_at(
+                        RSC_017,
+                        Severity::Warning,
+                        format!("\"{token}\" role is deprecated"),
+                        path.clone(),
+                    );
                 }
             }
         }
@@ -2736,7 +2767,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     .filter(|n| n.is_text())
                     .filter_map(|n| n.text())
                     .collect();
-                crate::css::check(&css_text, &path, &dir, &name_index, None, report);
+                crate::css::check(
+                    &css_text,
+                    &path,
+                    &dir,
+                    &name_index,
+                    &manifest_paths,
+                    None,
+                    report,
+                );
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
                 doc_class_names
                     .entry(path.clone())
@@ -3107,7 +3146,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         let Some(b) = ocf.read(&orig) else { continue };
         let css_text = crate::css::decode_bytes(&b);
         let dir = parent_dir(&path);
-        crate::css::check(&css_text, &path, &dir, &name_index, Some(&b), report);
+        crate::css::check(
+            &css_text,
+            &path,
+            &dir,
+            &name_index,
+            &manifest_paths,
+            Some(&b),
+            report,
+        );
         // RSC-008: a standalone (manifest-declared) stylesheet can
         // reference a remote resource without any content document ever
         // linking to it - still needs its own manifest item. OPF-014: and
