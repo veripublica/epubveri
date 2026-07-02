@@ -549,6 +549,87 @@ XHTML's parsed text).
 | CSS family exact hits | 0/17 | **5/17** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: Media Overlays (SMIL) validation (2026-07-02)
+
+Next family: `MED`. Owner's scope call, after seeing the size comparison (same
+kind of decision as XPath 1.0/2.0 and EPUB-XHTML-profile-vs-full-XHTML5
+earlier): implement the **EPUB Media Overlays profile of SMIL** specifically,
+not general SMIL 3.0 (~40-50 elements across a dozen modules — animation,
+visual layout/regions, non-audio media objects, content-control switching,
+linking, transitions — almost none of which EPUB Media Overlays touches; the
+actual profile is `smil`/`body`/`seq`/`par`/`text`/`audio` plus
+`epub:textref`/`epub:type` and the `clipBegin`/`clipEnd` clock-value grammar).
+Because the scope is narrow and EPUB-specific (unlike `styloria`/`schemora`,
+which are genuinely general-purpose), this stayed **inside epubveri**
+(`src/smil.rs`) rather than becoming a new `veripublica` repo — the owner's
+explicit call this round.
+
+**Grounded in the real corpus** (read-only, for understanding — same
+clean-room stance as every prior increment). One provenance note worth
+recording: a grep incidentally pulled up epubcheck's own Java implementation
+file; I stopped short of reading it, since that crosses from "reading a
+declarative schema/test fixture for understanding" (already-established
+practice) into "reading their algorithm" — a real line this project draws.
+The audio Core Media Types list (`audio/mpeg`, `audio/mp4`) is public EPUB3
+spec knowledge, not derived from their code.
+
+**Implemented:** new `src/smil.rs` — a clock-value parser (the three SMIL
+grammar forms: full-clock `HH:MM:SS(.mmm)?`, partial-clock `MM:SS(.mmm)?`,
+timecount `N(.mmm)?(h|min|s|ms)?`, with `Minutes`/`Seconds` constrained to
+exactly 2 digits, 00-59, per the actual W3C grammar — this resolved an
+initial puzzle: several corpus fixtures reject 3-digit "minutes" values that
+looked plausible at first glance, but the grammar requires *exactly* 2
+digits, not 2-or-more); structural nesting checks (`<seq>` may only contain
+`<seq>`/`<par>`, `<par>` may only contain `<text>`/`<audio>` — both RSC-005,
+confirmed against the corpus rather than assumed, including the non-obvious
+detail that a `<seq>` with *both* a stray `<text>` and a stray `<audio>`
+reports RSC-005 *twice*, once per offending child, not deduplicated per
+container); per-`<audio>` checks (URL fragments forbidden — MED-014; Core
+Media Type — MED-005; `clipBegin`/`clipEnd` comparison, only once both sides
+parse — MED-008/009); per-`<text>` checks (missing resource — RSC-001,
+reusing the existing convention). `opf::check` gained a `media-overlay`
+cross-referencing pass (needs the whole-package view, so it can't live in
+`smil.rs` itself): grouping every SMIL's `<text src>` targets by which
+content document they reference, then comparing against each document's
+declared `media-overlay` manifest attribute to produce MED-010 (referenced
+but no attribute declared), MED-011 (referenced by more than one overlay),
+MED-012 (declares the wrong overlay), MED-013 (declares an overlay that
+doesn't actually reference it back) — reverse-engineered precisely from
+reading the real corpus's four dedicated fixture directories side by side
+(manifest + all `.smil` files) since the plan's initial short description of
+these four codes had MED-010 partly backwards from what the actual scenario
+tests.
+
+**Deferred, by design:** MED-015 (SMIL `<text>` order must match the
+referenced content document's DOM order), MED-016 (package `media:duration`
+meta values must sum correctly across overlays), MED-017/018 (fragment-scheme
+edge cases for XHTML/SVG targets) — all real, but a distinctly separate and
+smaller-value slice; also MED-003/004/007, which turned out (once measured)
+to be `<picture>`/image-corruption checks sharing the `MED` prefix but
+unrelated to media overlays at all — out of this increment's scope by
+definition, not something to chase here.
+
+**A real, useful gap found via measurement, not guessing:** 3 of the 8
+targeted scenarios (`MED-008`/`009`/`014`) live as *bare* `.smil` fixtures
+(epubcheck's single-document check mode), which `scripts/corpus.py` had no
+wrapping support for yet (same class of gap `wrap_single_doc`/`wrap_opf_file`
+closed earlier for bare `.xhtml`/`.opf` fixtures) — they were silently
+falling into "missing-file" and not being measured at all. Added
+`wrap_smil_file`, which scans the SMIL's own `<text src>`/`<audio src>`
+attributes to generate matching stub resources (a content doc with an anchor
+for every referenced fragment id, an empty audio file) so references
+resolve without a harness-artifact RSC-001 — after which all three scenarios
+measured correctly on the first run (the underlying check logic already
+worked; only the harness was blind to them).
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 18.1% (63 hits) | 20.3% (**73 hits**) |
+| MED family exact hits | 0/10 | **8/13** (all 8 targeted codes hit; the 5 misses are explicitly out of scope — 3 deferred, 2 unrelated `<picture>`/image checks sharing the `MED` prefix) |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

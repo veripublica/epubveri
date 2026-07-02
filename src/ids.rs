@@ -42,3 +42,13 @@ pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resourc
 pub const CSS_002: &str = "CSS-002"; // @font-face 'src' has an empty url()
 pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)
 pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block
+
+// --- Media Overlays (SMIL) ---
+pub const MED_005: &str = "MED-005"; // <audio> resource is not a Core Media Type
+pub const MED_008: &str = "MED-008"; // clipBegin is after clipEnd
+pub const MED_009: &str = "MED-009"; // clipBegin equals clipEnd
+pub const MED_010: &str = "MED-010"; // content doc's ids aren't covered by its declared overlay
+pub const MED_011: &str = "MED-011"; // content doc is referenced by more than one overlay
+pub const MED_012: &str = "MED-012"; // content doc is referenced by the wrong overlay
+pub const MED_013: &str = "MED-013"; // content doc declares an overlay that doesn't reference it
+pub const MED_014: &str = "MED-014"; // <audio src> has a URL fragment (use clipBegin/clipEnd instead)

@@ -241,6 +241,88 @@ def wrap_opf_file(full, name):
     return tmp
 
 
+def wrap_smil_file(full, name):
+    """Wrap a bare .smil fixture (epubcheck's single-document media-overlay
+    check mode) in a minimal synthetic book. Scans the SMIL's own <text src>/
+    <audio src> attributes to generate matching stub resources (a content
+    document with an anchor for every referenced fragment id, and an empty
+    audio file) so those references resolve — avoiding a harness-artifact
+    RSC-001 the same way wrap_single_doc/wrap_opf_file do (also excluded
+    from scoring below via single_doc_wrap, belt-and-suspenders)."""
+    with open(full, encoding="utf-8") as f:
+        smil_content = f.read()
+    srcs = re.findall(r'src="([^"]*)"', smil_content)
+    xhtml_names, audio_names, anchors = set(), set(), set()
+    for src in srcs:
+        path, _, frag = src.partition("#")
+        if path.endswith((".xhtml", ".html", ".htm")):
+            xhtml_names.add(path)
+            if frag:
+                anchors.add(frag)
+        else:
+            audio_names.add(path)
+    if not xhtml_names:
+        xhtml_names.add("chapter1.xhtml")
+    body = "".join(f'<p id="{a}">t</p>' for a in sorted(anchors)) or "<p>t</p>"
+    content_xhtml = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+        f'<head><title>t</title></head>\n<body>{body}</body>\n</html>\n'
+    )
+    container_xml = (
+        '<?xml version="1.0"?>\n'
+        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'
+        '  <rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles>\n'
+        '</container>\n'
+    )
+    first_xhtml = sorted(xhtml_names)[0]
+    nav_xhtml = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">\n'
+        '<head><title>Nav</title></head>\n'
+        f'<body><nav epub:type="toc"><ol><li><a href="{first_xhtml}">t</a></li></ol></nav></body>\n'
+        '</html>\n'
+    )
+    manifest_items = [
+        '<item id="_nav" href="_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+        f'<item id="mo" href="{name}" media-type="application/smil+xml"/>',
+    ]
+    spine_items = ['<itemref idref="_nav"/>']
+    for i, fn in enumerate(sorted(xhtml_names)):
+        manifest_items.append(f'<item id="c{i}" href="{fn}" media-type="application/xhtml+xml" media-overlay="mo"/>')
+        spine_items.append(f'<itemref idref="c{i}"/>')
+    for i, fn in enumerate(sorted(audio_names)):
+        manifest_items.append(f'<item id="a{i}" href="{fn}" media-type="audio/mpeg"/>')
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">\n'
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
+        '    <dc:identifier id="id">urn:uuid:corpus-wrap</dc:identifier>\n'
+        '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
+        '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
+        '  </metadata>\n'
+        '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
+        '  <spine>' + "".join(spine_items) + '</spine>\n'
+        '</package>\n'
+    )
+    fd, tmp = tempfile.mkstemp(suffix=".epub")
+    os.close(fd)
+    with zipfile.ZipFile(tmp, "w") as z:
+        zi = zipfile.ZipInfo("mimetype")
+        zi.compress_type = zipfile.ZIP_STORED
+        z.writestr(zi, "application/epub+zip")
+        z.writestr("META-INF/container.xml", container_xml)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/_nav.xhtml", nav_xhtml)
+        for fn in xhtml_names:
+            z.writestr(f"OEBPS/{fn}", content_xhtml)
+        for fn in audio_names:
+            z.writestr(f"OEBPS/{fn}", b"\x00" * 16)
+        z.writestr(f"OEBPS/{name}", smil_content)
+    return tmp
+
+
 def resolve(s):
     """Return (epub_path, is_temp, skip_reason, single_doc_wrap)."""
     name = s["name"]
@@ -262,6 +344,8 @@ def resolve(s):
         return full + ".epub", False, None, False
     if os.path.isfile(full) and name.endswith((".xhtml", ".html", ".htm")):
         return wrap_single_doc(full, name), True, None, True
+    if os.path.isfile(full) and name.endswith(".smil"):
+        return wrap_smil_file(full, name), True, None, True
     return None, False, "missing-file", False
 
 

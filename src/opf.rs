@@ -237,6 +237,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // --- manifest ---
     // id -> (resolved-path, media-type)
     let mut items: HashMap<String, (String, String)> = HashMap::new();
+    // content-doc resolved-path -> declared media-overlay manifest id (raw,
+    // resolved to an overlay path once the full manifest is known below).
+    let mut media_overlay_attrs: Vec<(String, String)> = Vec::new();
     let mut nav_present = false;
     let manifest = pkg
         .children()
@@ -286,6 +289,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     format!("manifest item '{id}' references a missing resource '{href}'"),
                 );
             }
+            if let Some(mo) = item.attribute("media-overlay") {
+                media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
+            }
             items.insert(id.to_string(), (resolved, mt.to_string()));
         }
     } else {
@@ -296,6 +302,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             opf_path,
         );
     }
+
+    // content-doc resolved-path -> its declared overlay's resolved-path
+    // (once the id it names is resolvable). Used below to cross-reference
+    // against what each overlay's <text src> actually references.
+    let content_doc_overlay: HashMap<String, String> = media_overlay_attrs
+        .into_iter()
+        .filter_map(|(doc_path, overlay_id)| {
+            items
+                .get(&overlay_id)
+                .map(|(overlay_path, _)| (doc_path, nfc(overlay_path)))
+        })
+        .collect();
 
     // --- spine ---
     let spine = pkg
@@ -490,5 +508,90 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         let css_text = crate::css::decode_bytes(&b);
         let dir = parent_dir(&path);
         crate::css::check(&css_text, &path, &dir, &name_index, report);
+    }
+
+    // --- Media Overlays (SMIL) ---
+    // resolved-path -> media-type, for the audio Core Media Type check.
+    let media_type_index: HashMap<String, String> = items
+        .values()
+        .map(|(path, mt)| (nfc(path), mt.clone()))
+        .collect();
+    let smil_items: Vec<String> = items
+        .values()
+        .filter(|(_, mt)| mt == "application/smil+xml")
+        .map(|(path, _)| path.clone())
+        .collect();
+    // content-doc resolved-path -> set of distinct overlay resolved-paths
+    // that reference it via <text src>, for the cross-referencing pass below.
+    let mut referenced_by: HashMap<String, HashSet<String>> = HashMap::new();
+    for path in smil_items {
+        let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
+            continue;
+        };
+        let Some(b) = ocf.read(&orig) else { continue };
+        let smil_text = String::from_utf8_lossy(&b).into_owned();
+        let dir = parent_dir(&path);
+        let overlay_path = nfc(&path);
+        let targets = crate::smil::check(
+            &smil_text,
+            &path,
+            &dir,
+            &name_index,
+            &media_type_index,
+            report,
+        );
+        for (content_doc_path, _frag) in targets {
+            referenced_by
+                .entry(content_doc_path)
+                .or_default()
+                .insert(overlay_path.clone());
+        }
+    }
+
+    let all_docs: HashSet<&String> = content_doc_overlay
+        .keys()
+        .chain(referenced_by.keys())
+        .collect();
+    for content_doc_path in all_docs {
+        let declared = content_doc_overlay.get(content_doc_path);
+        let actual = referenced_by.get(content_doc_path);
+        match actual.map(|s| s.len()).unwrap_or(0) {
+            0 => {
+                if declared.is_some() {
+                    report.push_at(
+                        MED_013,
+                        Severity::Error,
+                        "content document declares a media-overlay attribute but is not referenced from that overlay",
+                        content_doc_path.clone(),
+                    );
+                }
+            }
+            1 => {
+                let actual_overlay = actual.unwrap().iter().next().unwrap();
+                match declared {
+                    None => report.push_at(
+                        MED_010,
+                        Severity::Error,
+                        "content document is referenced from a media overlay but has no media-overlay attribute",
+                        content_doc_path.clone(),
+                    ),
+                    Some(d) if d != actual_overlay => report.push_at(
+                        MED_012,
+                        Severity::Error,
+                        "content document references the wrong media overlay",
+                        content_doc_path.clone(),
+                    ),
+                    Some(_) => {}
+                }
+            }
+            _ => {
+                report.push_at(
+                    MED_011,
+                    Severity::Error,
+                    "content document is declared/referenced in more than one media overlay",
+                    content_doc_path.clone(),
+                );
+            }
+        }
     }
 }
