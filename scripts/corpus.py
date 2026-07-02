@@ -40,7 +40,11 @@ TARGET_IDS = {
     "OPF-049", "OPF-050",
 }
 
-ID_RE = re.compile(r"\b([A-Z]{2,4}-\d{2,4})\b")
+# A trailing lowercase letter (e.g. "HTM-060a"/"HTM-060b") is a
+# Gherkin-authoring convention to label sub-cases of the same real
+# epubcheck code, not part of the reported message id - matched but not
+# captured, so "HTM-060a" scores as "HTM-060".
+ID_RE = re.compile(r"\b([A-Z]{2,4}-\d{2,4})[a-z]?\b")
 CHECK_RE = re.compile(r"checking (?:EPUB|document|file|the EPUB)\s+'([^']+)'")
 LOCATED_RE = re.compile(r"located at\s+'([^']+)'")
 

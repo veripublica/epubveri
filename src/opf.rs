@@ -183,10 +183,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // The package's actual identifier text (the dc:identifier named by
     // unique-identifier), used later for the NCX dtb:uid cross-check.
     let mut package_identifier_text: Option<String> = None;
+    // Package-level fixed-layout default (individual spine itemrefs can
+    // override this via their own 'properties'), used for the viewport/
+    // viewBox checks below.
+    let mut package_fixed_layout = false;
     let metadata = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "metadata");
     if let Some(md) = metadata {
+        package_fixed_layout = md
+            .children()
+            .filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attribute("property") == Some("rendition:layout")
+            })
+            .any(|n| {
+                let text: String = n
+                    .descendants()
+                    .filter(|t| t.is_text())
+                    .filter_map(|t| t.text())
+                    .collect();
+                text.trim() == "pre-paginated"
+            });
         let has = |local: &str| {
             md.children()
                 .any(|n| n.is_element() && n.tag_name().name() == local)
@@ -461,6 +480,42 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                                     format!("spine item idref '{idref}' has non-content media-type '{mt}' with no verified fallback"),
                                     opf_path,
                                 );
+                            }
+
+                            // --- Fixed-layout viewport/viewBox checks ---
+                            let props = ir.attribute("properties").unwrap_or("");
+                            let is_fixed_layout = if props
+                                .split_whitespace()
+                                .any(|p| p == "rendition:layout-reflowable")
+                            {
+                                false
+                            } else if props
+                                .split_whitespace()
+                                .any(|p| p == "rendition:layout-pre-paginated")
+                            {
+                                true
+                            } else {
+                                package_fixed_layout
+                            };
+                            if let Some(orig) = name_index.get(&nfc(path)).cloned() {
+                                if let Some(b) = ocf.read(&orig) {
+                                    let t = String::from_utf8_lossy(&b).into_owned();
+                                    if let Ok(d) = parse_xml(&t) {
+                                        if mt == "application/xhtml+xml" {
+                                            if is_fixed_layout {
+                                                crate::layout::check_xhtml_viewport(
+                                                    &d, path, report,
+                                                );
+                                            } else {
+                                                crate::layout::check_reflowable_viewport(
+                                                    &d, path, report,
+                                                );
+                                            }
+                                        } else if mt == "image/svg+xml" && is_fixed_layout {
+                                            crate::layout::check_svg_viewbox(&d, path, report);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

@@ -68,3 +68,12 @@ pub const NAV_011: &str = "NAV-011"; // toc nav link order doesn't match reading
 // --- NCX (EPUB 2 table of contents) ---
 pub const NCX_001: &str = "NCX-001"; // dtb:uid doesn't match the package's dc:identifier
 pub const NCX_006: &str = "NCX-006"; // an empty docTitle/navLabel text element
+
+// --- Fixed-layout viewport/viewBox ---
+pub const HTM_046: &str = "HTM-046"; // fixed-layout XHTML doc has no viewport meta
+pub const HTM_047: &str = "HTM-047"; // viewport content has a blank value after '='
+pub const HTM_048: &str = "HTM-048"; // fixed-layout SVG doc's root <svg> has no viewBox
+pub const HTM_056: &str = "HTM-056"; // viewport content is missing the width or height key
+pub const HTM_057: &str = "HTM-057"; // viewport width/height value fails the format grammar
+pub const HTM_059: &str = "HTM-059"; // viewport width or height key appears more than once
+pub const HTM_060: &str = "HTM-060"; // extra viewport meta, or viewport on a reflowable doc (usage)

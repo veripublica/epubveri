@@ -8,6 +8,7 @@
 
 pub mod css;
 pub mod ids;
+pub mod layout;
 pub mod ncx;
 pub mod ocf;
 pub mod opf;

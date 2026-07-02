@@ -783,6 +783,63 @@ each.
 | NCX family exact hits | 0/2 | **2/2** |
 | false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
 
+## Increment: HTM family, fixed-layout viewport/viewBox cluster (2026-07-02)
+
+Owner's choice: start the biggest remaining untapped family, `HTM` (0/29).
+Real corpus research showed `HTM` splits into three fairly separate
+clusters: (1) fixed-layout viewport/viewBox (12 scenarios, self-contained),
+(2) XML/encoding/doctype (8 scenarios), (3) misc attribute checks (6
+scenarios, excluding HTM-051/052 which — like NAV-003/009 last increment —
+are optional EDUPUB/region-nav extension-profile checks, not core EPUB 3).
+This increment scoped to **cluster 1 only**, the single biggest,
+self-contained slice — clusters 2 and 3 are a natural follow-up, same
+"split into digestible increments" pattern as CSS and Media Overlays.
+
+**Implemented, all confirmed against real corpus fixtures on the first
+attempt** (`src/layout.rs`, wired into a new pass over spine itemrefs in
+`opf.rs`, since fixed-layout is fundamentally a per-spine-item concept):
+fixed-layout detection (package-level `<meta property="rendition:layout">
+pre-paginated</meta>` default, overridable per itemref via
+`properties="rendition:layout-pre-paginated"`/`-reflowable`); a hand-written
+`content="key=value,..."` mini-grammar for `<meta name="viewport">`
+distinguishing several real, distinct malformation shapes the corpus
+actually exercises: **HTM-046** (no viewport meta at all), **HTM-056**
+(width/height key entirely absent), **HTM-057** (a recognized key with no
+`=` at all, or a value that fails the numeric/`device-width`/`device-height`
+grammar — units like `600px` count as this, not a syntax error — reported
+once per bad key), **HTM-047** (the value slot exists but is
+blank/whitespace-only — a whole-viewport syntax failure, reported once
+regardless of which key), **HTM-059** (a key duplicated within the same
+content string, once per duplicated key), and **HTM-060** (usage-level,
+`Severity::Info`: viewport metas beyond the first aren't checked at all,
+and neither is viewport metadata on a reflowable document — both just
+usage-flagged, not errors). **HTM-048**: a fixed-layout SVG's root `<svg>`
+missing a `viewBox` attribute, regardless of whether/how `width`/`height`
+are set.
+
+**A real, small measurement-harness gap found while researching, not
+guessing:** the two usage-level scenarios are written as `HTM-060a`/
+`HTM-060b` in the feature file — a Gherkin-authoring convention to label
+two related sub-cases, not a real epubcheck message-ID suffix — which
+`scripts/corpus.py`'s `ID_RE` never matched at all (no regex word boundary
+between a digit and a following lowercase letter), silently hiding both
+scenarios from every measurement. Fixed by widening `ID_RE` to match (but
+not capture) an optional trailing lowercase letter, so `HTM-060a` scores as
+`HTM-060` — same class of fix as the `CHECK_RE`/`wrap_opf_file` gaps found
+two increments ago.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 19.0% (110 hits) | 21.0% (**123 hits**) |
+| HTM family exact hits | 0/29 | **13/31** (denominator grew from the `ID_RE` fix surfacing the 2 usage scenarios) |
+| false positives | 1 | 1 (same known RELAX NG gap, unrelated) |
+
+**Deliberately deferred, named rather than silently dropped**: cluster 2
+(XML/encoding/doctype: HTM-001/003/004/009/058) and cluster 3 (misc
+attribute checks: HTM-007/054/055/061) — the next natural slice of `HTM`.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
