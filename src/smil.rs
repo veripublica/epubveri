@@ -121,7 +121,7 @@ pub(crate) fn check(
 /// vocabulary terms - this is a usage-level (Info) finding, so a false
 /// negative (missing a real term) is far safer than a false positive
 /// (flagging one), hence biased toward inclusion.
-fn is_default_vocab_type(token: &str) -> bool {
+pub(crate) fn is_default_vocab_type(token: &str) -> bool {
     const KNOWN: &[&str] = &[
         "abstract",
         "acknowledgments",
@@ -215,6 +215,7 @@ fn is_default_vocab_type(token: &str) -> bool {
         "qna",
         "question",
         "revision-history",
+        "region-based",
         "seriespage",
         "subchapter",
         "subtitle",
@@ -222,6 +223,7 @@ fn is_default_vocab_type(token: &str) -> bool {
         "table-cell",
         "table-row",
         "tip",
+        "title",
         "titlepage",
         "toc",
         "toc-brief",

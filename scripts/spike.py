@@ -179,8 +179,10 @@ def fixtures():
                    '    <item id="ch1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>',
                ]))))
 
-    # broken internal reference in content
-    fx.append(('broken_ref.epub', 'RSC-001',
+    # broken internal reference in content - RSC-001 is reserved for a
+    # manifest item/@href missing from the container (confirmed corpus-wide);
+    # a content document's own broken reference is RSC-007.
+    fx.append(('broken_ref.epub', 'RSC-007',
                put(base_entries(), 'OEBPS/chapter1.xhtml',
                    chapter('<p><img src="missing.png" alt="x"/></p>'))))
 

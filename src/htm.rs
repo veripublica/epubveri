@@ -55,6 +55,114 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
     }
 
     check_doctype(text, path, report);
+    check_entities(text, path, report);
+}
+
+/// A minimal, well-formedness-only entity-reference scanner. Runs on the
+/// raw text regardless of whether the document parses as XML at all —
+/// `roxmltree` simply fails to parse a document with a malformed or
+/// undeclared entity reference (confirmed: neither of the two real corpus
+/// fixtures for this parse successfully today), so this is the only place
+/// these two conditions can be caught. Numeric character references
+/// (`&#39;`/`&#x27;`) are always well-formed and out of scope here — only
+/// named references (`&foo;`) are checked.
+fn check_entities(text: &str, path: &str, report: &mut Report) {
+    let declared = declared_entity_names(text);
+    const PREDEFINED: &[&str] = &["amp", "lt", "gt", "apos", "quot"];
+    // `&foo;` inside a comment or CDATA section is literal text, not a
+    // real entity reference (confirmed via a real corpus fixture titled
+    // exactly this) - mask any '&' found there so the scan below skips it,
+    // without disturbing any other byte offset in the text.
+    let masked = mask_comments_and_cdata(text);
+    let text = masked.as_str();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while let Some(rel) = text[i..].find('&') {
+        let amp = i + rel;
+        let after = &text[amp + 1..];
+        if after.starts_with('#') {
+            i = amp + 1;
+            continue;
+        }
+        let name_len = after
+            .find(|c: char| !c.is_ascii_alphanumeric())
+            .unwrap_or(after.len());
+        if name_len == 0 {
+            i = amp + 1;
+            continue;
+        }
+        let name = &after[..name_len];
+        let terminated = bytes.get(amp + 1 + name_len) == Some(&b';');
+        if !terminated {
+            report.push_at(
+                RSC_016,
+                Severity::Error,
+                format!("entity reference '&{name}' must end with the ';' delimiter"),
+                path,
+            );
+        } else if !PREDEFINED.contains(&name) && !declared.iter().any(|d| d == name) {
+            report.push_at(
+                RSC_016,
+                Severity::Error,
+                format!("entity '{name}' was referenced, but not declared"),
+                path,
+            );
+        }
+        i = amp + 1 + name_len;
+    }
+}
+
+/// Blanks out (with spaces, preserving every other byte offset) any '&'
+/// found inside `<!-- -->` comments or `<![CDATA[ ]]>` sections, so
+/// `check_entities`'s scan never mistakes literal comment/CDATA text for a
+/// real entity reference.
+fn mask_comments_and_cdata(text: &str) -> String {
+    let mut out = text.as_bytes().to_vec();
+    for (open, close) in [("<!--", "-->"), ("<![CDATA[", "]]>")] {
+        let mut i = 0;
+        while let Some(rel) = text[i..].find(open) {
+            let start = i + rel + open.len();
+            let Some(end_rel) = text[start..].find(close) else {
+                break;
+            };
+            let end = start + end_rel;
+            for b in &mut out[start..end] {
+                if *b == b'&' {
+                    *b = b' ';
+                }
+            }
+            i = end + close.len();
+        }
+    }
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Entity names declared in the DOCTYPE's internal subset
+/// (`<!ENTITY name "...">`), so a legitimately custom-declared entity
+/// reference isn't misflagged as unknown.
+fn declared_entity_names(text: &str) -> Vec<String> {
+    let Some(start) = text.find("<!DOCTYPE") else {
+        return Vec::new();
+    };
+    let after = &text[start..];
+    let Some(open) = after.find('[') else {
+        return Vec::new();
+    };
+    let Some(close) = after[open..].find(']') else {
+        return Vec::new();
+    };
+    let subset = &after[open + 1..open + close];
+    let mut names = Vec::new();
+    let mut i = 0;
+    while let Some(rel) = subset[i..].find("<!ENTITY") {
+        let rest = subset[i + rel + "<!ENTITY".len()..].trim_start();
+        let name_len = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+        if name_len > 0 {
+            names.push(rest[..name_len].to_string());
+        }
+        i += rel + "<!ENTITY".len();
+    }
+    names
 }
 
 /// Finds the full `<!DOCTYPE ...>` declaration, correctly skipping past
@@ -216,6 +324,237 @@ fn is_valid_data_attr_suffix(rest: &str) -> bool {
     !rest.is_empty() && !rest.starts_with('-') && !rest.chars().any(|c| c.is_ascii_uppercase())
 }
 
+/// The HTML5 `<time datetime>` microsyntax - reverse-engineered directly
+/// from the real corpus's exhaustive valid/invalid fixture pairs (not from
+/// memory of the spec text), since several of its rules are non-obvious:
+/// the separator between date and time may be either "T" or a literal
+/// space; an offset may be "+HHMM" or "+HH:MM" but never combined with a
+/// trailing "Z"; a fractional-seconds part (in a plain time, a global
+/// date-time, or a duration) is capped at 1-3 digits even though nothing
+/// else here is digit-count-limited; and a "duration" string has two
+/// entirely different valid shapes - an ISO-8601-like "P...T..." form, or
+/// a bare whitespace-separated sequence of "<number><unit>" components
+/// with no "P"/"T" markers at all (both are exercised by real fixtures).
+pub(crate) fn is_valid_html5_datetime(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() || !s.is_ascii() {
+        return false;
+    }
+    is_valid_year(s)
+        || is_valid_month(s)
+        || is_valid_date(s)
+        || is_valid_yearless_date(s)
+        || is_valid_time(s)
+        || is_valid_week(s)
+        || is_valid_global_datetime(s)
+        || is_valid_duration(s)
+}
+
+fn all_digits(s: &str, n: usize) -> bool {
+    s.len() == n && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+fn digit_range(s: &str, lo: u32, hi: u32) -> bool {
+    all_digits(s, 2) && s.parse::<u32>().is_ok_and(|n| n >= lo && n <= hi)
+}
+
+fn is_valid_year(s: &str) -> bool {
+    all_digits(s, 4)
+}
+
+fn is_valid_month(s: &str) -> bool {
+    let Some((y, m)) = s.split_once('-') else {
+        return false;
+    };
+    all_digits(y, 4) && digit_range(m, 1, 12)
+}
+
+fn is_valid_date(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    matches!(parts.as_slice(), [y, m, d] if all_digits(y, 4) && digit_range(m, 1, 12) && digit_range(d, 1, 31))
+}
+
+fn is_valid_yearless_date(s: &str) -> bool {
+    let s = s.strip_prefix("--").unwrap_or(s);
+    let parts: Vec<&str> = s.split('-').collect();
+    matches!(parts.as_slice(), [m, d] if digit_range(m, 1, 12) && digit_range(d, 1, 31))
+}
+
+fn is_valid_week(s: &str) -> bool {
+    let Some((y, w)) = s.split_once("-W") else {
+        return false;
+    };
+    all_digits(y, 4) && digit_range(w, 1, 53)
+}
+
+fn valid_seconds(s: &str) -> bool {
+    match s.split_once('.') {
+        Some((whole, frac)) => {
+            digit_range(whole, 0, 59)
+                && !frac.is_empty()
+                && frac.len() <= 3
+                && frac.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => digit_range(s, 0, 59),
+    }
+}
+
+fn is_valid_time(s: &str) -> bool {
+    let parts: Vec<&str> = s.split(':').collect();
+    match parts.as_slice() {
+        [h, m] => digit_range(h, 0, 23) && digit_range(m, 0, 59),
+        [h, m, sec] => digit_range(h, 0, 23) && digit_range(m, 0, 59) && valid_seconds(sec),
+        _ => false,
+    }
+}
+
+/// A full date, "T" or a single space, a time, and an optional "Z" or
+/// numeric UTC offset (never both).
+fn is_valid_global_datetime(s: &str) -> bool {
+    if s.len() < 11 {
+        return false;
+    }
+    let (date_part, rest) = s.split_at(10);
+    if !is_valid_date(date_part) {
+        return false;
+    }
+    if rest[0..1] != *"T" && rest[0..1] != *" " {
+        return false;
+    }
+    let time_and_offset = &rest[1..];
+    if time_and_offset.starts_with(' ') {
+        return false;
+    }
+    if let Some(time_part) = time_and_offset.strip_suffix('Z') {
+        return is_valid_time(time_part);
+    }
+    if time_and_offset.len() >= 6 {
+        let (maybe_time, off) = time_and_offset.split_at(time_and_offset.len() - 6);
+        if (off.starts_with('+') || off.starts_with('-'))
+            && &off[3..4] == ":"
+            && digit_range(&off[1..3], 0, 23)
+            && digit_range(&off[4..6], 0, 59)
+        {
+            return is_valid_time(maybe_time);
+        }
+    }
+    if time_and_offset.len() >= 5 {
+        let (maybe_time, off) = time_and_offset.split_at(time_and_offset.len() - 5);
+        if (off.starts_with('+') || off.starts_with('-'))
+            && digit_range(&off[1..3], 0, 23)
+            && digit_range(&off[3..5], 0, 59)
+        {
+            return is_valid_time(maybe_time);
+        }
+    }
+    is_valid_time(time_and_offset)
+}
+
+fn is_valid_duration(s: &str) -> bool {
+    match s.strip_prefix('P') {
+        Some(rest) => is_valid_p_duration(rest),
+        None => is_valid_flat_duration(s),
+    }
+}
+
+/// Consumes leading `<digits><unit>` runs from `cursor` in the given unit
+/// order, returning `None` if any unit's preceding digit-run isn't purely
+/// digits (which also naturally rejects out-of-order units, since a unit
+/// letter appearing "too early" ends up embedded inside a supposedly
+/// all-digit span for a later unit).
+fn consume_units<'a>(mut cursor: &'a str, units: &[char], any: &mut bool) -> Option<&'a str> {
+    for unit in units {
+        if let Some(idx) = cursor.find(*unit) {
+            let num = &cursor[..idx];
+            if num.is_empty() || !num.bytes().all(|b| b.is_ascii_digit()) {
+                return None;
+            }
+            *any = true;
+            cursor = &cursor[idx + 1..];
+        }
+    }
+    Some(cursor)
+}
+
+fn is_valid_p_duration(rest: &str) -> bool {
+    let (date_part, time_part) = match rest.split_once('T') {
+        Some((d, t)) => (d, Some(t)),
+        None => (rest, None),
+    };
+    let mut any = false;
+    let Some(leftover) = consume_units(date_part, &['Y', 'M', 'D'], &mut any) else {
+        return false;
+    };
+    if !leftover.is_empty() {
+        return false;
+    }
+    if let Some(t) = time_part {
+        if t.is_empty() {
+            return false;
+        }
+        let mut any_time = false;
+        let Some(leftover) = consume_units(t, &['H', 'M'], &mut any_time) else {
+            return false;
+        };
+        let leftover = match leftover.strip_suffix('S') {
+            Some(rest_s) if !rest_s.is_empty() => {
+                let ok = match rest_s.split_once('.') {
+                    Some((whole, frac)) => {
+                        !whole.is_empty()
+                            && whole.bytes().all(|b| b.is_ascii_digit())
+                            && !frac.is_empty()
+                            && frac.len() <= 3
+                            && frac.bytes().all(|b| b.is_ascii_digit())
+                    }
+                    None => rest_s.bytes().all(|b| b.is_ascii_digit()),
+                };
+                if !ok {
+                    return false;
+                }
+                any_time = true;
+                ""
+            }
+            _ => leftover,
+        };
+        if !leftover.is_empty() || !any_time {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
+fn is_valid_duration_component(token: &str) -> bool {
+    let Some(unit) = token.chars().next_back() else {
+        return false;
+    };
+    if !matches!(unit, 'Y' | 'M' | 'W' | 'D' | 'H' | 'S') {
+        return false;
+    }
+    let num = &token[..token.len() - unit.len_utf8()];
+    match num.split_once('.') {
+        Some((whole, frac)) => {
+            !whole.is_empty()
+                && whole.bytes().all(|b| b.is_ascii_digit())
+                && !frac.is_empty()
+                && frac.len() <= 3
+                && frac.bytes().all(|b| b.is_ascii_digit())
+        }
+        None => !num.is_empty() && num.bytes().all(|b| b.is_ascii_digit()),
+    }
+}
+
+fn is_valid_flat_duration(s: &str) -> bool {
+    let mut any = false;
+    for token in s.split_whitespace() {
+        if !is_valid_duration_component(token) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -370,5 +709,116 @@ mod tests {
         let xhtml = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body data-ok="1"/></html>"#;
         assert!(run_raw(xhtml).is_empty());
         assert!(run_dom(xhtml).is_empty());
+    }
+
+    #[test]
+    fn datetime_rejects_all_25_real_invalid_values() {
+        // Every one of `time-error.xhtml`'s 25 real corpus datetime values,
+        // each individually confirmed invalid.
+        const INVALID: &[&str] = &[
+            "201",
+            "09999001",
+            "01--31",
+            "---12-31",
+            "3123-05-31-12",
+            "2019-01-25T 12:12:12Z",
+            "2019-01-2512:12:12",
+            "2019-01-25A12:12:12Z",
+            "2019-01-25T12:12:12-0500Z",
+            "2019-01-25 12:12:12-05 00",
+            "2019-01-25 12:12:12.33777",
+            "2018-W522",
+            "2019W01",
+            "08::40",
+            "19:24:291",
+            "14:08:59.999999",
+            "P32DT",
+            "P32D223T12H",
+            "P23DT32M12H",
+            "PT2.1112S",
+            "PT12H9",
+            "P12T431M",
+            "9123W12",
+            "  1231 23D  ",
+            "343HD",
+        ];
+        for v in INVALID {
+            assert!(!is_valid_html5_datetime(v), "expected invalid: {v}");
+        }
+    }
+
+    #[test]
+    fn datetime_accepts_all_real_valid_values() {
+        // Every one of `time-valid.xhtml`'s real corpus datetime values.
+        const VALID: &[&str] = &[
+            "2019",
+            "0001",
+            "01-31",
+            "02-28",
+            "--12-31",
+            "3123-05-31",
+            "1200-08",
+            "2019-01-25T12:12:12Z",
+            "2019-01-25 12:12:12",
+            "2019-01-25 12:12:12Z",
+            "2019-01-25 12:12:12-0500",
+            "2019-01-25 12:12:12-05:00",
+            "2019-01-25 12:12:12.777",
+            "2018-W52",
+            "2019-W01",
+            "08:40",
+            "19:24:29",
+            "14:08:59.999",
+            "P32D",
+            "P32DT12H",
+            "P23DT12H32M1231S",
+            "PT12H23M12.112S",
+            "PT12H",
+            "PT431M",
+            "PT12.433S",
+            "9123W",
+            "  123123D  ",
+            "343H",
+            "1M",
+            "12S",
+            "12.12S",
+            "123W 123H   32D 12S",
+            "2014-03",
+        ];
+        for v in VALID {
+            assert!(is_valid_html5_datetime(v), "expected valid: {v}");
+        }
+    }
+
+    #[test]
+    fn entity_missing_semicolon_and_unknown_name() {
+        let mut report = Report::new();
+        check_entities("&amp ", "content.xhtml", &mut report);
+        assert_eq!(
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![RSC_016]
+        );
+
+        let mut report = Report::new();
+        check_entities("&foo;", "content.xhtml", &mut report);
+        assert_eq!(
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![RSC_016]
+        );
+    }
+
+    #[test]
+    fn entity_predefined_and_declared_are_valid() {
+        let mut report = Report::new();
+        check_entities("&amp; &lt; &gt;", "content.xhtml", &mut report);
+        assert!(report.messages.is_empty());
+
+        let mut report = Report::new();
+        check_entities(
+            "<!DOCTYPE html [<!ENTITY foo \"bar\">]><p>&foo;</p>",
+            "content.xhtml",
+            &mut report,
+        );
+        assert!(report.messages.is_empty());
     }
 }

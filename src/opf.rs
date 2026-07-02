@@ -1756,27 +1756,438 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             );
         }
 
-        // <title> present but empty.
-        if let Some(title) = d
+        // <title> present but empty, or missing entirely.
+        match d
             .descendants()
             .find(|n| n.is_element() && n.tag_name().name() == "title")
         {
-            // `Node::text()` returns content for comment nodes too, not
-            // just text nodes - filter to real text first, or a title
-            // containing only a comment (e.g. `<title><!--x--></title>`)
-            // would be mistaken for having real content.
-            let text: String = title
-                .descendants()
-                .filter(|n| n.is_text())
-                .filter_map(|n| n.text())
-                .collect();
-            if text.trim().is_empty() {
+            Some(title) => {
+                // `Node::text()` returns content for comment nodes too, not
+                // just text nodes - filter to real text first, or a title
+                // containing only a comment (e.g. `<title><!--x--></title>`)
+                // would be mistaken for having real content.
+                let text: String = title
+                    .descendants()
+                    .filter(|n| n.is_text())
+                    .filter_map(|n| n.text())
+                    .collect();
+                if text.trim().is_empty() {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        "\"title\" must not be empty",
+                        path.clone(),
+                    );
+                }
+            }
+            None => {
+                report.push_at(
+                    RSC_017,
+                    Severity::Warning,
+                    "The \"head\" element should have a \"title\" child element.",
+                    path.clone(),
+                );
+            }
+        }
+
+        // Duplicate `id` attribute values within this document.
+        {
+            let mut seen: HashSet<&str> = HashSet::new();
+            for n in d.descendants().filter(|n| n.is_element()) {
+                if let Some(id) = n.attribute("id") {
+                    if !seen.insert(id) {
+                        report.push_at(
+                            RSC_005,
+                            Severity::Error,
+                            format!("Duplicate ID \"{id}\""),
+                            path.clone(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // ID-referencing attributes (ARIA + a couple of plain HTML ones)
+        // must refer to a real id in the same document.
+        {
+            let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attribute("id")).collect();
+            const MULTI_TOKEN: &[&str] = &[
+                "aria-labelledby",
+                "aria-describedby",
+                "aria-owns",
+                "aria-activedescendant",
+                "aria-controls",
+                "aria-flowto",
+                "aria-details",
+            ];
+            const SINGLE_TOKEN: &[&str] = &["for", "list"];
+            for n in d.descendants().filter(|n| n.is_element()) {
+                for attr in MULTI_TOKEN {
+                    if let Some(v) = n.attribute(*attr) {
+                        for token in v.split_whitespace() {
+                            if !ids.contains(token) {
+                                report.push_at(
+                                    RSC_005,
+                                    Severity::Error,
+                                    format!("attribute \"{attr}\" must refer to elements in the same document (target ID missing)"),
+                                    path.clone(),
+                                );
+                            }
+                        }
+                    }
+                }
+                // <output for="..."> is a space-separated *list* of
+                // control ids (like the ARIA attributes above), unlike
+                // <label for>/<input list>, which each name a single id -
+                // confirmed via a real fixture using `<output for="o2 o3">`.
+                if n.tag_name().name() == "output" {
+                    if let Some(v) = n.attribute("for") {
+                        for token in v.split_whitespace() {
+                            if !ids.contains(token) {
+                                report.push_at(
+                                    RSC_005,
+                                    Severity::Error,
+                                    "attribute \"for\" must refer to elements in the same document (target ID missing)",
+                                    path.clone(),
+                                );
+                            }
+                        }
+                    }
+                    continue;
+                }
+                for attr in SINGLE_TOKEN {
+                    if let Some(v) = n.attribute(*attr) {
+                        let v = v.trim();
+                        if !v.is_empty() && !ids.contains(v) {
+                            report.push_at(
+                                RSC_005,
+                                Severity::Error,
+                                format!("attribute \"{attr}\" must refer to elements in the same document (target ID missing)"),
+                                path.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // <img src> must not be empty/whitespace-only.
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "img")
+        {
+            if n.attribute("src").is_some_and(|v| v.trim().is_empty()) {
                 report.push_at(
                     RSC_005,
                     Severity::Error,
-                    "\"title\" must not be empty",
+                    "\"img\" element's \"src\" attribute must not be empty",
                     path.clone(),
                 );
+            }
+        }
+
+        // lang/xml:lang must agree when both are present on the same element.
+        for n in d.descendants().filter(|n| n.is_element()) {
+            if let (Some(lang), Some(xml_lang)) = (
+                n.attribute("lang"),
+                n.attribute(("http://www.w3.org/XML/1998/namespace", "lang")),
+            ) {
+                if lang.trim() != xml_lang.trim() {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        "lang and xml:lang attributes must have the same value",
+                        path.clone(),
+                    );
+                }
+            }
+        }
+
+        // <img usemap> must be a "#name" reference in EPUB 3 (HTML5's
+        // IDREF-typed usemap) - a bare name with no leading '#' is
+        // invalid there regardless of whether a matching <map name>
+        // exists. EPUB 2's XHTML 1.1 DTD later retyped usemap as URIREF
+        // (basically CDATA), which explicitly also permits the bare form
+        // (confirmed via a real, deliberately-commented EPUB2 fixture) -
+        // so this check is EPUB3-only.
+        for n in d
+            .descendants()
+            .filter(|n| is_epub3 && n.is_element() && n.tag_name().name() == "img")
+        {
+            if let Some(usemap) = n.attribute("usemap") {
+                if !usemap.starts_with('#') {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        format!("value of attribute \"usemap\" is invalid: \"{usemap}\""),
+                        path.clone(),
+                    );
+                }
+            }
+        }
+
+        // Both an http-equiv Content-Type meta and a charset meta declared;
+        // and, independently, an http-equiv Content-Type meta whose value
+        // isn't exactly the expected UTF-8 declaration.
+        let has_http_equiv_content_type = d.descendants().any(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && n.attribute("http-equiv")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+        });
+        let has_charset_meta = d.descendants().any(|n| {
+            n.is_element() && n.tag_name().name() == "meta" && n.attribute("charset").is_some()
+        });
+        if has_http_equiv_content_type && has_charset_meta {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
+                path.clone(),
+            );
+        }
+        for n in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && n.attribute("http-equiv")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+        }) {
+            if !n
+                .attribute("content")
+                .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
+            {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                    path.clone(),
+                );
+            }
+        }
+
+        // HTML5 microdata: itemprop is only meaningful on an element that
+        // also carries the attribute microdata uses to derive that
+        // element's *value* - a/area/link -> href, several embed-like
+        // elements -> src, object -> data, data/meter -> value, time ->
+        // datetime. Missing that attribute is a real, corpus-confirmed
+        // misuse (only a/object are exercised by the real fixture; the
+        // rest of this table is the well-known HTML5 microdata spec rule,
+        // included for the same family of elements rather than guessed).
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.has_attribute("itemprop"))
+        {
+            let (required_attr, tag) = match n.tag_name().name() {
+                t @ ("a" | "area" | "link") => ("href", t),
+                t @ ("audio" | "embed" | "iframe" | "img" | "source" | "track" | "video") => {
+                    ("src", t)
+                }
+                t @ "object" => ("data", t),
+                t @ ("data" | "meter") => ("value", t),
+                t @ "time" => ("datetime", t),
+                _ => continue,
+            };
+            if !n.has_attribute(required_attr) {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!(
+                        "element \"{tag}\" missing required attribute \"{required_attr}\" (if the itemprop is specified on this element type, that attribute must also be present)"
+                    ),
+                    path.clone(),
+                );
+            }
+        }
+
+        // A <dfn> must not have a <dfn> descendant.
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "dfn")
+        {
+            if n.descendants()
+                .skip(1)
+                .any(|c| c.is_element() && c.tag_name().name() == "dfn")
+            {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "a \"dfn\" element must not contain a nested \"dfn\" element",
+                    path.clone(),
+                );
+            }
+        }
+
+        // epub:trigger is deprecated; its ref/ev:observer attributes must
+        // each resolve to a real id in the same document.
+        {
+            let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attribute("id")).collect();
+            for n in d.descendants().filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "trigger"
+                    && n.tag_name().namespace() == Some(EPUB_NS)
+            }) {
+                report.push_at(
+                    RSC_017,
+                    Severity::Warning,
+                    "The \"epub:trigger\" element is deprecated",
+                    path.clone(),
+                );
+                if let Some(r) = n.attribute("ref") {
+                    if !ids.contains(r) {
+                        report.push_at(
+                            RSC_005,
+                            Severity::Error,
+                            "The ref attribute must refer to an element in the same document",
+                            path.clone(),
+                        );
+                    }
+                }
+                if let Some(o) = n.attribute(("http://www.w3.org/2001/xml-events", "observer")) {
+                    if !ids.contains(o) {
+                        report.push_at(
+                            RSC_005,
+                            Severity::Error,
+                            "The ev:observer attribute must refer to an element in the same document",
+                            path.clone(),
+                        );
+                    }
+                }
+            }
+        }
+
+        // epub:type default-vocabulary / deprecated / misuse taxonomies -
+        // reuses smil::is_default_vocab_type (built for SMIL's own
+        // epub:type check in an earlier increment); custom-prefixed
+        // tokens (containing ':') are always exempt.
+        const DEPRECATED_SSV: &[&str] = &[
+            "annoref",
+            "annotation",
+            "biblioentry",
+            "bridgehead",
+            "endnote",
+            "help",
+            "marginalia",
+            "note",
+            "rearnote",
+            "rearnotes",
+            "sidebar",
+            "subchapter",
+            "warning",
+        ];
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
+        {
+            let value = n.attribute((EPUB_NS, "type")).unwrap();
+            let tag = n.tag_name().name();
+            for token in value.split_whitespace() {
+                if token.contains(':') {
+                    continue;
+                }
+                if !crate::smil::is_default_vocab_type(token) {
+                    report.push_at(
+                        OPF_088,
+                        Severity::Info,
+                        format!("epub:type value '{token}' is not in the default vocabulary"),
+                        path.clone(),
+                    );
+                }
+                // "endnote" specifically is deprecated only when used
+                // *without* being nested inside its proper "endnotes"
+                // container - confirmed via two real fixtures: a
+                // standalone `<aside epub:type="endnote">` is deprecated,
+                // but the same value on a `<div>` nested inside a
+                // `<section epub:type="endnotes">` is the recommended,
+                // non-deprecated usage.
+                let endnote_exempt = token == "endnote"
+                    && n.ancestors().any(|a| {
+                        a.attribute((EPUB_NS, "type"))
+                            .is_some_and(|t| t.split_whitespace().any(|tok| tok == "endnotes"))
+                    });
+                if DEPRECATED_SSV.contains(&token) && !endnote_exempt {
+                    report.push_at(
+                        OPF_086,
+                        Severity::Info,
+                        format!("epub:type value '{token}' is deprecated"),
+                        path.clone(),
+                    );
+                }
+                let redundant = matches!(
+                    (tag, token),
+                    ("table", "table")
+                        | ("tr", "table-row")
+                        | ("td", "table-cell")
+                        | ("ul", "list")
+                        | ("ol", "list")
+                        | ("li", "list-item")
+                        | ("figure", "figure")
+                        | ("aside", "aside")
+                );
+                if redundant {
+                    report.push_at(
+                        OPF_087,
+                        Severity::Info,
+                        format!("epub:type value '{token}' only restates the semantic of its host element \"{tag}\""),
+                        path.clone(),
+                    );
+                }
+            }
+        }
+
+        // The epub: namespace prefix should be bound to exactly the real
+        // EPUB ops namespace URI - an unrecognized binding is informative,
+        // not an error (the document may still be usable).
+        for ns in d.root_element().namespaces() {
+            if ns.name() == Some("epub") && ns.uri() != EPUB_NS {
+                report.push_at(
+                    HTM_010,
+                    Severity::Info,
+                    format!("Namespace \"{}\" is unusual", ns.uri()),
+                    path.clone(),
+                );
+            }
+        }
+
+        // MathML <math> with no alttext at all, and no annotation
+        // (annotation/annotation-xml, tex or otherwise) providing an
+        // alternative representation either, has no accessible fallback.
+        // Real corpus finding: several "valid" fixtures have no `alttext`
+        // attribute but do have a `<semantics><annotation-xml ...>` child,
+        // which counts as an alternative just as much as `alttext` would.
+        for n in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "math"
+                && n.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
+        }) {
+            let has_annotation = n.descendants().any(|c| {
+                c.is_element()
+                    && matches!(c.tag_name().name(), "annotation" | "annotation-xml")
+                    && c.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
+            });
+            if !n.has_attribute("alttext") && !has_annotation {
+                report.push_at(
+                    ACC_009,
+                    Severity::Info,
+                    "MathML markup has no alternative text",
+                    path.clone(),
+                );
+            }
+        }
+
+        // HTML5 <time datetime="..."> value grammar.
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "time")
+        {
+            if let Some(v) = n.attribute("datetime") {
+                if !crate::htm::is_valid_html5_datetime(v) {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        format!("value of attribute \"datetime\" is invalid: \"{v}\""),
+                        path.clone(),
+                    );
+                }
             }
         }
 
@@ -1819,6 +2230,263 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         }
 
         let dir = parent_dir(&path);
+
+        // --- <a href> fragment resolution (RSC-012/RSC-014), stylesheet/
+        // svg-use/img fragment classification (RSC-013/RSC-015/RSC-009),
+        // srcset (RSC-008), and base-URI-aware remote reclassification
+        // (RSC-006) ---
+        {
+            // An absolute remote <base href>/xml:base means every
+            // relative-or-fragment-only <a href> elsewhere in *this*
+            // document actually resolves to a remote URL through it -
+            // narrower than (and additive to) the existing manifest-
+            // declared-remote-image RSC-006 check further below, since
+            // this target was never manifest-declared at all.
+            let remote_base = d
+                .descendants()
+                .find(|n| n.is_element() && n.tag_name().name() == "base")
+                .and_then(|n| n.attribute("href"))
+                .filter(|v| is_remote_url(v))
+                .or_else(|| {
+                    d.root_element()
+                        .attribute(("http://www.w3.org/XML/1998/namespace", "base"))
+                        .filter(|v| is_remote_url(v))
+                })
+                .is_some();
+
+            let mut frag_id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+
+            for a in d
+                .descendants()
+                .filter(|n| n.is_element() && n.tag_name().name() == "a")
+            {
+                let Some(href) = a.attribute("href") else {
+                    continue;
+                };
+                if crate::url::is_absolute(href) {
+                    if crate::url::has_syntax_error(href) {
+                        report.push_at(
+                            RSC_020,
+                            Severity::Error,
+                            format!("URL '{href}' is not conforming"),
+                            path.clone(),
+                        );
+                    } else if crate::url::has_unregistered_scheme(href) {
+                        report.push_at(
+                            HTM_025,
+                            Severity::Warning,
+                            format!("URL '{href}' uses an unregistered scheme"),
+                            path.clone(),
+                        );
+                    }
+                }
+                // `is_external` treats *any* fragment-only href
+                // (`#foo`) as "skip normal resolution" - correct for the
+                // old file-existence check, but RSC-012's fragment
+                // resolution needs to run on exactly those hrefs, so only
+                // bail out here for a genuinely remote/data/mailto/tel
+                // href (empty hrefs have no fragment to check either).
+                if !href.starts_with('#') && is_external(href) {
+                    continue;
+                }
+                if href.trim().is_empty() {
+                    continue;
+                }
+                if remote_base {
+                    report.push_at(
+                        RSC_006,
+                        Severity::Error,
+                        format!(
+                            "relative reference '{href}' resolves to a remote resource via base"
+                        ),
+                        path.clone(),
+                    );
+                    continue;
+                }
+                let (path_part, frag) = match href.split_once('#') {
+                    Some((p, f)) => (p, Some(f)),
+                    None => (href, None),
+                };
+                let Some(frag) = frag else { continue };
+                // Not a plain NCName-style id reference - e.g. a CFI
+                // (`epubcfi(...)`) or a Media Fragments URI
+                // (`xywh=percent:5,5,15,15`), both real, valid constructs
+                // confirmed via the corpus (`nav-cfi-valid`,
+                // `region-based-nav-valid`) that this project doesn't
+                // resolve as an id.
+                if frag.is_empty() || frag.contains(['=', ':', '(']) {
+                    continue;
+                }
+                let target_nfc = if path_part.is_empty() {
+                    nfc(&path)
+                } else {
+                    nfc(&resolve(&dir, path_part))
+                };
+                // A hyperlink to the package document itself (a CFI-style
+                // self-reference) isn't a content document with ids to
+                // resolve against (same exemption as the RSC-011 spine-
+                // reachability check, confirmed via the same fixture).
+                if target_nfc == nfc(opf_path) {
+                    continue;
+                }
+                if !frag_id_cache.contains_key(&target_nfc) {
+                    let ids = if target_nfc == nfc(&path) {
+                        dom_id_order(&d)
+                    } else {
+                        name_index
+                            .get(&target_nfc)
+                            .cloned()
+                            .and_then(|orig| ocf.read(&orig))
+                            .map(|b| {
+                                let t = String::from_utf8_lossy(&b).into_owned();
+                                parse_xml(&t)
+                                    .map(|d2| dom_id_order(&d2))
+                                    .unwrap_or_default()
+                            })
+                            .unwrap_or_default()
+                    };
+                    frag_id_cache.insert(target_nfc.clone(), ids);
+                }
+                if !frag_id_cache[&target_nfc].contains_key(frag) {
+                    report.push_at(
+                        RSC_012,
+                        Severity::Error,
+                        format!("fragment identifier '{frag}' is not defined in '{target_nfc}'"),
+                        path.clone(),
+                    );
+                    continue;
+                }
+                // RSC-014: a same-document hyperlink to an SVG <symbol> -
+                // navigable links can't target an SVG element definition.
+                if path_part.is_empty() {
+                    if let Some(target_node) =
+                        d.descendants().find(|n| n.attribute("id") == Some(frag))
+                    {
+                        if target_node.tag_name().name() == "symbol"
+                            && target_node.tag_name().namespace()
+                                == Some("http://www.w3.org/2000/svg")
+                        {
+                            report.push_at(
+                                RSC_014,
+                                Severity::Error,
+                                format!("hyperlink '{href}' targets an SVG symbol (incompatible resource type)"),
+                                path.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // RSC-013: a stylesheet reference must not carry a fragment.
+        for n in d.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "link"
+                && n.attribute("rel").is_some_and(|r| {
+                    r.split_whitespace()
+                        .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                })
+        }) {
+            if let Some(href) = n.attribute("href") {
+                if !is_external(href) && href.contains('#') {
+                    report.push_at(
+                        RSC_013,
+                        Severity::Error,
+                        format!(
+                            "stylesheet reference '{href}' must not have a fragment identifier"
+                        ),
+                        path.clone(),
+                    );
+                }
+            }
+        }
+
+        // RSC-009: a non-SVG image referenced via a URL fragment - image
+        // fragments only make sense for SVG targets. RSC-008: an <img
+        // srcset> candidate not declared in the manifest at all.
+        for n in d.descendants().filter(|n| n.is_element()) {
+            let (src_attr, tag) = match n.tag_name().name() {
+                "img" => ("src", "img"),
+                "image" if n.tag_name().namespace() == Some("http://www.w3.org/2000/svg") => {
+                    ("href", "image")
+                }
+                _ => continue,
+            };
+            let src = n.attribute(src_attr).or_else(|| {
+                if tag == "image" {
+                    n.attribute(("http://www.w3.org/1999/xlink", "href"))
+                } else {
+                    None
+                }
+            });
+            if let Some(v) = src {
+                if let Some((p, _frag)) = v.split_once('#') {
+                    if !is_external(v) {
+                        let resolved = nfc(&resolve(&dir, p));
+                        let is_svg = resolved.ends_with(".svg")
+                            || items
+                                .values()
+                                .any(|(ip, mt)| nfc(ip) == resolved && mt == "image/svg+xml");
+                        if !is_svg {
+                            report.push_at(
+                                RSC_009,
+                                Severity::Warning,
+                                format!(
+                                    "non-SVG image '{v}' is referenced with a fragment identifier"
+                                ),
+                                path.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            if tag == "img" {
+                if let Some(srcset) = n.attribute("srcset") {
+                    for candidate in srcset.split(',') {
+                        let url = candidate.trim().split_whitespace().next().unwrap_or("");
+                        if url.is_empty() || is_external(url) {
+                            continue;
+                        }
+                        let resolved = nfc(&resolve(&dir, url));
+                        // Real corpus finding: the srcset candidate file
+                        // genuinely exists in the container - the defect
+                        // is that it's missing its own manifest item, so
+                        // this must check manifest declaration (`items`),
+                        // not container file existence (`name_index`).
+                        if !items.values().any(|(ip, _)| nfc(ip) == resolved) {
+                            report.push_at(
+                                RSC_008,
+                                Severity::Error,
+                                format!("srcset candidate '{url}' is not declared in the manifest"),
+                                path.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // RSC-015: an SVG <use> element's href must always carry a
+        // fragment identifier (it references an element definition, never
+        // a whole document).
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "use")
+        {
+            let href = n
+                .attribute("href")
+                .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
+            if let Some(v) = href {
+                if !is_external(v) && !v.contains('#') {
+                    report.push_at(
+                        RSC_015,
+                        Severity::Error,
+                        format!("\"use\" element's href '{v}' has no fragment identifier"),
+                        path.clone(),
+                    );
+                }
+            }
+        }
 
         // --- Navigation document checks (NAV-010/011) ---
         if nav_path.as_deref() == Some(path.as_str()) {
@@ -1946,7 +2614,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             if node.tag_name().name() == "base" {
                 continue;
             }
-            for attr in ["src", "href", "data", "poster"] {
+            for attr in ["src", "href", "data", "poster", "altimg"] {
                 if let Some(v) = node.attribute(attr) {
                     if is_remote_url(v) {
                         remote_refs.insert(strip_url_fragment(v));
@@ -1967,12 +2635,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     if attr == "data" || attr == "poster" {
                         continue;
                     }
+                    // `resolve` already strips any "#fragment" - a
+                    // fragment-only href (e.g. "#foo") is caught by the
+                    // `is_external` check above instead (fragment
+                    // resolution is RSC-012, checked separately below).
                     let resolved = resolve(&dir, v);
                     if !name_index.contains_key(&nfc(&resolved)) {
+                        // Real corpus finding, grep-verified across the
+                        // whole corpus: RSC-001 is used exclusively for a
+                        // manifest item/@href missing from the container
+                        // (and a CSS @import target, handled separately in
+                        // css.rs) - every other "this content-doc
+                        // reference doesn't resolve" case is RSC-007.
                         report.push_at(
-                            RSC_001,
+                            RSC_007,
                             Severity::Error,
-                            format!("references a missing resource '{v}'"),
+                            format!("reference to a resource missing from the publication: '{v}'"),
                             path.clone(),
                         );
                     }
@@ -2063,6 +2741,62 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                         }
                     }
                 }
+            }
+            // CSS-005 (usage): a plain `<link rel="stylesheet">` (not
+            // "alternate stylesheet") whose `class` names more than one
+            // alt-style-tag - a single name is fine (even if unrecognized),
+            // only multiple conflicting names are flagged.
+            if node.tag_name().name() == "link" {
+                let rel_tokens: Vec<&str> = node
+                    .attribute("rel")
+                    .map(|r| r.split_whitespace().collect())
+                    .unwrap_or_default();
+                let is_plain_stylesheet =
+                    rel_tokens.len() == 1 && rel_tokens[0].eq_ignore_ascii_case("stylesheet");
+                let is_alt_stylesheet = rel_tokens.len() == 2
+                    && rel_tokens[0].eq_ignore_ascii_case("alternate")
+                    && rel_tokens[1].eq_ignore_ascii_case("stylesheet");
+                if is_plain_stylesheet {
+                    if let Some(class) = node.attribute("class") {
+                        if class.split_whitespace().count() > 1 {
+                            report.push_at(
+                                CSS_005,
+                                Severity::Info,
+                                "link element's class names conflicting alt style tags",
+                                path.clone(),
+                            );
+                        }
+                    }
+                }
+                // CSS-015: an alternate-stylesheet link must have a
+                // non-empty title (missing and present-but-empty are each
+                // their own finding).
+                if is_alt_stylesheet {
+                    match node.attribute("title") {
+                        None => {
+                            report.push_at(
+                                CSS_015,
+                                Severity::Error,
+                                "an alternate stylesheet link must have a title attribute",
+                                path.clone(),
+                            );
+                        }
+                        Some(t) if t.trim().is_empty() => {
+                            report.push_at(
+                                CSS_015,
+                                Severity::Error,
+                                "an alternate stylesheet link's title must not be empty",
+                                path.clone(),
+                            );
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            // CSS-008: a `style="..."` attribute is a plain declaration
+            // list, same malformed-shape check as a stylesheet's own block.
+            if let Some(style) = node.attribute("style") {
+                crate::css::check_style_attribute(style, &path, report);
             }
         }
 

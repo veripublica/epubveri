@@ -63,6 +63,14 @@ def parse_features():
                 lines = f.readlines()
             for raw in lines:
                 line = raw.strip()
+                # A Gherkin comment line (e.g. a disabled assertion like
+                # "#Then error RSC-005 is reported", left in on purpose by
+                # epubcheck itself with a FIXME above it) must not be read
+                # as a real assertion - without this, a commented-out
+                # expectation silently corrupts scoring (a fixture we're
+                # already correctly silent on looks like a miss).
+                if line.startswith("#"):
+                    continue
                 m = LOCATED_RE.search(line)
                 if m:
                     base = m.group(1)
@@ -104,7 +112,14 @@ def parse_features():
                         cur[("warns" if table_mode == "warn" else "errs")].update(ids)
                     continue
                 table_mode = None
-                if "is reported" in line:
+                # "X is reported 0 times" is a negative assertion (the ID
+                # must NOT appear) - the opposite of every other "is
+                # reported" phrasing here. Only 2 scenarios in the whole
+                # corpus use it; without this check, both were misread as
+                # *expecting* the named ID, backwards from their real
+                # (and, since they're paired with "no other errors/
+                # warnings", fully clean) intent.
+                if "is reported" in line and "reported 0 times" not in line:
                     ids = ID_RE.findall(line)
                     if "warning" in line:
                         cur["warns"].update(ids)
@@ -466,6 +481,16 @@ def main():
             # a defect the fixture is meant to test (none of epubveri's
             # real OPF-014 scenarios are single-doc-wrapped fixtures).
             reported.discard("OPF-014")
+            # RSC-012 (a hyperlink's fragment doesn't resolve to a real id)
+            # is a real check, but wrap_single_doc demotes every *other*
+            # directory-sibling xhtml/html file to an inert media type
+            # (so a single-doc wrap doesn't also exercise their own,
+            # independent content-model tests) - meaning a cross-doc
+            # fragment the fixture legitimately references may live in a
+            # sibling that this harness never actually parses as a real
+            # content document, a wrapping-harness gap rather than a
+            # defect in the fixture under test.
+            reported.discard("RSC-012")
             rc = 1 if reported else 0
 
         # A scenario can expect only a *warning* (no "errs"), e.g. MED-016

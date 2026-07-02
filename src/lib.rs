@@ -20,6 +20,7 @@ pub mod report;
 pub mod rng;
 pub mod schematron;
 pub mod smil;
+pub mod url;
 pub mod xpath;
 
 use std::path::Path;

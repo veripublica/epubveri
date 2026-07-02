@@ -30,13 +30,18 @@ pub const RSC_004: &str = "RSC-004"; // a resource is encrypted; its content is 
                                      // id; and a missing EPUB 3 navigation document.
 pub const RSC_005: &str = "RSC-005";
 pub const RSC_006: &str = "RSC-006"; // a remote resource is referenced from an HTML "a" element
-pub const RSC_007: &str = "RSC-007"; // a package metadata link points to a resource that can't be found
+pub const RSC_007: &str = "RSC-007"; // a reference points to a resource missing from the publication
 pub const RSC_008: &str = "RSC-008"; // a remote resource is used but not declared in the manifest
+pub const RSC_009: &str = "RSC-009"; // a non-SVG image is referenced with a URL fragment identifier
 pub const RSC_011: &str = "RSC-011"; // a hyperlinked document isn't listed in the spine
-pub const RSC_012: &str = "RSC-012"; // an NCX content src fragment identifier doesn't resolve
+pub const RSC_012: &str = "RSC-012"; // a content src/href fragment identifier doesn't resolve
+pub const RSC_013: &str = "RSC-013"; // a stylesheet reference has a URL fragment identifier
+pub const RSC_014: &str = "RSC-014"; // a hyperlink targets an incompatible resource type (e.g. an SVG symbol)
+pub const RSC_015: &str = "RSC-015"; // an SVG "use" element's href has no fragment identifier
+pub const RSC_016: &str = "RSC-016"; // a malformed or unknown XML entity reference
 pub const RSC_017: &str = "RSC-017"; // a deprecated construct is used (e.g. epub:switch)
 pub const RSC_019: &str = "RSC-019"; // a multi-rendition publication has no META-INF/metadata.xml
-pub const RSC_020: &str = "RSC-020"; // a href contains unencoded spaces (not a valid IRI)
+pub const RSC_020: &str = "RSC-020"; // a URL is not conforming (spaces, unparseable host, missing slashes)
 
 // --- OPF package document (dedicated codes, used verbatim) ---
 pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared
@@ -50,7 +55,8 @@ pub const OPF_049: &str = "OPF-049"; // spine itemref idref not found in the man
 pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resource
 pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't application/xhtml+xml
 pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no print-source is identified
-pub const OPF_086: &str = "OPF-086"; // usage of a deprecated rendition property or value
+pub const OPF_086: &str = "OPF-086"; // usage of a deprecated rendition property or value, or a deprecated epub:type value
+pub const OPF_087: &str = "OPF-087"; // epub:type value only restates its host element's own native semantic (usage)
 pub const OPF_088: &str = "OPF-088"; // epub:type value isn't in the default vocabulary (usage)
 pub const OPF_077: &str = "OPF-077"; // the Data Navigation Document is referenced from the spine
 pub const OPF_003: &str = "OPF-003"; // a container resource isn't listed in the manifest (usage)
@@ -77,9 +83,11 @@ pub const OPF_099: &str = "OPF-099"; // a manifest item references the package d
 // --- CSS (via the styloria parser) ---
 pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi' property
 pub const CSS_002: &str = "CSS-002"; // @font-face 'src' has an empty url()
+pub const CSS_005: &str = "CSS-005"; // a stylesheet link's class conflicts between alt style tags (usage)
 pub const CSS_003: &str = "CSS-003"; // a stylesheet is UTF-16 encoded
 pub const CSS_004: &str = "CSS-004"; // @charset value isn't utf-8 or utf-16
 pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)
+pub const CSS_015: &str = "CSS-015"; // an alternate stylesheet link is missing or has an empty title
 pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block
 pub const CSS_029: &str = "CSS-029"; // well-known media-overlay class used but its property isn't declared (usage)
 pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has no matching CSS selector
@@ -118,6 +126,8 @@ pub const HTM_059: &str = "HTM-059"; // viewport width or height key appears mor
 pub const HTM_060: &str = "HTM-060"; // extra viewport meta, or viewport on a reflowable doc (usage)
 
 // --- XML/encoding/doctype, misc attributes ---
+pub const HTM_010: &str = "HTM-010"; // an unrecognized epub: namespace URI is bound (informative)
+pub const HTM_025: &str = "HTM-025"; // a URL uses an unregistered scheme
 pub const HTM_001: &str = "HTM-001"; // XML declaration has version="1.1" (only 1.0 is allowed)
 pub const HTM_003: &str = "HTM-003"; // an entity is declared SYSTEM/PUBLIC (external)
 pub const HTM_004: &str = "HTM-004"; // a DOCTYPE has a PUBLIC identifier (obsolete)
@@ -131,3 +141,6 @@ pub const HTM_061: &str = "HTM-061"; // an invalid data-* attribute name
 // --- Extension profiles: EDUPUB, Region-Based Navigation ---
 pub const HTM_051: &str = "HTM-051"; // HTML5 microdata attribute in an edupub content document
 pub const HTM_052: &str = "HTM-052"; // region-based nav found outside the Data Navigation Document
+
+// --- Accessibility ---
+pub const ACC_009: &str = "ACC-009"; // MathML markup has no alternative text (usage)

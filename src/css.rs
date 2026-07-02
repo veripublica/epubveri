@@ -152,6 +152,20 @@ pub(crate) fn check(
     }
 }
 
+/// A `style="..."` attribute value is a plain declaration list (no
+/// enclosing braces) - reuses `check_declaration_shapes` (built for a CSS
+/// rule's block contents) by wrapping the text in a throwaway rule so
+/// styloria's existing tokenizer/parser produces the same
+/// `&[ComponentValue]` shape, rather than adding a new styloria entry
+/// point for a one-off caller.
+pub(crate) fn check_style_attribute(value: &str, path: &str, report: &mut Report) {
+    let wrapped = format!("x{{{value}}}");
+    let sheet = Parser::parse_stylesheet(&wrapped);
+    if let Some(Rule::Qualified(q)) = sheet.rules.first() {
+        check_declaration_shapes(&q.block.values, path, report);
+    }
+}
+
 fn charset_value(prelude: &[ComponentValue]) -> Option<String> {
     prelude.iter().find_map(|v| match v {
         ComponentValue::Token(Token::String(s)) => Some(s.to_string()),

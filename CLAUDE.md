@@ -1612,6 +1612,191 @@ With this, `09-media-overlays.feature` is effectively **done** for this
 project's current scope - all 10 targeted scenarios hit exactly, plus 12
 adjacent already-passing scenarios spot-checked with no regressions.
 
+## Increment: content-document-xhtml/svg, first slice (2026-07-02)
+
+Next family: `epub3/06-content-document/content-document-xhtml.feature` +
+`content-document-svg.feature`, repeatedly deferred in earlier "what's
+left" menus as "a bigger, lower-ROI undertaking." Measured directly: 196
+scenarios, 87 expecting an error/warning, only 35 hit exactly at the
+start - 52 real misses, spanning far more distinct rules than any prior
+increment (most prior big increments were Schematron-pattern variations
+on one engine; this family needed many genuinely different hand-coded
+checks). Scoped to a **first slice, Clusters A-F (~41 scenarios)**,
+explicitly deferring **Cluster G (11 scenarios)** - the SVG
+`foreignObject`/`title` nested-flow-content model and the MathML
+`annotation-xml` content model - to a follow-up increment (real
+schema-engineering, qualitatively bigger than everything else here).
+`aria-roles-li-deprecated-warning` (a full DPUB-ARIA role taxonomy)
+stays out of scope, as named in an earlier increment.
+
+**Cluster A - reference/fragment reclassification.** Real corpus finding,
+grep-verified across the *entire* corpus: `RSC-001` is used only for a
+manifest `item/@href` missing from the container and a CSS `@import`
+target (handled in `css.rs`) - every other "this content-doc reference
+doesn't resolve" case is `RSC-007`, and a fragment that doesn't resolve
+is `RSC-012`. Reclassified the generic per-content-doc resource-scan loop
+from `RSC-001` to `RSC-007` (and updated `scripts/spike.py`'s
+`broken_ref.epub` fixture to match - the fixture encoded the old,
+now-corrected assumption); added `altimg` to that same loop (MathML's
+alt-image is a resource reference too); added same-doc/cross-doc/nav-doc
+`<a href>` fragment resolution (`RSC-012`).
+
+**Cluster B - URL/base/fragment validity.** New `src/url.rs` (no new
+dependency, same style as `smil.rs`'s clock-value parser): `RSC-020` for
+URL syntax errors (spaces, missing `//` after `http(s):`, invalid host
+characters) and `HTM-025` for an unregistered scheme - both scoped to
+absolute `http`/`https` URLs only after real false positives surfaced
+(see below). Base-URI-aware remote reclassification: an absolute-remote
+`<base href>`/`xml:base` makes every relative-or-fragment-only `<a href>`
+elsewhere in that document resolve to a remote URL (`RSC-006`, additive
+to - not replacing - the existing image-hyperlink `RSC-006` check).
+Fragment/resource-type classification, one dedicated real fixture each:
+`RSC-013` (stylesheet link with a fragment), `RSC-014` (hyperlink to an
+SVG `<symbol>` - "incompatible resource type"), `RSC-015` (SVG `<use>`
+with no fragment), `RSC-009` (non-SVG image referenced via a fragment),
+`RSC-008` (an `<img srcset>` candidate not declared in the manifest).
+
+**Cluster C - structural RSC-005/RSC-017 checks**, all in the existing
+per-content-doc loop: duplicate `id`; ID-referencing attributes
+(`aria-*`, `for`, `list`) resolving to a real same-document id; empty
+`<img src>`; `lang`/`xml:lang` mismatch; `usemap` needing a leading `#`
+(EPUB3-only, see below); `http-equiv="Content-Type"` value; HTML5
+microdata `itemprop` placement (a curated element -> required-attribute
+table); nested `<dfn>`; missing `<title>` entirely; `epub:trigger`
+(deprecated + `ref`/`ev:observer` id resolution).
+
+**Cluster D - entities and datetime grammar.** New raw-text entity
+scanner in `htm.rs` (`RSC-016`, mapped to `Severity::Error` - no `Fatal`
+variant exists) for a missing `;` or an undeclared/unknown entity name -
+runs regardless of whether the document parses at all, since `roxmltree`
+simply fails to parse either malformed case. A real, exhaustively
+reverse-engineered HTML5 `<time datetime>` microsyntax
+(`is_valid_html5_datetime`, `htm.rs`) - built and unit-tested directly
+against all 25 of the real corpus's invalid values *and* all 32 of its
+valid values, since several rules are non-obvious (separator may be `T`
+*or* a literal space; a fractional-seconds part is capped at 1-3 digits
+everywhere it appears; a "duration" has two entirely different valid
+shapes - an ISO-8601-like `P...T...` form, or a bare whitespace-separated
+`<number><unit>` sequence with no `P`/`T` at all).
+
+**Cluster E - epub:type taxonomy extension to content docs.** Reused
+`smil::is_default_vocab_type`/`OPF-088` (built for SMIL) for XHTML
+content docs. Two new taxonomies confirmed via real fixtures: deprecated
+SSV terms (`OPF-086`, reusing the existing rendition-property constant -
+epubcheck itself reuses IDs across conditions routinely) and
+misuse/redundant-with-host-element terms (new `OPF-087`, e.g.
+`<table epub:type="table">` restates its own element's native semantic).
+
+**Cluster F - small CSS/MathML/namespace usage checks:** `CSS-005`
+(stylesheet link's `class` names more than one alt-style-tag), `CSS-015`
+(alternate-stylesheet link missing/empty title), `CSS-008` extended to
+`style="..."` attributes (wrapped in a throwaway rule so styloria's
+existing tokenizer produces the same `&[ComponentValue]` shape
+`check_declaration_shapes` already expects, rather than adding a
+styloria entry point for one caller), `HTM-010` (unrecognized `epub:`
+namespace URI), `ACC-009` (new `ACC` family: MathML with no alt text).
+
+**Real false positives found via the corpus and fixed, not guessed
+up front - a longer list than usual, since URL/host/scheme grammars are
+exactly the kind of rule real-world documents stress in ways a single
+"invalid" fixture doesn't anticipate:**
+1. Internationalized domain names (`https://ü.example.org`) and
+   percent-encoded hosts (`%C3%BC`) were misread as invalid host
+   characters; fixed by only rejecting stray *ASCII* punctuation
+   (non-ASCII and `%` are always allowed).
+2. The "`//` required after scheme" and host-character rules were
+   applied to *every* absolute scheme uniformly, false-positiving on a
+   legitimate `mailto:` link (mailto never has `//`) - scoped to
+   `http`/`https` only, matching what the real fixtures actually test.
+3. An underscore in a host (`w_w.example.com`, non-standard but accepted
+   by most browsers per a real fixture's own comment) was rejected;
+   added to the allowed host-character set.
+4. `usemap` without a leading `#` is EPUB3-only invalid - EPUB2's XHTML
+   1.1 DTD retyped `usemap` as URIREF, explicitly permitting the bare
+   form too (confirmed via a real, deliberately-commented EPUB2
+   fixture); the check is now gated on `is_epub3`.
+5. `http-equiv="Content-Type"` content-value comparison was
+   case-sensitive; a real fixture uses `Text/HTML; Charset=UTF-8` and is
+   valid - fixed with `eq_ignore_ascii_case`.
+6. `<output for="o2 o3">` is a space-separated *list* of control ids
+   (like the ARIA attributes), unlike `<label for>`/`<input list>`,
+   which each name a single id - confirmed via a real fixture combining
+   both forms in one document; `<output>` now gets its own multi-token
+   handling.
+7. ACC-009 (MathML no-alt-text) fired on several "valid" fixtures that
+   have no `alttext` attribute but *do* have a `<semantics><annotation-xml>`
+   child providing an alternative representation - fixed by exempting any
+   `math` element with an `annotation`/`annotation-xml` descendant.
+8. `&foo;` inside an HTML comment or `<![CDATA[...]]>` section is literal
+   text, not a real entity reference (confirmed via a real fixture titled
+   exactly this) - the raw entity scanner now masks any `&` found inside
+   those spans before scanning.
+9. `<img srcset="...">` candidates were checked against `name_index`
+   (container file existence) instead of `items` (manifest declaration) -
+   the real fixture's undeclared candidate genuinely exists as a file, so
+   the original check never fired at all; fixed to check manifest
+   declaration.
+10. `epub:type="endnote"` is deprecated only when used *without* being
+    nested inside its proper `endnotes` container - a real "valid" fixture
+    nests `<div epub:type="endnote">` inside `<section
+    epub:type="endnotes">`, while the deprecated-usage fixture uses it
+    standalone; fixed with an ancestor-based exemption specific to this
+    one term (the only one of the 13 deprecated terms with a real
+    fixture contradicting a blanket rule).
+11. A same-document `<a href="#frag">` fragment reference was never
+    reaching the new RSC-012/RSC-006/RSC-014 checks at all, because the
+    pre-existing `is_external(href)` guard (correctly built for the old
+    "does this file exist" check) treats *any* fragment-only href as
+    "skip resolution" - reordered so a fragment-only href only bails out
+    when it's genuinely remote/`data:`/`mailto:`/`tel:`, not merely
+    `#`-prefixed.
+12. Two real, corpus-confirmed EPUB Structural Semantics terms were
+    missing from the default-vocabulary allowlist entirely (`title`,
+    `region-based`), causing spurious `OPF-088` usage on legitimate
+    region-based-nav and edupub title/subtitle fixtures - added both.
+13. Same class of bug as `nav-cfi-valid`'s CFI fragment: a hyperlink's
+    fragment may be a CFI (`epubcfi(...)`) or a Media Fragments URI
+    (`xywh=percent:5,5,15,15`), neither a plain id - both real, valid
+    constructs (confirmed via `nav-cfi-valid`/`region-based-nav-valid`)
+    that RSC-012 must not try to resolve as an id; and a hyperlink whose
+    target resolves to the OPF document itself (a CFI self-reference)
+    has no ids to resolve against at all - both now skipped.
+
+**Two harness-only fixes, not product bugs:** `scripts/corpus.py`'s
+`parse_features` didn't skip Gherkin comment lines (`#Then ...`), so a
+disabled assertion (`img-alt-missing-error.xhtml`, which even epubcheck's
+own suite doesn't enforce, per its own `FIXME`) was misread as a real
+expectation; and `"X is reported 0 times"` (a negative assertion, used by
+exactly 2 scenarios in the whole corpus) was misread as *expecting* that
+ID, backwards from its actual meaning - both fixed. Also added `RSC-012`
+to the existing `single_doc_wrap` scoring-exclusion set (alongside
+`RSC-001`/`RSC-007`/`RSC-011`/`RSC-008`/`OPF-014`): a bare-fixture wrap
+demotes every *other* directory-sibling xhtml/html file to an inert media
+type, so a cross-doc fragment a fixture legitimately references may live
+in a sibling this harness never actually parses as a real content
+document - a wrapping-harness gap, not a defect in the fixture under
+test.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| scenarios measured | 981 | 981 (same denominator; the two harness fixes shifted 1 scenario each between buckets, net neutral) |
+| exact-ID recall | 51.9% (310 hits) | **59.4% (352 hits)** |
+| within target-family spot-check (content-document-xhtml/svg) | 35/87 | **72/85** (all Cluster A-F scenarios hit exactly; the 12 remaining misses are the 11 Cluster-G deferrals + the 1 out-of-scope DPUB-ARIA scenario) |
+| RSC family exact hits | 174/379 | **209/377** |
+| HTM family exact hits | 26/31 | **28/31** |
+| CSS family exact hits | 15/20 | **18/19** |
+| ACC family exact hits | 0/1 | **1/1** |
+| false positives | 1 | **2** (the same known RELAX NG gap, plus one newly-exposed, epubcheck-acknowledged single-document-mode limitation - `unique-identifier-not-found-error.opf` carries a `# FIXME this error should be detected... in single-document mode` comment in epubcheck's own suite; our validator has no separate single-document mode and correctly detects it always, which epubcheck's own bare-`.opf` check mode doesn't) |
+
+**Next follow-up, explicitly named:** Cluster G (11 scenarios - SVG
+`foreignObject`/`title` nested flow-content model, MathML `annotation-xml`
+content model with its encoding-equivalence table) and the still-larger
+`content-document-xhtml`/`svg` content-model tail beyond that (~54 more
+scenarios not yet scoped in detail) remain the natural next slice of this
+family.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
