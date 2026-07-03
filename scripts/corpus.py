@@ -58,6 +58,7 @@ def parse_features():
             path = os.path.join(dirpath, fn)
             base = None
             edupub_profile_bg = False  # sticky, set by a Background/Given line
+            idx_profile_bg = False  # same pattern, for the 'idx' (EPUB Indexes) profile
             cur = None  # current scenario dict
             table_mode = None  # "err" / "warn" while inside a Cucumber table
             with open(path, encoding="utf-8") as f:
@@ -75,13 +76,25 @@ def parse_features():
                 m = LOCATED_RE.search(line)
                 if m:
                     base = m.group(1)
-                # This is normally declared once in a feature file's
-                # Background (so it's read before `cur` exists at all for
-                # the first scenario) - tracked as a rolling flag, like
-                # `base`, and copied onto each new scenario at creation
-                # time, same pattern.
+                # Declared either once in a feature file's Background
+                # (read before `cur` exists at all for the first scenario
+                # - tracked as a rolling flag, like `base`, and copied onto
+                # each new scenario at creation time) or per-scenario
+                # inside an individual scenario's own body (as
+                # `indexes-publication.feature` does for only 3 of its 6
+                # scenarios) - in that case it must set *only* the current
+                # scenario, not leak into every scenario after it the way
+                # a naive sticky flag would.
                 if "EPUBCheck configured with the 'edupub' profile" in line:
-                    edupub_profile_bg = True
+                    if cur is None:
+                        edupub_profile_bg = True
+                    else:
+                        cur["edupub_profile"] = True
+                if "EPUBCheck configured with the 'idx' profile" in line:
+                    if cur is None:
+                        idx_profile_bg = True
+                    else:
+                        cur["idx_profile"] = True
                 if line.startswith("Scenario Outline"):
                     cur = None  # skip parameterized outlines
                     table_mode = None
@@ -96,7 +109,8 @@ def parse_features():
                 if line.startswith("Scenario") or line.startswith("Example:"):
                     cur = {"file": path, "base": base, "name": None,
                            "errs": set(), "warns": set(), "clean": False,
-                           "as_nav": False, "edupub_profile": edupub_profile_bg}
+                           "as_nav": False, "edupub_profile": edupub_profile_bg,
+                           "idx_profile": idx_profile_bg}
                     scenarios.append(cur)
                     table_mode = None
                     continue
@@ -251,7 +265,7 @@ def wrap_nav_doc(target_full, target_name, version="3.0"):
     return tmp
 
 
-def wrap_single_doc(target_full, target_name, version="3.0", edupub=False):
+def wrap_single_doc(target_full, target_name, version="3.0", edupub=False, idx=False):
     """epubcheck can check a single content document in isolation; epubveri
     only validates full books. So for a bare content-document fixture, build a
     minimal synthetic EPUB that includes it (plus all of its directory
@@ -341,6 +355,8 @@ def wrap_single_doc(target_full, target_name, version="3.0", edupub=False):
         '    <dc:type>edupub</dc:type>\n'
         '    <meta property="schema:accessibilityFeature">tableOfContents</meta>\n'
     ) if edupub else ''
+    # The 'idx' (EPUB Indexes) profile, same simulation approach.
+    idx_meta = '    <dc:type>index</dc:type>\n' if idx else ''
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         f'<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">\n'
@@ -348,7 +364,7 @@ def wrap_single_doc(target_full, target_name, version="3.0", edupub=False):
         '    <dc:identifier id="id">corpus-wrap</dc:identifier>\n'
         '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
         '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
-        + edupub_meta +
+        + edupub_meta + idx_meta +
         '  </metadata>\n'
         '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
         f'  <spine{toc_attr}><itemref idref="_nav"/></spine>\n'
@@ -524,7 +540,8 @@ def resolve(s):
         version = "2.0" if "/epub2/" in (s["file"] or "") else "3.0"
         if s.get("as_nav"):
             return wrap_nav_doc(full, name, version), True, None, True
-        return wrap_single_doc(full, name, version, edupub=s.get("edupub_profile", False)), True, None, True
+        return wrap_single_doc(full, name, version, edupub=s.get("edupub_profile", False),
+                                idx=s.get("idx_profile", False)), True, None, True
     if os.path.isfile(full) and name.endswith(".smil"):
         return wrap_smil_file(full, name), True, None, True
     return None, False, "missing-file", False

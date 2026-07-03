@@ -2997,6 +2997,92 @@ Remaining unscoped families: `epub-indexes` (12), `epub-previews` (7),
 `wrap_svg_file` harness gap, unconfirmed), a handful of small niche
 extension profiles (~5 combined).
 
+## Increment: EPUB Indexes 1.0 (2026-07-03)
+
+Implemented the whole extension spec (http://idpf.org/epub/idx/) across
+all three feature files - 11/12 should-error scenarios hit exactly (1
+named, accepted gap), 6/6 should-clean fixtures stay clean, 0 new false
+positives anywhere in the corpus. New `src/indexes.rs` (package-level
+`<collection>` structure + content-document detection/content-model) plus
+a moderate amount of new cross-referencing wiring in `src/opf.rs`.
+
+**Package document (`indexes-package-document.feature`, all 4 misses,
+self-contained - no profile involved at all):** a top-level `<collection
+role="index-group">` (direct child of `<package>`, not nested inside an
+`index` collection) is invalid (RSC-005); an `index` collection may only
+nest `index-group` sub-collections, nothing else (RSC-005); an
+`index-group` may not nest any further sub-collections at all (RSC-005);
+and every collection's own `<link>` targets must resolve to a real XHTML
+Content Document manifest item (new **OPF-071** otherwise, e.g. a link to
+a `.css` file).
+
+**Three independent ways a document gets identified as needing
+`epub:type="index"` content, matching the same detection-tier pattern
+established for Dictionaries** - explicit narrow signals take priority
+over the whole-publication fallback: (1) a manifest item declaring
+`properties="index"` - that specific document must have one, and the
+property itself must not be declared unless it's actually used (OPF-015,
+confirmed via a real fixture pairing both findings together - unlike
+remote-resources/scripted/svg, "used but undeclared" is *not* a real rule
+for `index`, confirmed the hard way after a first, uniform-with-those-
+three version regressed two real "-valid" fixtures); (2) linked from a
+`<collection role="index"|"index-group">` - that specific linked document
+must have one; (3) otherwise, if the publication declares `dc:type=
+index` (with neither of the above signals present), *some* content
+document anywhere in the book must have one (a single publication-wide
+RSC-005 if none do at all - confirmed via a real fixture that marks a
+plain `<section>` inside an ordinary content document, no manifest/
+collection signal in play). Regardless of which detection tier applies,
+every `epub:type="index"` element found anywhere is content-model-
+checked uniformly: it must contain exactly one `epub:type="index-entry-
+list"` descendant (RSC-005 if zero or more than one) - this part doesn't
+need to know how the document was identified as an index at all.
+
+**The same CLI-`--profile` harness pattern established for EDUPUB,
+extended to a second, more complex shape:** `indexes-content-document-
+xhtml.feature`'s single-content-document ('idx' profile) scenarios need
+`scripts/corpus.py` to synthesize `dc:type=index` in the wrap, same as
+`edupub_profile` did. New wrinkle this time: `indexes-publication.
+feature` declares the `'idx' profile` line *inside three individual
+scenario bodies*, not once in the Background - a naive sticky rolling
+flag (copying the EDUPUB pattern verbatim) would have leaked `True` into
+every scenario *after* the first one that declares it, silently
+corrupting the other three scenarios in the same file that don't use the
+profile at all. Fixed by only treating the line as a sticky Background
+default when encountered *before* the first scenario starts (`cur is
+None`); once a scenario is underway, the same line instead sets *only
+that scenario's own* flag - a real, generalizable distinction the EDUPUB
+version happened not to need since it was declared exclusively in that
+file's Background.
+
+**Deliberately deferred, one scenario:** `index-declaration-body-error.
+xhtml` requires the *single-content-document check mode specifically* to
+enforce a stricter rule this project can't express - that `epub:type=
+"index"` must sit on the document's own `<body>` element exactly (not
+just anywhere in the document) - confirmed real, since the *identical*
+construct (`epub:type="index"` on a nested `<section>`, not `body`) is
+explicitly valid in the whole-publication/collection detection tiers
+tested elsewhere in this same increment. Enforcing "must be on body"
+unconditionally would break those other, already-passing scenarios; this
+project has no mechanism to make the rule conditional on "am I being
+checked in single-document mode" the way real epubcheck's profile flag
+can, so it's named and left as a gap rather than guessed around.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 94.9% (563 hits) | **96.8% (574 hits)** |
+| RSC family exact hits | 348/377 | **358/377** |
+| OPF family exact hits | 131/146 | **133/146** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub-indexes` is **effectively done** (aside from the 1 named
+single-document-mode gap). Remaining unscoped families: `epub-previews`
+(7), `content-document-svg.feature`'s ~12 misses (likely mostly the
+`wrap_svg_file` harness gap, unconfirmed), a handful of small niche
+extension profiles (~5 combined).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

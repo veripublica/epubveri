@@ -2750,6 +2750,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // (checked per-collection for a multi-dictionary publication, so a
     // bool alone isn't enough).
     let mut dictionary_marked_docs: HashSet<String> = HashSet::new();
+    // EPUB Indexes 1.0: which content documents are specifically
+    // identified as indexes (manifest properties="index", or linked from
+    // a `<collection role="index"|"index-group">`) - each such document
+    // must itself carry an epub:type="index" marker. Absent either
+    // signal, a confirmed index publication (dc:type=index) instead only
+    // needs *some* content document anywhere to have one (tracked via
+    // `any_index_content` below).
+    let manifest_index_paths: HashSet<String> = item_properties
+        .iter()
+        .filter(|(_, props)| props.split_whitespace().any(|t| t == "index"))
+        .map(|(p, _)| p.clone())
+        .collect();
+    let collection_index_paths: HashSet<String> = crate::indexes::linked_paths(&pkg, &base_dir);
+    let is_index_pub = opf_dc_type.as_deref() == Some("index");
+    let mut any_index_content = false;
     for path in content_docs {
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
@@ -2772,6 +2787,24 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         crate::dict::check_content_doc(&d, &path, report);
         if crate::dict::has_dictionary_marker(&d) {
             dictionary_marked_docs.insert(nfc(&path));
+        }
+
+        if is_epub3 {
+            let doc_key = nfc(&path);
+            let has_index_elem = !crate::indexes::index_elements(&d).is_empty();
+            if has_index_elem {
+                any_index_content = true;
+            } else if manifest_index_paths.contains(&doc_key)
+                || collection_index_paths.contains(&doc_key)
+            {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "At least one \"index\" element must be present in a document declared as an index in the OPF",
+                    path.clone(),
+                );
+            }
+            crate::indexes::check_content_model(&d, &path, report);
         }
 
         let declared_prefixes = d
@@ -4171,6 +4204,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     path.clone(),
                 );
             }
+            // "index" only gets the "declared but unused" direction
+            // (OPF-015, confirmed via a real fixture) - unlike remote-
+            // resources/scripted/svg, a real "index" *usage* is detected
+            // via epub:type markers that don't need the manifest property
+            // at all when the publication is identified as an index some
+            // other way (dc:type=index, or a <collection role="index">
+            // link) - so "used but undeclared" isn't a real rule here
+            // (confirmed the hard way: a naive uniform version false-
+            // positived on `index-whole-pub-valid`).
+            if declared_tokens.contains(&"index") && crate::indexes::index_elements(&d).is_empty() {
+                report.push_at(
+                    OPF_015,
+                    Severity::Error,
+                    "the \"index\" property is declared but doesn't appear to be needed",
+                    path.clone(),
+                );
+            }
         }
 
         // RSC-008: a remote resource referenced from this content
@@ -4232,6 +4282,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 );
             }
         }
+    }
+
+    // Whole-publication index fallback: only when neither a manifest
+    // properties="index" item nor an index/index-group collection
+    // narrows things down to specific documents - a confirmed index
+    // publication then just needs *some* content document anywhere with
+    // an epub:type="index" element (confirmed via a real fixture using
+    // dc:type=index alone, with the index marked on an ordinary
+    // <section>, not called out via any manifest/collection signal).
+    if is_index_pub
+        && manifest_index_paths.is_empty()
+        && collection_index_paths.is_empty()
+        && !any_index_content
+    {
+        report.push_at(
+            RSC_005,
+            Severity::Error,
+            "At least one \"index\" element must be present in a document declared as an index in the OPF",
+            opf_path,
+        );
     }
 
     // dc:type="dictionary" detection - the OPF-078/079 cross-check itself
@@ -4808,6 +4878,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         opf_path,
         report,
     );
+    crate::indexes::check_collections(&pkg, &items, &base_dir, opf_path, report);
 }
 
 /// EPUB Dictionaries & Glossaries 1.0 package-level checks: Search Key Map

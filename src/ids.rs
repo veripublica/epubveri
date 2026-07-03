@@ -96,6 +96,7 @@ pub const OPF_045: &str = "OPF-045"; // fallback references its own item id
 pub const OPF_048: &str = "OPF-048"; // package is missing its required unique-identifier attribute
 pub const OPF_065: &str = "OPF-065"; // a refines chain forms a cycle
 pub const OPF_070: &str = "OPF-070"; // a collection role used as a URL is not a valid URL
+pub const OPF_071: &str = "OPF-071"; // an index collection links to a non-XHTML resource
 pub const OPF_074: &str = "OPF-074"; // two manifest items represent the same resource
 pub const OPF_060: &str = "OPF-060"; // two container entry names collide after case-folding/NFC normalization
 pub const OPF_085: &str = "OPF-085"; // a urn:uuid: dc:identifier isn't a valid UUID

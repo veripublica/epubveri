@@ -15,6 +15,7 @@ pub mod foreign;
 pub mod htm;
 pub mod ids;
 pub mod image;
+pub mod indexes;
 pub mod layout;
 pub mod mathml;
 pub mod navdoc;
