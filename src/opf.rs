@@ -2898,13 +2898,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 })
         }) {
             crate::svg::check_vocabulary(svg_root, &path, report);
+            crate::svg::check_epub_attributes(svg_root, &path, report);
+            // `check_ids` is standalone-SVG-only: a real fixture confirms
+            // `id="1"` on an SVG root is fine when the SVG is embedded
+            // inline inside an XHTML document (a shared XML id-space with
+            // the rest of that document, not its own document-level id
+            // rules) - the identically-shaped standalone-SVG fixture
+            // rejects it.
+            crate::svg::check_link_labels(svg_root, &path, report);
         }
         for fo in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "foreignObject"
                 && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
         }) {
-            crate::svg::check_foreign_object(fo, &t, d.root_element(), &path, is_epub3, report);
+            crate::svg::check_foreign_object(
+                fo,
+                &t,
+                d.root_element(),
+                &path,
+                is_epub3,
+                true,
+                report,
+            );
         }
         for svg_title in d.descendants().filter(|n| {
             n.is_element()
@@ -4443,6 +4459,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             }
         }
         crate::svg::check_vocabulary(d.root_element(), doc_path, report);
+        crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
+        crate::svg::check_ids(d.root_element(), doc_path, report);
+        crate::svg::check_link_labels(d.root_element(), doc_path, report);
         for fo in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "foreignObject"
@@ -4454,6 +4473,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 d.root_element(),
                 doc_path,
                 is_epub3,
+                false,
                 report,
             );
         }

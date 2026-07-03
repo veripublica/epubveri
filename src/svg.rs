@@ -14,11 +14,15 @@
 //!   element-vocabulary check - real epubcheck reports SVG conformance
 //!   issues as USAGE, not errors (confirmed via a dedicated fixture).
 
+use std::collections::HashMap;
+
 use crate::ids::*;
 use crate::report::{Report, Severity};
 
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
+const EPUB_OPS_NS: &str = "http://www.idpf.org/2007/ops";
+const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 
 /// Real SVG 1.1 element vocabulary. A false negative here is far safer
 /// than a false positive, since `RSC-025` findings are usage-level (Info).
@@ -127,6 +131,149 @@ pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &m
     }
 }
 
+/// `epub:type` is disallowed on non-visual/metadata SVG elements - `title`/
+/// `desc`/`defs`/`tref` (confirmed via one real fixture testing all four
+/// at once, plus an unrecognized element, expecting exactly 5 findings)
+/// - and on any unrecognized element; it's allowed everywhere else,
+/// including the `<svg>` root itself (confirmed via a real "valid"
+/// fixture using it on a dozen ordinary shape/text elements plus the
+/// root). Any *other* `epub:*`-namespaced attribute (i.e. anything other
+/// than `epub:type`) is always disallowed, regardless of element.
+const EPUB_TYPE_FORBIDDEN_ELEMENTS: &[&str] = &["title", "desc", "defs", "tref"];
+
+pub(crate) fn check_epub_attributes(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
+    for attr in svg_root.attributes() {
+        check_one_epub_attribute(svg_root, attr, path, report);
+    }
+    for child in svg_root
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().namespace() == Some(SVG_NS))
+    {
+        check_epub_attributes_rec(child, path, report);
+    }
+}
+
+fn check_epub_attributes_rec(n: roxmltree::Node, path: &str, report: &mut Report) {
+    for attr in n.attributes() {
+        check_one_epub_attribute(n, attr, path, report);
+    }
+    if matches!(n.tag_name().name(), "foreignObject" | "title") {
+        return;
+    }
+    for child in n
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().namespace() == Some(SVG_NS))
+    {
+        check_epub_attributes_rec(child, path, report);
+    }
+}
+
+fn check_one_epub_attribute(
+    n: roxmltree::Node,
+    attr: roxmltree::Attribute,
+    path: &str,
+    report: &mut Report,
+) {
+    if attr.namespace() != Some(EPUB_OPS_NS) {
+        return;
+    }
+    if attr.name() == "type" {
+        let name = n.tag_name().name();
+        if EPUB_TYPE_FORBIDDEN_ELEMENTS.contains(&name) || !is_recognized_element(name) {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "attribute \"epub:type\" not allowed here",
+                path,
+            );
+        }
+    } else if attr.name() == "prefix" {
+        // A real, legitimate attribute - checked separately, in full,
+        // by `opf::check_prefix_declaration`/`check_prefix_placement`
+        // (confirmed via a real fixture declaring `epub:prefix` on an
+        // SVG root and expecting zero findings).
+    } else {
+        report.push_at(
+            RSC_005,
+            Severity::Error,
+            format!("attribute \"epub:{}\" not allowed here", attr.name()),
+            path,
+        );
+    }
+}
+
+fn is_valid_ncname(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_alphabetic() || first == '_')
+        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// `RSC-005`: every `id` attribute anywhere in the SVG document must be a
+/// valid XML NCName (a real fixture uses `id="1"`, invalid because it
+/// starts with a digit) and unique document-wide (a real fixture shares
+/// one id between two elements, reported once *per* colliding element -
+/// the same "per-element not per-pair" convention already used
+/// elsewhere in this project, e.g. NCX id duplication).
+pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
+    let mut by_id: HashMap<&str, u32> = HashMap::new();
+    for n in svg_root.descendants().filter(|n| n.is_element()) {
+        if let Some(id) = n.attribute("id") {
+            if !is_valid_ncname(id) {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("value of attribute \"id\" is invalid: '{id}'"),
+                    path,
+                );
+            }
+            *by_id.entry(id).or_insert(0) += 1;
+        }
+    }
+    for n in svg_root.descendants().filter(|n| n.is_element()) {
+        if let Some(id) = n.attribute("id") {
+            if by_id.get(id).copied().unwrap_or(0) > 1 {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("Duplicate \"id\" value '{id}'"),
+                    path,
+                );
+            }
+        }
+    }
+}
+
+/// `ACC-011` (usage): an SVG `<a>` link with no accessible label at all -
+/// no `xlink:title` attribute, no `<title>` child, no `aria-label`, and
+/// no real text content anywhere inside it (confirmed via a real fixture
+/// exercising all four labeling mechanisms as valid, plus a fifth `<a>`
+/// with none of them).
+pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
+    for a in svg_root.descendants().filter(|n| {
+        n.is_element() && n.tag_name().name() == "a" && n.tag_name().namespace() == Some(SVG_NS)
+    }) {
+        let has_label = a.attribute((XLINK_NS, "title")).is_some()
+            || a.attribute("aria-label").is_some()
+            || a.children()
+                .any(|c| c.is_element() && c.tag_name().name() == "title")
+            || a.descendants()
+                .filter(|d| d.is_text())
+                .filter_map(|d| d.text())
+                .any(|t| !t.trim().is_empty());
+        if !has_label {
+            report.push_at(
+                ACC_011,
+                Severity::Info,
+                "SVG link has no accessible label",
+                path,
+            );
+        }
+    }
+}
+
 /// A real HTML5 rule: `href` is only a valid attribute on
 /// `a`/`area`/`link`/`base` - `schemas/xhtml.rng`'s attribute handling is
 /// deliberately permissive (a global catch-all pattern, not a per-element
@@ -192,6 +339,7 @@ pub(crate) fn check_foreign_object(
     root: roxmltree::Node,
     path: &str,
     is_epub3: bool,
+    wrap_in_body: bool,
     report: &mut Report,
 ) {
     if !is_epub3 {
@@ -204,6 +352,19 @@ pub(crate) fn check_foreign_object(
     let last = fo.children().last().unwrap_or(first);
     let inner = &text[first.range().start..last.range().end];
 
+    // Every *prefixed* namespace binding from the real document's root
+    // carries forward, so prefixed content inside the foreignObject still
+    // resolves - but the wrapper's own *default* (unprefixed) namespace
+    // is always forced to XHTML, regardless of what `root` itself
+    // declares. When `root` is an XHTML document's own root, its default
+    // already is XHTML, so this changes nothing there - but when `root`
+    // is a standalone SVG document's own `<svg>` element (the other real
+    // call site), its default is the SVG namespace, and copying it
+    // verbatim would put the synthetic `<html>`/`<body>` wrapper itself
+    // in the SVG namespace, failing the XHTML grammar check on every
+    // single foreignObject regardless of its actual (valid) content - a
+    // real bug only ever exposed once standalone SVG single-document
+    // checks started actually running through this code path.
     let mut ns_decls = String::new();
     for ns in root.namespaces() {
         match ns.name() {
@@ -212,11 +373,29 @@ pub(crate) fn check_foreign_object(
             // slightly wrong upstream, a needless source of a parse error.
             Some("xml") => continue,
             Some(prefix) => ns_decls.push_str(&format!(" xmlns:{prefix}=\"{}\"", ns.uri())),
-            None => ns_decls.push_str(&format!(" xmlns=\"{}\"", ns.uri())),
+            None => {}
         }
     }
-    let wrapped =
-        format!("<html{ns_decls}><head><title>t</title></head><body>{inner}</body></html>");
+    // Embedded (foreignObject inside an XHTML document's own inline SVG):
+    // there's already an ambient XHTML `<body>` in scope, so the content
+    // is ordinary flow content and gets wrapped in a synthetic `<body>`
+    // (confirmed: a real fixture explicitly flags a *literal* `<body>`
+    // element appearing here as its own error, "element \"body\" not
+    // allowed here" - body-inside-body). Standalone (a top-level SVG
+    // content document with no ambient XHTML context at all): the
+    // content itself must directly *be* a single `<body>` element (real
+    // fixtures confirm both "non-body content" and "more than one body"
+    // are their own distinct errors) - so it replaces the body slot
+    // instead of being wrapped inside another one.
+    let wrapped = if wrap_in_body {
+        format!(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"{ns_decls}><head><title>t</title></head><body>{inner}</body></html>"
+        )
+    } else {
+        format!(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"{ns_decls}><head><title>t</title></head>{inner}</html>"
+        )
+    };
     let Ok(doc) = crate::ocf::parse_xml(&wrapped) else {
         return;
     };

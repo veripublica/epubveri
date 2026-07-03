@@ -397,6 +397,73 @@ def wrap_single_doc(target_full, target_name, version="3.0", edupub=False, idx=F
     return tmp
 
 
+def wrap_svg_file(target_full, target_name):
+    """epubcheck's 'svg' single-document check mode, for a bare standalone
+    SVG content-document fixture - same shape as `wrap_single_doc`
+    (synthetic nav hyperlinking to the target so it has a reason to be
+    included, kept out of the spine to isolate the content-model check;
+    directory siblings included so relative references resolve, with
+    other bare xhtml/html/svg siblings demoted to an inert media type so
+    they don't also get exercised as independent content documents).
+    EPUB3-only - no corpus fixture for this family originates from an
+    `epub2/` feature file, so unlike `wrap_single_doc` there's no
+    version parameter."""
+    src_dir = os.path.dirname(target_full)
+    siblings = sorted(
+        fn for fn in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, fn))
+    )
+    container_xml = (
+        '<?xml version="1.0"?>\n'
+        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'
+        '  <rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles>\n'
+        '</container>\n'
+    )
+    nav_xhtml = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">\n'
+        '<head><title>Nav</title></head>\n'
+        f'<body><nav epub:type="toc"><ol><li><a href="{target_name}">t</a></li></ol></nav></body>\n'
+        '</html>\n'
+    )
+    manifest_items = [
+        '<item id="_nav" href="_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
+        f'<item id="_svg" href="{target_name}" media-type="image/svg+xml"/>',
+    ]
+    for i, fn in enumerate(siblings):
+        if fn == target_name:
+            continue
+        mt = guess_media_type(fn)
+        if mt in ("application/xhtml+xml", "image/svg+xml"):
+            mt = "application/octet-stream"
+        manifest_items.append(f'<item id="f{i}" href="{fn}" media-type="{mt}"/>')
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">\n'
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
+        '    <dc:identifier id="id">corpus-wrap</dc:identifier>\n'
+        '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
+        '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
+        '  </metadata>\n'
+        '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
+        '  <spine><itemref idref="_nav"/></spine>\n'
+        '</package>\n'
+    )
+    fd, tmp = tempfile.mkstemp(suffix=".epub")
+    os.close(fd)
+    with zipfile.ZipFile(tmp, "w") as z:
+        zi = zipfile.ZipInfo("mimetype")
+        zi.compress_type = zipfile.ZIP_STORED
+        z.writestr(zi, "application/epub+zip")
+        z.writestr("META-INF/container.xml", container_xml)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/_nav.xhtml", nav_xhtml)
+        for fn in siblings:
+            with open(os.path.join(src_dir, fn), "rb") as fh:
+                z.writestr(f"OEBPS/{fn}", fh.read())
+    return tmp
+
+
 def wrap_opf_file(full, name):
     """Wrap a bare .opf fixture (epubcheck's single-file package-document
     check mode) in a minimal synthetic book: mimetype + container.xml
@@ -544,6 +611,8 @@ def resolve(s):
                                 idx=s.get("idx_profile", False)), True, None, True
     if os.path.isfile(full) and name.endswith(".smil"):
         return wrap_smil_file(full, name), True, None, True
+    if os.path.isfile(full) and name.endswith(".svg"):
+        return wrap_svg_file(full, name), True, None, True
     return None, False, "missing-file", False
 
 

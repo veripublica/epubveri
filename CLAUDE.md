@@ -3143,6 +3143,112 @@ named, permanently unreachable gap). Remaining unscoped families:
 extension profiles (~5 combined: B-external-identifiers, accessibility,
 media-type-registrations, distributable-objects).
 
+## Increment: `wrap_svg_file` harness fix + finish `content-document-svg.feature` (2026-07-03)
+
+Closed the long-standing harness gap named in several prior increments:
+`scripts/corpus.py` had `wrap_opf_file`/`wrap_single_doc`/`wrap_nav_doc`/
+`wrap_smil_file` but no equivalent for a bare standalone `.svg` single-
+document-check-mode fixture, silently skipping every such scenario as
+"missing-file" rather than measuring it. Added `wrap_svg_file` (same
+shape as `wrap_single_doc`: synthetic nav hyperlinking to the target so
+it has a reason to be included, kept out of the spine to isolate the
+content-model check, EPUB3-only since no fixture in this family
+originates from `epub2/`). This alone grew the measured corpus from 593
+to 606 should-error scenarios and surfaced `content-document-svg.
+feature`'s **true** state: not "12 misses" as the pre-fix denominator
+implied, but a mix of real misses and two real, previously-invisible
+product bugs - now all fixed, all 13/13 (of the scenarios this harness
+addition made newly measurable) hit exactly, 17/17 should-clean stay
+clean.
+
+**A real, serious bug the harness fix immediately exposed: `check_foreign_
+object`'s namespace-carrying logic was fundamentally wrong for standalone
+SVG documents.** The function copies every namespace binding from a
+`root` node so prefixed content inside a `foreignObject` still resolves -
+correct when `root` is an XHTML document's own root (default namespace
+already XHTML), but when `root` is a **standalone SVG document's own
+`<svg>` element** (the other real call site, only exercised for the first
+time by this harness fix), its default namespace is the SVG namespace -
+so the synthetic `<html>{ns_decls}>...<body>{inner}</body></html>`
+wrapper itself ended up in the *SVG* namespace, failing the XHTML grammar
+check on **every single foreignObject regardless of content**, valid or
+not. Fixed by always forcing the wrapper's own default namespace to XHTML
+explicitly, while still carrying forward every *prefixed* namespace
+binding from `root` for resolving prefixed content inside.
+
+**A second, related, real bug in the same function, also only ever
+exposed by finally exercising standalone SVG foreignObject content:** the
+wrapping strategy itself differs by context, not just the namespace.
+Embedded-in-XHTML `foreignObject` content is ordinary flow content with
+an *ambient* XHTML `<body>` already in scope from the enclosing document,
+so it gets wrapped in a synthetic `<body>{inner}</body>` (confirmed: a
+real fixture explicitly flags a literal `<body>` appearing here as its
+own error - body-inside-body). But a **standalone** SVG document has no
+ambient XHTML context at all, so its own real corpus fixtures always
+put the content **directly as a single `<body>` element** (with its own
+explicit `xmlns`) - wrapping *that* in another synthetic `<body>` created
+a double-body structure that failed content-model validation regardless
+of the real (valid) content inside. Fixed by adding a `wrap_in_body: bool`
+parameter: `true` at the XHTML-embedded call site (unchanged behavior),
+`false` at the standalone-SVG call site, where the content now replaces
+the `<body>` slot directly instead of being wrapped inside another one -
+this also naturally makes real fixtures testing "non-body content" (an
+unrecognized element, or a bare `<title>` with no body wrapper) and
+"multiple body elements" both fail for the right reason (the grammar
+rejects whatever isn't exactly one valid `<body>`), without any special-
+casing needed.
+
+**New checks for the family's remaining real misses (all newly
+measurable, not previously scoped in any earlier increment), added
+alongside the existing `check_vocabulary`/`check_foreign_object`/
+`check_title_content` in `src/svg.rs`:**
+- **`epub:type` restricted on non-visual SVG elements:** disallowed on
+  `title`/`desc`/`defs`/`tref` and on any unrecognized element - allowed
+  everywhere else, including the `<svg>` root itself (confirmed via one
+  real fixture testing all four forbidden elements plus an unrecognized
+  one together, expecting exactly 5 findings, and a separate "valid"
+  fixture using it on a dozen ordinary shape/text elements). Any *other*
+  `epub:*`-namespaced attribute (not `type`) is always disallowed -
+  except `epub:prefix`, which is a real, legitimate attribute checked
+  separately by the pre-existing prefix-declaration engine (a real false
+  positive found immediately: a naive "anything but type is forbidden"
+  rule broke a real `epub:prefix`-on-svg-root fixture).
+- **`id` validity/uniqueness** - every `id` in the document must be a
+  valid XML NCName (a real fixture uses `id="1"`, invalid since it starts
+  with a digit) and unique document-wide (reported once per colliding
+  element, the same convention as NCX id duplication). **Scoped to
+  standalone SVG documents only** - a real, direct contradiction in the
+  corpus proved this: the *identical* `<svg id="1">` shape is invalid when
+  checked as its own standalone document but explicitly valid (a
+  dedicated "svg-id-valid.xhtml" fixture) when the same SVG is embedded
+  inline inside an XHTML document, since it then shares that document's
+  own XML id-space rather than being subject to its own document-level id
+  rules.
+- **`ACC-011`** (usage, new ID): an SVG `<a>` link with no accessible
+  label at all - no `xlink:title`, no `<title>` child, no `aria-label`,
+  no real text content anywhere inside - confirmed via a real fixture
+  exercising all four labeling mechanisms as valid, plus a fifth `<a>`
+  with none of them.
+
+**Honest numbers** (measured corpus denominator grew honestly from 593 to
+606 should-error scenarios purely from the harness fix; all 13/13
+newly-measurable `content-document-svg.feature` scenarios hit exactly,
+17/17 should-clean stay clean, 0 new false positives anywhere in the
+corpus after the two real bugs above were fixed):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 97.8% (580/593) | **97.7% (592/606)** - a larger, more honest denominator, not a regression |
+| RSC family exact hits | 362/377 | **373/389** |
+| ACC family exact hits | 1/1 | **2/2** |
+| false positives | 4 | 4 (same accepted set, unrelated - briefly regressed to 7 mid-increment before the two SVG bugs above were found and fixed) |
+
+With this, `content-document-svg.feature` (and by extension the whole
+`content-document-xhtml/svg/css` family) is **fully done**. Remaining
+unscoped families: a handful of small niche extension profiles (~5
+combined: `B-external-identifiers`, `accessibility`,
+`media-type-registrations`, `distributable-objects`).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

@@ -190,6 +190,7 @@ pub const HTM_052: &str = "HTM-052"; // region-based nav found outside the Data 
 
 // --- Accessibility ---
 pub const ACC_009: &str = "ACC-009"; // MathML markup has no alternative text (usage)
+pub const ACC_011: &str = "ACC-011"; // an SVG link has no accessible label (usage)
 
 // --- EPUB Dictionaries & Glossaries 1.0 ---
 pub const RSC_021: &str = "RSC-021"; // a search-key-group href targets an incompatible resource type
