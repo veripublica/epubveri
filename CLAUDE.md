@@ -3464,21 +3464,71 @@ every generated fixture's *extracted content* is identical too (raw ZIP
 container bytes differ - timestamps/version fields - which is expected
 and harmless). `scripts/spike.py` has been deleted.
 
-**`scripts/corpus.py` (822 lines, not yet ported) is next**, agreed to
-tackle slowly and carefully rather than all at once, verifying parity at
-each step - it encodes over a dozen individually-discovered, non-obvious
-parsing fixes (Gherkin comment-line skipping, the `Example:` keyword,
-negative "is reported 0 times" assertions, the lettered-suffix `ID_RE`
-handling, `CHECK_RE`'s four verb forms, the single-doc-wrap scoring
-exclusion set, and more - see this file's own dated increments for each).
-Porting it is a real, careful task, not a mechanical translation - a
-faithful port must carry every one of those fixes forward, or the corpus
-recall numbers could silently misreport again. Likely needs `regex` as a
-new dependency (all patterns used are simple - no lookaround/backreferences
-- so `regex`-crate-compatible) and a decision on where dev-only
-dependencies like that should live relative to the published `epubveri`
-crate (e.g. a second binary target vs. a Cargo workspace member) - not yet
-decided.
+**`scripts/corpus.py` (822 lines) → `harness/` workspace crate (done the
+same session, ported in 5 verified phases).** Unlike `spike.py`, this one
+needed `regex` (all patterns are simple - no lookaround/backreferences,
+directly portable) - a dev-only dependency that shouldn't pollute the
+published `epubveri` crate's own `Cargo.toml`. Solved by adding a
+`[workspace]` table to the root `Cargo.toml` (`members = ["harness"]`)
+without moving `epubveri` itself anywhere - a new `epubveri-harness`
+crate depends on `epubveri` via a `path = ".."` dependency, plus `regex`
+and `zip`. New binary: `harness/src/corpus.rs` (orchestration) +
+`harness/src/wrap.rs` (the `zip_dir`/`wrap_*` fixture builders).
+
+Ported and verified in order, each phase checked against the Python
+original before moving to the next:
+1. **Gherkin parsing** (`parse_features`) - the highest-risk part, since
+   it encodes over a dozen individually-discovered, non-obvious fixes
+   (comment-line skipping, the `Example:` keyword, negative "is reported
+   0 times" assertions, the lettered-suffix `ID_RE` handling, `CHECK_RE`'s
+   four verb forms, sticky-vs-per-scenario profile flags). Verified via a
+   `--dump` mode in both languages, printing one canonical line per parsed
+   scenario, sorted, and diffed - **981/981 scenarios byte-for-byte
+   identical** on the first attempt.
+2. **The `zip_dir`/`wrap_*` fixture builders** (`wrap.rs`) - verified via
+   a `--wrap-test <kind> <path> <name> [version]` debug mode that invokes
+   one builder directly; extracted and diffed the resulting `.epub`'s
+   contents against Python's output for 9 representative real corpus
+   fixtures (one per wrap kind, including an EPUB2-context single-doc
+   wrap and a genuinely complex multi-target SMIL file) - all identical.
+3. **`resolve()`'s dispatch logic** and **`run()`** (calls
+   `epubveri::validate_path_with_profile` directly, in-process - no
+   subprocess/CLI round-trip needed at all) and the full scoring loop +
+   report, verified by diffing the complete corpus report against
+   Python's own output.
+
+**Two real bugs found and fixed during phase 3's full-corpus diff, not
+guessed:** (1) `run()` initially called `validate_bytes_with_profile` on
+manually-read bytes rather than `validate_path_with_profile` - but
+**PKG-016** (the file's own `.epub` extension case) is a filesystem-level
+check that only exists on the `_path` entry point (it needs a real
+filename, which raw bytes don't carry) - this silently dropped one
+scenario's hit, costing exactly 1/607 exact-ID recall and 1/37 in the PKG
+family, both restored once fixed. (2) tied family counts (e.g. `ACC`/`NCX`
+both 2/2) printed in a different, non-reproducible order on every single
+run of the same binary - traced to `HashMap`'s randomized per-process hash
+seed; switched `exp_family`/`hit_family`/`skipped` to `BTreeMap` for
+deterministic iteration order (a real robustness improvement, not just a
+cosmetic fix, since irreproducible output actively hinders debugging a
+measurement tool).
+
+**Honest residual difference, understood and left as-is:** the *order* of
+false-positive examples in the printed report can differ from Python's
+(same items, same count, just reordered) - traced to Python's `os.walk()`
+not sorting directory entries (OS/filesystem-dependent, non-deterministic
+even across runs of the Python original on different systems), versus this
+port's `find_feature_files` sorting entries alphabetically for
+reproducibility. Every actual number/percentage/family-count matches
+exactly; only this presentation-order artifact for already-fully-scored
+items differs, and deterministic output is arguably the better behavior
+for a measurement tool anyway.
+
+**Speed**: full corpus run ~9.2s (Python, subprocess-per-scenario) → ~6.4s
+(Rust, in-process library calls) - a real, if smaller-than-hoped,
+improvement; validation + ZIP I/O dominate the runtime more than process-
+spawn overhead did. `scripts/corpus.py` and the now-empty `scripts/`
+directory have been deleted - **no non-Rust code remains anywhere in this
+repository.**
 
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary

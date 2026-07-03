@@ -6,6 +6,13 @@ description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alterna
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
 publish = false
 
+# `harness/` is the epubcheck-corpus measurement tool (Rust port of the
+# former scripts/corpus.py) - kept as a separate workspace member so its
+# dev-only dependencies (e.g. `regex`) never appear in this crate's own
+# Cargo.toml.
+[workspace]
+members = ["harness"]
+
 [lib]
 name = "epubveri"
 path = "src/lib.rs"
