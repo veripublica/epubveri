@@ -1411,6 +1411,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             "rendition:flow",
             "rendition:viewport",
         ];
+        // The real EPUB Accessibility 1.1 a11y: meta-property vocabulary
+        // (confirmed via real fixtures for certifiedBy/certifierCredential/
+        // exemption; certifierReport is real public spec vocabulary too,
+        // though only exercised here as a link rel, not a meta property).
+        const KNOWN_A11Y_META_PROPERTIES: &[&str] = &[
+            "a11y:certifiedBy",
+            "a11y:certifierCredential",
+            "a11y:certifierReport",
+            "a11y:exemption",
+        ];
         for n in md
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "meta")
@@ -1423,6 +1433,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                         OPF_027,
                         Severity::Error,
                         format!("unknown rendition property '{property}'"),
+                        opf_path,
+                    );
+                }
+                if property.starts_with("a11y:") && !KNOWN_A11Y_META_PROPERTIES.contains(&property)
+                {
+                    report.push_at(
+                        OPF_027,
+                        Severity::Error,
+                        format!("unknown a11y property '{property}'"),
                         opf_path,
                     );
                 }
@@ -2279,6 +2298,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 "the \"alternate\" keyword must not be combined with other link relationships",
                 opf_path,
             );
+        }
+        // The real EPUB Accessibility 1.1 a11y: link-rel vocabulary
+        // (confirmed via real fixtures: "certifierReport"/
+        // "certifierCredential" valid, a lowercase "certifierreport"
+        // invalid - rel values are case-sensitive).
+        const KNOWN_A11Y_LINK_RELS: &[&str] = &["a11y:certifierCredential", "a11y:certifierReport"];
+        for token in &rel_tokens {
+            if token.starts_with("a11y:") && !KNOWN_A11Y_LINK_RELS.contains(token) {
+                report.push_at(
+                    OPF_027,
+                    Severity::Error,
+                    format!("unknown a11y link relationship '{token}'"),
+                    opf_path,
+                );
+            }
         }
         // The only real link/@properties vocabulary term is "onix"
         // (confirmed via a real fixture pairing it with a custom-prefixed
@@ -4886,6 +4920,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     check_font_obfuscation(ocf, &items, &name_index, report);
     check_image_signatures(ocf, &items, &name_index, report);
     check_html_declared_as_xhtml(ocf, &items, &name_index, report);
+    check_external_identifiers(ocf, &items, &name_index, opf_path, report);
     check_dictionaries(
         &pkg,
         is_dictionary_pub,
@@ -4907,6 +4942,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         opf_path,
         report,
     );
+    check_distributable_objects(&pkg, opf_path, report);
+}
+
+/// EPUB Distributable Objects 1.0, §2.2.3: a `<collection role=
+/// "distributable-object">`'s own nested `<metadata>` must include
+/// exactly one `dc:identifier` (confirmed via a real fixture with zero).
+fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &mut Report) {
+    for coll in pkg.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().name() == "collection"
+            && n.attribute("role") == Some("distributable-object")
+    }) {
+        let count = coll
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "metadata")
+            .into_iter()
+            .flat_map(|md| md.children())
+            .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
+            .count();
+        if count != 1 {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "A \"distributable-object\" collection must include exactly one identifier",
+                opf_path,
+            );
+        }
+    }
 }
 
 /// EPUB Dictionaries & Glossaries 1.0 package-level checks: Search Key Map
@@ -5267,6 +5330,105 @@ fn check_html_declared_as_xhtml(
                 Severity::Warning,
                 format!("manifest item '{path}' is XHTML but declared as text/html"),
                 path.as_str(),
+            );
+        }
+    }
+}
+
+/// EPUB 3.3 Appendix B - Allowed External Identifiers: a small, closed
+/// table of `(media-type, PUBLIC id, SYSTEM id)` triples a manifest
+/// resource's own DOCTYPE (if it has one at all) must match *exactly*
+/// for its declared media type - confirmed via real fixtures for NCX/
+/// SVG/MathML (all three MathML sub-types share the same DTD pair).
+const ALLOWED_EXTERNAL_IDENTIFIERS: &[(&str, &str, &str)] = &[
+    (
+        "application/x-dtbncx+xml",
+        "-//NISO//DTD ncx 2005-1//EN",
+        "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd",
+    ),
+    (
+        "image/svg+xml",
+        "-//W3C//DTD SVG 1.1//EN",
+        "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd",
+    ),
+    (
+        "application/mathml+xml",
+        "-//W3C//DTD MathML 3.0//EN",
+        "http://www.w3.org/Math/DTD/mathml3/mathml3.dtd",
+    ),
+    (
+        "application/mathml-presentation+xml",
+        "-//W3C//DTD MathML 3.0//EN",
+        "http://www.w3.org/Math/DTD/mathml3/mathml3.dtd",
+    ),
+    (
+        "application/mathml-content+xml",
+        "-//W3C//DTD MathML 3.0//EN",
+        "http://www.w3.org/Math/DTD/mathml3/mathml3.dtd",
+    ),
+];
+
+fn extract_quoted(s: &str) -> Option<(String, &str)> {
+    let s = s.trim_start();
+    let quote = s.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let rest = &s[quote.len_utf8()..];
+    let end = rest.find(quote)?;
+    Some((rest[..end].to_string(), &rest[end + quote.len_utf8()..]))
+}
+
+/// Extracts a DOCTYPE's `PUBLIC "id" "system"` pair, if present.
+fn extract_doctype_ids(text: &str) -> Option<(String, String)> {
+    let start = text.find("<!DOCTYPE")?;
+    let after = &text[start..];
+    let end = after.find('>')?;
+    let decl = &after[..end];
+    let public_idx = decl.find("PUBLIC")?;
+    let rest = &decl[public_idx + "PUBLIC".len()..];
+    let (public_id, rest) = extract_quoted(rest)?;
+    let (system_id, _) = extract_quoted(rest)?;
+    Some((public_id, system_id))
+}
+
+/// OPF-073: a manifest resource whose media type has a real allowed
+/// external identifier (NCX/SVG/MathML) but whose own DOCTYPE doesn't
+/// match it exactly - either a real external identifier used on the
+/// *wrong* media type (confirmed via a real fixture using SVG's DOCTYPE
+/// on an NCX resource), or a public identifier with a mismatched/
+/// non-standard system identifier (confirmed via a real fixture using
+/// the NCX public id with an arbitrary, non-DAISY system id).
+fn check_external_identifiers(
+    ocf: &mut Ocf,
+    items: &HashMap<String, (String, String)>,
+    name_index: &HashMap<String, String>,
+    opf_path: &str,
+    report: &mut Report,
+) {
+    for (path, mt) in items.values() {
+        let Some((_, allowed_public, allowed_system)) = ALLOWED_EXTERNAL_IDENTIFIERS
+            .iter()
+            .find(|(m, _, _)| m == mt)
+        else {
+            continue;
+        };
+        let Some(orig) = name_index.get(&nfc(path)).cloned() else {
+            continue;
+        };
+        let Some(bytes) = ocf.read(&orig) else {
+            continue;
+        };
+        let text = crate::css::decode_bytes(&bytes);
+        let Some((public_id, system_id)) = extract_doctype_ids(&text) else {
+            continue;
+        };
+        if public_id != *allowed_public || system_id != *allowed_system {
+            report.push_at(
+                OPF_073,
+                Severity::Error,
+                format!("DOCTYPE external identifier is not allowed for media type '{mt}'"),
+                opf_path,
             );
         }
     }

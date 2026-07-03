@@ -595,7 +595,12 @@ def resolve(s):
         if os.path.isfile(full):
             return wrap_opf_file(full, name), True, None, True
         return None, False, "opf-only (missing file)", False
-    if name.endswith(".epub"):
+    if name.lower().endswith(".epub"):
+        # Case-insensitive on purpose (not just ".epub" exactly): a real
+        # fixture uses a mixed-case ".ePub" extension specifically to test
+        # PKG-016, and the file must be handed to our binary with its
+        # original name/case intact (not renamed via a temp wrap) for that
+        # check to see it at all.
         if os.path.isfile(full):
             return full, False, None, False
         return None, False, "missing-file", False

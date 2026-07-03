@@ -3249,6 +3249,79 @@ unscoped families: a handful of small niche extension profiles (~5
 combined: `B-external-identifiers`, `accessibility`,
 `media-type-registrations`, `distributable-objects`).
 
+## Increment: four small niche families in one pass (2026-07-03)
+
+Closed out all four remaining small, self-contained families in a single
+increment - `B-external-identifiers`, `accessibility`,
+`media-type-registrations`, `distributable-objects` - 5/5 should-error
+scenarios hit exactly, 5/5 should-clean fixtures stay clean, 0 new false
+positives.
+
+**`B-external-identifiers` (new OPF-073, EPUB 3.3 Appendix B).** A closed
+table of `(media-type, PUBLIC id, SYSTEM id)` triples a manifest
+resource's own DOCTYPE must match *exactly* for its media type - NCX
+(`-//NISO//DTD ncx 2005-1//EN`), SVG (`-//W3C//DTD SVG 1.1//EN`), and all
+three MathML sub-types (presentation/content/generic, sharing one DTD
+pair), assembled from the corpus's own valid fixture rather than guessed.
+Fires when a real, recognized external identifier is used on the *wrong*
+media type (confirmed via a real fixture using SVG's DOCTYPE on an NCX
+resource) or when the public id is right but the system id doesn't match
+(a real fixture pairs NCX's own public id with an arbitrary non-DAISY
+system id). A small hand-rolled `PUBLIC "..." "..."` extractor, since
+nothing in this codebase parses DOCTYPE external-id pairs yet (`htm.rs`'s
+existing DOCTYPE scanner only ever compares the whole PUBLIC-id string,
+never splits public from system).
+
+**`epub-accessibility` (extends the existing OPF-027 "unknown property"
+pattern).** The real EPUB Accessibility 1.1 vocabulary: `a11y:certifiedBy`/
+`certifierCredential`/`certifierReport`/`exemption` as `meta[@property]`
+values (three confirmed directly, the fourth - certifierReport - only
+via the link-rel test but included as real public spec vocabulary); the
+same `certifierCredential`/`certifierReport` pair as `link[@rel]` tokens
+too (case-sensitive - a real fixture uses a lowercase `certifierreport`
+specifically to test this). Both scoped the same way `rendition:`
+properties already were: unknown token with the `a11y:` prefix -> OPF-027.
+
+**`media-type-registrations` (new PKG-016, a genuine architectural
+first).** The file's own `.epub` extension should be lowercase - the
+*only* check in this entire project that depends on the file's name on
+disk rather than its ZIP-internal bytes, since `validate_bytes` never
+sees a filename at all. Added directly to `lib.rs::validate_path` (the
+one entry point that legitimately has a `Path`), comparing `path.
+extension()` case-sensitively against `"epub"`. Also fixed a real
+`scripts/corpus.py` gap this surfaced: `resolve()`'s `.epub` match was
+itself case-sensitive, so a fixture literally named `...-warning.ePub`
+never reached the "real file on disk, unmodified" branch at all -
+harmless for every other scenario (which all happen to use lowercase
+`.epub` already) but silently made this one specific scenario
+unreachable. Fixed to match case-insensitively while still handing the
+file to our binary with its original name intact.
+
+**`distributable-objects` (a single, narrow, self-contained check).** A
+`<collection role="distributable-object">`'s own nested `<metadata>`
+must include exactly one `dc:identifier` (RSC-005 otherwise) - confirmed
+via one real fixture with zero. No new module needed; a four-line helper
+function was enough.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 97.7% (592/606) | **98.4% (597/607)** |
+| RSC family exact hits | 373/389 | **374/389** |
+| OPF family exact hits | 135/146 | **138/146** |
+| PKG family exact hits | 36/36 | **37/37** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, every family the corpus-recall menu has surfaced across this
+project's entire history is either **fully done** or has an explicitly
+named, accepted gap (CLI-profile-only scenarios needing real `--profile`
+support this project deliberately doesn't build, and the two long-
+standing schema-engine limitations). The next natural step is simply
+re-running `scripts/corpus.py` fresh to see if any new gaps have opened
+up, or revisiting one of the ~10 named deferred scenarios if a cheap path
+to reach it is ever found.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
