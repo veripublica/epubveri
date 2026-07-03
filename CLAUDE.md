@@ -3442,6 +3442,44 @@ scenarios (epubcheck's own suite disclaims these), `epub-indexes`'s
 single-doc-mode body-content-model gap, and `epub3/03-resources`'s one
 known single-document-mode limitation - none of which a CLI flag touches.
 
+## Decision: no non-Rust tooling; ported `scripts/spike.py` to Rust (2026-07-03)
+
+**Owner's standing policy, stated explicitly this session:** don't step
+outside Rust in this project unless truly forced to, and explain why when
+forced. epubveri's whole identity is "pure-Rust, JVM-free, no C deps" -
+that principle is meant to cover the project's tooling too, not just the
+shipped crate/binary. `scripts/spike.py` and `scripts/corpus.py` (the
+measurement harnesses) were the only non-Rust code anywhere in the repo.
+
+**`scripts/spike.py` → `src/bin/spike.rs` (done this session).** A new
+`spike` binary target (auto-discovered by Cargo from `src/bin/`, no
+`Cargo.toml` changes needed) that builds the same 25 synthetic fixtures
+and validates them - but calls `epubveri::validate_bytes` **directly,
+in-process**, rather than shelling out to a separately-built binary via
+`subprocess`, which is both simpler and faster. Used the `zip` crate's
+write API (`ZipWriter`/`SimpleFileOptions`) - already a real dependency
+of epubveri itself for reading, now also used for writing. Verified
+byte-for-byte identical stdout against the Python version, and confirmed
+every generated fixture's *extracted content* is identical too (raw ZIP
+container bytes differ - timestamps/version fields - which is expected
+and harmless). `scripts/spike.py` has been deleted.
+
+**`scripts/corpus.py` (822 lines, not yet ported) is next**, agreed to
+tackle slowly and carefully rather than all at once, verifying parity at
+each step - it encodes over a dozen individually-discovered, non-obvious
+parsing fixes (Gherkin comment-line skipping, the `Example:` keyword,
+negative "is reported 0 times" assertions, the lettered-suffix `ID_RE`
+handling, `CHECK_RE`'s four verb forms, the single-doc-wrap scoring
+exclusion set, and more - see this file's own dated increments for each).
+Porting it is a real, careful task, not a mechanical translation - a
+faithful port must carry every one of those fixes forward, or the corpus
+recall numbers could silently misreport again. Likely needs `regex` as a
+new dependency (all patterns used are simple - no lookaround/backreferences
+- so `regex`-crate-compatible) and a decision on where dev-only
+dependencies like that should live relative to the published `epubveri`
+crate (e.g. a second binary target vs. a Cargo workspace member) - not yet
+decided.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
