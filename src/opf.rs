@@ -1189,7 +1189,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
     }
 }
 
-pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
+pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut Report) {
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
         None => {
@@ -1277,6 +1277,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     }
     let is_epub3 = version.starts_with("3.");
     let is_epub2 = version.starts_with("2.");
+    // The 'dict'/'edupub'/'preview' CLI profiles are all EPUB 3-only
+    // extension specs - a real fixture confirms an EPUB 2 publication
+    // stays fully valid even when one of these profiles is specified
+    // ("even when a 3.0 profile is specified"), so a version mismatch
+    // must silently disable profile enforcement rather than force a
+    // spurious "dc:type required" error onto a book that was never
+    // attempting to be one in the first place.
+    let profile = if is_epub3 { profile } else { None };
 
     // PKG-025 (EPUB 3 only - a real EPUB 2 fixture, "Ignore unknown files
     // in the META-INF directory", explicitly stays clean with an
@@ -1526,6 +1534,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             .collect();
         crate::edupub::check_teacher_edition_and_accessibility(
             &dc_types,
+            profile,
             Some(md),
             opf_path,
             report,
@@ -4924,6 +4933,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     check_dictionaries(
         &pkg,
         is_dictionary_pub,
+        profile,
         &dictionary_marked_docs,
         &items,
         &item_properties,
@@ -4937,6 +4947,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     crate::previews::check_embedded_preview(&pkg, &items, &base_dir, opf_path, report);
     crate::previews::check_preview_publication(
         opf_dc_type.as_deref() == Some("preview"),
+        profile,
         metadata,
         package_identifier_text.as_deref(),
         opf_path,
@@ -4980,6 +4991,7 @@ fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &m
 fn check_dictionaries(
     pkg: &roxmltree::Node,
     is_dictionary_pub: bool,
+    profile: Option<&str>,
     dictionary_marked_docs: &HashSet<String>,
     items: &HashMap<String, (String, String)>,
     item_properties: &HashMap<String, String>,
@@ -5052,6 +5064,21 @@ fn check_dictionaries(
     }
 
     if !is_dictionary_pub {
+        // The 'dict' CLI profile forces treatment as a dictionary
+        // publication for the purpose of *this one* gating check only -
+        // real epubcheck's own corpus fixture for this (a bare, single-
+        // Package-Document check with zero other dictionary content at
+        // all) expects exactly this one finding and nothing else, not
+        // the full structural check suite cascading on top of content
+        // that was never meant to satisfy it.
+        if profile == Some("dict") {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "The dc:type identifier \"dictionary\" is required",
+                opf_path,
+            );
+        }
         return;
     }
 

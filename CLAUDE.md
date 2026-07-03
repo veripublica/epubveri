@@ -3322,6 +3322,95 @@ re-running `scripts/corpus.py` fresh to see if any new gaps have opened
 up, or revisiting one of the ~10 named deferred scenarios if a cheap path
 to reach it is ever found.
 
+## Increment: a real `--profile` CLI flag (2026-07-03)
+
+Built genuine `--profile <name>` support (`dict`/`edupub`/`idx`/`preview`),
+matching real epubcheck's own CLI flag - not a corpus-measurement trick,
+a real product feature. This closes 3 of the ~10 previously-named,
+accepted "needs real --profile support" gaps.
+
+**Semantics, confirmed via the real corpus rather than assumed:** a
+profile does *not* broadly force "treat this book as a dictionary/edupub/
+preview publication" - it only forces the narrow "this publication must
+declare its own `dc:type`" gating check. A real fixture pins this down
+precisely: `dictionary-metadata-type-missing-error.opf` (a bare, single-
+Package-Document check with zero other dictionary content - no Search Key
+Map item, no source-language metadata) expects *only* "The dc:type
+identifier 'dictionary' is required" and nothing else - not the full
+structural-check cascade (missing SKM, missing source language, etc.)
+that naively flipping `is_dictionary_pub = true` would also trigger on
+content that was never meant to satisfy those checks. Same shape
+confirmed for `edupub-metadata-type-missing-error.opf` and
+`preview-pub-dc-type-missing-error`. Implemented as a small, targeted
+gate at each of the three existing detection points (`check_dictionaries`,
+`check_teacher_edition_and_accessibility`, `check_preview_publication`):
+when the real `dc:type` doesn't match but the CLI profile says it should,
+emit just the one RSC-005 and return before running the rest of that
+extension's checks. `epub-indexes` needed no equivalent change - no
+corpus scenario exercises an "idx dc:type required" gate at all.
+
+**A second real fixture caught a naive over-application, fixed before it
+became a false positive:** `epub2/ocf-publication.feature` has a
+deliberately-paired scenario, "Verify a minimal EPUB 2.0.1 publication
+even when a 3.0 profile is specified" - `--profile dict` on an ordinary,
+un-related EPUB 2 book must stay silently inert, not force the dc:type-
+required error onto a book that was never attempting to be a dictionary
+in the first place. All three profiles (dict/edupub/preview) are EPUB
+3-only extension specs, so the fix is a single, clean gate at the top of
+`opf::check`: `let profile = if is_epub3 { profile } else { None };`,
+shadowing the parameter for the rest of the function rather than
+threading an extra `is_epub3` parameter into three separate call sites.
+
+**API surface:** `lib.rs` gained `validate_bytes_with_profile(bytes,
+profile: Option<&str>)` and `validate_path_with_profile(path, profile)`,
+with the existing `validate_bytes`/`validate_path` becoming thin
+`profile: None` wrappers (no breaking change). `opf::check` gained a
+`profile: Option<&str>` parameter. `main.rs`'s CLI gained a `--profile
+<name>` flag. Unrecognized profile names are silently accepted and behave
+like `None` - this project's inputs are never rejected outright, matching
+its general design stance.
+
+**`scripts/corpus.py`** gained a generic `cli_profile` capture (any
+`EPUBCheck configured with the '<name>' profile` line, sticky-or-
+per-scenario via the same Background/body distinction used for the
+pre-existing `edupub_profile`/`idx_profile` wrap-synthesis flags), and
+`run()` now passes `--profile <name>` straight to the real binary when a
+scenario declares one - a genuine CLI invocation, not synthesis, since
+the actual product feature now exists to receive it.
+
+**A real, unrelated, and more serious bug found and fixed while touching
+this code**: `cargo test --release`'s command in this project's own
+workflow has always been piped through `grep -E "running|test result|
+FAILED"` to keep output short - but a *compile* error in the test binary
+prints neither of those strings, so the grep silently swallowed a real
+compilation failure with **no visible output at all**, since the
+previous increment (`content-document-svg.feature`'s `wrap_in_body`
+parameter) had left 5 of `svg.rs`'s own unit-test call sites uninformed of
+the new parameter. `cargo build --release` never catches this class of
+bug, since `#[cfg(test)]` code only compiles under `cargo test`. Fixed all
+5 call sites; all 170 unit tests now genuinely pass (verified by reading
+the full, unfiltered output, not just the grep). **Going forward: always
+check `cargo test --release`'s real output (or at minimum its exit
+status) after any function-signature change, not just a keyword-filtered
+grep of it** - the previous increment's own report of "170 passed" was
+never actually true after the moment `wrap_in_body` was added, and this
+went unnoticed for an entire increment (the "four small niche families"
+one) before being caught here.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 98.4% (597/607) | **98.8% (600/607)** |
+| false positives | 4 | 4 (same accepted set, unrelated - a 5th briefly appeared mid-increment from the EPUB2/profile-scoping gap above, fixed before completion) |
+
+Remaining named, accepted gaps: `epub-edupub-content-document-xhtml`'s
+3-scenario heading-nesting cluster (contradictory fixture evidence, not
+fixable by a profile flag), `epub2/opf-publication`'s 2 legacy-OEBPS-1.2
+scenarios (epubcheck's own suite disclaims these), `epub-indexes`'s
+single-doc-mode body-content-model gap, and `epub3/03-resources`'s one
+known single-document-mode limitation - none of which a CLI flag touches.
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

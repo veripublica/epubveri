@@ -47,6 +47,7 @@ TARGET_IDS = {
 ID_RE = re.compile(r"\b([A-Z]{2,4}-\d{2,4})[a-z]?\b")
 CHECK_RE = re.compile(r"checking (?:EPUB|document|file|the EPUB)\s+'([^']+)'")
 LOCATED_RE = re.compile(r"located at\s+'([^']+)'")
+CLI_PROFILE_RE = re.compile(r"configured with the '(\w+)' profile")
 
 
 def parse_features():
@@ -59,6 +60,7 @@ def parse_features():
             base = None
             edupub_profile_bg = False  # sticky, set by a Background/Given line
             idx_profile_bg = False  # same pattern, for the 'idx' (EPUB Indexes) profile
+            cli_profile_bg = None  # the real `--profile <name>` value to pass to our binary
             cur = None  # current scenario dict
             table_mode = None  # "err" / "warn" while inside a Cucumber table
             with open(path, encoding="utf-8") as f:
@@ -95,6 +97,19 @@ def parse_features():
                         idx_profile_bg = True
                     else:
                         cur["idx_profile"] = True
+                # A real `epubveri --profile <name>` value (any name, not
+                # just edupub/idx) - passed straight to our binary so its
+                # own new profile-gating checks (dc:type-required, etc.)
+                # actually run, on top of (not instead of) the wrap-
+                # synthesis mechanism above, which still matters for
+                # content-document-level detection with no package in
+                # play at all.
+                pm = CLI_PROFILE_RE.search(line)
+                if pm:
+                    if cur is None:
+                        cli_profile_bg = pm.group(1)
+                    else:
+                        cur["cli_profile"] = pm.group(1)
                 if line.startswith("Scenario Outline"):
                     cur = None  # skip parameterized outlines
                     table_mode = None
@@ -110,7 +125,8 @@ def parse_features():
                     cur = {"file": path, "base": base, "name": None,
                            "errs": set(), "warns": set(), "clean": False,
                            "as_nav": False, "edupub_profile": edupub_profile_bg,
-                           "idx_profile": idx_profile_bg}
+                           "idx_profile": idx_profile_bg,
+                           "cli_profile": cli_profile_bg}
                     scenarios.append(cur)
                     table_mode = None
                     continue
@@ -624,7 +640,7 @@ def resolve(s):
 SEVERITY_LINE_RE = re.compile(r"^(ERROR|WARNING|INFO)\s+([A-Z]{2,4}-\d{2,4})\b")
 
 
-def run(path):
+def run(path, cli_profile=None):
     # `--format human` (not `ids`) so severity is available: the
     # single_doc_wrap rc-recompute below needs to ignore Info-severity
     # findings (e.g. OPF-090), which real epubcheck's default reporting
@@ -633,8 +649,11 @@ def run(path):
     # looks like a false positive purely because the wrap's own rc
     # recomputation (unlike the CLI's real exit code) doesn't check
     # severity at all.
-    p = subprocess.run([BIN, "--format", "human", path],
-                       capture_output=True, text=True)
+    args = [BIN, "--format", "human"]
+    if cli_profile:
+        args += ["--profile", cli_profile]
+    args.append(path)
+    p = subprocess.run(args, capture_output=True, text=True)
     ids, error_ids = [], []
     for ln in p.stdout.splitlines():
         m = SEVERITY_LINE_RE.match(ln.strip())
@@ -671,7 +690,7 @@ def main():
             skipped[reason] += 1
             continue
         try:
-            ids, error_ids, rc = run(path)
+            ids, error_ids, rc = run(path, s.get("cli_profile"))
         finally:
             if is_temp:
                 os.unlink(path)

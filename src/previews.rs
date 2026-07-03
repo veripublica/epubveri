@@ -21,12 +21,27 @@ fn elem_text(n: roxmltree::Node) -> String {
 /// text as `dc:identifier`).
 pub(crate) fn check_preview_publication(
     is_preview_pub: bool,
+    profile: Option<&str>,
     metadata: Option<roxmltree::Node>,
     package_identifier_text: Option<&str>,
     opf_path: &str,
     report: &mut Report,
 ) {
     if !is_preview_pub {
+        // The 'preview' CLI profile forces treatment as a Preview
+        // publication for the purpose of *this one* gating check only -
+        // a real fixture (a full EPUB with zero other preview content or
+        // metadata at all) expects exactly this one finding and nothing
+        // else, not the source-identification checks below cascading on
+        // content that was never meant to satisfy them.
+        if profile == Some("preview") {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "An EPUB Preview publication must have a \"preview\" dc:type",
+                opf_path,
+            );
+        }
         return;
     }
     let Some(md) = metadata else { return };

@@ -444,7 +444,15 @@ mod tests {
             .find(|n| n.tag_name().name() == "foreignObject")
             .unwrap();
         let mut report = Report::new();
-        check_foreign_object(fo, &xml, d.root_element(), "c.xhtml", true, &mut report);
+        check_foreign_object(
+            fo,
+            &xml,
+            d.root_element(),
+            "c.xhtml",
+            true,
+            true,
+            &mut report,
+        );
         assert_eq!(
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
             vec![RSC_005]
@@ -464,7 +472,15 @@ mod tests {
             .find(|n| n.tag_name().name() == "foreignObject")
             .unwrap();
         let mut report = Report::new();
-        check_foreign_object(fo, &xml, d.root_element(), "c.xhtml", true, &mut report);
+        check_foreign_object(
+            fo,
+            &xml,
+            d.root_element(),
+            "c.xhtml",
+            true,
+            true,
+            &mut report,
+        );
         assert_eq!(
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
             vec![RSC_005]
@@ -484,7 +500,15 @@ mod tests {
             .find(|n| n.tag_name().name() == "foreignObject")
             .unwrap();
         let mut report = Report::new();
-        check_foreign_object(fo, &xml, d.root_element(), "c.xhtml", true, &mut report);
+        check_foreign_object(
+            fo,
+            &xml,
+            d.root_element(),
+            "c.xhtml",
+            true,
+            true,
+            &mut report,
+        );
         assert_eq!(
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
             vec![RSC_005]
@@ -504,7 +528,15 @@ mod tests {
             .find(|n| n.tag_name().name() == "foreignObject")
             .unwrap();
         let mut report = Report::new();
-        check_foreign_object(fo, &xml, d.root_element(), "c.xhtml", true, &mut report);
+        check_foreign_object(
+            fo,
+            &xml,
+            d.root_element(),
+            "c.xhtml",
+            true,
+            true,
+            &mut report,
+        );
         assert!(report.messages.is_empty());
     }
 
@@ -520,7 +552,15 @@ mod tests {
             .find(|n| n.tag_name().name() == "foreignObject")
             .unwrap();
         let mut report = Report::new();
-        check_foreign_object(fo, &xml, d.root_element(), "c.xhtml", true, &mut report);
+        check_foreign_object(
+            fo,
+            &xml,
+            d.root_element(),
+            "c.xhtml",
+            true,
+            true,
+            &mut report,
+        );
         assert!(report.messages.is_empty());
     }
 
@@ -540,7 +580,15 @@ mod tests {
             .find(|n| n.tag_name().name() == "foreignObject")
             .unwrap();
         let mut report = Report::new();
-        check_foreign_object(fo, &xml, d.root_element(), "c.xhtml", false, &mut report);
+        check_foreign_object(
+            fo,
+            &xml,
+            d.root_element(),
+            "c.xhtml",
+            false,
+            true,
+            &mut report,
+        );
         assert!(report.messages.is_empty());
     }
 

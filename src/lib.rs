@@ -50,6 +50,21 @@ fn peek_opf_version(ocf: &mut ocf::Ocf, opf_path: &str) -> Option<String> {
 
 /// Validate raw EPUB bytes and return a [`Report`].
 pub fn validate_bytes(bytes: Vec<u8>) -> Report {
+    validate_bytes_with_profile(bytes, None)
+}
+
+/// Validate raw EPUB bytes under a specific EPUB extension-spec profile,
+/// matching real epubcheck's `--profile <name>` CLI flag (`"dict"`,
+/// `"edupub"`, `"idx"`, `"preview"`, or `None`/anything else for default
+/// behavior). A profile only ever *forces the "this publication must
+/// declare itself as X" gating check* for a book that would otherwise be
+/// silently treated as a plain, unrelated publication - it never
+/// overrides or duplicates the checks a real `dc:type`/content-based
+/// declaration already triggers on its own. Unrecognized profile names
+/// are accepted and simply behave like `None` (permissive, matching the
+/// project's general design principle: this project doesn't second-
+/// guess or reject its own inputs).
+pub fn validate_bytes_with_profile(bytes: Vec<u8>, profile: Option<&str>) -> Report {
     let mut report = Report::new();
     let mut container = match ocf::open(bytes, &mut report) {
         Some(c) => c,
@@ -62,7 +77,7 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
     // with a reflowable + fixed-layout rendition) legitimately declares
     // more than one, each validated as its own, independent OPF.
     for opf_path in &opf_paths {
-        opf::check(&mut container, opf_path, &mut report);
+        opf::check(&mut container, opf_path, profile, &mut report);
     }
     // Checked once for the whole publication (not per-rendition): the
     // multi-rendition dc:type cardinality cross-check reads
@@ -96,7 +111,13 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
 
 /// Validate an EPUB file on disk.
 pub fn validate_path(path: &Path) -> std::io::Result<Report> {
-    let mut report = validate_bytes(std::fs::read(path)?);
+    validate_path_with_profile(path, None)
+}
+
+/// Validate an EPUB file on disk under a specific EPUB extension-spec
+/// profile - see [`validate_bytes_with_profile`].
+pub fn validate_path_with_profile(path: &Path, profile: Option<&str>) -> std::io::Result<Report> {
+    let mut report = validate_bytes_with_profile(std::fs::read(path)?, profile);
     // PKG-016: the file's own ".epub" extension should be lowercase - a
     // filesystem-level concern `validate_bytes` alone can't see, since it
     // only ever receives raw bytes with no filename attached.

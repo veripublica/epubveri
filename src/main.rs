@@ -1,4 +1,4 @@
-//! Thin CLI: `epubveri [--format human|ids] <file.epub>`
+//! Thin CLI: `epubveri [--format human|ids] [--profile <name>] <file.epub>`
 //!
 //! Exit codes: 0 = valid (no errors), 1 = invalid (errors found), 2 = usage/IO error.
 
@@ -6,13 +6,16 @@ use std::path::Path;
 use std::process::ExitCode;
 
 fn usage() -> ExitCode {
-    eprintln!("usage: epubveri [--format human|ids] <file.epub>");
+    eprintln!(
+        "usage: epubveri [--format human|ids] [--profile dict|edupub|idx|preview] <file.epub>"
+    );
     ExitCode::from(2)
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().collect();
     let mut format = String::from("human");
+    let mut profile: Option<String> = None;
     let mut path: Option<String> = None;
 
     let mut i = 1;
@@ -25,6 +28,13 @@ fn main() -> ExitCode {
                     None => return usage(),
                 }
             }
+            "--profile" => {
+                i += 1;
+                match args.get(i) {
+                    Some(v) => profile = Some(v.clone()),
+                    None => return usage(),
+                }
+            }
             "-h" | "--help" => return usage(),
             s => path = Some(s.to_string()),
         }
@@ -32,7 +42,7 @@ fn main() -> ExitCode {
     }
 
     let Some(path) = path else { return usage() };
-    let report = match epubveri::validate_path(Path::new(&path)) {
+    let report = match epubveri::validate_path_with_profile(Path::new(&path), profile.as_deref()) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("error: cannot read {path}: {e}");

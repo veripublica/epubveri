@@ -298,22 +298,33 @@ pub(crate) fn check_page_list(
 /// schema.org value otherwise).
 pub(crate) fn check_teacher_edition_and_accessibility(
     dc_types: &[String],
+    profile: Option<&str>,
     metadata: Option<roxmltree::Node>,
     opf_path: &str,
     report: &mut Report,
 ) {
     let is_edupub_pub = dc_types.iter().any(|t| t == "edupub");
     let is_teacher_edition = dc_types.iter().any(|t| t == "teacher-edition");
-    let Some(md) = metadata else { return };
 
-    if is_teacher_edition && !is_edupub_pub {
+    if !is_edupub_pub && (is_teacher_edition || profile == Some("edupub")) {
         report.push_at(
             RSC_005,
             Severity::Error,
             "The dc:type identifier \"edupub\" is required",
             opf_path,
         );
+        if !is_teacher_edition {
+            // Pure profile-forced detection with no other real edupub
+            // signal at all - a real fixture (a bare, single-Package-
+            // Document check with no accessibility metadata either)
+            // expects exactly this one finding, not the accessibility
+            // check below cascading on content that was never meant to
+            // satisfy it.
+            return;
+        }
     }
+    let Some(md) = metadata else { return };
+
     if is_teacher_edition {
         let has_source = md.children().any(|n| {
             n.is_element()
