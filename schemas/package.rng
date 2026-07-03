@@ -77,18 +77,26 @@
     </element>
   </define>
 
-  <!-- any package child that is not metadata/manifest/spine -->
+  <!-- The only other real package children used anywhere in the corpus
+       (guide/bindings/collection - "tours" is a real legacy OEB 1.2
+       element but no corpus fixture actually exercises it as a package
+       child, so it's deliberately left out rather than guessed), plus any
+       element from a *different* namespace (a vendor extension) - an
+       unrecognized OPF-namespaced element (confirmed via a real fixture,
+       a stray <hello/>) is a real content-model violation, not something
+       to stay permissive about. -->
   <define name="otherPackageChild">
-    <element>
-      <anyName>
-        <except>
-          <name>metadata</name>
-          <name>manifest</name>
-          <name>spine</name>
-        </except>
-      </anyName>
-      <ref name="looseContent"/>
-    </element>
+    <choice>
+      <element name="guide">
+        <!-- must have at least one <reference> (confirmed via a real
+             fixture, an empty <guide></guide>) -->
+        <ref name="anyAttributes"/>
+        <oneOrMore><ref name="anyElement"/></oneOrMore>
+      </element>
+      <element name="bindings"><ref name="looseContent"/></element>
+      <element name="collection"><ref name="looseContent"/></element>
+      <ref name="foreignElement"/>
+    </choice>
   </define>
 
 </grammar>

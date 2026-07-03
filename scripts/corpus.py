@@ -270,16 +270,37 @@ def wrap_single_doc(target_full, target_name, version="3.0"):
         'media-type="application/oebps-package+xml"/></rootfiles>\n'
         '</container>\n'
     )
-    nav_xhtml = (
-        '<?xml version="1.0" encoding="utf-8"?>\n'
-        '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">\n'
-        '<head><title>Nav</title></head>\n'
-        f'<body><nav epub:type="toc"><ol><li><a href="{target_name}">t</a></li></ol></nav></body>\n'
-        '</html>\n'
-    )
-    manifest_items = [
-        '<item id="_nav" href="_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
-    ]
+    # EPUB 2 has no `<nav>`/nav-document concept at all - `<nav>` is
+    # itself an HTML5-only element, so using it here would make an EPUB
+    # 2-context wrap fail EPUB 2's own new "no HTML5-only elements" DOM
+    # check (confirmed the hard way: it broke `minimal.xhtml` and every
+    # other epub2 content-model fixture once that check existed). The
+    # EPUB 2 wrap uses a plain hyperlink to the target instead, which
+    # still gives the harness the same "a reason to include this
+    # resource, but keep it out of the spine to isolate the content-
+    # model check" property the EPUB 3 nav-based version has.
+    if version.startswith("2"):
+        nav_xhtml = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+            '<head><title>t</title></head>\n'
+            f'<body><p><a href="{target_name}">t</a></p></body>\n'
+            '</html>\n'
+        )
+        manifest_items = [
+            '<item id="_nav" href="_nav.xhtml" media-type="application/xhtml+xml"/>'
+        ]
+    else:
+        nav_xhtml = (
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">\n'
+            '<head><title>Nav</title></head>\n'
+            f'<body><nav epub:type="toc"><ol><li><a href="{target_name}">t</a></li></ol></nav></body>\n'
+            '</html>\n'
+        )
+        manifest_items = [
+            '<item id="_nav" href="_nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+        ]
     # Siblings are included so the *target*'s relative references (css,
     # images, fonts, ...) resolve. Other bare xhtml/html/svg siblings are
     # separate, independent test fixtures in their own right — including

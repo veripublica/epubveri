@@ -26,7 +26,13 @@ use crate::report::{Report, Severity};
 /// EPUB2 fixtures across the corpus reuse exactly this doctype as their
 /// standard template).
 pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, report: &mut Report) {
+    // Entity well-formedness (RSC-016) is a basic XML concern, not an
+    // EPUB-3-specific one - a real EPUB 2 fixture (an unknown named
+    // entity reference) expects it too.
+    check_entities(text, path, report);
+
     if !is_epub3 {
+        check_doctype_epub2(text, path, report);
         return;
     }
     if crate::css::has_utf16_bom(bytes) {
@@ -55,7 +61,6 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
     }
 
     check_doctype(text, path, report);
-    check_entities(text, path, report);
 }
 
 /// A minimal, well-formedness-only entity-reference scanner. Runs on the
@@ -179,6 +184,31 @@ fn extract_doctype(text: &str) -> Option<&str> {
     Some(&after[..search_from + end + 1])
 }
 
+/// EPUB 2's own DOCTYPE rule for XHTML content documents - the *opposite*
+/// polarity from EPUB 3's `check_doctype` (any PUBLIC id is obsolete
+/// there), confirmed via three real fixtures: EPUB 2's content model is
+/// XHTML-1.1-DTD-based, so the DOCTYPE must carry a recognized XHTML/OEB
+/// PUBLIC identifier - a missing one (a bare HTML5-style `<!DOCTYPE
+/// html>`) or an unrecognized/malformed one (a typo'd "1.1/EN" missing a
+/// slash, or a nonsense "FOO") is HTM-004.
+fn check_doctype_epub2(text: &str, path: &str, report: &mut Report) {
+    const KNOWN_PUBLIC_IDS: [&str; 2] = [
+        "-//W3C//DTD XHTML 1.1//EN",
+        "+//ISBN 0-9673008-1-9//DTD OEB 1.2 Document//EN",
+    ];
+    let Some(doctype) = extract_doctype(text) else {
+        return;
+    };
+    if !KNOWN_PUBLIC_IDS.iter().any(|id| doctype.contains(id)) {
+        report.push_at(
+            HTM_004,
+            Severity::Error,
+            "DOCTYPE does not have a recognized XHTML PUBLIC identifier",
+            path,
+        );
+    }
+}
+
 fn check_doctype(text: &str, path: &str, report: &mut Report) {
     let Some(doctype) = extract_doctype(text) else {
         return;
@@ -253,6 +283,86 @@ const KNOWN_NAMESPACES: [&str; 7] = [
     "http://www.w3.org/2000/svg",
     "http://www.w3.org/1998/Math/MathML",
 ];
+
+/// A curated (not exhaustive) set of elements HTML5 introduced that don't
+/// exist in the older XHTML 1.1 module set EPUB 2's content model is
+/// built on - confirmed via a real fixture using `<aside>` (the only
+/// HTML5-only element actually used anywhere in the whole EPUB 2 corpus).
+const HTML5_ONLY_ELEMENTS: [&str; 26] = [
+    "aside",
+    "section",
+    "article",
+    "nav",
+    "header",
+    "footer",
+    "hgroup",
+    "figure",
+    "figcaption",
+    "main",
+    "mark",
+    "time",
+    "meter",
+    "progress",
+    "output",
+    "details",
+    "summary",
+    "dialog",
+    "canvas",
+    "audio",
+    "video",
+    "source",
+    "track",
+    "embed",
+    "data",
+    "wbr",
+];
+
+/// EPUB 2's own content-document DOM rules - the opposite scope from
+/// `check_dom` below (EPUB 2 only, not EPUB 3): no HTML5-only elements,
+/// no custom-namespaced attributes at all (XHTML 1.1 is closed, unlike
+/// EPUB 3's HTML5-based, more extensible profile), and `<a>` may never
+/// nest another `<a>` (all three confirmed via dedicated real fixtures).
+pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut Report) {
+    for node in d.descendants().filter(|n| n.is_element()) {
+        if node.tag_name().namespace() == Some(XHTML_NS)
+            && HTML5_ONLY_ELEMENTS.contains(&node.tag_name().name())
+        {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                format!("element \"{}\" not allowed here", node.tag_name().name()),
+                path,
+            );
+        }
+        for attr in node.attributes() {
+            if let Some(ns) = attr.namespace() {
+                if !KNOWN_NAMESPACES.contains(&ns) {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        format!("attribute \"{}\" not allowed here", attr.name()),
+                        path,
+                    );
+                }
+            }
+        }
+        if node.tag_name().namespace() == Some(XHTML_NS) && node.tag_name().name() == "a" {
+            let nested = node.descendants().skip(1).any(|d| {
+                d.is_element()
+                    && d.tag_name().namespace() == Some(XHTML_NS)
+                    && d.tag_name().name() == "a"
+            });
+            if nested {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "The \"a\" element cannot contain any nested \"a\" elements",
+                    path,
+                );
+            }
+        }
+    }
+}
 
 /// DOM/attribute-level checks on an already-parsed content document.
 /// EPUB3-only, same reasoning as `check_raw` above (all confirmed from the

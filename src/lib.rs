@@ -34,6 +34,17 @@ use std::path::Path;
 
 use report::Report;
 
+/// A quick, non-reporting peek at an OPF's own declared `version`
+/// attribute - used only to decide whether multiple rootfiles are the
+/// legitimate EPUB 3 Multiple Renditions feature or an EPUB 2 error
+/// (PKG-013); the real, fully-reporting parse happens in `opf::check`.
+fn peek_opf_version(ocf: &mut ocf::Ocf, opf_path: &str) -> Option<String> {
+    let bytes = ocf.read(opf_path)?;
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let doc = ocf::parse_xml(&text).ok()?;
+    doc.root_element().attribute("version").map(String::from)
+}
+
 /// Validate raw EPUB bytes and return a [`Report`].
 pub fn validate_bytes(bytes: Vec<u8>) -> Report {
     let mut report = Report::new();
@@ -54,8 +65,23 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
     // multi-rendition dc:type cardinality cross-check reads
     // META-INF/metadata.xml, which no single opf::check call ever sees.
     if opf_paths.len() > 1 {
-        edupub::check_multi_rendition_dc_type(&mut container, &opf_paths, &mut report);
-        renditions::check(&mut container, &mut report);
+        // Multiple Renditions is an EPUB 3-only feature - a real EPUB 2
+        // fixture with two rootfiles (both declaring version="2.0")
+        // expects only PKG-013, none of the multi-rendition machinery
+        // below (which doesn't apply to EPUB 2 at all).
+        let all_epub3 = opf_paths
+            .iter()
+            .all(|p| peek_opf_version(&mut container, p).is_some_and(|v| v.starts_with('3')));
+        if all_epub3 {
+            edupub::check_multi_rendition_dc_type(&mut container, &opf_paths, &mut report);
+            renditions::check(&mut container, &mut report);
+        } else {
+            report.push(
+                ids::PKG_013,
+                report::Severity::Error,
+                "container.xml declares more than one rootfile outside of EPUB 3 Multiple Renditions",
+            );
+        }
     }
     // Bound the RNG engine's pattern-interning cache (see
     // `rng::pattern::clear_intern_cache`) to roughly one book's working set,

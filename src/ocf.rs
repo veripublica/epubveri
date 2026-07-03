@@ -229,6 +229,26 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         }
     }
 
+    // PKG-014: a directory entry (name ends with '/') with no other entry
+    // nested inside it is an empty directory - confirmed via a real
+    // fixture.
+    for name in &names {
+        if !name.ends_with('/') {
+            continue;
+        }
+        if !names
+            .iter()
+            .any(|other| other != name && other.starts_with(name.as_str()))
+        {
+            report.push_at(
+                PKG_014,
+                Severity::Warning,
+                format!("'{name}' is an empty directory"),
+                name.as_str(),
+            );
+        }
+    }
+
     // mimetype: must be the first entry, stored (uncompressed), exact
     // contents, and its ZIP header must carry no extra field (needed so
     // tools can sniff the media type at a fixed byte offset without a

@@ -92,8 +92,12 @@
     </rule>
   </pattern>
 
+  <!-- EPUB 3 only: an empty dc:title is an error (RSC-005). EPUB 2 is
+       more lenient here - a real corpus fixture expects only a warning
+       (OPF-055, hand-coded in opf.rs since this schema engine reports
+       every finding as RSC-005 uniformly). -->
   <pattern id="opf-title-not-empty">
-    <rule context="dc:title">
+    <rule context="opf:package[starts-with(@version, '3')]/opf:metadata/dc:title">
       <assert test="string-length(normalize-space(.)) &gt; 0"
         >dc:title must be a string with length at least 1</assert>
     </rule>

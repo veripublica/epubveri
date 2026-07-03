@@ -52,6 +52,71 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
     {
         check_empty_text(nav_label, ncx_path, report);
     }
+
+    check_id_attributes(&d, ncx_path, report);
+    check_page_target_types(&d, ncx_path, report);
+}
+
+/// Every `id` attribute anywhere in the NCX must be a valid XML NCName
+/// (confirmed via a real fixture using `np:1`, invalid only because of the
+/// colon) and unique document-wide (confirmed via a real fixture where
+/// `navMap` and `navPoint` share one value, reported once *per* colliding
+/// element - 2 findings for 2 elements, not 1 for the pair).
+fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    let mut by_id: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(id) = n.attribute("id") {
+            if !is_valid_ncname(id) {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("value of attribute \"id\" is invalid: '{id}'"),
+                    ncx_path,
+                );
+            }
+            *by_id.entry(id).or_insert(0) += 1;
+        }
+    }
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(id) = n.attribute("id") {
+            if by_id.get(id).copied().unwrap_or(0) > 1 {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("The \"id\" attribute does not have a unique value: '{id}'"),
+                    ncx_path,
+                );
+            }
+        }
+    }
+}
+
+fn is_valid_ncname(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    (first.is_alphabetic() || first == '_')
+        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+/// A `pageTarget`'s `type` must be one of the three DAISY-defined values.
+fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    for n in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "pageTarget")
+    {
+        if let Some(ty) = n.attribute("type") {
+            if !matches!(ty, "front" | "normal" | "special") {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    format!("value of attribute \"type\" is invalid: '{ty}'"),
+                    ncx_path,
+                );
+            }
+        }
+    }
 }
 
 fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Report) {

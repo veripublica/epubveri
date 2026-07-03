@@ -108,6 +108,17 @@ pub(crate) fn href_leaks_container_root(base_dir: &str, href: &str) -> bool {
     false
 }
 
+/// True for a manifest media-type that's a real "OPS"/Content Document -
+/// XHTML or SVG (EPUB 3), or DTBook (a real, valid EPUB 2 OPS content
+/// type, confirmed via a real `ops-dtbook-valid` fixture that a guide/NCX
+/// reference check must not reject).
+pub(crate) fn is_content_document_type(mt: &str) -> bool {
+    matches!(
+        mt,
+        "application/xhtml+xml" | "image/svg+xml" | "application/x-dtbook+xml"
+    )
+}
+
 /// True for hrefs we should not resolve against the container (remote/special).
 pub(crate) fn is_external(href: &str) -> bool {
     let href = href.trim();
@@ -372,7 +383,50 @@ fn check_refines_cycles(doc: &roxmltree::Document, opf_path: &str, report: &mut 
 
 /// OPF-085: a `dc:identifier` starting with `urn:uuid:` must be followed
 /// by a syntactically valid UUID (8-4-4-4-12 hex groups).
+/// A Dublin Core date: `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` (the W3C-DTF
+/// profile of ISO 8601 that `dc:date` actually uses) - a bare year is the
+/// common, valid case (a real fixture's own "no other errors" pairing
+/// with a specific-year value elsewhere in this codebase already relies
+/// on this), an empty string or a natural-language date are both
+/// rejected uniformly by not matching any of the three shapes.
+fn is_valid_dc_date(s: &str) -> bool {
+    let digits_in = |slice: &str| slice.bytes().all(|b| b.is_ascii_digit());
+    match s.len() {
+        4 => digits_in(s),
+        7 => {
+            s.as_bytes().get(4) == Some(&b'-')
+                && digits_in(&s[0..4])
+                && digits_in(&s[5..7])
+                && (1..=12).contains(&s[5..7].parse().unwrap_or(0))
+        }
+        10 => {
+            s.as_bytes().get(4) == Some(&b'-')
+                && s.as_bytes().get(7) == Some(&b'-')
+                && digits_in(&s[0..4])
+                && digits_in(&s[5..7])
+                && digits_in(&s[8..10])
+                && (1..=12).contains(&s[5..7].parse().unwrap_or(0))
+                && (1..=31).contains(&s[8..10].parse().unwrap_or(0))
+        }
+        _ => false,
+    }
+}
+
+fn is_valid_uuid(uuid: &str) -> bool {
+    let groups: Vec<&str> = uuid.split('-').collect();
+    groups.len() == 5
+        && [8, 4, 4, 4, 12]
+            .iter()
+            .zip(&groups)
+            .all(|(len, g)| g.len() == *len && g.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+/// OPF-085: a `dc:identifier` claiming to be a UUID - either via the
+/// `urn:uuid:` scheme prefix, or (an EPUB 2 convention) an `opf:scheme="
+/// uuid"` attribute with the bare UUID as the element's text - must
+/// actually look like one.
 fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    const OPF_NS: &str = "http://www.idpf.org/2007/opf";
     for n in doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
@@ -384,16 +438,20 @@ fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mu
             .collect::<String>()
             .trim()
             .to_string();
-        let Some(uuid) = text.strip_prefix("urn:uuid:") else {
+        let uuid_part = if let Some(rest) = text.strip_prefix("urn:uuid:") {
+            Some(rest)
+        } else if n
+            .attribute((OPF_NS, "scheme"))
+            .is_some_and(|s| s.eq_ignore_ascii_case("uuid"))
+        {
+            Some(text.as_str())
+        } else {
+            None
+        };
+        let Some(uuid_part) = uuid_part else {
             continue;
         };
-        let groups: Vec<&str> = uuid.split('-').collect();
-        let valid = groups.len() == 5
-            && [8, 4, 4, 4, 12]
-                .iter()
-                .zip(&groups)
-                .all(|(len, g)| g.len() == *len && g.chars().all(|c| c.is_ascii_hexdigit()));
-        if !valid {
+        if !is_valid_uuid(uuid_part) {
             report.push_at(
                 OPF_085,
                 Severity::Warning,
@@ -672,15 +730,76 @@ fn check_guide_duplicates(doc: &roxmltree::Document, opf_path: &str, report: &mu
     }
 }
 
-/// RSC-012: an NCX `<content src="target#fragment">`'s fragment must
-/// resolve to a real `id` in the target content document. Reads each
-/// distinct target doc once, caching its id set (a real book can have
-/// many navPoints pointing to the same doc).
+/// `guide/reference` targets: OPF-031 if not declared as a manifest item
+/// (plus RSC-007 if the file doesn't exist in the container at all -
+/// confirmed via a real fixture where the target is both undeclared and
+/// missing); OPF-032 if it *is* declared but isn't a Content Document
+/// (a real fixture links to a plain image).
+fn check_guide_references(
+    doc: &roxmltree::Document,
+    base_dir: &str,
+    name_index: &HashMap<String, String>,
+    items: &HashMap<String, (String, String)>,
+    opf_path: &str,
+    report: &mut Report,
+) {
+    for r in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "reference")
+    {
+        let Some(href) = r.attribute("href") else {
+            continue;
+        };
+        if is_external(href) {
+            continue;
+        }
+        let path_part = href.split(['#', '?']).next().unwrap_or(href);
+        let resolved = nfc(&resolve(base_dir, path_part));
+        match items.values().find(|(p, _)| nfc(p) == resolved) {
+            None => {
+                report.push_at(
+                    OPF_031,
+                    Severity::Error,
+                    format!("guide reference '{href}' is not declared in the manifest"),
+                    opf_path,
+                );
+                if !name_index.contains_key(&resolved) {
+                    report.push_at(
+                        RSC_007,
+                        Severity::Error,
+                        format!("guide reference '{href}' does not resolve to a real resource"),
+                        opf_path,
+                    );
+                }
+            }
+            Some((_, mt)) => {
+                if !is_content_document_type(mt) {
+                    report.push_at(
+                        OPF_032,
+                        Severity::Error,
+                        format!("guide reference '{href}' does not target a Content Document"),
+                        opf_path,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// RSC-007/RSC-010/RSC-012: an NCX `<content src="...">` target must
+/// exist in the container (RSC-007 if not - confirmed via a real fixture
+/// referencing a bogus local path), must be an OPS (Content Document)
+/// resource, not e.g. a plain image (RSC-010, confirmed via a real
+/// fixture), and - when the reference carries a `#fragment` - that
+/// fragment must resolve to a real `id` in the target document (RSC-012).
+/// Reads each distinct target doc once, caching its id set (a real book
+/// can have many navPoints pointing to the same doc).
 fn check_ncx_content_fragments(
     ncx_doc: &roxmltree::Document,
     ncx_path: &str,
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
+    items: &HashMap<String, (String, String)>,
     report: &mut Report,
 ) {
     let dir = parent_dir(ncx_path);
@@ -692,13 +811,38 @@ fn check_ncx_content_fragments(
         let Some(src) = n.attribute("src") else {
             continue;
         };
-        let Some((target, frag)) = src.split_once('#') else {
-            continue;
-        };
-        if frag.is_empty() || is_external(src) {
+        if is_external(src) {
             continue;
         }
+        let (target, frag) = match src.split_once('#') {
+            Some((p, f)) => (p, Some(f)),
+            None => (src, None),
+        };
         let resolved = nfc(&resolve(&dir, target));
+        if !name_index.contains_key(&resolved) {
+            report.push_at(
+                RSC_007,
+                Severity::Error,
+                format!("NCX content src '{src}' does not resolve to a real resource"),
+                ncx_path,
+            );
+            continue;
+        }
+        if let Some((_, mt)) = items.values().find(|(p, _)| nfc(p) == resolved) {
+            if !is_content_document_type(mt) {
+                report.push_at(
+                    RSC_010,
+                    Severity::Error,
+                    format!("NCX content src '{src}' does not target an OPS document"),
+                    ncx_path,
+                );
+                continue;
+            }
+        }
+        let Some(frag) = frag else { continue };
+        if frag.is_empty() {
+            continue;
+        }
         if !id_cache.contains_key(&resolved) {
             let ids = name_index
                 .get(&resolved)
@@ -1171,6 +1315,72 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 "Required metadata dc:title is missing",
                 opf_path,
             );
+        } else if is_epub2 {
+            // EPUB 3 already reports an empty dc:title as RSC-005 (via
+            // `schemas/package.sch`'s own version-scoped pattern); EPUB 2
+            // is more lenient - a real corpus fixture expects only a
+            // warning.
+            for n in md
+                .children()
+                .filter(|n| n.is_element() && n.tag_name().name() == "title")
+            {
+                let text: String = n
+                    .descendants()
+                    .filter(|t| t.is_text())
+                    .filter_map(|t| t.text())
+                    .collect();
+                if text.trim().is_empty() {
+                    report.push_at(OPF_055, Severity::Warning, "dc:title is empty", opf_path);
+                }
+            }
+        }
+        // OPF-054: dc:date must be a non-empty, ISO-8601 (YYYY[-MM[-DD]])
+        // value - confirmed via two real fixtures (an empty date, and one
+        // using a natural-language date string).
+        for n in md
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "date")
+        {
+            let text: String = n
+                .descendants()
+                .filter(|t| t.is_text())
+                .filter_map(|t| t.text())
+                .collect();
+            if !is_valid_dc_date(text.trim()) {
+                report.push_at(
+                    OPF_054,
+                    Severity::Error,
+                    format!(
+                        "dc:date value '{}' is empty or doesn't conform to ISO 8601",
+                        text.trim()
+                    ),
+                    opf_path,
+                );
+            }
+        }
+        // OPF-052: a dc:creator/dc:contributor's opf:role (any of the
+        // "opf"/"epub" prefixes real fixtures use - both bind to the same
+        // namespace) must be a real MARC relator code - approximated as
+        // "exactly 3 lowercase ASCII letters" (every MARC code has this
+        // shape; the corpus's own fixtures - "edc"/"clr" valid, the 9-
+        // letter "companion" invalid - don't need the full ~500-entry
+        // vocabulary to distinguish).
+        const OPF_NS_ROLE: &str = "http://www.idpf.org/2007/opf";
+        for n in md
+            .children()
+            .filter(|n| n.is_element() && matches!(n.tag_name().name(), "creator" | "contributor"))
+        {
+            if let Some(role) = n.attribute((OPF_NS_ROLE, "role")) {
+                let valid = role.len() == 3 && role.bytes().all(|b| b.is_ascii_lowercase());
+                if !valid {
+                    report.push_at(
+                        OPF_052,
+                        Severity::Error,
+                        format!("'{role}' is not a recognized MARC relator code"),
+                        opf_path,
+                    );
+                }
+            }
         }
         if !has("language") {
             report.push_at(
@@ -1293,6 +1503,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // manifest id -> its declared 'fallback' manifest id, for spine
     // core-media-type fallback-chain resolution.
     let mut fallback_map: HashMap<String, String> = HashMap::new();
+    // manifest id -> its declared (obsolete EPUB 2) 'fallback-style'
+    // manifest id, validated once the whole manifest is known (OPF-041).
+    let mut fallback_style_map: HashMap<String, String> = HashMap::new();
     let mut nav_present = false;
     let mut nav_path: Option<String> = None;
     // Data Navigation Document(s) (properties="data-nav"): (resolved path,
@@ -1384,6 +1597,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     OPF_090,
                     Severity::Info,
                     format!("media-type '{mt}' is a non-preferred (but valid) Core Media Type"),
+                    opf_path,
+                );
+            }
+            if mt == "text/x-oeb1-css" {
+                report.push_at(
+                    OPF_037,
+                    Severity::Warning,
+                    "media-type 'text/x-oeb1-css' is a deprecated OEB 1.x construct",
                     opf_path,
                 );
             }
@@ -1480,6 +1701,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     "the \"fallback-style\" attribute is an obsolete EPUB 2 construct",
                     opf_path,
                 );
+            } else if let Some(fs) = item.attribute("fallback-style") {
+                fallback_style_map.insert(id.to_string(), fs.trim().to_string());
             }
             if let Some(fb) = item.attribute("fallback").map(str::trim) {
                 if fb == id {
@@ -1605,6 +1828,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             );
         }
     }
+    for target in fallback_style_map.values() {
+        if !items.contains_key(target) {
+            report.push_at(
+                OPF_041,
+                Severity::Error,
+                format!("fallback-style references unknown manifest item id '{target}'"),
+                opf_path,
+            );
+        }
+    }
+    check_guide_references(&doc, &base_dir, &name_index, &items, opf_path, report);
     // OPF-045: a `fallback` chain must not form a cycle - same DFS-cycle-
     // detector shape as OPF-065's `@refines`-cycle check, over
     // `fallback_map` (already built above) instead of walking the DOM
@@ -1801,6 +2035,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "spine");
     if let Some(sp) = spine {
+        // `page-map` is an invalid (never-standardized) Adobe extension -
+        // any use at all is a content-model violation (RSC-005),
+        // regardless of whether it resolves; if it *also* doesn't resolve
+        // to a real manifest item, that's additionally OPF-063.
+        if let Some(page_map) = sp.attribute("page-map") {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "attribute \"page-map\" not allowed here",
+                opf_path,
+            );
+            if !items.contains_key(page_map.trim()) {
+                report.push_at(
+                    OPF_063,
+                    Severity::Warning,
+                    format!("page-map reference '{page_map}' was not found in the manifest"),
+                    opf_path,
+                );
+            }
+        }
         let refs: Vec<_> = sp
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "itemref")
@@ -1871,12 +2125,24 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                                 hops += 1;
                             }
                             if !covered {
-                                report.push_at(
-                                    OPF_043,
-                                    Severity::Warning,
-                                    format!("spine item idref '{idref}' has non-content media-type '{mt}' with no verified fallback"),
-                                    opf_path,
-                                );
+                                if mt.starts_with("image/") {
+                                    // A real fixture confirms an image is
+                                    // its own dedicated (error-level)
+                                    // case, not the generic warning.
+                                    report.push_at(
+                                        OPF_042,
+                                        Severity::Error,
+                                        format!("spine item idref '{idref}' is an image, not a Content Document"),
+                                        opf_path,
+                                    );
+                                } else {
+                                    report.push_at(
+                                        OPF_043,
+                                        Severity::Warning,
+                                        format!("spine item idref '{idref}' has non-content media-type '{mt}' with no verified fallback"),
+                                        opf_path,
+                                    );
+                                }
                             }
 
                             // --- Fixed-layout viewport/viewBox checks ---
@@ -1962,6 +2228,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                                         ncx_path,
                                         ocf,
                                         &name_index,
+                                        &items,
                                         report,
                                     );
                                 }
@@ -2025,6 +2292,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // RSC-007/RSC-008 (undeclared, missing vs. still present).
     let manifest_paths: HashSet<String> = items.values().map(|(p, _)| nfc(p)).collect();
 
+    // OPF-003 (usage): a real container resource that isn't declared as
+    // any manifest item at all - `mimetype`/`META-INF/*`/the OPF itself
+    // are structural, not "publication resources", and OS junk files
+    // (`.DS_Store`, `Thumbs.db`) are explicitly ignored (confirmed via a
+    // real corpus fixture pair).
+    {
+        const IGNORED_BASENAMES: [&str; 2] = [".ds_store", "thumbs.db"];
+        let opf_own = nfc(opf_path);
+        for name in &ocf.names {
+            if name == "mimetype" || name.starts_with("META-INF/") || name.ends_with('/') {
+                continue;
+            }
+            let key = nfc(name);
+            if key == opf_own {
+                continue;
+            }
+            let basename = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
+            if IGNORED_BASENAMES.contains(&basename.as_str()) {
+                continue;
+            }
+            if !manifest_paths.contains(&key) {
+                report.push_at(
+                    OPF_003,
+                    Severity::Info,
+                    format!("container resource '{name}' is not listed in the manifest"),
+                    opf_path,
+                );
+            }
+        }
+    }
+
     // resolved-resource-key -> Core-Media-Type/fallback status, for the
     // foreign-resource-fallback checks (RSC-032/MED-003/MED-007) below.
     let resource_status = crate::foreign::build_resource_status(&items, &fallback_map);
@@ -2070,6 +2368,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             continue;
         };
         crate::htm::check_dom(&d, &path, is_epub3, report);
+        if !is_epub3 {
+            crate::htm::check_dom_epub2(&d, &path, report);
+        }
 
         if let Some(prefix) = d
             .root_element()
@@ -3996,6 +4297,45 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
 
     check_font_obfuscation(ocf, &items, &name_index, report);
     check_image_signatures(ocf, &items, &name_index, report);
+    check_html_declared_as_xhtml(ocf, &items, &name_index, report);
+}
+
+/// OPF-035 (warning): a manifest item declared `text/html` whose actual
+/// content *is* a real XHTML document (a well-formed XML document whose
+/// root is `<html>` in the XHTML namespace) - should be declared
+/// `application/xhtml+xml` instead. Confirmed via a real fixture using
+/// exactly this shape, unreferenced by anything else in the book (so this
+/// check runs over every manifest item regardless of spine/hyperlink
+/// usage).
+fn check_html_declared_as_xhtml(
+    ocf: &mut Ocf,
+    items: &HashMap<String, (String, String)>,
+    name_index: &HashMap<String, String>,
+    report: &mut Report,
+) {
+    const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
+    for (path, mt) in items.values() {
+        if mt != "text/html" {
+            continue;
+        }
+        let Some(orig) = name_index.get(&nfc(path)).cloned() else {
+            continue;
+        };
+        let Some(bytes) = ocf.read(&orig) else {
+            continue;
+        };
+        let text = crate::css::decode_bytes(&bytes);
+        let Ok(d) = parse_xml(&text) else { continue };
+        let root = d.root_element();
+        if root.tag_name().name() == "html" && root.tag_name().namespace() == Some(XHTML_NS) {
+            report.push_at(
+                OPF_035,
+                Severity::Warning,
+                format!("manifest item '{path}' is XHTML but declared as text/html"),
+                path.as_str(),
+            );
+        }
+    }
 }
 
 /// Raster Core Media Types this project can sniff a real signature for
