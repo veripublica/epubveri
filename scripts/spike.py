@@ -186,8 +186,11 @@ def fixtures():
                put(base_entries(), 'OEBPS/chapter1.xhtml',
                    chapter('<p><img src="missing.png" alt="x"/></p>'))))
 
-    # duplicate spine reference -> OPF-034
-    fx.append(('duplicate_spine.epub', 'OPF-034',
+    # duplicate spine reference -> RSC-005 in EPUB3 (real corpus fixtures
+    # confirm the identically-shaped EPUB2 case is OPF-034 instead, a
+    # version-scoped ID split - this default-version (3.0) fixture expects
+    # the EPUB3 side)
+    fx.append(('duplicate_spine.epub', 'RSC-005',
                put(base_entries(), 'OEBPS/content.opf',
                    opf(spine=['    <itemref idref="ch1"/>',
                               '    <itemref idref="ch1"/>']))))

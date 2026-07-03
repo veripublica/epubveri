@@ -2769,6 +2769,98 @@ unscoped families: `epub-edupub` gaps (13), `epub3/05-package-document`
 (10, regrew), `epub-indexes` (12), `epub-previews` (7), a handful of
 small niche extension profiles (~6 combined).
 
+## Increment: finish `epub3/05-package-document.feature`'s regrowth (2026-07-03)
+
+Closed out all 10 scenarios that had regrown since the earlier "all 76
+done" increment - all 94 should-error scenarios in the file hit exactly,
+27/27 should-clean fixtures stay clean, 0 new false positives. The
+recurring theme, once again: **the exact same underlying condition often
+has a different message ID/severity in EPUB2 vs. EPUB3** - three of the
+ten misses were this shape, not "check doesn't exist."
+
+**dc:date and dcterms:modified (3 misses).** A malformed/empty `dc:date`
+is **OPF-053/Warning** in EPUB3 ("does not follow recommended syntax")
+but **OPF-054/Error** in EPUB2 (confirmed via the EPUB2 corpus's own
+dedicated fixtures) - the existing `is_valid_dc_date` check (built during
+the epub2 increment) was firing OPF-054 unconditionally; gated it on
+`is_epub3`. New: `dcterms:modified` must be exactly `CCYY-MM-DDThh:mm:ssZ`
+(a plain fixed-width byte-shape check - `is_valid_dcterms_modified` -
+not the XPath-engine date regex this was originally deferred as needing;
+the exact format was simple enough to hand-code once actually attempted).
+
+**Duplicate spine itemref (1 miss), the same version-split shape found
+again:** a spine referencing the same manifest item id twice is
+**RSC-005** in EPUB3 but **OPF-034** in EPUB2 - confirmed via two
+corpus fixtures using the *exact same* XML shape (content_001 twice,
+content_002 in between) that differ only in `version="2.0"` vs `"3.0"`.
+The pre-existing OPF-034 check (one of the very first checks this project
+ever wrote) had never been version-gated; fixed, and `scripts/spike.py`'s
+own `duplicate_spine.epub` regression fixture (a default-EPUB3 synthetic
+book) updated to expect RSC-005 instead - a real, if minor, "our own
+synthetic fixture predates a correctness fix" gap, same precedent as
+several earlier increments.
+
+**Manifest item vocabulary tightening (2 misses).** `link[@properties]`'s
+only real vocabulary term is `"onix"` (confirmed via a real fixture
+pairing it with an exempt custom-prefixed token) - anything else
+unprefixed is `OPF-027`. More subtly: a manifest `<item>`'s `properties`
+token with a *reserved* prefix (e.g. `rendition:layout-pre-paginated`,
+which is only ever a valid `<itemref>` override, never an `<item>`
+property) has no valid item-level meaning at all - the existing "unknown
+property" check only ever rejected *unprefixed* unknown tokens, exempting
+*any* colon-containing one as if it were always a legitimate custom
+vocabulary term. Fixed by splitting the check: an unprefixed token still
+needs the `KNOWN_ITEM_PROPERTIES` allowlist; a prefixed token is only
+exempt when its prefix is genuinely custom (not one of the 10 reserved
+prefixes) - a real, if narrow, false-negative this project had been
+carrying since the original `KNOWN_ITEM_PROPERTIES` design.
+
+**The single nav item + nav-must-be-XHTML rules (2 misses), both new,
+straightforward manifest-scan additions:** more than one manifest item
+declaring `properties="nav"` is `RSC-005` (added a `nav_count` alongside
+the pre-existing `nav_present` bool); a `nav`-declared item whose
+media-type isn't `application/xhtml+xml` fires *both* `OPF-012`
+("property not defined for media type," extending the existing
+cover-image/search-key-map pattern) *and* a separate `RSC-005` - both,
+not either/or, confirmed via the one real fixture testing this shape.
+
+**`<bindings>` deprecation (1 miss):** a plain presence check - any
+`<bindings>` element anywhere in the package document is `RSC-017`
+(warning), regardless of its own content (already schema-permissive via
+`package.rng`'s `looseContent`).
+
+**Remote font embedded in a standalone SVG content document (1 miss) -
+narrower than the increment that originally deferred it.** The original
+"deferred" note assumed this needed tracing *into* an SVG **embedded
+inline inside XHTML markup** (no parser for that). The real fixture is
+simpler: the SVG is its own **standalone manifest item** (`image/
+svg+xml`), referenced from XHTML only via an ordinary `<img src=
+"cover.svg">` - meaning it's already walked by the existing standalone-
+SVG loop (`svg_doc_paths`, built for the CSS-029/030 cross-reference).
+Added a check there: an `<font-face-uri xlink:href="...">` pointing to a
+remote URL means the SVG document "uses a remote resource" just like an
+XHTML doc would, and needs its own manifest item to declare
+`remote-resources` (OPF-014, reusing the exact message shape the XHTML
+check already uses). The genuinely-inline-embedded-SVG case (no separate
+manifest item at all) remains out of scope, unchanged.
+
+**Honest numbers** (all 94 should-error scenarios in
+`epub3/05-package-document.feature` hit exactly; 27/27 should-clean
+fixtures stay clean; overall corpus numbers below):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 91.7% (544 hits) | **93.4% (554 hits)** |
+| RSC family exact hits | 334/377 | **339/377** |
+| OPF family exact hits | 125/146 | **131/146** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub3/05-package-document.feature` is **fully done** again.
+Remaining unscoped families: `epub-edupub` gaps (13), `epub-indexes`
+(12), `epub-previews` (7), `content-document-svg.feature`'s ~12 misses
+(likely mostly the `wrap_svg_file` harness gap, unconfirmed), a handful
+of small niche extension profiles (~6 combined).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

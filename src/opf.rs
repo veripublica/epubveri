@@ -412,6 +412,31 @@ fn is_valid_dc_date(s: &str) -> bool {
     }
 }
 
+/// `dcterms:modified` must be exactly `CCYY-MM-DDThh:mm:ssZ` (fixed
+/// width, literal `T`/`Z`, no fractional seconds or numeric timezone
+/// offset - confirmed via a real fixture using a bare date with no time
+/// component at all, and the expected message text itself spelling out
+/// this exact form).
+fn is_valid_dcterms_modified(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 20 {
+        return false;
+    }
+    let digit = |i: usize| b[i].is_ascii_digit();
+    (0..4).all(digit)
+        && b[4] == b'-'
+        && (5..7).all(digit)
+        && b[7] == b'-'
+        && (8..10).all(digit)
+        && b[10] == b'T'
+        && (11..13).all(digit)
+        && b[13] == b':'
+        && (14..16).all(digit)
+        && b[16] == b':'
+        && (17..19).all(digit)
+        && b[19] == b'Z'
+}
+
 fn is_valid_uuid(uuid: &str) -> bool {
     let groups: Vec<&str> = uuid.split('-').collect();
     groups.len() == 5
@@ -1221,6 +1246,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     check_meta_property_scheme_shape(&doc, opf_path, report);
     check_collection_roles(&doc, opf_path, report);
     check_guide_duplicates(&doc, opf_path, report);
+    if pkg
+        .children()
+        .any(|n| n.is_element() && n.tag_name().name() == "bindings")
+    {
+        report.push_at(
+            RSC_017,
+            Severity::Warning,
+            "the \"bindings\" element is deprecated",
+            opf_path,
+        );
+    }
 
     // --- version ---
     let version = pkg.attribute("version").unwrap_or("");
@@ -1524,9 +1560,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 }
             }
         }
-        // OPF-054: dc:date must be a non-empty, ISO-8601 (YYYY[-MM[-DD]])
-        // value - confirmed via two real fixtures (an empty date, and one
-        // using a natural-language date string).
+        // dc:date must be a non-empty, ISO-8601 (YYYY[-MM[-DD]]) value -
+        // confirmed via two real EPUB2 fixtures (an empty date, and one
+        // using a natural-language date string) that this is OPF-054/Error
+        // there, but two real EPUB3 fixtures (an invalid-syntax and an
+        // unknown-format date) confirm the *same* underlying check is only
+        // OPF-053/Warning in EPUB3 - a version-scoped severity/ID split,
+        // same shape as dc:title's empty-value check elsewhere in this file.
         for n in md
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "date")
@@ -1537,15 +1577,54 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 .filter_map(|t| t.text())
                 .collect();
             if !is_valid_dc_date(text.trim()) {
-                report.push_at(
-                    OPF_054,
-                    Severity::Error,
-                    format!(
-                        "dc:date value '{}' is empty or doesn't conform to ISO 8601",
-                        text.trim()
-                    ),
-                    opf_path,
-                );
+                if is_epub3 {
+                    report.push_at(
+                        OPF_053,
+                        Severity::Warning,
+                        format!(
+                            "dc:date value '{}' does not follow recommended syntax",
+                            text.trim()
+                        ),
+                        opf_path,
+                    );
+                } else {
+                    report.push_at(
+                        OPF_054,
+                        Severity::Error,
+                        format!(
+                            "dc:date value '{}' is empty or doesn't conform to ISO 8601",
+                            text.trim()
+                        ),
+                        opf_path,
+                    );
+                }
+            }
+        }
+        // dcterms:modified must be exactly 'CCYY-MM-DDThh:mm:ssZ' (the
+        // message text itself is checked verbatim by a real fixture) - a
+        // plain fixed-width byte-shape check, not the XPath-engine date
+        // regex this was originally deferred as needing (EPUB3-only,
+        // matching where the existing "must be defined" RSC-005 check for
+        // this same property is already scoped).
+        if is_epub3 {
+            if let Some(modified) = md.children().find(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attribute("property") == Some("dcterms:modified")
+            }) {
+                let text: String = modified
+                    .descendants()
+                    .filter(|t| t.is_text())
+                    .filter_map(|t| t.text())
+                    .collect();
+                if !is_valid_dcterms_modified(text.trim()) {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        "dcterms:modified must be of the form 'CCYY-MM-DDThh:mm:ssZ'",
+                        opf_path,
+                    );
+                }
             }
         }
         // OPF-052: a dc:creator/dc:contributor's opf:role (any of the
@@ -1697,6 +1776,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // manifest id, validated once the whole manifest is known (OPF-041).
     let mut fallback_style_map: HashMap<String, String> = HashMap::new();
     let mut nav_present = false;
+    let mut nav_count = 0u32;
     let mut nav_path: Option<String> = None;
     // Data Navigation Document(s) (properties="data-nav"): (resolved path,
     // media-type), for the Region-Based Navigation checks below.
@@ -1885,13 +1965,41 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             ),
                             opf_path,
                         );
-                    } else if !token.contains(':') && !KNOWN_ITEM_PROPERTIES.contains(&token) {
+                    } else if token == "nav" && mt != "application/xhtml+xml" {
                         report.push_at(
-                            OPF_027,
+                            OPF_012,
                             Severity::Error,
-                            format!("unknown manifest item property '{token}'"),
+                            format!("property \"nav\" is not defined for media type '{mt}'"),
                             opf_path,
                         );
+                        report.push_at(
+                            RSC_005,
+                            Severity::Error,
+                            "the nav document must be an XHTML Content Document",
+                            opf_path,
+                        );
+                    } else {
+                        // A genuinely custom (non-reserved) prefix is
+                        // always allowed - but a *reserved*-prefixed
+                        // token (e.g. "rendition:layout-pre-paginated",
+                        // which is only ever a valid <itemref> override,
+                        // never a manifest <item> property) has no known
+                        // valid manifest-item-level term at all, so it's
+                        // just as "unknown" as an unprefixed one.
+                        let unknown = match token.split_once(':') {
+                            Some((prefix, _)) => {
+                                RESERVED_PREFIXES.iter().any(|(n, _)| *n == prefix)
+                            }
+                            None => !KNOWN_ITEM_PROPERTIES.contains(&token),
+                        };
+                        if unknown {
+                            report.push_at(
+                                OPF_027,
+                                Severity::Error,
+                                format!("unknown manifest item property '{token}'"),
+                                opf_path,
+                            );
+                        }
                     }
                 }
             }
@@ -1920,6 +2028,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"))
             {
                 nav_present = true;
+                nav_count += 1;
                 nav_path = Some(resolved.clone());
             }
             if item
@@ -2160,6 +2269,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 opf_path,
             );
         }
+        // The only real link/@properties vocabulary term is "onix"
+        // (confirmed via a real fixture pairing it with a custom-prefixed
+        // token, both valid) - anything else unprefixed is undefined.
+        if let Some(props) = link.attribute("properties") {
+            for token in props.split_whitespace() {
+                if token != "onix" && !token.contains(':') {
+                    report.push_at(
+                        OPF_027,
+                        Severity::Error,
+                        format!("unknown link property '{token}'"),
+                        opf_path,
+                    );
+                }
+            }
+        }
         // "record"/"voicing" links must declare a media-type even when
         // remote - a stricter rule than the general OPF-093 leniency
         // below, confirmed via real fixtures explicitly noting "even when
@@ -2330,8 +2454,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 ),
                 Some(idref) => {
                     if !spine_seen.insert(idref) {
+                        // Same underlying condition, version-scoped ID:
+                        // EPUB2's own dedicated fixture confirms OPF-034,
+                        // but the identically-shaped EPUB3 fixture expects
+                        // RSC-005 instead.
                         report.push_at(
-                            OPF_034,
+                            if is_epub3 { RSC_005 } else { OPF_034 },
                             Severity::Error,
                             format!("spine references manifest item id '{idref}' more than once"),
                             opf_path,
@@ -2528,6 +2656,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             RSC_005,
             Severity::Error,
             "EPUB 3 requires a navigation document (a manifest item with properties=\"nav\")",
+            opf_path,
+        );
+    }
+    if nav_count > 1 {
+        report.push_at(
+            RSC_005,
+            Severity::Error,
+            "only one manifest item may declare the \"nav\" property",
             opf_path,
         );
     }
@@ -4184,6 +4320,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
                 check_prefix_usage(v, &declared_prefixes, doc_path, report);
+            }
+        }
+        // OPF-014: a standalone SVG content document embedding a remote
+        // font (via <font-face-uri>) uses a remote resource just as much
+        // as an XHTML doc referencing one directly - confirmed via a real
+        // fixture where the SVG's own manifest item lacks the
+        // "remote-resources" property.
+        if is_epub3 {
+            let uses_remote_font = d.descendants().any(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "font-face-uri"
+                    && n.attribute(("http://www.w3.org/1999/xlink", "href"))
+                        .or_else(|| n.attribute("href"))
+                        .is_some_and(is_remote_url)
+            });
+            if uses_remote_font {
+                let declared = item_properties
+                    .get(doc_path.as_str())
+                    .cloned()
+                    .unwrap_or_default();
+                if !declared.split_whitespace().any(|t| t == "remote-resources") {
+                    report.push_at(
+                        OPF_014,
+                        Severity::Error,
+                        "content document uses a remote font but doesn't declare the \"remote-resources\" property",
+                        doc_path.clone(),
+                    );
+                }
             }
         }
         crate::svg::check_vocabulary(d.root_element(), doc_path, report);
