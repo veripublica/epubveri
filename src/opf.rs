@@ -80,6 +80,34 @@ pub(crate) fn resolve(base_dir: &str, href: &str) -> String {
     parts.join("/")
 }
 
+/// RSC-026: a local href is path-absolute (starts with "/") or, once its
+/// ".." segments are followed from `base_dir`, would escape above the
+/// container root entirely - both confirmed via dedicated real fixtures.
+/// `resolve()` above is deliberately lenient about this (a `pop()` past
+/// empty is a harmless no-op, so leaking hrefs still resolve to the
+/// "intended" real path) - this is the separate, stricter check that
+/// actually flags the leak.
+pub(crate) fn href_leaks_container_root(base_dir: &str, href: &str) -> bool {
+    if href.starts_with('/') {
+        return true;
+    }
+    let path_part = href.split(['#', '?']).next().unwrap_or(href);
+    let mut depth: i32 = base_dir.split('/').filter(|p| !p.is_empty()).count() as i32;
+    for seg in path_part.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                depth -= 1;
+                if depth < 0 {
+                    return true;
+                }
+            }
+            _ => depth += 1,
+        }
+    }
+    false
+}
+
 /// True for hrefs we should not resolve against the container (remote/special).
 pub(crate) fn is_external(href: &str) -> bool {
     let href = href.trim();
@@ -916,6 +944,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     let is_epub3 = version.starts_with("3.");
     let is_epub2 = version.starts_with("2.");
 
+    // PKG-025 (EPUB 3 only - a real EPUB 2 fixture, "Ignore unknown files
+    // in the META-INF directory", explicitly stays clean with an
+    // unrecognized META-INF file, contradicting EPUB 3's stricter rule):
+    // only a closed set of well-known files may live directly in
+    // META-INF - anything else (a publication resource stored there,
+    // confirmed via a real EPUB 3 fixture) is an error. Checked here
+    // (not in `ocf::open`) since the container is opened before the
+    // package version is even known.
+    const META_INF_RESERVED_NAMES: [&str; 6] = [
+        "container.xml",
+        "encryption.xml",
+        "manifest.xml",
+        "metadata.xml",
+        "rights.xml",
+        "signatures.xml",
+    ];
+    if is_epub3 {
+        for name in &ocf.names {
+            if let Some(rest) = name.strip_prefix("META-INF/") {
+                if !rest.is_empty() && !META_INF_RESERVED_NAMES.contains(&rest) {
+                    report.push_at(
+                        PKG_025,
+                        Severity::Error,
+                        format!("'{name}' is a publication resource stored inside META-INF"),
+                        name.as_str(),
+                    );
+                }
+            }
+        }
+    }
+
     // Schema validation against our own (permissive) package-document RNG.
     // Additive: a structurally non-conformant package is reported as RSC-005.
     if !crate::rng::validate_node(&crate::rng::package_grammar(), pkg) {
@@ -1346,6 +1405,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             };
             let resolved_nfc = nfc(&resolved);
             if !is_external(href) {
+                if href_leaks_container_root(&base_dir, href) {
+                    report.push_at(
+                        RSC_026,
+                        Severity::Error,
+                        format!("manifest item '{id}' href '{href}' is path-absolute or escapes the container root"),
+                        opf_path,
+                    );
+                }
+                if href.contains('?') {
+                    report.push_at(
+                        RSC_033,
+                        Severity::Error,
+                        format!("manifest item '{id}' href '{href}' must not have a query string"),
+                        opf_path,
+                    );
+                }
                 if resolved.contains(' ') {
                     report.push_at(
                         PKG_010,
@@ -1435,6 +1510,36 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     Severity::Error,
                     format!("manifest item '{id}' references a missing resource '{href}'"),
                 );
+                // PKG-009/012: real epubcheck's single-package-document
+                // check mode has no actual container to inspect, so it
+                // validates the declared href's own file-name segments
+                // directly (confirmed via a real fixture pair testing the
+                // identical defect once as a real file name, once as a
+                // bare `.opf`'s manifest href) - only meaningful here when
+                // the resource doesn't actually exist, since an existing
+                // file's real name is already checked in `ocf::open` and
+                // double-reporting the same defect for a normal, fully-
+                // resolvable publication would be wrong.
+                let href_path = href.split(['?', '#']).next().unwrap_or(href);
+                for segment in href_path.split('/').filter(|s| !s.is_empty()) {
+                    let decoded = percent_decode(segment);
+                    if crate::filename::has_forbidden_char(&decoded) {
+                        report.push_at(
+                            PKG_009,
+                            Severity::Error,
+                            format!("manifest item '{id}' href segment '{decoded}' contains a forbidden character"),
+                            opf_path,
+                        );
+                    }
+                    if crate::filename::has_non_ascii(&decoded) {
+                        report.push_at(
+                            PKG_012,
+                            Severity::Info,
+                            format!("manifest item '{id}' href segment '{decoded}' contains non-ASCII characters"),
+                            opf_path,
+                        );
+                    }
+                }
             }
             // An XHTML Content Document can never be remote - it *is* the
             // publication's content, unlike embedded media/fonts, which
@@ -1642,6 +1747,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         }
         if is_external(href) {
             continue;
+        }
+        if href.contains('?') {
+            report.push_at(
+                RSC_033,
+                Severity::Error,
+                format!("package link href '{href}' must not have a query string"),
+                opf_path,
+            );
         }
         let resolved = resolve(&base_dir, href);
         if !name_index.contains_key(&nfc(&resolved)) {
@@ -2874,6 +2987,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
 
         // --- Navigation document checks (NAV-010/011) ---
         if nav_path.as_deref() == Some(path.as_str()) {
+            crate::navdoc::check(&d, &path, &dir, &items, report);
             // NAV-010: external links inside the required toc/page-list/
             // landmarks nav elements aren't allowed (links to remote
             // resources are fine in other, custom nav types).
@@ -2893,7 +3007,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     .filter(|n| n.is_element() && n.tag_name().name() == "a")
                 {
                     if let Some(href) = a.attribute("href") {
-                        if is_external(href) {
+                        // `is_external` also covers fragment-only/data:/
+                        // mailto:/tel: hrefs (correct for "should this be
+                        // resolved as a container path", wrong here - a
+                        // same-document `#toc` anchor is a completely
+                        // normal same-page link, not "external" - a real
+                        // false positive found via a real `nav-landmarks-
+                        // valid` fixture using exactly that shape).
+                        if is_remote_url(href) {
                             report.push_at(
                                 NAV_010,
                                 Severity::Error,
@@ -3005,7 +3126,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             if node.tag_name().name() == "base" {
                 continue;
             }
-            for attr in ["src", "href", "data", "poster", "altimg"] {
+            for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
                 if let Some(v) = node.attribute(attr) {
                     if v.trim_start().starts_with("file:") {
                         report.push_at(
@@ -3043,7 +3164,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                         // fixture (`rdfa-valid.xhtml`) using ordinary
                         // `<a href="http://...">` links with no manifest
                         // declaration at all, which must stay clean.
-                        if tag == "a" && attr == "href" {
+                        if (tag == "a" && attr == "href") || attr == "cite" {
                             remote_link_refs.insert(bare);
                         } else {
                             remote_refs.insert(bare.clone());
@@ -3114,6 +3235,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                             path.clone(),
                         );
                     } else if !is_external(href) {
+                        if href.contains('?') {
+                            report.push_at(
+                                RSC_033,
+                                Severity::Error,
+                                format!("hyperlink href '{href}' must not have a query string"),
+                                path.clone(),
+                            );
+                        }
                         if node.tag_name().name() == "a" {
                             hyperlink_targets.insert(nfc(&resolve(&dir, href)));
                         }
@@ -3395,7 +3524,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             // "in the spine" - confirmed via a real corpus fixture.
             continue;
         }
-        if !spine_order.contains_key(target) && name_index.contains_key(target) {
+        // "In the spine" is only a meaningful expectation for a genuine
+        // Content Document - a hyperlink to e.g. an image (confirmed via a
+        // real corpus fixture, `nav-links-to-non-content-document-type-
+        // error`, which expects only RSC-010 for that link, not this too)
+        // was being wrongly flagged here as well, since this check
+        // previously only looked at container file existence, not type.
+        let is_content_doc = items.values().any(|(p, mt)| {
+            nfc(p) == *target && (mt == "application/xhtml+xml" || mt == "image/svg+xml")
+        });
+        if is_content_doc && !spine_order.contains_key(target) && name_index.contains_key(target) {
             report.push_at(
                 RSC_011,
                 Severity::Error,

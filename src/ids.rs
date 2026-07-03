@@ -13,13 +13,21 @@
 //! verbatim below. Our message *wording* is our own (we do not copy epubcheck's).
 
 // --- Packaging / OCF ---
+pub const PKG_003: &str = "PKG-003"; // the zip file is empty
 pub const PKG_004: &str = "PKG-004"; // corrupted/unreadable ZIP header (not a usable OCF)
+pub const PKG_005: &str = "PKG-005"; // the mimetype entry's ZIP header has a non-empty extra field
 pub const PKG_006: &str = "PKG-006"; // mimetype entry missing or not first in the archive
 pub const PKG_007: &str = "PKG-007"; // mimetype compressed, or contents != application/epub+zip
+pub const PKG_008: &str = "PKG-008"; // the ZIP archive could not be opened at all
+pub const PKG_009: &str = "PKG-009"; // a file name contains a forbidden character
 pub const PKG_010: &str = "PKG-010"; // an href contains unencoded spaces
+pub const PKG_011: &str = "PKG-011"; // a file name ends with a full stop
+pub const PKG_012: &str = "PKG-012"; // a file name contains non-ASCII characters (usage)
 pub const PKG_021: &str = "PKG-021"; // an image resource is corrupt (its bytes don't match any known image format)
 pub const PKG_022: &str = "PKG-022"; // an image resource's file extension doesn't match its actual format
+pub const PKG_025: &str = "PKG-025"; // a publication resource is stored inside META-INF
 pub const PKG_026: &str = "PKG-026"; // font-obfuscated resource isn't a font Core Media Type
+pub const PKG_027: &str = "PKG-027"; // a ZIP entry's file name isn't valid UTF-8
 
 // --- Resources / generic ---
 pub const RSC_001: &str = "RSC-001"; // a referenced file could not be found
@@ -35,6 +43,7 @@ pub const RSC_006: &str = "RSC-006"; // a remote resource is referenced from an 
 pub const RSC_007: &str = "RSC-007"; // a reference points to a resource missing from the publication
 pub const RSC_008: &str = "RSC-008"; // a remote resource is used but not declared in the manifest
 pub const RSC_009: &str = "RSC-009"; // a non-SVG image is referenced with a URL fragment identifier
+pub const RSC_010: &str = "RSC-010"; // a toc nav link targets a resource that isn't a Content Document
 pub const RSC_011: &str = "RSC-011"; // a hyperlinked document isn't listed in the spine
 pub const RSC_012: &str = "RSC-012"; // a content src/href fragment identifier doesn't resolve
 pub const RSC_013: &str = "RSC-013"; // a stylesheet reference has a URL fragment identifier
@@ -51,6 +60,8 @@ pub const RSC_028: &str = "RSC-028"; // the OPF/content document uses a disallow
 pub const RSC_030: &str = "RSC-030"; // a file: URL is used, which is not allowed
 pub const RSC_031: &str = "RSC-031"; // a remote resource uses http instead of https
 pub const RSC_032: &str = "RSC-032"; // a foreign resource is used with no required fallback
+pub const RSC_033: &str = "RSC-033"; // a local reference has a URL query string
+pub const RSC_026: &str = "RSC-026"; // a URL is path-absolute or escapes the container root
 
 // --- OPF package document (dedicated codes, used verbatim) ---
 pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared
@@ -84,6 +95,7 @@ pub const OPF_048: &str = "OPF-048"; // package is missing its required unique-i
 pub const OPF_065: &str = "OPF-065"; // a refines chain forms a cycle
 pub const OPF_070: &str = "OPF-070"; // a collection role used as a URL is not a valid URL
 pub const OPF_074: &str = "OPF-074"; // two manifest items represent the same resource
+pub const OPF_060: &str = "OPF-060"; // two container entry names collide after case-folding/NFC normalization
 pub const OPF_085: &str = "OPF-085"; // a urn:uuid: dc:identifier isn't a valid UUID
 pub const OPF_091: &str = "OPF-091"; // a manifest item href must not have a fragment identifier
 pub const OPF_092: &str = "OPF-092"; // a language tag is empty/whitespace or not well-formed

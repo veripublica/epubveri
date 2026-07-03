@@ -2179,6 +2179,205 @@ With this, `epub3/03-resources.feature` is **fully done**. Remaining
 unscoped families: `epub3/04-ocf` (26 misses), `navigation-document.feature`
 (19), `epub-dictionaries` (17+9).
 
+## Increment: epub3/04-ocf, finished in full (2026-07-03)
+
+Closed out both `epub3/04-ocf/ocf.feature` and `.../filename-checker.feature`
+entirely - all 43 should-error scenarios in `ocf.feature` hit exactly, 0
+misses, 13/13 clean fixtures stay clean. Scoped as 5 clusters.
+
+**Cluster E - ZIP-level error classification (PKG-003/004/005/008/027),
+first since it's foundational.** The pre-existing `ocf::open` treated
+every `ZipArchive::new` failure identically (blanket PKG-004) - real
+epubcheck distinguishes: an **empty file** (PKG-003 + PKG-008, "the zip
+file is empty"); bytes that are actually a recognizable *other* format
+(reused `image::sniff_image_type` to detect a JPEG mis-named `.epub` -
+PKG-004 *and* PKG-008 together, a more specific "corrupted header"
+defect); a generic truncated/malformed archive with no recognizable
+format (PKG-008 alone). Also new: **PKG-027** (a ZIP entry's file name
+isn't valid UTF-8, checked via `name_raw()` bytes directly rather than
+the crate's own lossy-decoded `name()`, which never fails) - fatal,
+aborts all further checking, confirmed via a real fixture using raw
+CP437-encoded bytes for an 'é'. **PKG-005** (the `mimetype` entry's ZIP
+header must carry no extra field, needed so tools can sniff the media
+type at a fixed byte offset without a full ZIP parse) via `extra_data()`.
+
+**Cluster A - file-name conformance, new `src/filename.rs` - the
+biggest cluster.** Three checks assembled from the corpus's own
+`filename-checker.feature` table (forbidden characters, non-ASCII usage,
+trailing full stop) plus **OPF-060** (duplicate names after case-folding/
+normalization). Real, non-obvious findings: (1) OPF-060's real rule,
+reverse-engineered from 4 fixture pairs, is "NFC-normalize, then full-
+case-fold" - canonically-equivalent names (precomposed vs. decomposed
+Á) and case-fold-equivalent names (`CONTENT_001` vs `content_001`; German
+ß vs "ss", needing a hardcoded special case since Rust's `to_lowercase`
+performs simple lowercasing, not full Unicode case *folding*) collide,
+but merely *compatibility*-equivalent names (math double-struck ℍ vs
+plain H) must **not** - confirmed via a dedicated "-valid" fixture. (2) A
+genuine `zip` crate limitation: `ZipArchive` de-duplicates same-named
+entries into one `IndexMap` slot internally (a later central-directory
+record silently overwrites an earlier one), so its own entry list can
+*never* expose a true duplicate-name defect - confirmed via a real
+fixture with 6 central-directory records but `ZipArchive::len()`
+reporting only 5. Worked around with a small hand-rolled raw-bytes
+central-directory scanner (`find_exact_duplicate_entry`, same "narrow
+binary-format parser" style as `image.rs`'s signature sniffing), run on
+the bytes *before* they're moved into the crate's own reader. (3) real
+epubcheck's single-package-document check mode has no actual container
+to inspect, so PKG-009/012 also validate a manifest item's declared
+`href` string directly when the resource doesn't actually exist (gated on
+that, to avoid double-reporting the same defect for a normal, fully-
+resolvable publication where the real file name is already checked).
+
+**Two real false positives found via the corpus, not guessed:** a
+Unicode emoji tag sequence (a real flag emoji, using the same "Tags"
+codepoint block E0000-E007F that also contains the deprecated LANGUAGE
+TAG character) was being rejected entirely - the real rule (confirmed by
+re-reading the filename-checker table closely) forbids only the single
+literal `U+E0001` LANGUAGE TAG codepoint, not the whole block; the tag
+*letters* and the reinstated CANCEL TAG are fine. And the new manifest-
+href PKG-009 check initially flagged a URL's own `?query` delimiter as a
+"forbidden character" (`?` is in the forbidden set) - fixed by stripping
+query/fragment before extracting path segments, same convention already
+used elsewhere for href handling.
+
+**Cluster B - PKG-025 (publication resource in META-INF).** Only a closed
+set of reserved file names may live directly in META-INF. **A real,
+version-scoped false positive found via the corpus, not guessed:** a
+dedicated EPUB **2** fixture, "Ignore unknown files in the META-INF
+directory," explicitly expects *no* error for the exact same shape EPUB 3
+forbids - so this check had to move out of `ocf::open` (which runs before
+the OPF, and thus the package version, is even known) into `opf.rs`,
+gated on `is_epub3`.
+
+**Cluster C - URL checks (RSC-026, RSC-033) + `cite` attribute
+(RSC-007).** **RSC-026**: a manifest item href that's path-absolute
+(`/...`) or whose `..` segments, honestly walked from `base_dir`, escape
+above the container root entirely - `resolve()`'s own path-joining is
+deliberately lenient here (a `pop()` past empty is a harmless no-op, so a
+leaking href still resolves to the "intended" real path), so a separate,
+stricter `href_leaks_container_root` does the actual flagging. **RSC-033**:
+a query string (`?...`) on any *local* reference (manifest item href,
+package `<link>` href, or a content-doc hyperlink) - remote references are
+exempt (query strings are meaningful there). **`cite`** (on `<blockquote>`/
+`<q>`/`<ins>`/`<del>`) just needed adding to the existing generic attr-scan
+list for the RSC-007 missing-resource check - but needed the same
+"navigation, not an embedded dependency" carve-out `<a href>` already has
+(a real false positive surfaced immediately: a remote `cite` was
+wrongly treated as an undeclared embedded resource, OPF-014/RSC-008).
+
+**Cluster D - META-INF XML content-model checks.** `<container>`'s only
+real children are `<rootfiles>` and `<links>` (the Rendition Mapping
+Document reference) - anything else is RSC-005. `encryption.xml`'s root
+element must be named "encryption" (else RSC-005); every `Id` attribute
+value must be unique document-wide (reported once *per element* sharing a
+duplicate, confirmed via a real 2-element fixture expecting exactly 2
+findings, not 1); the IDPF compression extension's `<Compression
+Method="0|8" OriginalLength="<non-negative integer>">` attributes are
+validated. `signatures.xml` (never read at all before this) gained the
+same "root element must be named 'signatures'" check, wired into
+`lib.rs::validate_bytes` alongside `check_encryption`.
+
+**Honest numbers** (`epub3/04-ocf`: all 43 should-error scenarios across
+both feature files hit exactly, 0 misses; overall corpus numbers below):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 71.5% (424 hits) | **75.9% (450 hits)** |
+| RSC family exact hits | 271/377 | **282/377** |
+| PKG family exact hits | 21/36 | **34/36** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub3/04-ocf` is **fully done**. Remaining unscoped families:
+`navigation-document.feature` (19 misses), `epub-dictionaries` (17+9),
+`epub2` package-document rules (19), `D-vocabularies` siblings (17),
+`epub-edupub` gaps (13).
+
+## Increment: epub3/07-navigation-document, finished in full (2026-07-03)
+
+Closed out `navigation-document.feature` entirely - all 23 should-error
+scenarios hit exactly, 0 misses. New `src/navdoc.rs`: a real content model
+for the EPUB 3 `<nav>` element, the first genuinely new per-element
+content-model engine since the XHTML/SVG/MathML work.
+
+**A real harness gap found first, before any product code:** the large
+majority of this feature file's scenarios use a step this project had
+never seen before, `Given EPUBCheck configured to check a navigation
+document` - epubcheck's own single-file "check this as a nav doc"
+mode. `scripts/corpus.py`'s existing `wrap_single_doc` wraps a bare
+fixture as an *ordinary* content document behind a **separate** synthetic
+nav, which is exactly backwards for these scenarios (the fixture itself
+*is* meant to be the nav). Added `wrap_nav_doc` (declares the target with
+`properties="nav"`, plus one dummy ordinary spine document so the book
+isn't empty) and a new `as_nav` per-scenario flag parsed from that `Given`
+line, routed in `resolve()`. Without this fix essentially the whole
+feature file would have stayed unmeasurable, the same class of gap as
+`wrap_opf_file`/`wrap_smil_file` before it.
+
+**The real content model, reverse-engineered from ~20 fixture pairs, not
+guessed:** a `<nav>` with **no** `epub:type` at all is completely
+unrestricted (a real fixture uses arbitrary markup in one). Any `<nav>`
+that **does** declare a type restricts its own children to `[heading]?
+<ol>` - `toc`/`page-list`/`landmarks` don't require the heading; any
+*other* named type does (a same-shaped "lot" nav fixture pair, valid with
+a heading and invalid without one, pinned this down - it would have been
+easy to assume all named types behave alike). An `<ol>` needs >=1 `<li>`;
+each `<li>`'s first element child must be `<a>` or `<span>` (the "label" -
+anything else, e.g. a bare nested `<ol>`, is "not allowed yet"); a `<span>`
+label has no link of its own, so a nested `<ol>` sub-navigation is
+*required* right after it, while an `<a>` label may optionally have one.
+Both `<a>` and `<span>` labels need real content - non-whitespace text
+*or* an `<img>` descendant (confirmed via a fixture using two images with
+no text at all, one even with an empty `alt`, still valid). `page-list`/
+`landmarks` specifically forbid nested sublists (RSC-017 warning, not a
+content-model error - a fixture with otherwise-correct label-then-ol
+ordering still gets flagged, meaning this is a policy restriction on top
+of the base model, not part of it). Document-level: at least one `toc`
+nav is required; more than one `page-list` or `landmarks` nav is an error
+(reported once, not once per extra). `hidden` (checked on any element,
+not just `nav`) is an HTML5 boolean attribute - only `""` or the literal
+`"hidden"` are valid.
+
+**New RSC-010**: a `toc` nav link must target a real Content Document
+(xhtml/svg) - a real fixture links to a plain image instead. **New
+landmarks-specific rules**: every entry needs its own `epub:type`
+(reported once per missing occurrence); no two entries may share both an
+`epub:type` token *and* their target resource, including the fragment
+(reported once per offending entry - confirmed via a real 2-entry-
+collision fixture expecting exactly 2 findings) - same type with a
+*different* target, or different type with the same target, are each
+independently valid.
+
+**Two real, general (not nav-specific) bugs found via the corpus, not
+guessed - both were latent in code from earlier increments, just never
+exercised by a fixture that hit them before:** (1) the existing NAV-010
+"external link" check used `is_external()` (which also treats fragment-
+only/`data:`/`mailto:`/`tel:` hrefs as "external", correct for container-
+path resolution but wrong here) instead of the narrower `is_remote_url()`
+- a same-document `<a href="#toc">` inside a real, valid `landmarks` nav
+was being wrongly flagged as an "external link". Fixed by switching that
+one check to `is_remote_url`. (2) the RSC-011 "hyperlinked but not in
+spine" check only verified the target *existed* in the container, not
+that it was actually a Content Document - a hyperlink to a
+plain image (the same `nav-links-to-non-content-document-type-error`
+fixture, which expects *only* RSC-010) was also wrongly getting RSC-011,
+since "should be in the spine" was never a meaningful expectation for a
+non-content resource in the first place. Fixed by gating that check on
+the target's manifest media-type being xhtml/svg.
+
+**Honest numbers** (`navigation-document.feature`: all 23 should-error
+scenarios hit exactly, 0 misses; overall corpus numbers below):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 75.9% (450 hits) | **79.1% (469 hits)** |
+| RSC family exact hits | 282/377 | **301/377** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub3/07-navigation-document.feature` is **fully done**.
+Remaining unscoped families: `epub-dictionaries` (17+9 misses), `epub2`
+package-document rules (19), `D-vocabularies` siblings (17), `epub-edupub`
+gaps (13), `epub3/05-package-document` (11, regrew since "all 76 done").
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

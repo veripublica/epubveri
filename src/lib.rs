@@ -9,12 +9,14 @@
 pub mod cmt;
 pub mod css;
 pub mod edupub;
+pub mod filename;
 pub mod foreign;
 pub mod htm;
 pub mod ids;
 pub mod image;
 pub mod layout;
 pub mod mathml;
+pub mod navdoc;
 pub mod ncx;
 pub mod ocf;
 pub mod opf;
@@ -40,6 +42,7 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
         None => return report,
     };
     ocf::check_encryption(&mut container, &mut report);
+    ocf::check_signatures(&mut container, &mut report);
     let opf_paths = ocf::find_rootfiles(&mut container, &mut report);
     // Usually a single rootfile; a multi-rendition package (e.g. EDUPUB
     // with a reflowable + fixed-layout rendition) legitimately declares

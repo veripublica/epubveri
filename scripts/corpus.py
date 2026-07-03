@@ -87,12 +87,15 @@ def parse_features():
                 # corrupting scoring for every scenario after the first.
                 if line.startswith("Scenario") or line.startswith("Example:"):
                     cur = {"file": path, "base": base, "name": None,
-                           "errs": set(), "warns": set(), "clean": False}
+                           "errs": set(), "warns": set(), "clean": False,
+                           "as_nav": False}
                     scenarios.append(cur)
                     table_mode = None
                     continue
                 if cur is None:
                     continue
+                if "EPUBCheck configured to check a navigation document" in line:
+                    cur["as_nav"] = True
                 cm = CHECK_RE.search(line)
                 if cm:
                     cur["name"] = cm.group(1)
@@ -168,6 +171,76 @@ EXT_MEDIA_TYPE = {
 def guess_media_type(name):
     _, ext = os.path.splitext(name)
     return EXT_MEDIA_TYPE.get(ext.lower(), "application/octet-stream")
+
+
+def wrap_nav_doc(target_full, target_name, version="3.0"):
+    """epubcheck has a dedicated "check this as a navigation document"
+    single-file mode ("Given EPUBCheck configured to check a navigation
+    document"), used throughout navigation-document.feature. Unlike
+    `wrap_single_doc` (which wraps the target as an ordinary content
+    document behind a *separate* synthetic nav), this wraps the target
+    itself as the book's real nav doc (`properties="nav"`), alongside one
+    dummy ordinary content document so the spine isn't empty. Directory
+    siblings are still included (demoted to inert media types, mirroring
+    `wrap_single_doc`) so the target's own relative references resolve."""
+    with open(target_full, "rb") as f:
+        nav_content = f.read()
+    src_dir = os.path.dirname(target_full)
+    siblings = sorted(
+        fn for fn in os.listdir(src_dir) if os.path.isfile(os.path.join(src_dir, fn))
+    )
+    container_xml = (
+        '<?xml version="1.0"?>\n'
+        '<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">\n'
+        '  <rootfiles><rootfile full-path="OEBPS/content.opf" '
+        'media-type="application/oebps-package+xml"/></rootfiles>\n'
+        '</container>\n'
+    )
+    content_xhtml = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<html xmlns="http://www.w3.org/1999/xhtml">\n'
+        '<head><title>t</title></head><body><p>t</p></body>\n'
+        '</html>\n'
+    )
+    manifest_items = [
+        f'<item id="_navtarget" href="{target_name}" media-type="application/xhtml+xml" properties="nav"/>',
+        '<item id="_content" href="_content.xhtml" media-type="application/xhtml+xml"/>',
+    ]
+    for i, fn in enumerate(siblings):
+        if fn == target_name:
+            continue
+        mt = guess_media_type(fn)
+        if mt in ("application/xhtml+xml", "image/svg+xml"):
+            mt = "application/octet-stream"
+        manifest_items.append(f'<item id="f{i}" href="{fn}" media-type="{mt}"/>')
+    opf = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        f'<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">\n'
+        '  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n'
+        '    <dc:identifier id="id">corpus-wrap</dc:identifier>\n'
+        '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
+        '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
+        '  </metadata>\n'
+        '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
+        '  <spine><itemref idref="_content"/></spine>\n'
+        '</package>\n'
+    )
+    fd, tmp = tempfile.mkstemp(suffix=".epub")
+    os.close(fd)
+    with zipfile.ZipFile(tmp, "w") as z:
+        zi = zipfile.ZipInfo("mimetype")
+        zi.compress_type = zipfile.ZIP_STORED
+        z.writestr(zi, "application/epub+zip")
+        z.writestr("META-INF/container.xml", container_xml)
+        z.writestr("OEBPS/content.opf", opf)
+        z.writestr("OEBPS/_content.xhtml", content_xhtml)
+        z.writestr(f"OEBPS/{target_name}", nav_content)
+        for fn in siblings:
+            if fn == target_name:
+                continue
+            with open(os.path.join(src_dir, fn), "rb") as fh:
+                z.writestr(f"OEBPS/{fn}", fh.read())
+    return tmp
 
 
 def wrap_single_doc(target_full, target_name, version="3.0"):
@@ -410,6 +483,8 @@ def resolve(s):
         return full + ".epub", False, None, False
     if os.path.isfile(full) and name.endswith((".xhtml", ".html", ".htm")):
         version = "2.0" if "/epub2/" in (s["file"] or "") else "3.0"
+        if s.get("as_nav"):
+            return wrap_nav_doc(full, name, version), True, None, True
         return wrap_single_doc(full, name, version), True, None, True
     if os.path.isfile(full) and name.endswith(".smil"):
         return wrap_smil_file(full, name), True, None, True
