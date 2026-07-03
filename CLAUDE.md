@@ -2659,6 +2659,116 @@ With this, `epub-dictionaries` is **effectively done**. Remaining
 unscoped families: `D-vocabularies` siblings (17 misses),
 `epub-edupub` gaps (13), `epub3/05-package-document` (11, regrew).
 
+## Increment: finish `epub3/D-vocabularies`, all three remaining feature files (2026-07-03)
+
+Closed out the rest of the `D-vocabularies` family - `vocabularies.feature`
+(12 misses), `metadata-link-vocab.feature` (4), and
+`package-rendering-vocab.feature` (1) - all 49 should-error scenarios
+across all three files hit exactly, 27/27 should-clean fixtures stay
+clean, 0 new false positives. `vocabularies.feature` is essentially a
+full "vocabulary association" mini-engine (the `prefix`/`epub:prefix`
+attribute grammar, reserved-prefix rules, and undeclared-prefix usage
+checking) that had never existed before beyond the single, narrow
+"reserved prefix redeclared to a different URI" check from an earlier
+increment.
+
+**A load-bearing scoring discovery, made before writing any product
+code:** real epubcheck's feature file labels several distinct
+sub-conditions `OPF-004c`/`OPF-007a`/`OPF-007b`/`OPF-007c` - but tracing
+`scripts/corpus.py`'s own `ID_RE` regex (`\b([A-Z]{2,4}-\d{2,4})[a-z]?\b`)
+shows the trailing lowercase letter is matched but **not captured** by
+the group, so a scenario expecting "OPF-007b" is actually scored against
+plain **OPF-007** - the exact same Gherkin-sub-case-labeling convention
+already established for `HTM-060a` two increments ago, not a set of real
+distinct message IDs. Confirmed empirically (`ID_RE.findall(...)` on the
+literal feature-file line) before writing any Rust, avoiding an entire
+wasted set of `OPF_007A`/`OPF_007B`/`OPF_007C`/`OPF_004C` constants that
+would never have matched.
+
+**The `prefix` attribute grammar** (`opf::parse_prefix_value`): a
+whitespace-separated list of `name:` `URI` pairs, parsed leniently to
+tolerate two real syntax-error shapes a corpus fixture exercises in one
+value (`"foaf http://... dbp : http://..."` - `foaf` has no colon at
+all, `dbp` has its colon separated by whitespace) - each increments an
+**OPF-004** count (2, matching the fixture) while still best-effort
+recording the pair, so a downstream "is this prefix declared" check
+doesn't cascade into an unrelated second finding for a name that's
+present, just malformed.
+
+**`check_prefix_declaration`** (replaces the old, narrow
+`check_reserved_prefixes`, returns the declared name→URI map for the
+caller's own usage-checking): four conditions, all sharing the single
+**OPF-007** message ID per the scoring discovery above - the reserved
+prefix `_` must never be declared; a prefix must not be mapped to one of
+the **4 default-vocabulary URIs** (`.../package/{meta,link,item,itemref}/#`
+- the rule is about the *URI* side, confirmed since the one real fixture
+happens to also reuse those same 4 words as prefix *names*, but the spec
+text is explicit it's the URL being reused that's disallowed); a prefix
+must not be mapped to the Dublin Core elements namespace; and the
+pre-existing "reserved prefix redeclared to a different URI" warning.
+
+**`check_prefix_usage`** (OPF-028): for every `prefix:term` token found
+in a `property`/`properties`/`epub:type` attribute value, the prefix must
+be either one of the 10 fixed reserved prefixes (usable without
+declaring) or present in the document's own declared map - checked
+uniformly across package metadata/manifest/spine (`property`/
+`properties`), XHTML and standalone-SVG content documents (`epub:type`),
+and - genuinely new territory - **Media Overlays (SMIL) documents**,
+which had no prefix-declaration handling of any kind before this
+increment (`epub:type` custom-prefix tokens were previously waved through
+by an unconditional "contains ':' is exempt" leniency, never actually
+checking whether the prefix was declared).
+
+**`check_prefix_placement`** (RSC-005): a `prefix`/`epub:prefix`
+attribute is only valid on the document's own root element - confirmed
+via two real fixtures (an XHTML `<head>`, and an embedded `<svg>` inside
+an XHTML body) that both expect the exact same message,
+`attribute "epub:prefix" not allowed here`. A **SMIL-specific
+companion finding**, also new: a *bare* (non-namespaced) `prefix`
+attribute on the `<smil>` root is a structural violation there
+(`RSC-005`, "attribute \"prefix\" not allowed here" - note the different
+message text, since it's the un-namespaced attribute name, not
+`epub:prefix`) - SMIL has no permissive RelaxNG-style attribute
+catch-all the way XHTML does, so this needed a small hand-coded check
+rather than a schema change.
+
+**metadata-link-vocab.feature (4 misses), extending the existing
+metadata-`<link>` cross-referencing loop:** a `rel="alternate"` link must
+not be combined with any other `rel` keyword (new **OPF-089**); `rel`
+containing `record` or `voicing` must declare a `media-type` **even when
+the link is remote** (new **OPF-094**) - a stricter carve-out from the
+existing OPF-093 check, which deliberately exempts remote links in
+general; and a `voicing` link's declared media-type must actually be an
+audio type (new **OPF-095**).
+
+**package-rendering-vocab.feature + meta-properties-vocab.feature (2
+misses), both simple `meta[@property]` name checks:** a `rendition:`-
+prefixed property outside the 5 known ones (`layout`/`orientation`/
+`spread`/`flow`/`viewport`) is an unknown property (reused the existing
+**OPF-027**, "unknown property," rather than inventing a new code for
+what's the same underlying concept as the manifest-item-properties
+version); the deprecated `meta-auth` property is a plain presence check
+(**RSC-017** warning).
+
+**Honest numbers** (all 49 should-error scenarios across `vocabularies`/
+`metadata-link-vocab`/`package-rendering-vocab` hit exactly; 27/27
+should-clean fixtures stay clean; the 1 remaining "skip" -
+`prefix-attribute-valid.svg` - is the already-known, harness-only
+`wrap_svg_file` gap noted in an earlier increment, not a real miss):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 88.5% (525 hits) | **91.7% (544 hits)** |
+| RSC family exact hits | 330/377 | **334/377** |
+| OPF family exact hits | 109/146 | **125/146** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub3/D-vocabularies` is **fully done** (aside from the named
+`wrap_svg_file` harness gap, orthogonal to this family). Remaining
+unscoped families: `epub-edupub` gaps (13), `epub3/05-package-document`
+(10, regrew), `epub-indexes` (12), `epub-previews` (7), a handful of
+small niche extension profiles (~6 combined).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

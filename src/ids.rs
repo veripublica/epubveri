@@ -196,3 +196,16 @@ pub const OPF_081: &str = "OPF-081"; // a dictionary collection link target isn'
 pub const OPF_082: &str = "OPF-082"; // a dictionary collection contains more than one Search Key Map Document
 pub const OPF_083: &str = "OPF-083"; // a dictionary collection contains no Search Key Map Document
 pub const OPF_084: &str = "OPF-084"; // a dictionary collection link targets neither a Search Key Map nor an XHTML doc
+
+// --- D-vocabularies: prefix attribute / vocabulary association ---
+// Real epubcheck's feature-file scenarios label several distinct
+// sub-conditions "OPF-004c"/"OPF-007a"/"OPF-007b"/"OPF-007c" - but (like
+// the earlier "HTM-060a" case) these are Gherkin-authoring sub-case
+// labels, not real distinct message IDs: `scripts/corpus.py`'s own
+// `ID_RE` strips the trailing lowercase letter when parsing expectations,
+// so the real, scored ID is plain OPF-004/OPF-007 in every case.
+pub const OPF_004: &str = "OPF-004"; // the prefix attribute value has a syntax error
+pub const OPF_028: &str = "OPF-028"; // an undeclared (and non-reserved) prefix is used
+pub const OPF_089: &str = "OPF-089"; // an "alternate" link is combined with another rel keyword
+pub const OPF_094: &str = "OPF-094"; // a "record"/"voicing" link is missing a media-type
+pub const OPF_095: &str = "OPF-095"; // a "voicing" link's media-type isn't an audio type

@@ -540,27 +540,172 @@ fn check_meta_property_scheme_shape(
     }
 }
 
-/// OPF-007: a `prefix` (or `epub:prefix`) attribute redeclares one of the
-/// reserved default-vocabulary prefixes above to a *different* URI. One
-/// warning per occurrence (the corpus counts "once for each reserved
-/// prefix", not deduplicated).
-fn check_reserved_prefixes(prefix_attr: &str, path: &str, report: &mut Report) {
-    let tokens: Vec<&str> = prefix_attr.split_whitespace().collect();
+/// The 4 default-vocabulary URIs - package `meta`/`link`/`item`/`itemref`
+/// attribute contexts each have their own unprefixed "default" vocabulary
+/// - explicitly mapping any prefix to one of these is forbidden
+/// (OPF-007, "b" sub-case), confirmed via a real fixture (which happens
+/// to reuse the names "meta"/"link"/"item"/"itemref" as its prefix names
+/// too, but the rule text is about the URI side, not the name).
+const DEFAULT_VOCAB_URIS: &[&str] = &[
+    "http://idpf.org/epub/vocab/package/meta/#",
+    "http://idpf.org/epub/vocab/package/link/#",
+    "http://idpf.org/epub/vocab/package/item/#",
+    "http://idpf.org/epub/vocab/package/itemref/#",
+];
+
+const DC_ELEMENTS_NS: &str = "http://purl.org/dc/elements/1.1/";
+
+/// Parses a `prefix`/`epub:prefix` attribute value (a whitespace-
+/// separated list of `name:` `URI` pairs) leniently, tolerating two real
+/// syntax-error shapes a corpus fixture exercises (a name with no colon
+/// at all; a colon separated from its name by whitespace) - each
+/// increments the OPF-004 count but still best-effort records the pair
+/// (rather than dropping it), so a later "is this prefix declared" check
+/// doesn't cascade into a spurious second finding for a name that IS
+/// present, just syntactically malformed.
+fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize) {
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    let mut pairs = HashMap::new();
+    let mut errors = 0;
     let mut i = 0;
-    while i + 1 < tokens.len() {
-        let name = tokens[i].trim_end_matches(':');
-        let uri = tokens[i + 1];
-        if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| *n == name) {
-            if uri != *default_uri {
+    while i < tokens.len() {
+        let tok = tokens[i];
+        if let Some(name) = tok.strip_suffix(':') {
+            if !name.is_empty() && i + 1 < tokens.len() {
+                pairs.insert(name.to_string(), tokens[i + 1].to_string());
+                i += 2;
+            } else {
+                errors += 1;
+                i += 1;
+            }
+        } else if i + 1 < tokens.len() && tokens[i + 1] == ":" {
+            errors += 1;
+            if i + 2 < tokens.len() {
+                pairs.insert(tok.to_string(), tokens[i + 2].to_string());
+                i += 3;
+            } else {
+                i += 2;
+            }
+        } else if i + 1 < tokens.len() {
+            errors += 1;
+            pairs.insert(tok.to_string(), tokens[i + 1].to_string());
+            i += 2;
+        } else {
+            errors += 1;
+            i += 1;
+        }
+    }
+    (pairs, errors)
+}
+
+/// Validates a `prefix`/`epub:prefix` attribute's declared value: syntax
+/// errors (OPF-004), the reserved prefix `_` (OPF-007), a prefix mapped
+/// to one of the 4 default-vocabulary URIs (OPF-007), a prefix mapped to
+/// the Dublin Core elements namespace (OPF-007), and a reserved prefix
+/// redeclared to a *different* URI than its own default (OPF-007,
+/// pre-existing check) - all four conditions share the single OPF-007
+/// message ID (confirmed: `scripts/corpus.py`'s own ID-matching strips
+/// the "a"/"b"/"c" Gherkin sub-case suffixes real epubcheck's feature
+/// file uses to label them). Returns the declared name->URI map for the
+/// caller's own OPF-028 (undeclared-prefix-usage) checking.
+fn check_prefix_declaration(
+    prefix_attr: &str,
+    path: &str,
+    report: &mut Report,
+) -> HashMap<String, String> {
+    let (pairs, syntax_errors) = parse_prefix_value(prefix_attr);
+    for _ in 0..syntax_errors {
+        report.push_at(
+            OPF_004,
+            Severity::Error,
+            "the \"prefix\" attribute value has a syntax error",
+            path,
+        );
+    }
+    for (name, uri) in &pairs {
+        if name == "_" {
+            report.push_at(
+                OPF_007,
+                Severity::Error,
+                "the prefix \"_\" must not be declared",
+                path,
+            );
+        }
+        if DEFAULT_VOCAB_URIS.contains(&uri.as_str()) {
+            report.push_at(
+                OPF_007,
+                Severity::Error,
+                format!("prefix '{name}' must not be assigned to a default-vocabulary URI"),
+                path,
+            );
+        }
+        if uri == DC_ELEMENTS_NS {
+            report.push_at(
+                OPF_007,
+                Severity::Error,
+                format!("prefix '{name}' must not be mapped to the Dublin Core elements namespace"),
+                path,
+            );
+        }
+        if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| n == name) {
+            if uri != default_uri {
                 report.push_at(
                     OPF_007,
                     Severity::Warning,
                     format!("the '{name}' prefix is reserved and must not be redeclared"),
-                    path.to_string(),
+                    path,
                 );
             }
         }
-        i += 2;
+    }
+    pairs
+}
+
+/// OPF-028: a `prefix:term` token (from an `epub:type`/`property`/
+/// `properties` attribute value) whose prefix is neither one of the fixed
+/// reserved prefixes (always usable undeclared) nor present in `declared`
+/// (this document's own parsed `prefix`/`epub:prefix` attribute).
+fn check_prefix_usage(
+    text: &str,
+    declared: &HashMap<String, String>,
+    path: &str,
+    report: &mut Report,
+) {
+    for tok in text.split_whitespace() {
+        let Some((prefix, _)) = tok.split_once(':') else {
+            continue;
+        };
+        if prefix.is_empty() || RESERVED_PREFIXES.iter().any(|(n, _)| *n == prefix) {
+            continue;
+        }
+        if declared.contains_key(prefix) {
+            continue;
+        }
+        report.push_at(
+            OPF_028,
+            Severity::Error,
+            format!("undeclared prefix '{prefix}' used in '{tok}'"),
+            path,
+        );
+    }
+}
+
+/// RSC-005: a `prefix`/`epub:prefix` attribute is only allowed on the
+/// document's own root element - confirmed via real fixtures flagging it
+/// on an XHTML `<head>` and on an embedded `<svg>` element.
+fn check_prefix_placement(doc: &roxmltree::Document, path: &str, report: &mut Report) {
+    let root = doc.root_element();
+    for n in doc.descendants().filter(|n| n.is_element() && *n != root) {
+        if n.attribute(("http://www.idpf.org/2007/ops", "prefix"))
+            .is_some()
+        {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "attribute \"epub:prefix\" not allowed here",
+                path,
+            );
+        }
     }
 }
 
@@ -1058,8 +1203,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         );
         return;
     }
-    if let Some(prefix) = pkg.attribute("prefix") {
-        check_reserved_prefixes(prefix, opf_path, report);
+    let declared_prefixes = pkg
+        .attribute("prefix")
+        .map(|p| check_prefix_declaration(p, opf_path, report))
+        .unwrap_or_default();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(v) = n.attribute("property") {
+            check_prefix_usage(v, &declared_prefixes, opf_path, report);
+        }
+        if let Some(v) = n.attribute("properties") {
+            check_prefix_usage(v, &declared_prefixes, opf_path, report);
+        }
     }
     check_lang_tags(&doc, opf_path, report);
     check_refines_cycles(&doc, opf_path, report);
@@ -1211,6 +1365,42 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 opf_path,
             );
         }
+        // rendition:X custom/unknown properties (OPF-027) and the
+        // deprecated meta-auth property (RSC-017), both simple
+        // presence/name checks over every meta[@property] element.
+        const KNOWN_RENDITION_PROPERTIES: &[&str] = &[
+            "rendition:layout",
+            "rendition:orientation",
+            "rendition:spread",
+            "rendition:flow",
+            "rendition:viewport",
+        ];
+        for n in md
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "meta")
+        {
+            if let Some(property) = n.attribute("property") {
+                if property.starts_with("rendition:")
+                    && !KNOWN_RENDITION_PROPERTIES.contains(&property)
+                {
+                    report.push_at(
+                        OPF_027,
+                        Severity::Error,
+                        format!("unknown rendition property '{property}'"),
+                        opf_path,
+                    );
+                }
+                if property == "meta-auth" {
+                    report.push_at(
+                        RSC_017,
+                        Severity::Warning,
+                        "the meta-auth property is deprecated",
+                        opf_path,
+                    );
+                }
+            }
+        }
+
         media_active_class = meta_property_text("media:active-class");
         media_playback_active_class = meta_property_text("media:playback-active-class");
 
@@ -1957,6 +2147,38 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         .flat_map(|md| md.children())
         .filter(|n| n.is_element() && n.tag_name().name() == "link")
     {
+        let rel_tokens: Vec<&str> = link
+            .attribute("rel")
+            .unwrap_or("")
+            .split_whitespace()
+            .collect();
+        if rel_tokens.contains(&"alternate") && rel_tokens.len() > 1 {
+            report.push_at(
+                OPF_089,
+                Severity::Error,
+                "the \"alternate\" keyword must not be combined with other link relationships",
+                opf_path,
+            );
+        }
+        // "record"/"voicing" links must declare a media-type even when
+        // remote - a stricter rule than the general OPF-093 leniency
+        // below, confirmed via real fixtures explicitly noting "even when
+        // remote".
+        let media_type_always_required =
+            rel_tokens.iter().any(|t| *t == "record" || *t == "voicing");
+        let media_type = link.attribute("media-type");
+        if rel_tokens.contains(&"voicing") {
+            if let Some(mt) = media_type {
+                if !mt.starts_with("audio/") {
+                    report.push_at(
+                        OPF_095,
+                        Severity::Error,
+                        format!("a \"voicing\" link's media-type '{mt}' must be an audio type"),
+                        opf_path,
+                    );
+                }
+            }
+        }
         let Some(href) = link.attribute("href") else {
             continue;
         };
@@ -1991,6 +2213,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             continue;
         }
         if is_external(href) {
+            if media_type_always_required && media_type.is_none() {
+                report.push_at(
+                    OPF_094,
+                    Severity::Error,
+                    "a \"record\"/\"voicing\" link must declare a media-type even when remote",
+                    opf_path,
+                );
+            }
             continue;
         }
         if href.contains('?') {
@@ -2010,9 +2240,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 opf_path,
             );
         }
-        if link.attribute("media-type").is_none() {
+        if media_type.is_none() {
             report.push_at(
-                OPF_093,
+                if media_type_always_required {
+                    OPF_094
+                } else {
+                    OPF_093
+                },
                 Severity::Error,
                 "a link to a local resource must declare a media-type",
                 opf_path,
@@ -2393,11 +2627,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             dictionary_marked_docs.insert(nfc(&path));
         }
 
-        if let Some(prefix) = d
+        let declared_prefixes = d
             .root_element()
             .attribute(("http://www.idpf.org/2007/ops", "prefix"))
-        {
-            check_reserved_prefixes(prefix, &path, report);
+            .map(|p| check_prefix_declaration(p, &path, report))
+            .unwrap_or_default();
+        check_prefix_placement(&d, &path, report);
+        for n in d.descendants().filter(|n| n.is_element()) {
+            if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
+                check_prefix_usage(v, &declared_prefixes, &path, report);
+            }
         }
 
         // EDUPUB: microdata attributes aren't allowed in an edupub content
@@ -3936,6 +4175,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         let Some(b) = ocf.read(&orig) else { continue };
         let text = String::from_utf8_lossy(&b).into_owned();
         let Ok(d) = parse_xml(&text) else { continue };
+        let declared_prefixes = d
+            .root_element()
+            .attribute(("http://www.idpf.org/2007/ops", "prefix"))
+            .map(|p| check_prefix_declaration(p, doc_path, report))
+            .unwrap_or_default();
+        check_prefix_placement(&d, doc_path, report);
+        for n in d.descendants().filter(|n| n.is_element()) {
+            if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
+                check_prefix_usage(v, &declared_prefixes, doc_path, report);
+            }
+        }
         crate::svg::check_vocabulary(d.root_element(), doc_path, report);
         for fo in d.descendants().filter(|n| {
             n.is_element()
@@ -4179,6 +4429,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             &media_type_index,
             report,
         );
+
+        // Vocabulary association (prefix/epub:type), same rules as XHTML/
+        // SVG: a bare (non-namespaced) `prefix` attribute isn't part of
+        // SMIL's own content model at all (RSC-005, confirmed via a real
+        // fixture - only the namespaced `epub:prefix` is recognized).
+        if let Ok(smil_doc) = parse_xml(&smil_text) {
+            let smil_root = smil_doc.root_element();
+            if smil_root.attribute("prefix").is_some() {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "attribute \"prefix\" not allowed here",
+                    path.as_str(),
+                );
+            }
+            let declared_prefixes = smil_root
+                .attribute(("http://www.idpf.org/2007/ops", "prefix"))
+                .map(|p| check_prefix_declaration(p, &path, report))
+                .unwrap_or_default();
+            check_prefix_placement(&smil_doc, &path, report);
+            for n in smil_doc.descendants().filter(|n| n.is_element()) {
+                if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
+                    check_prefix_usage(v, &declared_prefixes, &path, report);
+                }
+            }
+        }
 
         // RSC-012: epub:textref fragments must resolve to a real id in
         // their target document - same shape as the NCX <content src>
