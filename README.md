@@ -138,14 +138,7 @@ to be valid or to trip exactly one specific rule. As of this writing:
   would report.
 - **98.9%** of the test suite's "this is perfectly valid" cases are
   correctly left alone (no false alarms) — the remaining handful are
-  understood, narrow, and documented (see `CLAUDE.md` if you want the
-  full history).
-
-These numbers, and the reasoning behind every decision made along the
-way, are tracked in obsessive, dated detail in this repo's own
-[`CLAUDE.md`](./CLAUDE.md) — genuinely worth a skim if you want to see
-how a validator like this actually gets built, rule by rule, against
-real test evidence rather than guesswork.
+  understood and narrow.
 
 ## Trying it out
 
@@ -210,8 +203,7 @@ improving quickly.
 **Can I use it in production today?** You can — several
 publisher/retailer-style checks are already at 100% recall against the
 real test suite (packaging, manifest/spine integrity, OCF, navigation
-documents, and more — see `CLAUDE.md` for the exhaustive, honest,
-per-feature breakdown). Just go in with eyes open about what's measured
+documents, and more). Just go in with eyes open about what's measured
 and what isn't, and validate against your own real EPUB files before
 depending on it for anything load-bearing.
 
@@ -241,18 +233,16 @@ process that isn't built yet). Opening an issue to discuss an idea is
 always welcome.
 
 **Does it support WebAssembly (WASM) yet?** Not yet — it's on the
-roadmap (see `CLAUDE.md`'s "Open / not-yet-decided" section), and it's
-one of the more exciting reasons this project exists: a pure-Rust
-validator can compile to WASM and run **directly in a web browser**,
-something a JVM-based tool fundamentally cannot do.
+roadmap, and it's one of the more exciting reasons this project exists:
+a pure-Rust validator can compile to WASM and run **directly in a web
+browser**, something a JVM-based tool fundamentally cannot do.
 
 **Why is it called "epubveri"?** "Veri" carries a deliberate triple
 meaning: it's the start of "veri(fy)" (English), it echoes "veritas /
 verity" (Latin, "truth"), and it's also the actual Turkish word for
 "data" (the author is Turkish). So "epub-veri" reads naturally as "epub
 verify" while still being a distinctive, ownable name rather than a
-generic one. The full naming reasoning (there was a lot of it) is in
-`CLAUDE.md` if you're curious.
+generic one.
 
 **Where do I report a bug, or a book epubveri gets wrong?** Open an
 issue on this repository with the `.epub` file (or a minimal excerpt)
@@ -294,11 +284,3 @@ understand how the validator actually works internally — the module
 layout, the custom RELAX NG and XPath/Schematron engines built for this
 project, how the test/measurement setup works, and how to add a new
 check — see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
-
-The full, dated history of every decision made on this project (why
-things are built the way they are, what was tried and rejected, and
-exactly how coverage grew over time) lives in [`CLAUDE.md`](./CLAUDE.md).
-It was originally written as a project-context file for AI-assisted
-development sessions, but it doubles as an unusually detailed engineering
-log — genuinely worth reading if you want to see the reasoning behind
-this project, not just its current state.

@@ -2,3 +2,7 @@
 /corpus
 /tests/fixtures/*.epub
 __pycache__/
+
+# Local-only project context / history — not for publication (owner decision).
+/CLAUDE.md
+/docs/PROGRESS_LOG.md
