@@ -497,6 +497,37 @@ that de-duplication is a deliberately deferred, separate decision. See `schemora
 `CLAUDE.md` for the extraction details and the two non-obvious XPath/Schematron correctness
 fixes (document-node vs. root-element; Schematron `context` as a match-pattern) it inherited.
 
+## Decision: `schemora` repo archived (2026-07-03)
+
+Reconsidered the multi-repo split during a strategic discussion about why
+`styloria`/`schemora` were split out in the first place (AGPL freedom for
+other developers + letting consumers avoid downloading unrelated
+packages). Verdict: **`styloria` earns its split — `schemora` didn't.**
+`styloria` is a real, wired-in dependency (`styloria = { path = "../styloria"
+}` in `Cargo.toml`) that's also *technically required* to stay separate once
+epubveri ever publishes to crates.io (path dependencies can't be published;
+`styloria` would need to be its own crates.io crate regardless of
+philosophy). `schemora`, by contrast, was extracted but **epubveri never
+actually switched to depending on it** (see the entry above - "deliberately
+deferred, separate decision") - meaning it sat as an orphaned fork with zero
+real consumers, at the cost of double-maintaining `src/xpath`/`src/schematron`
+across two repos with no realized benefit from either of the original two
+reasons for splitting.
+
+**Decision: archived `github.com/veripublica/schemora` (GitHub archive, not
+deleted - reversible).** epubveri's own `src/xpath`/`src/schematron` is now
+the single, canonical, actively-maintained copy going forward - no further
+sync/de-duplication with `schemora` is planned. **General principle adopted
+for future splits** (applies to epubveri and its `veripublica` siblings):
+Cargo's dependency-graph-only compilation means "avoid downloading
+unnecessary packages" is a much weaker argument in the Rust ecosystem than
+in e.g. npm - an unpublished intermediate crate burdens no one until the
+top-level crate itself is published. So a future module (e.g. the `src/rng`
+RELAX NG engine, also plausibly general-purpose) should only be split into
+its own repo when there's a **real, concrete second consumer or an actual
+external demand signal** - not merely "this code is theoretically
+general-purpose." `schemora` is the cautionary example of the latter.
+
 ## Increment: wire in `styloria`, real CSS checks (2026-07-02)
 
 The `CSS` message-ID family had been stuck at 0% since the project's start — the reason
