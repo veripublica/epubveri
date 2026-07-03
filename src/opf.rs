@@ -4879,6 +4879,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         report,
     );
     crate::indexes::check_collections(&pkg, &items, &base_dir, opf_path, report);
+    crate::previews::check_embedded_preview(&pkg, &items, &base_dir, opf_path, report);
+    crate::previews::check_preview_publication(
+        opf_dc_type.as_deref() == Some("preview"),
+        metadata,
+        package_identifier_text.as_deref(),
+        opf_path,
+        report,
+    );
 }
 
 /// EPUB Dictionaries & Glossaries 1.0 package-level checks: Search Key Map

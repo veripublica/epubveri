@@ -3083,6 +3083,66 @@ single-document-mode gap). Remaining unscoped families: `epub-previews`
 `wrap_svg_file` harness gap, unconfirmed), a handful of small niche
 extension profiles (~5 combined).
 
+## Increment: EPUB Previews 1.0 (2026-07-03)
+
+Implemented the whole extension spec (http://idpf.org/epub/previews/)
+across both feature files - 6/7 should-error scenarios hit exactly (1
+named, permanently unreachable gap), 3/3 should-clean fixtures stay
+clean, 0 new false positives. New `src/previews.rs`; the smallest and
+most straightforward of the four small-IDPF-extension increments this
+project has now done (Dictionaries → EDUPUB → Indexes → Previews), since
+neither of its two clusters needed the multi-tier detection machinery the
+others did.
+
+**§2.4/2.5 Preview Identification (publication-level, gated on a
+confirmed `dc:type="preview"`):** should (warning, RSC-017) identify its
+source publication via `dc:source`; that source must not equal the
+package's own identifier text (RSC-005, confirmed via a real fixture
+using the exact same string as both `dc:source` and `dc:identifier`) -
+reused the pre-existing `package_identifier_text` (captured for an
+earlier, unrelated check) rather than re-deriving it.
+
+**§3.4 Preview Collections (package-level, `<collection role=
+"preview">`, unconditional - no dc:type gating needed since the
+collection's own presence is the signal):** must contain exactly one
+child `<collection role="manifest">` (RSC-005 otherwise) and at least one
+direct child `<link>` - the preview's own entry points, a different
+population from the nested manifest collection's own `<link>`s (which
+keep following the already-established "collection-nested links are
+exempt from the generic metadata-link rules" precedent from an earlier
+increment). Each entry-point link must resolve to a real XHTML Content
+Document (new **OPF-075** otherwise, e.g. a link to a `.css` file) and
+must not use an EPUB CFI fragment (new **OPF-076**, a real fixture using
+`#epubcfi(/6/2!/4/2/1:3)`).
+
+**One deliberately deferred scenario, structurally different from every
+prior extension's profile-gap:** `preview-pub-dc-type-missing-error`
+needs the `'preview'` CLI profile with *zero* other content signal, same
+shape as the analogous Dictionaries/EDUPUB gaps - but unlike those (bare
+single-Package-Document or single-content-document checks that go
+through `scripts/corpus.py`'s `wrap_*` synthesis, which can inject a
+simulated `dc:type`), this is a **full EPUB check against a real,
+already-zipped directory fixture** (`zip_dir()`, not `wrap_single_doc()`)
+- the harness has no synthesis step to hook into for this shape at all,
+making it a slightly different (permanent, not just "not yet built")
+category of unreachable gap.
+
+**Honest numbers:**
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 96.8% (574 hits) | **97.8% (580 hits)** |
+| RSC family exact hits | 358/377 | **362/377** |
+| OPF family exact hits | 133/146 | **135/146** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub-previews` is **effectively done** (aside from the 1
+named, permanently unreachable gap). Remaining unscoped families:
+`content-document-svg.feature`'s ~12 misses (likely mostly the
+`wrap_svg_file` harness gap, unconfirmed), a handful of small niche
+extension profiles (~5 combined: B-external-identifiers, accessibility,
+media-type-registrations, distributable-objects).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
