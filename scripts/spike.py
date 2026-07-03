@@ -137,7 +137,7 @@ def fixtures():
 
     # OPF presence / well-formedness / version
     fx.append(('opf_missing.epub', 'OPF-002', drop(base_entries(), 'OEBPS/content.opf')))
-    fx.append(('opf_malformed.epub', 'RSC-005',
+    fx.append(('opf_malformed.epub', 'RSC-016',
                put(base_entries(), 'OEBPS/content.opf', '<?xml version="1.0"?><package><metadata>')))
     fx.append(('opf_no_version.epub', 'OPF-001',
                put(base_entries(), 'OEBPS/content.opf', opf(version=None))))

@@ -1980,6 +1980,205 @@ a genuinely different family: `epub3/03-resources` (56 misses),
 `epub3/04-ocf` (26), `navigation-document.feature` (19), or
 `epub-dictionaries` (17+9) - all unscoped so far.
 
+## Increment: epub3/03-resources, finished in full (2026-07-03)
+
+Closed out `epub3/03-resources.feature` entirely - all 59 should-error
+scenarios hit exactly, 0 misses. Scoped as 10 clusters (research-first,
+same clean-room corpus-reading stance as every prior increment), the
+biggest single-family push since `05-package-document`.
+
+**Cluster 1 - foreign-resource fallback model (RSC-032/MED-003/MED-007),
+new `src/cmt.rs` + `src/foreign.rs`.** EPUB 3's actual rule, reverse-
+engineered from real fixture pairs rather than assumed: a resource is
+"foreign" if its declared media-type isn't a Core Media Type (§3.2); a
+foreign resource used anywhere needs a fallback (a manifest `fallback`
+chain reaching a Core Media Type), **except** `video/*` (no CMT exists for
+video at all, so it's exempt everywhere - confirmed via a foreign
+`video/avi` resource used directly as an `<img src>` with no fallback,
+still valid) and `<link>`/`<track>` targets (§3.4, always exempt). `<audio>`/
+`<video>` additionally support an *intrinsic* fallback: a group of
+candidate resources (the element's own `@src`, or its child `<source>`
+list) is fine as long as *any one* candidate is usable. A `<picture>`'s own
+`<img>` fallback is held to a *stricter* rule (must itself be a Core Media
+Type, no manifest-fallback rescue at all - it's the picture's "always
+works" raster fallback, MED-003); its `<source>` elements are exempt only
+when they declare a `type` attribute (MED-007 otherwise, regardless of any
+manifest fallback). `src/cmt.rs` centralizes the Core Media Type list
+itself (assembled from the corpus's own `resources-core-media-types-*.opf`
+fixtures) since three separate clusters this increment (1, 6, 9) all need
+the same classification.
+
+**Cluster 2 - remote-resource-misuse expansion (RSC-006/RSC-031).**
+EPUB 3 restricts *where* a remote resource may be used, independent of the
+foreign/fallback question above: `<img>`/`<iframe>`/`<script src>`/a
+stylesheet reference (`<link rel=stylesheet>`, an SVG `<?xml-stylesheet?>`
+PI, or a CSS `@import`) can never be remote; `<object>` follows its
+resource's own category (exempt only if audio/video/font - confirmed via
+`resources-remote-audio-object-valid` vs `-object-undeclared-error`); a
+manifest item typed `application/xhtml+xml` can never be remote *at all*,
+even if never referenced anywhere (a real fixture declares one unused,
+still an error) - deliberately **not** extended to `image/svg+xml`, since
+SVG is dual-purpose (a real fixture uses a remote `image/svg+xml` item
+exclusively as an `@font-face` font, which must stay valid). RSC-031 (any
+plain `http://` instead of `https://`) is a flat, context-independent scan
+over every genuine embedded-resource reference.
+
+Two real false positives found via the corpus, not by inspection: (1) a
+`<link rel="foaf:topic" href="http://...">` (an RDFa vocabulary term used
+as `rel`, from `rdfa-valid.xhtml`) was being treated as "using a remote
+resource" by the pre-existing generic attribute scan - fixed by only
+tracking a `<link>`'s `href` as a resource reference at all when its `rel`
+contains "stylesheet" (metadata/navigation `rel` values aren't resource
+dependencies). (2) that same pre-existing scan was *also* inserting plain
+`<a href="http://...">` hyperlink URLs into the general remote-resource
+set (contradicting its own code comment, which already said hyperlinks
+shouldn't count) - once RSC-031 started scanning that set unconditionally,
+ordinary external hyperlinks in `rdfa-valid.xhtml` started false-positiving
+on both RSC-008 (undeclared) and RSC-031. Fixed by only tracking hyperlink
+URLs in the separate `remote_link_refs` set (already used for the image-
+hyperlink RSC-006 check), never the general one.
+
+**Cluster 3 - data URLs (RSC-029), extending `src/foreign.rs`.** `data:`
+URLs are flatly disallowed in structural contexts (manifest item href,
+package `<link>` href, `<a>`/`<area>` href in HTML *or* SVG - the latter
+via `xlink:href`) but allowed as an ordinary resource reference in `<img>`/
+`<picture>` (classified by the media-type declared *inside* the URL
+itself, e.g. `data:image/jpeg;base64,...` - a `data:` URL can never carry a
+manifest `fallback`, so a foreign one can only be rescued by an intrinsic
+mechanism like a `<picture><source type=...>`).
+
+**Cluster 4 - file: URLs (RSC-030).** Simpler than data: URLs - disallowed
+everywhere, no exceptions, across manifest item href, package `<link>`
+href, any content-doc attribute, and CSS `url()`/`@import`. `is_external`
+gained `file:` to its exclusion list (alongside `data:`/`mailto:`/`tel:`)
+so a bare `file:example` (no `//`) doesn't get misresolved as a relative
+container path before the file: check even runs.
+
+**Cluster 5 - XML encoding conformance (RSC-027/028/016).** The OPF's own
+bytes were being decoded with a blind `String::from_utf8_lossy`, so a
+genuinely UTF-16/Latin-1/UTF-32-encoded package document just produced
+garbage that either failed to parse (falling through to a generic "not
+well-formed" message) or silently misbehaved. New `decode_opf_bytes` in
+`opf.rs`: sniffs a real BOM (UTF-8/UTF-16 either endian) or, for BOM-less
+UTF-32, the XML spec's own Appendix F autodetection pattern (`00 00 00
+'<'` / `'<' 00 00 00`); reports **RSC-027** (warning) for genuine UTF-16 -
+still decodable, so checking continues - and **RSC-028** (error) for any
+other non-UTF-8 encoding (UTF-32, Latin-1, or any other *recognized*
+declared name); reports **RSC-016** (fatal, aborting all further checks)
+*additionally* when the declared encoding doesn't match the actual bytes
+(a UTF-16-BOM'd file declaring `UTF-8`) or names an encoding nobody
+recognizes at all - confirmed via real fixture pairs that isolate each
+combination. Also reclassified the OPF's own "not well-formed XML" /
+"undeclared namespace prefix" parse-failure fallback from RSC-005 to
+**RSC-016** (real epubcheck's actual ID for a genuine fatal parser
+failure, confirmed via two dedicated fixtures) - `scripts/spike.py`'s own
+`opf_malformed.epub` regression fixture had encoded the old, now-corrected
+ID and needed updating to match, same "fixture must keep pace" precedent
+as every prior increment that changed a message ID.
+
+**Cluster 6 - OPF-090 (non-preferred Core Media Type usage), new.** A
+closed set of legacy-but-valid MIME aliases (`application/font-sfnt`,
+`application/x-font-ttf`, `application/vnd.ms-opentype`,
+`application/font-woff`, `application/ecmascript`, `text/javascript`) is
+flagged Info/usage when used instead of the modern preferred form.
+**A real classification bug found via the corpus, not guessed:**
+`application/x-font-woff` was initially folded into this "valid, non-
+preferred" set (it appears in the pre-existing, differently-scoped
+`FONT_CORE_MEDIA_TYPES` used only for font-*obfuscation* eligibility) -
+but no real "valid Core Media Type" fixture anywhere actually uses it;
+`foreign-exempt-font-valid` uses exactly that media-type and expects it
+treated as a genuinely *foreign* font (CSS-007, cluster 9). Removed from
+`cmt.rs`'s CMT list, with the distinction documented so the two separate
+"is this a plausible font" vocabularies (font-obfuscation eligibility vs.
+the real Core Media Type list) don't get conflated again.
+
+**Cluster 7 - OPF-013 (MIME-type mismatch), new.** A `type` attribute on
+`<object>`/`<embed>`, or a `<picture><source>`'s `srcset` target, must
+match the resource's own manifest-declared media-type - warning if not.
+An ordinary resource-hygiene check, not EPUB-specific (same convention
+epubcheck itself follows, reusing an "OPF-" prefixed code for it).
+
+**Cluster 8 - OPF-045 circular fallback chains, new.** A `fallback`
+chain that eventually loops back on itself (not just a direct self-
+reference, already caught) is an error - same DFS-cycle-detector shape
+already used for OPF-065's `@refines`-cycle check, just walking
+`fallback_map` (already built) instead of the DOM again.
+
+**Cluster 9 - CSS-007 (exempt font usage), new.** A `@font-face src`
+resolving to a genuinely foreign (non-CMT, non-exempt-video) font is
+allowed (fonts are always exempt from needing a fallback, §3.4) but
+flagged as Info-level usage. New `css::font_face_src_urls` (parallel to
+the existing `check_font_face`, but *collecting* `src` targets instead of
+just checking for emptiness - the pre-existing `collect_urls` pass
+deliberately skips `@font-face` blocks entirely, so this needed its own
+extraction), cross-referenced against the manifest's declared media-type
+in `opf.rs` (the same cross-referencing shape as CSS-029/030), wired into
+both the standalone-`.css`-manifest-item loop and inline `<style>` blocks.
+
+**Cluster 10 - image signature sniffing, new `src/image.rs`.** Originally
+scoped as "likely deferred" (a bigger, separate undertaking), but turned
+out bounded enough to finish in the same increment: magic-byte detection
+for the four raster Core Media Types (JPEG/PNG/GIF/WebP - SVG is XML,
+already validated as such elsewhere) against every manifest item declaring
+one of them. **MED-004 + PKG-021** (both fire together) when the bytes
+don't match any known signature at all (confirmed via a real 0-byte file
+declared `image/jpeg` - corrupt/truncated, not just "wrong format").
+**OPF-029** when the sniffed actual format doesn't match the declared
+media-type (a real JPEG declared as `image/gif`). **PKG-022** (warning)
+when the sniffed format *matches* the declared type but the file's own
+extension doesn't (a real JPEG named `image.gif`, correctly declared as
+`image/jpeg` in the manifest) - these three are mutually exclusive checks
+on the same sniff result, confirmed via three distinctly-shaped fixtures
+that never combine more than one condition at once.
+
+**A real measurement-harness bug found via this increment's own Info-
+severity additions (OPF-090/CSS-007), not guessed:** `scripts/corpus.py`'s
+single-doc-wrap scenarios recomputed their pass/fail `rc` as "any message
+ID remained after discarding harness artifacts" - unlike the *real* CLI
+exit code (`Report::is_valid()`, errors-only), this recomputation didn't
+check severity at all, so a wrapped "should stay clean" fixture that
+happened to trigger a brand-new Info-level usage message (like OPF-090 on
+`resources-core-media-types-valid.opf`, which legitimately mixes preferred
+and non-preferred font aliases) looked like a false positive purely from
+the harness's own inconsistency, not a real defect. Fixed by switching
+`run()` to parse `--format human` (which carries severity) instead of
+`--format ids`, and recomputing wrapped-scenario `rc` from only the
+Error-severity subset - consistent with the real CLI's own semantics. This
+also corrected the "detection recall" metric (58.7%→~59%-ish range across
+increments) to no longer overcount wrapped Warning/Info-only scenarios as
+"detected" the way it silently had been - a measurement correction, not a
+product regression; **exact-ID recall**, the metric this project has
+always treated as the headline number, was never affected by this bug
+either way.
+
+**Two more instances of the already-accepted "no separate single-document
+mode" limitation** (first documented in the content-document-xhtml/svg
+increment): `resources-remote-xhtml-error.opf` and `resources-remote-
+audio-valid.opf` both declare a manifest item that's only invalid when
+checked as part of a full, cross-referenced publication (a remote XHTML
+content-document item, or an unrelated one alongside valid remote audio) -
+epubcheck's own bare-`.opf` single-file check mode doesn't run that
+whole-publication check, but this project always validates fully, so it
+correctly (if more strictly than epubcheck's own single-file mode) flags
+them. Same accepted tradeoff as before, not a defect to chase.
+
+**Honest numbers** (`epub3/03-resources.feature`: all 59 should-error
+scenarios hit exactly, 0 misses; overall corpus numbers below):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 61.9% (367 hits) | **71.5% (424 hits)** |
+| RSC family exact hits | 226/377 | **271/377** |
+| OPF family exact hits | 72/146 | **81/146** |
+| PKG family exact hits | 19/36 | **21/36** |
+| CSS family exact hits | 18/19 | **19/19 (100%)** |
+| MED family exact hits | 12/16 | **16/16 (100%)** |
+| false positives | 2 | 4 (2 pre-existing + 2 new instances of the same accepted single-document-mode limitation) |
+
+With this, `epub3/03-resources.feature` is **fully done**. Remaining
+unscoped families: `epub3/04-ocf` (26 misses), `navigation-document.feature`
+(19), `epub-dictionaries` (17+9).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

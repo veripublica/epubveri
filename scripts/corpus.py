@@ -416,11 +416,30 @@ def resolve(s):
     return None, False, "missing-file", False
 
 
+SEVERITY_LINE_RE = re.compile(r"^(ERROR|WARNING|INFO)\s+([A-Z]{2,4}-\d{2,4})\b")
+
+
 def run(path):
-    p = subprocess.run([BIN, "--format", "ids", path],
+    # `--format human` (not `ids`) so severity is available: the
+    # single_doc_wrap rc-recompute below needs to ignore Info-severity
+    # findings (e.g. OPF-090), which real epubcheck's default reporting
+    # level wouldn't show either - without this, a wrapped "should stay
+    # clean" fixture that happens to trigger an Info-level usage message
+    # looks like a false positive purely because the wrap's own rc
+    # recomputation (unlike the CLI's real exit code) doesn't check
+    # severity at all.
+    p = subprocess.run([BIN, "--format", "human", path],
                        capture_output=True, text=True)
-    ids = [ln.strip() for ln in p.stdout.splitlines() if ln.strip()]
-    return ids, p.returncode
+    ids, error_ids = [], []
+    for ln in p.stdout.splitlines():
+        m = SEVERITY_LINE_RE.match(ln.strip())
+        if not m:
+            continue
+        sev, id_ = m.groups()
+        ids.append(id_)
+        if sev == "ERROR":
+            error_ids.append(id_)
+    return ids, error_ids, p.returncode
 
 
 def family(idstr):
@@ -447,7 +466,7 @@ def main():
             skipped[reason] += 1
             continue
         try:
-            ids, rc = run(path)
+            ids, error_ids, rc = run(path)
         finally:
             if is_temp:
                 os.unlink(path)
@@ -494,7 +513,7 @@ def main():
             # content document, a wrapping-harness gap rather than a
             # defect in the fixture under test.
             reported.discard("RSC-012")
-            rc = 1 if reported else 0
+            rc = 1 if (reported & set(error_ids)) else 0
 
         # A scenario can expect only a *warning* (no "errs"), e.g. MED-016
         # or CSS-003/019 — these were previously falling through to the

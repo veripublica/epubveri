@@ -6,10 +6,13 @@
 //! reports them with epubcheck-style message IDs. The deep XHTML content-model
 //! (RelaxNG/Schematron) is intentionally out of scope for now.
 
+pub mod cmt;
 pub mod css;
 pub mod edupub;
+pub mod foreign;
 pub mod htm;
 pub mod ids;
+pub mod image;
 pub mod layout;
 pub mod mathml;
 pub mod ncx;

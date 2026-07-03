@@ -17,6 +17,8 @@ pub const PKG_004: &str = "PKG-004"; // corrupted/unreadable ZIP header (not a u
 pub const PKG_006: &str = "PKG-006"; // mimetype entry missing or not first in the archive
 pub const PKG_007: &str = "PKG-007"; // mimetype compressed, or contents != application/epub+zip
 pub const PKG_010: &str = "PKG-010"; // an href contains unencoded spaces
+pub const PKG_021: &str = "PKG-021"; // an image resource is corrupt (its bytes don't match any known image format)
+pub const PKG_022: &str = "PKG-022"; // an image resource's file extension doesn't match its actual format
 pub const PKG_026: &str = "PKG-026"; // font-obfuscated resource isn't a font Core Media Type
 
 // --- Resources / generic ---
@@ -43,11 +45,18 @@ pub const RSC_017: &str = "RSC-017"; // a deprecated construct is used (e.g. epu
 pub const RSC_019: &str = "RSC-019"; // a multi-rendition publication has no META-INF/metadata.xml
 pub const RSC_020: &str = "RSC-020"; // a URL is not conforming (spaces, unparseable host, missing slashes)
 pub const RSC_025: &str = "RSC-025"; // SVG content-model violation (usage)
+pub const RSC_029: &str = "RSC-029"; // a data URL is used where it isn't allowed
+pub const RSC_027: &str = "RSC-027"; // the OPF/content document is UTF-16 encoded (warning)
+pub const RSC_028: &str = "RSC-028"; // the OPF/content document uses a disallowed non-UTF-8 encoding
+pub const RSC_030: &str = "RSC-030"; // a file: URL is used, which is not allowed
+pub const RSC_031: &str = "RSC-031"; // a remote resource uses http instead of https
+pub const RSC_032: &str = "RSC-032"; // a foreign resource is used with no required fallback
 
 // --- OPF package document (dedicated codes, used verbatim) ---
 pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared
 pub const OPF_001: &str = "OPF-001"; // error parsing the EPUB version
 pub const OPF_002: &str = "OPF-002"; // the OPF file was not found in the EPUB
+pub const OPF_029: &str = "OPF-029"; // a resource's declared media-type doesn't match its actual (sniffed) format
 pub const OPF_030: &str = "OPF-030"; // the unique-identifier was not found
 pub const OPF_033: &str = "OPF-033"; // the spine contains no linear resources
 pub const OPF_034: &str = "OPF-034"; // the spine references the same manifest item more than once
@@ -55,10 +64,12 @@ pub const OPF_043: &str = "OPF-043"; // spine item w/ non-content media-type has
 pub const OPF_049: &str = "OPF-049"; // spine itemref idref not found in the manifest
 pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resource
 pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't application/xhtml+xml
+pub const OPF_013: &str = "OPF-013"; // a declared type attribute doesn't match the resource's actual media-type
 pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no print-source is identified
 pub const OPF_086: &str = "OPF-086"; // usage of a deprecated rendition property or value, or a deprecated epub:type value
 pub const OPF_087: &str = "OPF-087"; // epub:type value only restates its host element's own native semantic (usage)
 pub const OPF_088: &str = "OPF-088"; // epub:type value isn't in the default vocabulary (usage)
+pub const OPF_090: &str = "OPF-090"; // a non-preferred (but valid) Core Media Type is used (usage)
 pub const OPF_077: &str = "OPF-077"; // the Data Navigation Document is referenced from the spine
 pub const OPF_003: &str = "OPF-003"; // a container resource isn't listed in the manifest (usage)
 pub const OPF_014: &str = "OPF-014"; // a content property (remote-resources/scripted/svg) is used but not declared
@@ -84,6 +95,7 @@ pub const OPF_099: &str = "OPF-099"; // a manifest item references the package d
 // --- CSS (via the styloria parser) ---
 pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi' property
 pub const CSS_002: &str = "CSS-002"; // @font-face 'src' has an empty url()
+pub const CSS_007: &str = "CSS-007"; // an exempt (foreign) font is used without a fallback (usage)
 pub const CSS_005: &str = "CSS-005"; // a stylesheet link's class conflicts between alt style tags (usage)
 pub const CSS_003: &str = "CSS-003"; // a stylesheet is UTF-16 encoded
 pub const CSS_004: &str = "CSS-004"; // @charset value isn't utf-8 or utf-16
@@ -94,7 +106,10 @@ pub const CSS_029: &str = "CSS-029"; // well-known media-overlay class used but 
 pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has no matching CSS selector
 
 // --- Media Overlays (SMIL) ---
+pub const MED_003: &str = "MED-003"; // a <picture> element's own <img> fallback references a foreign resource
+pub const MED_004: &str = "MED-004"; // an image resource is corrupt
 pub const MED_005: &str = "MED-005"; // <audio> resource is not a Core Media Type
+pub const MED_007: &str = "MED-007"; // a <picture> <source> references a foreign resource with no type attribute
 pub const MED_008: &str = "MED-008"; // clipBegin is after clipEnd
 pub const MED_009: &str = "MED-009"; // clipBegin equals clipEnd
 pub const MED_010: &str = "MED-010"; // content doc's ids aren't covered by its declared overlay

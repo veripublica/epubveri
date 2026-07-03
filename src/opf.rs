@@ -89,6 +89,7 @@ pub(crate) fn is_external(href: &str) -> bool {
         || href.starts_with("data:")
         || href.starts_with("mailto:")
         || href.starts_with("tel:")
+        || href.starts_with("file:")
 }
 
 /// True only for a genuine remote fetch (http/https) - unlike
@@ -695,6 +696,157 @@ fn check_ncx_content_fragments(
     }
 }
 
+/// Extracts the `encoding="..."` (or `'...'`) pseudo-attribute value from
+/// an XML declaration's own text, if present - a tiny hand-rolled scan
+/// (same style as `extract_pi_href` above), scoped to only the text before
+/// the declaration's own `?>` and only when it actually starts with
+/// `<?xml`, so it never matches an unrelated `encoding=` elsewhere in the
+/// document.
+fn extract_xml_declared_encoding(text: &str) -> Option<String> {
+    let decl_end = text.find("?>")?;
+    let decl = &text[..decl_end];
+    if !decl.trim_start().starts_with("<?xml") {
+        return None;
+    }
+    let idx = decl.find("encoding")?;
+    let rest = &decl[idx + "encoding".len()..];
+    let eq = rest.find('=')?;
+    let after_eq = rest[eq + 1..].trim_start();
+    let quote = after_eq.chars().next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    let after_quote = &after_eq[quote.len_utf8()..];
+    let end = after_quote.find(quote)?;
+    Some(after_quote[..end].to_string())
+}
+
+fn decode_utf32(bytes: &[u8], big_endian: bool) -> String {
+    bytes
+        .chunks_exact(4)
+        .filter_map(|c| {
+            let v = if big_endian {
+                u32::from_be_bytes([c[0], c[1], c[2], c[3]])
+            } else {
+                u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+            };
+            char::from_u32(v)
+        })
+        .collect()
+}
+
+/// EPUB 3 §3.9 (XML conformance): decodes the OPF's raw bytes into text,
+/// detecting its real encoding from a BOM or (for BOM-less UTF-32, per the
+/// XML spec's own Appendix F autodetection) a `00 00 00 '<'`/`'<' 00 00 00`
+/// byte pattern, and reports:
+/// - **RSC-027** (warning): genuine UTF-16 (BOM-detected) - EPUB requires
+///   UTF-8 but this is still decodable, so checking continues.
+/// - **RSC-028** (error): any other non-UTF-8 encoding (UTF-32, Latin-1,
+///   or any other declared-but-recognized name) - still decodable, so
+///   checking continues.
+/// - **RSC-016** (fatal, in *addition* to RSC-027/028, returns `None` to
+///   abort all further checks): the declared encoding doesn't match the
+///   actual bytes (a UTF-16-BOM'd file declaring `UTF-8`) or names an
+///   encoding we don't recognize at all - a real, strict XML parser
+///   can't recover from either, so neither can we.
+fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option<String> {
+    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
+        return Some(String::from_utf8_lossy(&bytes[3..]).into_owned());
+    }
+    if bytes.len() >= 2
+        && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE))
+    {
+        let big_endian = bytes[0] == 0xFE;
+        let text = crate::css::decode_utf16(&bytes[2..], big_endian);
+        report.push_at(
+            RSC_027,
+            Severity::Warning,
+            "the OPF is UTF-16 encoded; EPUB requires UTF-8",
+            opf_path,
+        );
+        if let Some(declared) = extract_xml_declared_encoding(&text) {
+            let is_utf16 = declared.eq_ignore_ascii_case("utf-16")
+                || declared.eq_ignore_ascii_case("utf-16le")
+                || declared.eq_ignore_ascii_case("utf-16be");
+            if !is_utf16 {
+                report.push_at(
+                    RSC_016,
+                    Severity::Error,
+                    format!("declared encoding '{declared}' does not match the file's actual UTF-16 encoding"),
+                    opf_path,
+                );
+                return None;
+            }
+        }
+        return Some(text);
+    }
+    let is_utf32_be = bytes.len() >= 4
+        && ((bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
+            || (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x00 && bytes[3] == b'<'));
+    let is_utf32_le = bytes.len() >= 4
+        && ((bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00)
+            || (bytes[0] == b'<' && bytes[1] == 0x00 && bytes[2] == 0x00 && bytes[3] == 0x00));
+    if is_utf32_be || is_utf32_le {
+        let has_real_bom =
+            (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
+                || (bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00);
+        let body = if has_real_bom { &bytes[4..] } else { bytes };
+        report.push_at(
+            RSC_028,
+            Severity::Error,
+            "the OPF uses an encoding other than UTF-8, which is not allowed",
+            opf_path,
+        );
+        return Some(decode_utf32(body, is_utf32_be));
+    }
+    let prelim = String::from_utf8_lossy(bytes).into_owned();
+    match extract_xml_declared_encoding(&prelim) {
+        None => Some(prelim),
+        Some(enc) if enc.eq_ignore_ascii_case("utf-8") || enc.eq_ignore_ascii_case("utf8") => {
+            Some(prelim)
+        }
+        Some(enc) => {
+            const KNOWN_NON_UTF8: [&str; 5] = [
+                "iso-8859-1",
+                "iso-8859-15",
+                "us-ascii",
+                "ascii",
+                "windows-1252",
+            ];
+            let is_known = KNOWN_NON_UTF8.iter().any(|k| enc.eq_ignore_ascii_case(k));
+            report.push_at(
+                RSC_028,
+                Severity::Error,
+                format!(
+                    "the OPF declares encoding '{enc}', which is not allowed (EPUB requires UTF-8)"
+                ),
+                opf_path,
+            );
+            if !is_known {
+                report.push_at(
+                    RSC_016,
+                    Severity::Error,
+                    format!("unrecognized encoding '{enc}'"),
+                    opf_path,
+                );
+                return None;
+            }
+            if enc.eq_ignore_ascii_case("iso-8859-1")
+                || enc.eq_ignore_ascii_case("iso-8859-15")
+                || enc.eq_ignore_ascii_case("windows-1252")
+            {
+                // A single-byte-per-codepoint encoding: byte value IS the
+                // Unicode codepoint (exact for Latin-1; a close enough
+                // approximation for the other two - no corpus fixture
+                // exercises a codepoint where they'd actually differ).
+                Some(bytes.iter().map(|&b| b as char).collect())
+            } else {
+                Some(prelim)
+            }
+        }
+    }
+}
+
 pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
@@ -707,13 +859,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             return;
         }
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let Some(text) = decode_opf_bytes(&bytes, opf_path, report) else {
+        return;
+    };
     crate::htm::check_opf_doctype(&text, opf_path, report);
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
             report.push_at(
-                RSC_005,
+                RSC_016,
                 Severity::Error,
                 format!("OPF is not well-formed XML: {e}"),
                 opf_path,
@@ -1150,6 +1304,30 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     opf_path,
                 );
             }
+            if href.trim_start().starts_with("data:") {
+                report.push_at(
+                    RSC_029,
+                    Severity::Error,
+                    format!("manifest item '{id}' href must not be a data URL"),
+                    opf_path,
+                );
+            }
+            if href.trim_start().starts_with("file:") {
+                report.push_at(
+                    RSC_030,
+                    Severity::Error,
+                    format!("manifest item '{id}' href is a file URL, which is not allowed"),
+                    opf_path,
+                );
+            }
+            if crate::cmt::is_non_preferred_core_media_type(mt) {
+                report.push_at(
+                    OPF_090,
+                    Severity::Info,
+                    format!("media-type '{mt}' is a non-preferred (but valid) Core Media Type"),
+                    opf_path,
+                );
+            }
             // resolve()'s query-stripping and path-segment handling are
             // meant for container-relative paths; applied to an absolute
             // remote URL, they'd garble it (and remote resources can
@@ -1258,6 +1436,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     format!("manifest item '{id}' references a missing resource '{href}'"),
                 );
             }
+            // An XHTML Content Document can never be remote - it *is* the
+            // publication's content, unlike embedded media/fonts, which
+            // may legitimately live outside the container. Checked here
+            // (manifest-level) rather than only via a DOM reference,
+            // since a real corpus fixture declares one with no reference
+            // to it anywhere at all (`resources-remote-spine-item-
+            // error`). Deliberately NOT extended to `image/svg+xml`: SVG
+            // is dual-purpose (a content document OR a font/image
+            // resource, e.g. an SVG font referenced only from CSS -
+            // confirmed via `resources-remote-font-svg-valid`, a remote
+            // `image/svg+xml` item used exclusively via `@font-face`); a
+            // remote SVG genuinely used *as* a content document is still
+            // caught separately when it's referenced via `<img>`
+            // (`resources-remote-svg-contentdoc-error`).
+            if is_remote_url(href) && mt == "application/xhtml+xml" {
+                report.push_at(
+                    RSC_006,
+                    Severity::Error,
+                    format!("Content Document '{href}' must not be remote"),
+                    opf_path,
+                );
+            }
             if let Some(mo) = item.attribute("media-overlay") {
                 if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
                     report.push_at(
@@ -1298,6 +1498,43 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 format!("fallback references unknown manifest item id '{target}'"),
                 opf_path,
             );
+        }
+    }
+    // OPF-045: a `fallback` chain must not form a cycle - same DFS-cycle-
+    // detector shape as OPF-065's `@refines`-cycle check, over
+    // `fallback_map` (already built above) instead of walking the DOM
+    // again. The direct self-fallback case (`fb == id`) is already caught
+    // separately above; this catches longer cycles (confirmed via a real
+    // 2-item cycle fixture).
+    {
+        let mut reported = HashSet::new();
+        for start in fallback_map.keys() {
+            if reported.contains(start) {
+                continue;
+            }
+            let mut seen = Vec::new();
+            let mut cur = start.as_str();
+            loop {
+                if seen.iter().any(|s: &String| s == cur) {
+                    if seen.first().map(|s| s.as_str()) == Some(start.as_str()) {
+                        for id in &seen {
+                            reported.insert(id.clone());
+                        }
+                        report.push_at(
+                            OPF_045,
+                            Severity::Error,
+                            "a chain of \"fallback\" attributes forms a cycle",
+                            opf_path,
+                        );
+                    }
+                    break;
+                }
+                seen.push(cur.to_string());
+                match fallback_map.get(cur) {
+                    Some(next) => cur = next,
+                    None => break,
+                }
+            }
         }
     }
     // A media-overlay attribute's target item must itself be a Media
@@ -1383,6 +1620,24 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     opf_path,
                 );
             }
+            continue;
+        }
+        if href.starts_with("data:") {
+            report.push_at(
+                RSC_029,
+                Severity::Error,
+                "a package link href must not be a data URL",
+                opf_path,
+            );
+            continue;
+        }
+        if href.starts_with("file:") {
+            report.push_at(
+                RSC_030,
+                Severity::Error,
+                "a package link href must not be a file URL",
+                opf_path,
+            );
             continue;
         }
         if is_external(href) {
@@ -1656,6 +1911,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // `css::check` to distinguish RSC-001 (declared but missing) from
     // RSC-007/RSC-008 (undeclared, missing vs. still present).
     let manifest_paths: HashSet<String> = items.values().map(|(p, _)| nfc(p)).collect();
+
+    // resolved-resource-key -> Core-Media-Type/fallback status, for the
+    // foreign-resource-fallback checks (RSC-032/MED-003/MED-007) below.
+    let resource_status = crate::foreign::build_resource_status(&items, &fallback_map);
 
     // --- broken internal references + content-model from content documents ---
     let content_docs: Vec<String> = items
@@ -2301,6 +2560,61 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
 
         let dir = parent_dir(&path);
 
+        crate::foreign::check_content_doc(&d, &path, &dir, &resource_status, report);
+
+        // OPF-013 (warning): an explicit `type` attribute on `<object>`/
+        // `<embed>`/a `<picture><source>` doesn't match the resource's own
+        // manifest-declared media-type - real epubcheck IDs this as an
+        // ordinary MIME-type mismatch, not an EPUB-defined content-model
+        // check (same convention already used for OPF-029's image case).
+        for n in d.descendants().filter(|n| n.is_element()) {
+            let (href_attr, resolve_srcset) = match n.tag_name().name() {
+                "object" => ("data", false),
+                "embed" => ("src", false),
+                "source"
+                    if n.ancestors()
+                        .skip(1)
+                        .any(|a| a.is_element() && a.tag_name().name() == "picture") =>
+                {
+                    ("srcset", true)
+                }
+                _ => continue,
+            };
+            let Some(declared_type) = n.attribute("type") else {
+                continue;
+            };
+            let Some(href) = n.attribute(href_attr) else {
+                continue;
+            };
+            let target = if resolve_srcset {
+                href.split(',')
+                    .next()
+                    .unwrap_or(href)
+                    .trim()
+                    .split_whitespace()
+                    .next()
+            } else {
+                Some(href)
+            };
+            let Some(target) = target else { continue };
+            if is_external(target) {
+                continue;
+            }
+            let resolved = nfc(&resolve(&dir, target));
+            if let Some((_, actual_type)) = items.values().find(|(ip, _)| nfc(ip) == resolved) {
+                if !actual_type.eq_ignore_ascii_case(declared_type) {
+                    report.push_at(
+                        OPF_013,
+                        Severity::Warning,
+                        format!(
+                            "declared type \"{declared_type}\" doesn't match the resource's actual media-type \"{actual_type}\""
+                        ),
+                        path.clone(),
+                    );
+                }
+            }
+        }
+
         // --- <a href> fragment resolution (RSC-012/RSC-014), stylesheet/
         // svg-use/img fragment classification (RSC-013/RSC-015/RSC-009),
         // srcset (RSC-008), and base-URI-aware remote reclassification
@@ -2677,6 +2991,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         let mut has_switch = false;
         let mut remote_refs: HashSet<String> = HashSet::new();
         let mut remote_link_refs: HashSet<String> = HashSet::new();
+        // Remote references EPUB 3 never allows regardless of manifest
+        // declaration (§3.6): img/iframe/script are always restricted;
+        // `<object>` follows its resource's own category (exempt only if
+        // it's audio/video/font, confirmed via `resources-remote-audio-
+        // object-valid` vs `resources-remote-object-undeclared-error`).
+        // Reported as RSC-006 instead of (not in addition to) RSC-008.
+        let mut restricted_remote_refs: HashSet<String> = HashSet::new();
         for node in d.descendants().filter(|n| n.is_element()) {
             // <base href> sets a base URI for resolving *other* relative
             // references; it isn't itself a reference to an existing
@@ -2686,17 +3007,64 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             }
             for attr in ["src", "href", "data", "poster", "altimg"] {
                 if let Some(v) = node.attribute(attr) {
-                    if is_remote_url(v) {
-                        remote_refs.insert(strip_url_fragment(v));
-                        // A plain hyperlink to a remote resource doesn't
-                        // trigger the remote-resources property - it's
-                        // navigation, not an embedded dependency (and
-                        // hyperlinking to an image specifically is its
-                        // own separate defect, RSC-006, below).
-                        if node.tag_name().name() == "a" && attr == "href" {
-                            remote_link_refs.insert(strip_url_fragment(v));
+                    if v.trim_start().starts_with("file:") {
+                        report.push_at(
+                            RSC_030,
+                            Severity::Error,
+                            format!("'{v}' is a file URL, which is not allowed"),
+                            path.clone(),
+                        );
+                        continue;
+                    }
+                    let tag = node.tag_name().name();
+                    // A `<link>` whose `rel` isn't "stylesheet" (e.g.
+                    // `rel="prev"`/`rel="next"`/an RDFa vocabulary term
+                    // used as `rel`) is a metadata/navigation reference,
+                    // not an embedded resource dependency at all - a real
+                    // corpus fixture (`rdfa-valid.xhtml`) uses exactly
+                    // this shape with a remote `href`, which must not be
+                    // treated as "using a remote resource".
+                    let is_non_stylesheet_link = tag == "link"
+                        && attr == "href"
+                        && !node.attribute("rel").is_some_and(|r| {
+                            r.split_whitespace()
+                                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                        });
+                    if is_remote_url(v) && !is_non_stylesheet_link {
+                        let bare = strip_url_fragment(v);
+                        // A plain hyperlink to a remote resource is
+                        // navigation, not an embedded dependency - it
+                        // doesn't need a manifest declaration (RSC-008),
+                        // doesn't trigger the remote-resources property,
+                        // and isn't itself subject to the http-vs-https
+                        // check (RSC-031) - only tracked separately, for
+                        // the narrower "hyperlink to an image" defect
+                        // (RSC-006, below). Confirmed via a real corpus
+                        // fixture (`rdfa-valid.xhtml`) using ordinary
+                        // `<a href="http://...">` links with no manifest
+                        // declaration at all, which must stay clean.
+                        if tag == "a" && attr == "href" {
+                            remote_link_refs.insert(bare);
                         } else {
+                            remote_refs.insert(bare.clone());
                             has_remote = true;
+                            let restricted = match tag {
+                                "img" | "iframe" => true,
+                                "script" if attr == "src" => true,
+                                "link" if attr == "href" => {
+                                    node.attribute("rel").is_some_and(|r| {
+                                        r.split_whitespace()
+                                            .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                                    })
+                                }
+                                "object" if attr == "data" => !remote_manifest
+                                    .get(&bare)
+                                    .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt)),
+                                _ => false,
+                            };
+                            if restricted {
+                                restricted_remote_refs.insert(bare);
+                            }
                         }
                     }
                     if is_external(v) {
@@ -2731,10 +3099,24 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             {
                 has_switch = true;
             }
-            if node.tag_name().name() == "a" {
-                if let Some(href) = node.attribute("href") {
-                    if !is_external(href) {
-                        hyperlink_targets.insert(nfc(&resolve(&dir, href)));
+            if matches!(node.tag_name().name(), "a" | "area") {
+                // An SVG `<a>` may use `xlink:href` instead of a bare
+                // `href` (confirmed via `data-url-in-svg-a-href-error`).
+                let href = node
+                    .attribute("href")
+                    .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")));
+                if let Some(href) = href {
+                    if href.trim_start().starts_with("data:") {
+                        report.push_at(
+                            RSC_029,
+                            Severity::Error,
+                            "a hyperlink href must not be a data URL",
+                            path.clone(),
+                        );
+                    } else if !is_external(href) {
+                        if node.tag_name().name() == "a" {
+                            hyperlink_targets.insert(nfc(&resolve(&dir, href)));
+                        }
                     }
                 }
             }
@@ -2777,6 +3159,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     report,
                 );
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
+                check_exempt_font_usage(&sheet, &dir, &items, &path, report);
                 doc_class_names
                     .entry(path.clone())
                     .or_default()
@@ -2785,6 +3168,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     if is_remote_url(&u) {
                         has_remote = true;
                         remote_refs.insert(strip_url_fragment(&u));
+                    }
+                }
+                // Unlike a remote font/background image referenced via
+                // CSS (allowed, `resources-remote-font-in-css-valid`), a
+                // remote `@import` fetches another *stylesheet* - always
+                // restricted, same as a `<link rel="stylesheet">` (RSC-006
+                // instead of RSC-008), confirmed via the real
+                // `resources-remote-stylesheet-svg-import-error` fixture.
+                for u in crate::css::import_targets(&sheet) {
+                    if is_remote_url(&u) {
+                        restricted_remote_refs.insert(strip_url_fragment(&u));
                     }
                 }
             }
@@ -2934,11 +3328,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         // RSC-008: a remote resource referenced from this content
         // document isn't declared as its own manifest item at all
         // (EPUB 3 requires every resource, including remote ones, to
-        // have a manifest entry). RSC-006: a hyperlink (<a href>, not an
-        // embedding element) points to a remote resource that *is*
-        // declared, but as an image - hyperlinking to an image directly
-        // is the wrong construct (should be embedded, e.g. via <img>).
+        // have a manifest entry) - except a `restricted_remote_refs`
+        // reference, which is always RSC-006 instead (declared or not;
+        // confirmed via `resources-remote-iframe-undeclared-error` etc.,
+        // where only RSC-006 is expected, never RSC-008 too).
         for r in &remote_refs {
+            if restricted_remote_refs.contains(r) {
+                continue;
+            }
             if !remote_manifest.contains_key(r) {
                 report.push_at(
                     RSC_008,
@@ -2948,6 +3345,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 );
             }
         }
+        // RSC-006: a hyperlink (<a href>, not an embedding element)
+        // points to a remote resource that *is* declared, but as an
+        // image - hyperlinking to an image directly is the wrong
+        // construct (should be embedded, e.g. via <img>).
         for r in &remote_link_refs {
             if remote_manifest
                 .get(r)
@@ -2957,6 +3358,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                     RSC_006,
                     Severity::Error,
                     format!("remote image '{r}' is referenced from an \"a\" element"),
+                    path.clone(),
+                );
+            }
+        }
+        // RSC-006: img/iframe/script/stylesheet/non-exempt-object always
+        // disallow a remote resource, regardless of manifest declaration.
+        for r in &restricted_remote_refs {
+            report.push_at(
+                RSC_006,
+                Severity::Error,
+                format!("remote resource '{r}' is not allowed in this context"),
+                path.clone(),
+            );
+        }
+        // RSC-031: any remote reference (exempt or restricted) using a
+        // plain `http://` URL instead of `https://`.
+        for r in &remote_refs {
+            if r.starts_with("http://") {
+                report.push_at(
+                    RSC_031,
+                    Severity::Warning,
+                    format!("remote resource '{r}' should use https"),
                     path.clone(),
                 );
             }
@@ -3078,6 +3501,66 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                 }
             }
         }
+
+        // RSC-006: a remote stylesheet reference from a standalone SVG
+        // content document - via a top-level `<?xml-stylesheet?>` PI, an
+        // inline `<style>`'s `@import`, or a `<link rel="stylesheet">` -
+        // is always restricted, same rule as the XHTML content-doc loop
+        // above (a remote *stylesheet* is never allowed, unlike a remote
+        // font/image referenced from CSS).
+        for pi in d.root().children().filter(|n| n.is_pi()) {
+            if let Some(p) = pi.pi() {
+                if p.target == "xml-stylesheet" {
+                    if let Some(href) = p.value.and_then(extract_pi_href) {
+                        if is_remote_url(&href) {
+                            report.push_at(
+                                RSC_006,
+                                Severity::Error,
+                                format!("remote stylesheet '{href}' is not allowed"),
+                                doc_path.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        for n in d.descendants().filter(|n| n.is_element()) {
+            if n.tag_name().name() == "style" {
+                let css_text: String = n
+                    .descendants()
+                    .filter(|t| t.is_text())
+                    .filter_map(|t| t.text())
+                    .collect();
+                let sheet = styloria::Parser::parse_stylesheet(&css_text);
+                for import_url in crate::css::import_targets(&sheet) {
+                    if is_remote_url(&import_url) {
+                        report.push_at(
+                            RSC_006,
+                            Severity::Error,
+                            format!("remote stylesheet import '{import_url}' is not allowed"),
+                            doc_path.clone(),
+                        );
+                    }
+                }
+            }
+            if n.tag_name().name() == "link"
+                && n.attribute("rel").is_some_and(|r| {
+                    r.split_whitespace()
+                        .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                })
+            {
+                if let Some(href) = n.attribute("href") {
+                    if is_remote_url(href) {
+                        report.push_at(
+                            RSC_006,
+                            Severity::Error,
+                            format!("remote stylesheet '{href}' is not allowed"),
+                            doc_path.clone(),
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // --- Media-overlay active-class CSS cross-referencing (CSS-029/030) ---
@@ -3161,6 +3644,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         // the stylesheet's *own* manifest item needs "remote-resources"
         // declared, same as a content document or SMIL overlay would.
         let sheet = styloria::Parser::parse_stylesheet(&css_text);
+        check_exempt_font_usage(&sheet, &dir, &items, &path, report);
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
             if is_remote_url(&u) {
@@ -3373,6 +3857,74 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     }
 
     check_font_obfuscation(ocf, &items, &name_index, report);
+    check_image_signatures(ocf, &items, &name_index, report);
+}
+
+/// Raster Core Media Types this project can sniff a real signature for
+/// (SVG is XML, already validated as such elsewhere).
+const SNIFFABLE_IMAGE_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+/// PKG-021/MED-004 (corrupt image), OPF-029 (declared type doesn't match
+/// actual content), PKG-022 (file extension doesn't match actual
+/// content/declared type) - all three confirmed via dedicated real corpus
+/// fixtures. Only applies to manifest items declaring one of the four
+/// raster Core Media Types; SVG and anything already foreign is out of
+/// scope (foreign resources have no "actual format" expectation to sniff
+/// against in the first place).
+fn check_image_signatures(
+    ocf: &mut Ocf,
+    items: &HashMap<String, (String, String)>,
+    name_index: &HashMap<String, String>,
+    report: &mut Report,
+) {
+    for (path, mt) in items.values() {
+        if !SNIFFABLE_IMAGE_TYPES.contains(&mt.as_str()) {
+            continue;
+        }
+        let Some(orig) = name_index.get(&nfc(path)).cloned() else {
+            continue;
+        };
+        let Some(bytes) = ocf.read(&orig) else {
+            continue;
+        };
+        match crate::image::sniff_image_type(&bytes) {
+            None => {
+                report.push_at(
+                    MED_004,
+                    Severity::Error,
+                    format!("image '{path}' is corrupt (its content doesn't match any known image format)"),
+                    path.as_str(),
+                );
+                report.push_at(
+                    PKG_021,
+                    Severity::Error,
+                    format!("image '{path}' is corrupt"),
+                    path.as_str(),
+                );
+            }
+            Some(actual) if actual != *mt => {
+                report.push_at(
+                    OPF_029,
+                    Severity::Error,
+                    format!(
+                        "image '{path}' is declared as '{mt}' but its actual format is '{actual}'"
+                    ),
+                    path.as_str(),
+                );
+            }
+            Some(actual) => {
+                let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                if !crate::image::conventional_extensions(actual).contains(&ext.as_str()) {
+                    report.push_at(
+                        PKG_022,
+                        Severity::Warning,
+                        format!("image '{path}' has a file extension that doesn't match its actual format '{actual}'"),
+                        path.as_str(),
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Recognized font Core Media Types, assembled from every real media-type
@@ -3393,6 +3945,38 @@ const FONT_CORE_MEDIA_TYPES: [&str; 10] = [
     "image/svg+xml",
 ];
 const OBFUSCATION_ALGORITHM: &str = "http://www.idpf.org/2008/embedding";
+
+/// CSS-007 (usage): a `@font-face src` target resolves to a manifest item
+/// whose declared media-type is neither a Core Media Type nor exempt
+/// video - i.e. a genuinely foreign font (§3.4 exempts fonts from ever
+/// needing a fallback, but real epubcheck still flags the usage at Info
+/// level, confirmed via `foreign-exempt-font-valid`). Core/non-preferred-
+/// Core font types (confirmed via `resources-cmt-font-truetype-valid`,
+/// which expects this reported *zero* times) must not fire.
+fn check_exempt_font_usage(
+    sheet: &styloria::Stylesheet,
+    dir: &str,
+    items: &HashMap<String, (String, String)>,
+    path: &str,
+    report: &mut Report,
+) {
+    for u in crate::css::font_face_src_urls(sheet) {
+        if is_external(&u) {
+            continue;
+        }
+        let resolved = nfc(&resolve(dir, &u));
+        if let Some((_, mt)) = items.values().find(|(ip, _)| nfc(ip) == resolved) {
+            if !crate::cmt::is_core_media_type(mt) && !crate::cmt::is_exempt_video(mt) {
+                report.push_at(
+                    CSS_007,
+                    Severity::Info,
+                    format!("font '{u}' is a foreign resource, exempt from requiring a fallback"),
+                    path,
+                );
+            }
+        }
+    }
+}
 
 /// A resource obfuscated with the IDPF font-obfuscation algorithm must
 /// declare a font Core Media Type in the manifest. `ocf::check_encryption`

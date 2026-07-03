@@ -51,7 +51,7 @@ pub(crate) fn has_utf16_bom(bytes: &[u8]) -> bool {
         && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE))
 }
 
-fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
+pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
     let units = bytes.chunks_exact(2).map(|c| {
         if big_endian {
             u16::from_be_bytes([c[0], c[1]])
@@ -138,6 +138,15 @@ pub(crate) fn check(
         report.push_at(CSS_008, Severity::Error, "CSS syntax error", css_path);
     }
     for url in urls {
+        if url.trim_start().starts_with("file:") {
+            report.push_at(
+                RSC_030,
+                Severity::Error,
+                format!("'{url}' is a file URL, which is not allowed"),
+                css_path,
+            );
+            continue;
+        }
         if is_external(&url) {
             continue;
         }
@@ -297,6 +306,43 @@ fn check_font_face(block_values: &[ComponentValue], css_path: &str, report: &mut
             );
         }
     }
+}
+
+/// The `url()` targets of every `@font-face`'s `src` declaration - unlike
+/// the generic `collect_urls` pass (which deliberately skips `@font-face`
+/// blocks, handling them via `check_font_face` instead), this is used by
+/// the CSS-007 exempt-font-usage cross-reference in `opf.rs`, which needs
+/// each font's own resolved manifest media-type to decide whether it's a
+/// foreign (exempt, but usage-flagged) font.
+pub(crate) fn font_face_src_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
+    let mut out = Vec::new();
+    for rule in &sheet.rules {
+        let Rule::At(a) = rule else { continue };
+        if !a.name.eq_ignore_ascii_case("font-face") {
+            continue;
+        }
+        let Some(block) = &a.block else { continue };
+        for chunk in block
+            .values
+            .split(|v| matches!(v, ComponentValue::Token(Token::Semicolon)))
+        {
+            let mut iter = chunk
+                .iter()
+                .filter(|v| !matches!(v, ComponentValue::Token(Token::Whitespace)));
+            let Some(ComponentValue::Token(Token::Ident(name))) = iter.next() else {
+                continue;
+            };
+            if !name.eq_ignore_ascii_case("src") {
+                continue;
+            }
+            let Some(ComponentValue::Token(Token::Colon)) = iter.next() else {
+                continue;
+            };
+            collect_urls(chunk, &mut out);
+        }
+    }
+    out.retain(|u| !u.is_empty());
+    out
 }
 
 /// `@import`'s target is either a bare string (`@import "foo.css";`) or a
