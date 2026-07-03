@@ -186,3 +186,13 @@ pub const HTM_052: &str = "HTM-052"; // region-based nav found outside the Data 
 
 // --- Accessibility ---
 pub const ACC_009: &str = "ACC-009"; // MathML markup has no alternative text (usage)
+
+// --- EPUB Dictionaries & Glossaries 1.0 ---
+pub const RSC_021: &str = "RSC-021"; // a search-key-group href targets an incompatible resource type
+pub const OPF_078: &str = "OPF-078"; // dc:type=dictionary but no content document has dictionary content
+pub const OPF_079: &str = "OPF-079"; // dictionary content detected, but dc:type=dictionary isn't declared (usage)
+pub const OPF_080: &str = "OPF-080"; // a Search Key Map document's file name doesn't end in .xml (usage)
+pub const OPF_081: &str = "OPF-081"; // a dictionary collection link target isn't declared in the manifest
+pub const OPF_082: &str = "OPF-082"; // a dictionary collection contains more than one Search Key Map Document
+pub const OPF_083: &str = "OPF-083"; // a dictionary collection contains no Search Key Map Document
+pub const OPF_084: &str = "OPF-084"; // a dictionary collection link targets neither a Search Key Map nor an XHTML doc

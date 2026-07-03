@@ -609,6 +609,12 @@ def main():
             # content document, a wrapping-harness gap rather than a
             # defect in the fixture under test.
             reported.discard("RSC-012")
+            # OPF-078 ("no content document has dictionary content") needs
+            # a real book with real content documents to evaluate at all -
+            # a bare-.opf single-file wrap has none, so it always fires
+            # regardless of the fixture under test, a wrapping-harness
+            # artifact of the same shape as RSC-001/007 above.
+            reported.discard("OPF-078")
             rc = 1 if (reported & set(error_ids)) else 0
 
         # A scenario can expect only a *warning* (no "errs"), e.g. MED-016

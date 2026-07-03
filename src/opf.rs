@@ -1684,6 +1684,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
                                 opf_path,
                             );
                         }
+                    } else if token == "search-key-map"
+                        && mt != "application/vnd.epub.search-key-map+xml"
+                    {
+                        report.push_at(
+                            OPF_012,
+                            Severity::Error,
+                            format!(
+                                "property \"search-key-map\" is not defined for media type '{mt}'"
+                            ),
+                            opf_path,
+                        );
                     } else if !token.contains(':') && !KNOWN_ITEM_PROPERTIES.contains(&token) {
                         report.push_at(
                             OPF_027,
@@ -2352,6 +2363,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     // listed in the spine) and OPF-096 (a linear="no" spine item not
     // reachable via any hyperlink or the nav).
     let mut hyperlink_targets: HashSet<String> = HashSet::new();
+    // Resolved paths of every content document carrying an
+    // epub:type="dictionary" marker anywhere - for the EPUB Dictionaries &
+    // Glossaries OPF-078/079 cross-checks in `check_dictionaries` below
+    // (checked per-collection for a multi-dictionary publication, so a
+    // bool alone isn't enough).
+    let mut dictionary_marked_docs: HashSet<String> = HashSet::new();
     for path in content_docs {
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
@@ -2370,6 +2387,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         crate::htm::check_dom(&d, &path, is_epub3, report);
         if !is_epub3 {
             crate::htm::check_dom_epub2(&d, &path, report);
+        }
+        crate::dict::check_content_doc(&d, &path, report);
+        if crate::dict::has_dictionary_marker(&d) {
+            dictionary_marked_docs.insert(nfc(&path));
         }
 
         if let Some(prefix) = d
@@ -3816,6 +3837,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         }
     }
 
+    // dc:type="dictionary" detection - the OPF-078/079 cross-check itself
+    // (whether real dictionary content backs it up, per-collection for a
+    // multi-dictionary publication) happens in `check_dictionaries` below,
+    // which also needs the full `dictionary_marked_docs` set, not just a
+    // whole-publication bool.
+    let is_dictionary_pub = opf_dc_type.as_deref() == Some("dictionary");
+    if !is_dictionary_pub && !dictionary_marked_docs.is_empty() {
+        report.push_at(
+            OPF_079,
+            Severity::Warning,
+            "dictionary content was detected, but the dc:type identifier \"dictionary\" is not declared",
+            opf_path,
+        );
+    }
+
     // --- Spine reachability (RSC-011/OPF-096) ---
     let opf_own_name_nfc = nfc(opf_path);
     for target in &hyperlink_targets {
@@ -4298,6 +4334,343 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
     check_font_obfuscation(ocf, &items, &name_index, report);
     check_image_signatures(ocf, &items, &name_index, report);
     check_html_declared_as_xhtml(ocf, &items, &name_index, report);
+    check_dictionaries(
+        &pkg,
+        is_dictionary_pub,
+        &dictionary_marked_docs,
+        &items,
+        &item_properties,
+        &base_dir,
+        &name_index,
+        ocf,
+        opf_path,
+        report,
+    );
+}
+
+/// EPUB Dictionaries & Glossaries 1.0 package-level checks: Search Key Map
+/// document parsing/cross-referencing (regardless of whether this is a
+/// confirmed dictionary publication - a glossary can have one too), and -
+/// only for a confirmed dictionary publication (`dc:type="dictionary"`) -
+/// the single- vs. collection-based structural rules from spec §2.5.
+fn check_dictionaries(
+    pkg: &roxmltree::Node,
+    is_dictionary_pub: bool,
+    dictionary_marked_docs: &HashSet<String>,
+    items: &HashMap<String, (String, String)>,
+    item_properties: &HashMap<String, String>,
+    base_dir: &str,
+    name_index: &HashMap<String, String>,
+    ocf: &mut Ocf,
+    opf_path: &str,
+    report: &mut Report,
+) {
+    const SKM_MT: &str = "application/vnd.epub.search-key-map+xml";
+    let has_prop = |props: &str, token: &str| props.split_whitespace().any(|t| t == token);
+    let node_text = |n: roxmltree::Node| -> String {
+        n.descendants()
+            .filter(|t| t.is_text())
+            .filter_map(|t| t.text())
+            .collect::<String>()
+            .trim()
+            .to_string()
+    };
+
+    // Search Key Map document parsing + cross-referencing.
+    for (path, mt) in items.values() {
+        if mt != SKM_MT {
+            continue;
+        }
+        if !path.to_ascii_lowercase().ends_with(".xml") {
+            report.push_at(
+                OPF_080,
+                Severity::Warning,
+                format!("Search Key Map document '{path}' should have an .xml extension"),
+                opf_path,
+            );
+        }
+        let Some(orig) = name_index.get(&nfc(path)).cloned() else {
+            continue;
+        };
+        let Some(b) = ocf.read(&orig) else { continue };
+        let text = String::from_utf8_lossy(&b).into_owned();
+        let Ok(d) = parse_xml(&text) else { continue };
+        let skm_dir = parent_dir(path);
+        let hrefs = crate::dict::check_skm(&d, path, report);
+        for href in hrefs {
+            if is_external(&href) {
+                continue;
+            }
+            let path_part = href.split(['#', '?']).next().unwrap_or(&href);
+            let resolved = nfc(&resolve(&skm_dir, path_part));
+            if !name_index.contains_key(&resolved) {
+                report.push_at(
+                    RSC_007,
+                    Severity::Error,
+                    format!("search-key-group href '{href}' does not resolve to a real resource"),
+                    path.as_str(),
+                );
+                continue;
+            }
+            if let Some((_, target_mt)) = items.values().find(|(p, _)| nfc(p) == resolved) {
+                if target_mt != "application/xhtml+xml" && target_mt != "image/svg+xml" {
+                    report.push_at(
+                        RSC_021,
+                        Severity::Error,
+                        format!(
+                            "search-key-group href '{href}' does not target a Content Document"
+                        ),
+                        path.as_str(),
+                    );
+                }
+            }
+        }
+    }
+
+    if !is_dictionary_pub {
+        return;
+    }
+
+    let metadata = pkg
+        .children()
+        .find(|n| n.is_element() && n.tag_name().name() == "metadata");
+    let dc_languages: HashSet<String> = metadata
+        .map(|md| {
+            md.children()
+                .filter(|n| n.is_element() && n.tag_name().name() == "language")
+                .map(node_text)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Source/target language declarations - shared shape between the
+    // package's own metadata (single-dictionary publications) and each
+    // dictionary collection's own nested <metadata> (multi-dictionary
+    // publications). A missing target-language is only enforced at the
+    // collection scope (untested at the package scope) - and, per a real
+    // fixture, uses the *same* message text as a missing source language
+    // (confirmed, if slightly odd - not this project's own wording choice
+    // but what the corpus scenario actually expects).
+    let check_languages = |scope: Option<roxmltree::Node>,
+                           require_target: bool,
+                           report: &mut Report| {
+        let metas = |property: &str| -> Vec<String> {
+            scope
+                .into_iter()
+                .flat_map(|s| s.children())
+                .filter(|n| {
+                    n.is_element()
+                        && n.tag_name().name() == "meta"
+                        && n.attribute("property") == Some(property)
+                })
+                .map(node_text)
+                .collect()
+        };
+        let sources = metas("source-language");
+        if sources.is_empty() {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "a dictionary must declare its source language",
+                opf_path,
+            );
+        } else if sources.len() > 1 {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "a dictionary must not declare more than one source language",
+                opf_path,
+            );
+        }
+        let targets = metas("target-language");
+        if targets.is_empty() {
+            if require_target {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "a dictionary must declare its source language",
+                    opf_path,
+                );
+            }
+        } else {
+            for t in targets {
+                if !dc_languages.contains(&t) {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        format!("target-language '{t}' must also be declared as \"dc:language\""),
+                        opf_path,
+                    );
+                }
+            }
+        }
+    };
+
+    let dictionary_collections: Vec<_> = pkg
+        .children()
+        .filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "collection"
+                && n.attribute("role") == Some("dictionary")
+        })
+        .collect();
+
+    if dictionary_collections.is_empty() {
+        if dictionary_marked_docs.is_empty() {
+            report.push_at(
+                OPF_078,
+                Severity::Error,
+                "no content document was found with dictionary content",
+                opf_path,
+            );
+        }
+        check_languages(metadata, false, report);
+
+        let candidates: Vec<_> = item_properties
+            .iter()
+            .filter(|(_, props)| has_prop(props, "search-key-map"))
+            .collect();
+        if candidates.is_empty() {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "a dictionary publication must contain exactly one Search Key Map document",
+                opf_path,
+            );
+        } else if candidates.len() == 1 {
+            let (_, props) = candidates[0];
+            if !has_prop(props, "dictionary") {
+                report.push_at(
+                    RSC_005,
+                    Severity::Error,
+                    "the Search Key Map document must have the \"dictionary\" property",
+                    opf_path,
+                );
+            }
+        }
+
+        if let Some(md) = metadata {
+            if let Some(dt) = md.children().find(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attribute("property") == Some("dictionary-type")
+            }) {
+                let text = node_text(dt);
+                if !matches!(text.as_str(), "monolingual" | "bilingual" | "multilingual") {
+                    report.push_at(
+                        RSC_005,
+                        Severity::Error,
+                        format!("\"dictionary-type\" metadata must be one of monolingual/bilingual/multilingual ('{text}')"),
+                        opf_path,
+                    );
+                }
+            }
+        }
+        return;
+    }
+
+    let mut skm_owner: HashMap<String, usize> = HashMap::new();
+    for (idx, collection) in dictionary_collections.iter().enumerate() {
+        let has_subcollection = collection
+            .children()
+            .any(|n| n.is_element() && n.tag_name().name() == "collection");
+        if has_subcollection {
+            report.push_at(
+                RSC_005,
+                Severity::Error,
+                "a dictionary collection must not have sub-collections",
+                opf_path,
+            );
+        }
+
+        let mut skm_count = 0;
+        let mut has_dict_content = false;
+        for link in collection
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "link")
+        {
+            let Some(href) = link.attribute("href") else {
+                continue;
+            };
+            if is_external(href) {
+                continue;
+            }
+            let resolved = nfc(&resolve(base_dir, href));
+            if dictionary_marked_docs.contains(&resolved) {
+                has_dict_content = true;
+            }
+            match items.values().find(|(p, _)| nfc(p) == resolved) {
+                None => {
+                    report.push_at(
+                        OPF_081,
+                        Severity::Error,
+                        format!(
+                            "dictionary collection link '{href}' was not found in the manifest"
+                        ),
+                        opf_path,
+                    );
+                }
+                Some((_, mt)) => {
+                    let props = item_properties.get(&resolved).cloned().unwrap_or_default();
+                    if has_prop(&props, "search-key-map") {
+                        skm_count += 1;
+                        if let Some(&first) = skm_owner.get(&resolved) {
+                            if first != idx {
+                                report.push_at(
+                                    RSC_005,
+                                    Severity::Error,
+                                    format!("Search Key Map document '{href}' is referenced in more than one dictionary collection"),
+                                    opf_path,
+                                );
+                            }
+                        } else {
+                            skm_owner.insert(resolved.clone(), idx);
+                        }
+                    } else if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
+                        report.push_at(
+                            OPF_084,
+                            Severity::Error,
+                            format!("dictionary collection link '{href}' is neither a Search Key Map Document nor an XHTML Content Document"),
+                            opf_path,
+                        );
+                    }
+                }
+            }
+        }
+        match skm_count {
+            0 => report.push_at(
+                OPF_083,
+                Severity::Error,
+                "a dictionary collection must contain no Search Key Map Document",
+                opf_path,
+            ),
+            1 => {}
+            _ => report.push_at(
+                OPF_082,
+                Severity::Error,
+                "a dictionary collection must not contain more than one Search Key Map Document",
+                opf_path,
+            ),
+        }
+        if !has_dict_content {
+            report.push_at(
+                OPF_078,
+                Severity::Error,
+                "no content document was found with dictionary content",
+                opf_path,
+            );
+        }
+
+        // A collection's own nested <metadata> is authoritative when
+        // present; a real fixture with no per-collection <metadata> at
+        // all instead relies entirely on the package-level source/target-
+        // language declarations, so this falls back to those rather than
+        // treating the collection as having zero declarations.
+        let coll_metadata = collection
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "metadata");
+        check_languages(coll_metadata.or(metadata), true, report);
+    }
 }
 
 /// OPF-035 (warning): a manifest item declared `text/html` whose actual

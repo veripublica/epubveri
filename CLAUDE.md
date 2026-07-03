@@ -2531,6 +2531,134 @@ measured - not a product defect, since what *is* measured is 100%, but a
 quick harness addition, same pattern as `wrap_opf_file`/`wrap_smil_file`/
 `wrap_nav_doc`, that would likely surface a few more real misses).
 
+## Increment: EPUB Dictionaries & Glossaries 1.0 (2026-07-03)
+
+Implemented the whole extension spec (http://idpf.org/epub/dict/) from
+scratch across both its feature files - 25/26 should-error scenarios hit
+exactly, the 1 remaining named and deliberately deferred. New `src/dict.rs`
+(content-document dictionary content model + Search Key Map document
+parsing) plus a large new `check_dictionaries` in `src/opf.rs` (package-
+level cross-referencing: dc:type detection, single- vs. collection-based
+Search Key Map requirements, source/target-language declarations).
+
+**No CLI profile concept, by deliberate choice.** epubcheck's real
+behavior here is gated by a `--profile dict|default` flag its test suite
+exercises directly - a `dict`-profile scenario expects a hard RSC-005 for
+a missing `dc:type` even with *zero* content-based signal that the book
+is a dictionary at all (a bare `.opf` single-file check, so there's no
+content to detect from regardless). Building a real profile system for
+one scenario wasn't worth it: instead, "is this a dictionary" is detected
+either from an explicit `dc:type>dictionary` (full strict checks, matching
+every other scenario in the whole spec, since all of them declare it
+explicitly) or, absent that, from real content carrying an
+`epub:type="dictionary"` marker (demoted to a warning, OPF-079 - matching
+epubcheck's own *default*-profile behavior, which is the only mode this
+project's CLI has). The one scenario this can't reach
+(`dictionary-metadata-type-missing-error.opf`) is the sole miss.
+
+**Content model** (`dict::check_content_doc`, reused unconditionally on
+every content document regardless of dc:type - confirmed safe against a
+"default profile, no dc:type" fixture that still has a fully correct
+article/dfn structure): an `epub:type="dictionary"` element needs >=1
+`<article>` child (RSC-005 otherwise); each such article ("dictionary
+entry") needs >=1 `<dfn>` descendant (a second, independent RSC-005, both
+confirmed firing together from one real fixture's two content documents).
+`epub:type="glossary"` is a separate vocabulary term with no such model
+(confirmed via a real fixture using a `<dl>`, not `<article>`/`<dfn>`, and
+expecting zero findings).
+
+**Search Key Map documents** (`dict::check_skm` + cross-referencing in
+`check_dictionaries`): `<search-key-map>` needs >=1 `<search-key-group>`
+child (RSC-005 otherwise); each group's `href` must resolve to a real
+resource (RSC-007) that's a genuine Content Document, not e.g. a CSS file
+(new **RSC-021**); the manifest item itself should have an `.xml`
+extension (new **OPF-080**, warning); and the `search-key-map` manifest
+*property* requires the real SKM media type specifically - extended the
+existing `cover-image`-only OPF-012 check with a second property/media-
+type pair rather than inventing a new code.
+
+**Single-dictionary vs. collection-based structure**, the largest single
+piece: a confirmed dictionary publication with no `<collection
+role="dictionary">` at all must have exactly one manifest item whose
+`properties` includes `search-key-map` (RSC-005 "must contain exactly one
+..." if none), and that item's `properties` must *also* include
+`dictionary` (a separate RSC-005 mentioning `"dictionary"` if a lone SKM
+item lacks it - confirmed these are two independently-triggerable
+conditions, not one). A multi-dictionary publication instead uses one
+`<collection role="dictionary">` per dictionary: must not nest another
+`<collection>` (RSC-005); every `<link href>` must resolve to a declared
+manifest item (new **OPF-081** otherwise) that's either the collection's
+own Search Key Map or an XHTML/SVG Content Document (new **OPF-084**
+otherwise); exactly one linked resource may carry the `search-key-map`
+property (new **OPF-083**/**OPF-082** for zero/more-than-one); and the
+same Search Key Map must not be linked from more than one collection
+(RSC-005, tracked via a `resolved-path -> owning-collection-index` map).
+New **OPF-078**: at least one of a collection's own linked resources must
+itself carry the `epub:type="dictionary"` content-model marker - a real,
+non-obvious per-collection subtlety (see the bug below), not a single
+whole-publication check.
+
+**dictionary-type/source-language/target-language metadata**: an optional
+`dictionary-type` meta must be one of `monolingual`/`bilingual`/
+`multilingual` (RSC-005 otherwise); exactly one `source-language` meta is
+required (RSC-005 for zero *or* more than one, distinct messages); a
+declared `target-language` must also appear as a `dc:language` value
+(RSC-005). These are checked either at the package level (no collections)
+or, for a multi-dictionary publication, per-collection - **a collection's
+own nested `<metadata>` is authoritative when present, but falls back
+entirely to the package-level metadata when the collection has none at
+all** (a real fixture, "a dictionary collection can be used to define
+multiple dictionaries," declares source/target-language only once at the
+package level despite having two dictionary collections with no nested
+`<metadata>` of their own - the first version of this check treated
+"collections exist" as "always use per-collection scope," which
+false-positived "missing source language" on both). A genuinely odd,
+corpus-confirmed quirk kept rather than smoothed over: a *missing*
+target-language reports the same message text as a missing *source*
+language ("must declare its source language") - apparently a real
+epubcheck message-reuse bug, but that's the literal substring the
+scenario checks for.
+
+**The real per-collection OPF-078 bug, found via the corpus, not
+guessed:** the first version computed OPF-078 as one whole-publication
+scan ("does *any* content document anywhere have the marker"), which
+happened to coincidentally score correctly on both the single-dictionary
+fixture and a naive read of the multi-dictionary ones - until a real
+fixture (`dictionary-multiple-no-content-error`) showed collection 1's own
+content document *does* have a fully valid `epub:type="dictionary"`
+structure, while only collection 2's is missing it, and still expects
+exactly one OPF-078. That's only explicable as a *per-collection* check
+("does this specific collection's own linked content have the marker"),
+not a publication-wide one - fixed by tracking marked-doc paths in a
+`HashSet` (not a bool) built during the existing content-doc loop, and
+checking each collection's own linked targets against it individually.
+
+**A harness-only false positive, not a product bug, found the same way
+every prior increment's have been:** `dictionaries-package-document.
+feature`'s scenarios all use epubcheck's single-Package-Document check
+mode (`wrap_opf_file`), which has no real content documents at all - so
+the brand-new OPF-078 unconditionally fired on every single one of them,
+including the "-valid" fixtures. Added `OPF-078` to `scripts/corpus.py`'s
+existing single-doc-wrap scoring-exclusion set (alongside RSC-001/007/
+011/008/OPF-014/RSC-012) - the same "no real book to check against"
+reasoning as every entry already there.
+
+**Honest numbers** (25/26 should-error scenarios across both feature
+files hit exactly, the 1 remaining a named, accepted gap requiring real
+CLI-profile support; 8/8 should-clean fixtures stay clean; overall corpus
+numbers below):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 84.3% (500 hits) | **88.5% (525 hits)** |
+| RSC family exact hits | 315/377 | **330/377** |
+| OPF family exact hits | 99/146 | **109/146** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub-dictionaries` is **effectively done**. Remaining
+unscoped families: `D-vocabularies` siblings (17 misses),
+`epub-edupub` gaps (13), `epub3/05-package-document` (11, regrew).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the

@@ -8,6 +8,7 @@
 
 pub mod cmt;
 pub mod css;
+pub mod dict;
 pub mod edupub;
 pub mod filename;
 pub mod foreign;
