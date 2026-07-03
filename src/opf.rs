@@ -1500,6 +1500,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "type")
             .map(elem_text);
+        let dc_types: Vec<String> = md
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "type")
+            .map(elem_text)
+            .collect();
+        crate::edupub::check_teacher_edition_and_accessibility(
+            &dc_types,
+            Some(md),
+            opf_path,
+            report,
+        );
         has_pagination_source = md
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "source")
@@ -2780,6 +2791,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, report: &mut Report) {
         // included - no fixture suggests otherwise).
         if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
             crate::edupub::check_content_doc(&d, &path, report);
+            // Sectioning/heading structure is exempt for fixed-layout
+            // content ("Section with no heading OK in FXL", a real
+            // fixture's own comment) and for non-linear spine items
+            // ("EDUPUB structural requirements do not apply to non-linear
+            // content", also a real fixture comment).
+            let doc_key = nfc(&path);
+            let is_fxl = fixed_layout_docs.get(&doc_key).copied().unwrap_or(false);
+            let is_non_linear = non_linear_paths.contains(&doc_key);
+            if !is_fxl && !is_non_linear {
+                crate::edupub::check_sectioning_and_headings(&d, &path, report);
+            }
         }
 
         let nfc_path = nfc(&path);

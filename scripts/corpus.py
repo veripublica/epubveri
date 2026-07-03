@@ -57,6 +57,7 @@ def parse_features():
                 continue
             path = os.path.join(dirpath, fn)
             base = None
+            edupub_profile_bg = False  # sticky, set by a Background/Given line
             cur = None  # current scenario dict
             table_mode = None  # "err" / "warn" while inside a Cucumber table
             with open(path, encoding="utf-8") as f:
@@ -74,6 +75,13 @@ def parse_features():
                 m = LOCATED_RE.search(line)
                 if m:
                     base = m.group(1)
+                # This is normally declared once in a feature file's
+                # Background (so it's read before `cur` exists at all for
+                # the first scenario) - tracked as a rolling flag, like
+                # `base`, and copied onto each new scenario at creation
+                # time, same pattern.
+                if "EPUBCheck configured with the 'edupub' profile" in line:
+                    edupub_profile_bg = True
                 if line.startswith("Scenario Outline"):
                     cur = None  # skip parameterized outlines
                     table_mode = None
@@ -88,7 +96,7 @@ def parse_features():
                 if line.startswith("Scenario") or line.startswith("Example:"):
                     cur = {"file": path, "base": base, "name": None,
                            "errs": set(), "warns": set(), "clean": False,
-                           "as_nav": False}
+                           "as_nav": False, "edupub_profile": edupub_profile_bg}
                     scenarios.append(cur)
                     table_mode = None
                     continue
@@ -243,7 +251,7 @@ def wrap_nav_doc(target_full, target_name, version="3.0"):
     return tmp
 
 
-def wrap_single_doc(target_full, target_name, version="3.0"):
+def wrap_single_doc(target_full, target_name, version="3.0", edupub=False):
     """epubcheck can check a single content document in isolation; epubveri
     only validates full books. So for a bare content-document fixture, build a
     minimal synthetic EPUB that includes it (plus all of its directory
@@ -324,6 +332,15 @@ def wrap_single_doc(target_full, target_name, version="3.0"):
     if version.startswith("2"):
         manifest_items.append('<item id="ncx" href="_toc.ncx" media-type="application/x-dtbncx+xml"/>')
         toc_attr = ' toc="ncx"'
+    # The 'edupub' profile is a CLI flag in real epubcheck - since this
+    # harness has no profile concept, the wrap simulates it by declaring
+    # dc:type=edupub directly (and a schema:accessibilityFeature so an
+    # unrelated content-model scenario doesn't spuriously trip the
+    # separate accessibility-metadata check the profile also enables).
+    edupub_meta = (
+        '    <dc:type>edupub</dc:type>\n'
+        '    <meta property="schema:accessibilityFeature">tableOfContents</meta>\n'
+    ) if edupub else ''
     opf = (
         '<?xml version="1.0" encoding="utf-8"?>\n'
         f'<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">\n'
@@ -331,6 +348,7 @@ def wrap_single_doc(target_full, target_name, version="3.0"):
         '    <dc:identifier id="id">corpus-wrap</dc:identifier>\n'
         '    <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n'
         '    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>\n'
+        + edupub_meta +
         '  </metadata>\n'
         '  <manifest>\n    ' + '\n    '.join(manifest_items) + '\n  </manifest>\n'
         f'  <spine{toc_attr}><itemref idref="_nav"/></spine>\n'
@@ -506,7 +524,7 @@ def resolve(s):
         version = "2.0" if "/epub2/" in (s["file"] or "") else "3.0"
         if s.get("as_nav"):
             return wrap_nav_doc(full, name, version), True, None, True
-        return wrap_single_doc(full, name, version), True, None, True
+        return wrap_single_doc(full, name, version, edupub=s.get("edupub_profile", False)), True, None, True
     if os.path.isfile(full) and name.endswith(".smil"):
         return wrap_smil_file(full, name), True, None, True
     return None, False, "missing-file", False

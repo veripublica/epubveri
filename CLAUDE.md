@@ -2861,6 +2861,142 @@ Remaining unscoped families: `epub-edupub` gaps (13), `epub-indexes`
 (likely mostly the `wrap_svg_file` harness gap, unconfirmed), a handful
 of small niche extension profiles (~6 combined).
 
+## Increment: finish `epub-edupub`'s remaining gaps (2026-07-03)
+
+Closed out both remaining EDUPUB feature files -
+`edupub-package-document.feature` (5 misses) and
+`edupub-content-document-xhtml.feature` (8 misses) - 17/18 should-error
+scenarios hit exactly (1 named, accepted gap), 14/14 should-clean fixtures
+stay clean, 0 new false positives anywhere in the corpus (including the
+pre-existing, previously-passing `edupub-publication.feature`, which the
+new content-model checks initially regressed and then were fixed to
+respect).
+
+**Package document (5 misses, all straightforward, new
+`edupub::check_teacher_edition_and_accessibility`):** §3.4 Teacher's
+Editions - a `dc:type=teacher-edition` publication needs `dc:type=edupub`
+too (RSC-005) and should (warning, RSC-017) identify its corresponding
+student edition via `dc:source`; §8.3 Accessibility Metadata - a confirmed
+edupub publication needs at least one `schema:accessibilityFeature`
+declaration (RSC-005 if none), and the value `"none"` is specifically
+insufficient there even though it's a legitimate general schema.org value
+otherwise (RSC-005). Needed capturing *every* `dc:type` value (not just
+the first, which the pre-existing `opf_dc_type` var already tracked) into
+a new `dc_types: Vec<String>`, since a teacher's-edition publication
+legitimately declares `dc:type` twice (`edupub` and `teacher-edition`
+side by side).
+
+**The same accepted-gap shape as EPUB Dictionaries' one unreachable
+scenario:** `edupub-metadata-type-missing-error.opf` (§8.1, "an EDUPUB
+publication must declare the type 'edupub'") is a bare single-Package-
+Document check with *zero* content-based signal that the book is edupub
+at all (unlike the teacher-edition variant, which has `dc:type=
+teacher-edition` as a real, checkable signal) - genuinely unreachable
+without real epubcheck CLI `--profile` support, which this project
+deliberately doesn't build. Named and left as the one remaining miss.
+
+**Content-document sectioning/headings (8 misses), new
+`edupub::check_sectioning_and_headings` - the largest and most
+research-intensive part of this increment, deliberately scoped down
+mid-implementation once real evidence turned out contradictory (see
+below).** Implemented with confidence: `<body>` is "explicit" (needs its
+own heading or `aria-label`) exactly when it has any direct-child element
+that isn't itself sectioning content (`section`/`aside`/`nav`/`article`)
+- confirmed via matched fixture pairs where a body containing *only*
+sectioning children needs no heading of its own, but the same content
+plus a stray `<p>` or its own `<h1>` does. Every `<section>`/`<aside>`
+needs a heading (a direct-child `hN`, an ARIA `role="heading"` element -
+confirmed via a real `<span aria-level="1" role="heading">` fixture - or
+either wrapped in a direct-child `<header>`) or an `aria-label`
+substitute; `<nav>` is exempt from this requirement (untested either way,
+kept conservative). A heading whose only content is a single `<img>`
+needs real `alt` text (`"Empty ranked heading detected"`). An
+`aria-label` must not duplicate its own heading's text (confirmed via a
+real fixture flagging this on *both* `<body>` and one of its sections,
+expecting exactly 2 findings). A `subtitle` (`epub:type="subtitle"`) must
+be wrapped in `<header>` - *or* `<figcaption>`, a real, separate, exempt
+context confirmed via the same "valid" fixture using both shapes
+side by side (a figure's own title/subtitle pair isn't a section
+subtitle).
+
+**Deliberately, explicitly NOT implemented: the heading *nesting-level
+number* check** (e.g. "a heading two sections deep must be exactly
+`h2`"). Real fixture evidence for the exact depth-counting algorithm
+turned out genuinely contradictory once tested against enough pairs:
+an implicit `<body>` (no heading of its own) with a *single* sectioning
+child lets that child use `h1` (as if body doesn't count as a level at
+all) - but the *same* implicit body with *multiple* sectioning children
+(`nav`+`aside`+`section` siblings) makes each of them use `h2` (as if
+body *does* count as a level after all) - **except** a body with
+multiple *sibling* `<section>` elements and nothing else instead lets
+*each* section restart independently at `h1`, contradicting the
+"multiple children still counts body as level 1" reading derived from
+the nav/aside/section case just one fixture earlier. No hypothesis
+tried explained all three shapes at once without contradiction, and
+guessing wrong risked real false positives on other, currently-clean
+fixtures elsewhere in the corpus (confirmed the hard way mid-session -
+an early version regressed `edupub-fxl-valid`/`edupub-non-linear-valid`/
+`edupub-multiple-renditions-valid` in the *separate*
+`edupub-publication.feature`, described below). Rather than ship an
+unreliable heuristic, this was cut entirely; the three scenarios that
+specifically test numbering
+(`edupub-titles-invalid-missing-error`/`-titles-explicit-body-error`/
+`-untitled-heading-level-error`) are a named, deliberate gap.
+
+**Two real, substantial exemptions found only by testing against the
+*other*, already-passing `edupub-publication.feature` (full-EPUB mode,
+not the bare single-content-document mode this increment's other fixtures
+use) - both real fixture comments, not guessed:** "Section with no
+heading OK in FXL" - EDUPUB's sectioning/heading rules are exempt for
+fixed-layout content documents entirely (reusing the pre-existing
+`fixed_layout_docs` map already built for the HTM viewport checks); "EDUPUB
+structural requirements do not apply to non-linear content" - likewise
+exempt for any `linear="no"` spine item (reusing the pre-existing
+`non_linear_paths` list). Both needed passing spine/package context into
+the per-content-doc check, which the bare single-document-mode scenarios
+never exercise at all (their synthetic wraps have no real spine
+distinctions) - only running the fuller `edupub-publication.feature`
+surfaced this gap.
+
+**A harness extension, the same class as `wrap_nav_doc`/`wrap_smil_file`
+before it:** `edupub-content-document-xhtml.feature`'s Background declares
+`EPUBCheck configured with the 'edupub' profile` - a real CLI flag with
+no equivalent in this project, and critically, epubcheck's single-content-
+document check mode has *no package at all* to carry a `dc:type`. Since
+this project detects "is this edupub" purely from `dc:type`, none of
+these 8 scenarios' checks would ever fire through `wrap_single_doc`'s
+synthetic (non-edupub) wrap. Fixed by teaching `scripts/corpus.py` to
+recognize this Background line (a new sticky `edupub_profile` flag,
+copied onto every scenario in the file the same way the existing `base`
+tracking works across a whole feature file) and passing it through to a
+new `wrap_single_doc(..., edupub=True)` parameter, which synthesizes
+`<dc:type>edupub</dc:type>` plus a `schema:accessibilityFeature` meta (so
+the *separate* accessibility-metadata check doesn't spuriously fire on
+unrelated content-model scenarios) in the wrap's package document -
+simulating what the real CLI flag does, the same "harness must resolve
+epubcheck's own single-document check modes" precedent as every prior
+wrapping function.
+
+**Honest numbers** (17/18 should-error scenarios across both remaining
+`epub-edupub` feature files hit exactly, the 1 remaining a named CLI-
+profile gap; 14/14 should-clean fixtures stay clean, including all of
+`edupub-publication.feature`'s previously-passing fixtures, re-verified
+clean after the FXL/non-linear exemptions were added; overall corpus
+numbers below):
+
+| metric | before | after |
+|---|---|---|
+| exact-ID recall | 93.4% (554 hits) | **94.9% (563 hits)** |
+| RSC family exact hits | 339/377 | **348/377** |
+| false positives | 4 | 4 (same accepted set, unrelated) |
+
+With this, `epub-edupub` is **effectively done** (aside from the 1 named
+CLI-profile gap and the 3 named heading-nesting-number scenarios).
+Remaining unscoped families: `epub-indexes` (12), `epub-previews` (7),
+`content-document-svg.feature`'s ~12 misses (likely mostly the
+`wrap_svg_file` harness gap, unconfirmed), a handful of small niche
+extension profiles (~5 combined).
+
 ## Open / not-yet-decided
 - **Trademark clearance SKIPPED (owner decision, 2026-07-01).** Preliminary
   clearance for `veripublica` + `epubveri` (US/USPTO + EU/EUIPO) was on the
