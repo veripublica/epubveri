@@ -2,7 +2,7 @@
 name = "epubveri"
 version = "0.0.0"
 edition = "2021"
-description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alternative to epubcheck (measurement spike)."
+description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alternative to epubcheck."
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
 publish = false
 

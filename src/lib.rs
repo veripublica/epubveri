@@ -1,10 +1,12 @@
-//! epubveri — a pure-Rust EPUB validator (measurement spike).
+//! epubveri — a pure-Rust EPUB validator.
 //!
-//! A small, fast, JVM-free, embeddable alternative to epubcheck. This spike
-//! hand-codes ~20 high-value structural checks (OCF/mimetype, container,
-//! OPF metadata, manifest/spine integrity, broken references, EPUB 3 nav) and
-//! reports them with epubcheck-style message IDs. The deep XHTML content-model
-//! (RelaxNG/Schematron) is intentionally out of scope for now.
+//! A small, fast, JVM-free, embeddable alternative to epubcheck. It combines
+//! hand-coded structural checks (OCF/mimetype, container, OPF metadata,
+//! manifest/spine integrity, broken references, EPUB 3 navigation) with
+//! RELAX NG, XPath, and Schematron engines for the XHTML/SVG content model,
+//! and reports findings with epubcheck-style message IDs (`RSC-…`, `OPF-…`,
+//! `HTM-…`, …). A WebAssembly build ships separately as the `epubveri-wasm`
+//! crate.
 
 pub mod cmt;
 pub mod css;
