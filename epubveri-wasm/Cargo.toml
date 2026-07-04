@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2021"
 description = "WebAssembly bindings for epubveri — a pure-Rust, JVM-free EPUB validator that runs in the browser."
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
-repository = "https://github.com/veripublica/epubveri"
+# npm's canonical `repository.url` form (git+…​.git) — this crate isn't
+# published to crates.io (publish = false), so its only consumer is
+# wasm-pack → the generated npm package.json; using the normalized form here
+# keeps `npm publish` from warning that it auto-corrected the field.
+repository = "git+https://github.com/veripublica/epubveri.git"
 homepage = "https://github.com/veripublica/epubveri"
 readme = "README.md"
 keywords = ["epub", "epubcheck", "validator", "wasm", "ebook"]
