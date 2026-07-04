@@ -125,10 +125,12 @@ define.
 
 ## How good is it right now? (the honest part)
 
-epubveri is **pre-1.0 and not yet published** to crates.io or npm — it's
-still under active development. This is not a drop-in replacement for
-epubcheck yet, and this project is deliberately upfront about that
-rather than overclaiming.
+epubveri is **pre-1.0 and under active development.** This is not a
+drop-in replacement for epubcheck yet, and this project is deliberately
+upfront about that rather than overclaiming. (The WebAssembly build is
+already published to npm as `@veripublica/epubveri-wasm`; the Rust crate
+isn't on crates.io yet — the `epubveri` name there is currently just a
+reserved placeholder. See "Using it as a library" below.)
 
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
@@ -170,9 +172,17 @@ The exit code follows Unix convention: `0` if the book is valid, `1` if
 it found at least one error, `2` if something went wrong just trying to
 read the file (e.g. it isn't a ZIP at all).
 
-**Using it as a library** (inside your own Rust project): add it as a
-path or git dependency (it isn't published yet — see "How good is it
-right now?" above), then:
+**Using it as a library** (inside your own Rust project): the functional
+crate isn't on crates.io yet, so add it as a **git (or path) dependency** —
+for example, in your `Cargo.toml`:
+
+```toml
+epubveri = { git = "https://github.com/veripublica/epubveri" }
+```
+
+⚠️ Don't `cargo add epubveri`: the `epubveri` name on crates.io is currently
+only a **`0.0.0` placeholder** reserving the name — it has no functionality
+yet. Then:
 
 ```rust
 let report = epubveri::validate_path(std::path::Path::new("book.epub"))?;
