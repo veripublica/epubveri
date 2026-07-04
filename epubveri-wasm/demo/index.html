@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>epubveri — EPUB validation in the browser (WASM)</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1a1a1a;
+        --muted: #666;
+        --border: #ddd;
+        --card: #f7f7f8;
+        --ok: #1a7f37;
+        --err: #cf222e;
+        --warn: #9a6700;
+        --accent: #4b3fce;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #16161a;
+          --fg: #e8e8ea;
+          --muted: #9a9aa2;
+          --border: #33333a;
+          --card: #1f1f25;
+          --ok: #4ac26b;
+          --err: #ff6b74;
+          --warn: #d9a441;
+          --accent: #9d94ff;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+        padding: 2rem 1rem 4rem;
+      }
+      main { max-width: 820px; margin: 0 auto; }
+      h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+      .sub { color: var(--muted); margin: 0 0 1.5rem; }
+      .drop {
+        border: 2px dashed var(--border);
+        border-radius: 12px;
+        padding: 2.5rem 1rem;
+        text-align: center;
+        cursor: pointer;
+        transition: border-color .15s, background .15s;
+        background: var(--card);
+      }
+      .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+      .drop input { display: none; }
+      .drop strong { color: var(--accent); }
+      .status { margin: 1.25rem 0; font-size: .9rem; color: var(--muted); }
+      .verdict {
+        display: inline-flex; align-items: center; gap: .5rem;
+        font-weight: 700; font-size: 1.1rem; padding: .4rem .8rem;
+        border-radius: 8px; margin: 1rem 0 .5rem;
+      }
+      .verdict.valid { color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+      .verdict.invalid { color: var(--err); background: color-mix(in srgb, var(--err) 14%, transparent); }
+      .counts { color: var(--muted); font-size: .9rem; margin-bottom: 1rem; }
+      table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+      th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+      th { color: var(--muted); font-weight: 600; }
+      .sev { font-weight: 700; white-space: nowrap; }
+      .sev.ERROR { color: var(--err); }
+      .sev.WARNING { color: var(--warn); }
+      .sev.INFO { color: var(--muted); }
+      code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+      .id { white-space: nowrap; }
+      footer { margin-top: 3rem; color: var(--muted); font-size: .8rem; }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>epubveri <span style="color: var(--muted); font-weight: 400">· WASM demo</span></h1>
+      <p class="sub">A pure-Rust EPUB validator running entirely in your browser — no JVM, no upload, no server. Your file never leaves this page.</p>
+
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept=".epub,application/epub+zip" />
+        Drop an <strong>.epub</strong> here, or click to choose one.
+      </label>
+
+      <p class="status" id="status">Loading validator…</p>
+
+      <section id="result" hidden>
+        <div class="verdict" id="verdict"></div>
+        <div class="counts" id="counts"></div>
+        <table id="table" hidden>
+          <thead>
+            <tr><th>Severity</th><th>ID</th><th>Message</th><th>Location</th></tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </section>
+
+      <footer>
+        Served locally over HTTP. Built with <code>wasm-pack</code> from the
+        <code>epubveri-wasm</code> crate. <span id="ver"></span>
+      </footer>
+    </main>
+
+    <script type="module">
+      // The single JS glue for the demo: load the wasm module, hand it bytes,
+      // render the typed Report it returns. All validation logic lives in Rust.
+      import init, { validate, version } from "../pkg/epubveri.js";
+
+      const statusEl = document.getElementById("status");
+      const dropEl = document.getElementById("drop");
+      const fileEl = document.getElementById("file");
+      const resultEl = document.getElementById("result");
+      const verdictEl = document.getElementById("verdict");
+      const countsEl = document.getElementById("counts");
+      const tableEl = document.getElementById("table");
+      const tbodyEl = document.getElementById("tbody");
+
+      let ready = false;
+      init()
+        .then(() => {
+          ready = true;
+          statusEl.textContent = "Ready. Drop an .epub to validate it.";
+          document.getElementById("ver").textContent = "epubveri-wasm v" + version();
+        })
+        .catch((e) => {
+          statusEl.textContent = "Failed to load the validator: " + e;
+        });
+
+      async function run(file) {
+        if (!ready) return;
+        statusEl.textContent = `Validating ${file.name} (${file.size.toLocaleString()} bytes)…`;
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const t0 = performance.now();
+        const report = validate(bytes, undefined);
+        const ms = (performance.now() - t0).toFixed(1);
+        render(report, file.name, ms);
+      }
+
+      function render(report, name, ms) {
+        statusEl.textContent = `Validated ${name} in ${ms} ms.`;
+        resultEl.hidden = false;
+        verdictEl.className = "verdict " + (report.valid ? "valid" : "invalid");
+        verdictEl.textContent = report.valid ? "✓ VALID" : "✗ INVALID";
+        countsEl.textContent = `${report.errors} error(s), ${report.warnings} warning(s), ${report.messages.length} message(s) total`;
+
+        tbodyEl.textContent = "";
+        if (report.messages.length === 0) {
+          tableEl.hidden = true;
+          return;
+        }
+        tableEl.hidden = false;
+        for (const m of report.messages) {
+          const tr = document.createElement("tr");
+          const sev = document.createElement("td");
+          sev.className = "sev " + m.severity;
+          sev.textContent = m.severity;
+          const id = document.createElement("td");
+          id.className = "id";
+          const c = document.createElement("code");
+          c.textContent = m.id;
+          id.appendChild(c);
+          const text = document.createElement("td");
+          text.textContent = m.text;
+          const loc = document.createElement("td");
+          loc.textContent = m.location ?? "";
+          tr.append(sev, id, text, loc);
+          tbodyEl.appendChild(tr);
+        }
+      }
+
+      fileEl.addEventListener("change", () => {
+        if (fileEl.files.length) run(fileEl.files[0]);
+      });
+      ["dragenter", "dragover"].forEach((ev) =>
+        dropEl.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropEl.classList.add("over");
+        }),
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        dropEl.addEventListener(ev, (e) => {
+          e.preventDefault();
+          dropEl.classList.remove("over");
+        }),
+      );
+      dropEl.addEventListener("drop", (e) => {
+        const f = e.dataTransfer?.files?.[0];
+        if (f) run(f);
+      });
+    </script>
+  </body>
+</html>

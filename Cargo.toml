@@ -11,7 +11,7 @@ publish = false
 # dev-only dependencies (e.g. `regex`) never appear in this crate's own
 # Cargo.toml.
 [workspace]
-members = ["harness"]
+members = ["harness", "epubveri-wasm"]
 
 [lib]
 name = "epubveri"

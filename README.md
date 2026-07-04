@@ -190,6 +190,36 @@ rules. epubveri supports the same four profiles (`dict`, `edupub`,
 ./target/release/epubveri --profile dict my-dictionary.epub
 ```
 
+## Use it in the browser (WASM)
+
+Because epubveri is pure Rust with no JVM and no native dependencies, it
+compiles to **WebAssembly** and runs entirely in the browser (or any
+JavaScript runtime) — the `.epub` never leaves the page, and there's no
+server to run. This is the thing real epubcheck can't do: it's Java, so
+browser/app embedding means shipping or hosting a JVM.
+
+The bindings live in the [`epubveri-wasm/`](epubveri-wasm/) workspace
+crate and publish to npm as **`@veripublica/epubveri-wasm`**. Once installed
+(via a bundler like webpack/Vite), no init step is needed:
+
+```js
+import { validate } from "@veripublica/epubveri-wasm";
+const report = validate(new Uint8Array(await file.arrayBuffer()), undefined);
+console.log(report.valid, report.messages); // fully typed (.d.ts ships in the package)
+```
+
+Build it yourself with [`wasm-pack`](https://rustwasm.github.io/wasm-pack/):
+
+```sh
+cargo install wasm-pack
+wasm-pack build epubveri-wasm --target bundler --scope veripublica --out-name epubveri
+```
+
+`epubveri-wasm/demo/` has a zero-dependency drag-and-drop demo page (built
+with `--target web`). See [`epubveri-wasm/README.md`](epubveri-wasm/README.md)
+for the full API and the one CLI-only difference (the filename-based
+`PKG-016` check).
+
 ## Frequently asked questions
 
 **Is this a drop-in replacement for epubcheck?** Not yet, and maybe

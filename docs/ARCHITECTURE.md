@@ -60,7 +60,7 @@ everything it can find.
 
 ## Workspace layout
 
-This repository is a **Cargo workspace** with two members:
+This repository is a **Cargo workspace** with three members:
 
 - **`epubveri`** (root `Cargo.toml`, `src/`) — the actual product: the
   library (`lib.rs`, used as a dependency by other Rust projects) and
@@ -78,6 +78,14 @@ This repository is a **Cargo workspace** with two members:
   never has to appear in the *published* crate's own `Cargo.toml` — a
   library consumer pulling in `epubveri` from crates.io should never see
   `regex` in their dependency tree at all.
+- **`epubveri-wasm/`** (`epubveri-wasm` crate) — the WebAssembly delivery
+  of the validator: a `cdylib` that exposes a single `validate(bytes,
+  profile)` function over `epubveri`'s existing public API, so the whole
+  validator runs in the browser with no JVM and no server. It's a separate
+  member for the same reason `harness/` is — to keep its JS-boundary
+  dependencies (`wasm-bindgen`, `serde`, `tsify-next`) out of the core
+  crate's manifest. It adds no validation logic of its own. See "The
+  WASM boundary" below.
 
 There's also a small standalone binary, **`src/bin/spike.rs`**, which
 *is* part of the main `epubveri` crate (Cargo auto-discovers any
@@ -229,6 +237,30 @@ never touches the corresponding module at all.
   Reconciled against epubcheck's own real message bundle so that IDs
   match exactly where checks overlap — but message *wording* is always
   our own, never copied.
+
+## The WASM boundary
+
+`epubveri-wasm/src/lib.rs` is deliberately tiny. It does exactly one thing:
+call `epubveri::validate_bytes_with_profile(bytes, profile)` and re-shape the
+resulting `report::Report` into two `#[derive(Serialize, Tsify)]` structs
+(`Report` and `Message`) that cross the JS boundary as a plain object. The
+core `&'static str` message IDs and the `Severity` enum are flattened to
+strings there; nothing else changes.
+
+Using `tsify-next` (with `#[tsify(into_wasm_abi)]`) rather than a bare
+`serde-wasm-bindgen` conversion is what gives JS/TS consumers a **real
+generated `.d.ts`** — `validate(bytes: Uint8Array, profile?: string | null):
+Report` with fully typed `Report`/`Message` interfaces — instead of an
+untyped `any`. `wasm-pack build --target web` emits an ES module plus the
+wasm binary into `epubveri-wasm/pkg/` (git-ignored); `epubveri-wasm/demo/`
+consumes it directly.
+
+One check is intentionally unreachable from WASM: `PKG-016` (the `.epub`
+file *extension* should be lowercase) is filename-based and lives in
+`lib.rs::validate_path`, not `validate_bytes` — the WASM entry point only
+ever sees bytes, never a filename. Everything else is identical to the
+native library, verified by cross-checking `validate()` against the CLI over
+the whole corpus (24/24 books produce identical message IDs and verdicts).
 
 ## The `schemas/` directory
 

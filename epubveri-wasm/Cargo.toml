@@ -1,0 +1,29 @@
+[package]
+name = "epubveri-wasm"
+version = "0.1.0"
+edition = "2021"
+description = "WebAssembly bindings for epubveri — a pure-Rust, JVM-free EPUB validator that runs in the browser."
+license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
+repository = "https://github.com/veripublica/epubveri"
+homepage = "https://github.com/veripublica/epubveri"
+readme = "README.md"
+keywords = ["epub", "epubcheck", "validator", "wasm", "ebook"]
+# publish=false guards crates.io only; the npm package is produced by
+# wasm-pack from this crate and published under the @veripublica scope.
+publish = false
+
+# A separate workspace member (same precedent as `harness/`) so the
+# wasm-bindgen / serde / tsify dependencies below never leak into the core
+# `epubveri` crate's own manifest. This crate is a thin JS boundary over
+# `epubveri`'s existing public API; it adds no validation logic of its own.
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+epubveri = { path = ".." }
+wasm-bindgen = "0.2"
+serde = { version = "1", features = ["derive"] }
+# tsify-next = the maintained tsify fork; derives both serde (de)serialization
+# and a real TypeScript `.d.ts` for the returned types, and pulls in
+# serde-wasm-bindgen (the JS<->Rust ABI bridge) transitively.
+tsify-next = { version = "0.5", features = ["js"] }
