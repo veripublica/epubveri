@@ -748,7 +748,7 @@ mod tests {
     fn known_epub_and_xhtml_namespaces_are_not_reserved() {
         // epub:type is a legitimate, standard attribute - not a custom
         // attribute impersonating a w3.org/idpf.org affiliation. A real
-        // false positive found via scripts/spike.py's nav fixture
+        // false positive found via a real nav fixture
         // (epub:type="toc"), not by inspection.
         let xhtml = r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
             <body><nav epub:type="toc"/></body>

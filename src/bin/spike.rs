@@ -1,4 +1,4 @@
-//! epubveri measurement spike (Rust port of the former `scripts/spike.py`).
+//! epubveri measurement spike — a self-contained coverage sanity check.
 //!
 //! Builds a set of synthetic EPUB fixtures (one valid + several each
 //! deliberately tripping ONE high-value check), validates each one by

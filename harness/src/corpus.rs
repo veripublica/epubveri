@@ -464,7 +464,7 @@ fn py_list(items: &[String]) -> String {
     format!("[{}]", quoted.join(", "))
 }
 
-// Dedicated epubcheck IDs our spike emits (reconciled 2026-06-27). RSC-005 is
+// Dedicated epubcheck IDs our validator emits (reconciled 2026-06-27). RSC-005 is
 // deliberately EXCLUDED here: it is epubcheck's RelaxNG/Schematron catch-all
 // (~116 corpus cases), so counting it would swamp this precision metric. We DO
 // emit RSC-005 for our structural conditions, so those wins still show up in the
