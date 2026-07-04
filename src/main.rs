@@ -5,11 +5,36 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-fn usage() -> ExitCode {
-    eprintln!(
-        "usage: epubveri [--format human|ids] [--profile dict|edupub|idx|preview] <file.epub>"
-    );
+const USAGE: &str = "\
+epubveri — a pure-Rust EPUB validator
+
+USAGE:
+    epubveri [OPTIONS] <file.epub>
+
+OPTIONS:
+    --format <human|ids>                 output format (default: human)
+    --profile <dict|edupub|idx|preview>  also check against an EPUB extension profile
+    -V, --version                        print version and exit
+    -h, --help                           print this help and exit
+
+Exit codes: 0 = valid, 1 = errors found, 2 = usage/IO error.";
+
+/// Help was explicitly requested: print to stdout and exit successfully.
+fn help() -> ExitCode {
+    println!("{USAGE}");
+    ExitCode::SUCCESS
+}
+
+/// The invocation was wrong (missing/invalid arguments): print to stderr and
+/// exit with the usage-error code.
+fn usage_error() -> ExitCode {
+    eprintln!("{USAGE}");
     ExitCode::from(2)
+}
+
+fn version() -> ExitCode {
+    println!("epubveri {}", env!("CARGO_PKG_VERSION"));
+    ExitCode::SUCCESS
 }
 
 fn main() -> ExitCode {
@@ -25,23 +50,26 @@ fn main() -> ExitCode {
                 i += 1;
                 match args.get(i) {
                     Some(v) => format = v.clone(),
-                    None => return usage(),
+                    None => return usage_error(),
                 }
             }
             "--profile" => {
                 i += 1;
                 match args.get(i) {
                     Some(v) => profile = Some(v.clone()),
-                    None => return usage(),
+                    None => return usage_error(),
                 }
             }
-            "-h" | "--help" => return usage(),
+            "-h" | "--help" => return help(),
+            "-V" | "--version" => return version(),
             s => path = Some(s.to_string()),
         }
         i += 1;
     }
 
-    let Some(path) = path else { return usage() };
+    let Some(path) = path else {
+        return usage_error();
+    };
     let report = match epubveri::validate_path_with_profile(Path::new(&path), profile.as_deref()) {
         Ok(r) => r,
         Err(e) => {
