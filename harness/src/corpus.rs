@@ -496,6 +496,7 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     let mut hit_family: BTreeMap<String, u32> = BTreeMap::new();
     let mut fp_examples: Vec<(String, Vec<String>)> = Vec::new();
     let mut miss_examples: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut miss_all: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
 
     for s in scenarios {
         let resolved = resolve(s, res_dir);
@@ -566,6 +567,19 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
                 for e in &hit {
                     *hit_family.entry(family(e).to_string()).or_insert(0) += 1;
                 }
+            } else {
+                // A genuine exact-ID miss: none of this should-error
+                // scenario's expected IDs were reported. Capture every one
+                // (not just the TARGET-id subset below) for investigation.
+                let mut exp_sorted: Vec<String> =
+                    expected.iter().map(|s| s.to_string()).collect();
+                exp_sorted.sort();
+                let got = if ids.is_empty() {
+                    vec!["(none)".to_string()]
+                } else {
+                    ids.clone()
+                };
+                miss_all.push((s.name.clone().unwrap_or_default(), exp_sorted, got));
             }
             if expected.iter().any(|e| TARGET_IDS.contains(&e.as_str())) {
                 n_inscope += 1;
@@ -648,6 +662,19 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
         println!("  {fam:<5} {hit:>4} / {tot}");
     }
 
+    if !miss_all.is_empty() {
+        println!(
+            "\n-- ALL exact-ID MISSES ({} scenarios) --",
+            miss_all.len()
+        );
+        for (name, exp, got) in &miss_all {
+            println!(
+                "  {name}\n      expected {}  got {}",
+                py_list(exp),
+                py_list(got)
+            );
+        }
+    }
     if !miss_examples.is_empty() {
         println!("\n-- in-scope MISSES (target id expected, we missed exact) --");
         for (name, exp, got) in &miss_examples {
