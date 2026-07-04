@@ -1,10 +1,14 @@
 [package]
 name = "epubveri"
-version = "0.0.0"
+version = "0.1.0"
 edition = "2021"
 description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alternative to epubcheck."
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
-publish = false
+repository = "https://github.com/veripublica/epubveri"
+homepage = "https://github.com/veripublica/epubveri"
+readme = "README.md"
+keywords = ["epub", "epubcheck", "validator", "ebook", "ocf"]
+categories = ["parser-implementations", "command-line-utilities"]
 
 # `harness/` is the epubcheck-corpus measurement tool (Rust port of the
 # former scripts/corpus.py) - kept as a separate workspace member so its
@@ -27,9 +31,11 @@ path = "src/main.rs"
 zip = { version = "2.2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
 unicode-normalization = "0.1"
-# CSS parsing: sibling repo (github.com/veripublica/styloria), path
-# dependency during development (see CLAUDE.md's styloria/CSS-checks notes).
-styloria = { path = "../styloria" }
+# CSS parsing: the sibling styloria crate (github.com/veripublica/styloria),
+# consumed from crates.io like any external user (dogfooding). For local
+# co-development of styloria, add an uncommitted override:
+#   [patch.crates-io] styloria = { path = "../styloria" }
+styloria = "0.1"
 
 [profile.release]
 opt-level = 2

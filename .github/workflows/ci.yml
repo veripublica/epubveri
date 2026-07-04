@@ -14,34 +14,22 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      # epubveri and its sibling `styloria` (a path dependency,
-      # `styloria = { path = "../styloria" }`) are checked out side by side so
-      # that `../styloria` resolves the same way it does in local dev.
-      - name: Check out epubveri
+      - name: Check out
         uses: actions/checkout@v5
-        with:
-          path: epubveri
-      - name: Check out styloria (sibling path dependency)
-        uses: actions/checkout@v5
-        with:
-          repository: veripublica/styloria
-          path: styloria
 
       # ubuntu-latest ships stable Rust + rustfmt/clippy; we only add the
-      # wasm target for the smoke builds below.
+      # wasm target for the smoke builds below. (The styloria dependency now
+      # comes from crates.io, so there's no sibling checkout to wire up.)
       - name: Add wasm target
         run: rustup target add wasm32-unknown-unknown
 
       - name: Format (cargo fmt --check)
-        working-directory: epubveri
         run: cargo fmt --all --check
 
       - name: Build (workspace)
-        working-directory: epubveri
         run: cargo build --workspace --locked
 
       - name: Test (workspace)
-        working-directory: epubveri
         run: cargo test --workspace --locked
 
       # Prove the validator still compiles to WebAssembly: the core library
@@ -49,9 +37,7 @@ jobs:
       # wasm-bindgen / tsify codegen). A full `wasm-pack build` is run locally
       # before publishing; this is the lighter, tooling-free CI smoke test.
       - name: Build core lib for wasm32
-        working-directory: epubveri
         run: cargo build --lib --target wasm32-unknown-unknown --locked
 
       - name: Build epubveri-wasm for wasm32
-        working-directory: epubveri
         run: cargo build -p epubveri-wasm --target wasm32-unknown-unknown --locked
