@@ -1,5 +1,7 @@
 # epubveri
 
+[![CI](https://github.com/veripublica/epubveri/actions/workflows/ci.yml/badge.svg)](https://github.com/veripublica/epubveri/actions/workflows/ci.yml)
+
 **A pure-Rust EPUB validator — a small, fast, JVM-free alternative to
 [epubcheck](https://github.com/w3c/epubcheck).**
 
