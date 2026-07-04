@@ -571,8 +571,7 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
                 // A genuine exact-ID miss: none of this should-error
                 // scenario's expected IDs were reported. Capture every one
                 // (not just the TARGET-id subset below) for investigation.
-                let mut exp_sorted: Vec<String> =
-                    expected.iter().map(|s| s.to_string()).collect();
+                let mut exp_sorted: Vec<String> = expected.iter().map(|s| s.to_string()).collect();
                 exp_sorted.sort();
                 let got = if ids.is_empty() {
                     vec!["(none)".to_string()]
@@ -663,10 +662,7 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     }
 
     if !miss_all.is_empty() {
-        println!(
-            "\n-- ALL exact-ID MISSES ({} scenarios) --",
-            miss_all.len()
-        );
+        println!("\n-- ALL exact-ID MISSES ({} scenarios) --", miss_all.len());
         for (name, exp, got) in &miss_all {
             println!(
                 "  {name}\n      expected {}  got {}",
