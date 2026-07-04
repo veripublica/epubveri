@@ -18,11 +18,11 @@ jobs:
       # `styloria = { path = "../styloria" }`) are checked out side by side so
       # that `../styloria` resolves the same way it does in local dev.
       - name: Check out epubveri
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           path: epubveri
       - name: Check out styloria (sibling path dependency)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           repository: veripublica/styloria
           path: styloria
