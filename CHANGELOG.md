@@ -8,6 +8,26 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.3.0] - 2026-07-06
+
+### Added
+
+- Every diagnostic can now carry a stable, semantic **sub-code** (`rule`)
+  and the **values interpolated into its message** (`params`), alongside
+  the existing epubcheck-compatible `id`. This exists because a single
+  `id` — especially `RSC-005`, epubcheck's generic RelaxNG/Schematron
+  catch-all — covers many structurally unrelated conditions with only the
+  rendered English sentence to tell them apart. `Message` gained
+  `rule: Option<&'static str>` (e.g. `"opf.spine.duplicate_itemref"`) and
+  `params: Vec<String>`. `rule` is populated at every `RSC-005` call site
+  in the crate except a handful where no stable sub-code is derivable yet
+  (schematron-derived output, and a few "input didn't parse as XML at
+  all" cases) — other message IDs don't have `rule` populated yet and are
+  a candidate for the same treatment later.
+- Additive: `Report::push_full` (with position) and `Report::push_at_rule`
+  (without) sit alongside the existing `push`/`push_at`/`push_at_pos`,
+  which are unchanged. The WASM bindings expose the same fields.
+
 ## [0.2.1] - 2026-07-06
 
 ### Fixed

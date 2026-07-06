@@ -40,6 +40,14 @@ pub struct Message {
     pub location: Option<String>,
     /// Optional exact source position, when the check provides one.
     pub position: Option<Position>,
+    /// epubveri's own stable, semantic sub-code distinguishing sub-cases
+    /// of a shared `id` (e.g. `"opf.spine.duplicate_itemref"`), when the
+    /// check has been retrofitted for it (incremental rollout, see
+    /// epubveri issue #2). `None` otherwise.
+    pub rule: Option<String>,
+    /// The positional values interpolated into `text`, when `rule` is
+    /// present. Empty otherwise.
+    pub params: Vec<String>,
 }
 
 /// The full validation result for one EPUB.
@@ -84,6 +92,8 @@ pub fn validate(bytes: &[u8], profile: Option<String>) -> Report {
                     line: p.line,
                     column: p.column,
                 }),
+                rule: m.rule.map(str::to_string),
+                params: m.params.clone(),
             })
             .collect(),
     }

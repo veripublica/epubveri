@@ -24,12 +24,14 @@ pub(crate) fn check_data_nav_doc<'a>(
     {
         match nav.attribute((EPUB_NS, "type")) {
             None => {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "a \"nav\" element in a Data Navigation Document must have an \"epub:type\" attribute",
                     path,
                     Position::of(nav),
+                    "regionnav.data_nav.nav_missing_epub_type",
+                    Vec::new(),
                 );
             }
             Some("region-based") => region_based = Some(nav),
@@ -81,12 +83,14 @@ pub(crate) fn collect_targets(nav_el: roxmltree::Node) -> Vec<String> {
 pub(crate) fn check_content_model(nav_el: roxmltree::Node, path: &str, report: &mut Report) {
     let element_children: Vec<_> = nav_el.children().filter(|n| n.is_element()).collect();
     if element_children.len() != 1 || element_children[0].tag_name().name() != "ol" {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "a region-based nav element must contain exactly one child ol element",
             path,
             Position::of(nav_el),
+            "regionnav.content_model.expected_single_ol",
+            Vec::new(),
         );
     }
     // Still walk whatever <ol> is present (even alongside other, already-
@@ -113,12 +117,14 @@ fn check_ol(ol: roxmltree::Node, path: &str, report: &mut Report) {
 fn check_li(li: roxmltree::Node, path: &str, report: &mut Report) {
     let children: Vec<_> = li.children().filter(|n| n.is_element()).collect();
     let Some(first) = children.first() else {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "the first child of a region-based nav list item must be either an \"a\" or \"span\" element",
             path,
             Position::of(li),
+            "regionnav.li.missing_label",
+            Vec::new(),
         );
         return;
     };
@@ -127,12 +133,14 @@ fn check_li(li: roxmltree::Node, path: &str, report: &mut Report) {
             check_a_label(*first, path, report);
             if children.len() > 1 {
                 if children.len() != 2 || children[1].tag_name().name() != "ol" {
-                    report.push_at_pos(
+                    report.push_full(
                         RSC_005,
                         Severity::Error,
                         "the first child of a region-based nav list item can only be followed by a single \"ol\" element",
                         path,
                         Position::of(li),
+                        "regionnav.li.a_followed_by_invalid_sibling",
+                        Vec::new(),
                     );
                 } else {
                     check_ol(children[1], path, report);
@@ -145,22 +153,26 @@ fn check_li(li: roxmltree::Node, path: &str, report: &mut Report) {
                 .filter(|n| n.is_element() && n.tag_name().name() == "a")
                 .count();
             if a_count != 2 {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "\"span\" elements in region-based navs must contain exactly two \"a\" elements",
                     path,
                     Position::of(*first),
+                    "regionnav.li.span_wrong_anchor_count",
+                    vec![a_count.to_string()],
                 );
             }
         }
         _ => {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "the first child of a region-based nav list item must be either an \"a\" or \"span\" element",
                 path,
                 Position::of(*first),
+                "regionnav.li.missing_label",
+                Vec::new(),
             );
         }
     }

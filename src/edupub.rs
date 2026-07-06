@@ -125,12 +125,14 @@ fn check_heading_img_alt(h: roxmltree::Node, path: &str, report: &mut Report) {
         if img.tag_name().name() == "img" {
             let alt = img.attribute("alt").unwrap_or("").trim();
             if alt.is_empty() {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "Empty ranked heading detected",
                     path,
                     Position::of(h),
+                    "edupub.heading.empty_ranked_heading",
+                    Vec::new(),
                 );
             }
         }
@@ -151,12 +153,14 @@ fn check_aria_label_match(
     };
     let heading_text = node_text(heading);
     if !heading_text.is_empty() && label.trim() == heading_text {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "The value of the \"aria-label\" attribute must not be the same as the content of the heading",
             path,
             Position::of(container),
+            "edupub.heading.aria_label_duplicates_text",
+            Vec::new(),
         );
     }
 }
@@ -203,12 +207,14 @@ pub(crate) fn check_sectioning_and_headings(
         match heading {
             Some(h) => check_own_heading(body, h, path, report),
             None if !has_aria_label => {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "The body element requires a heading when it is used as an implied section",
                     path,
                     Position::of(body),
+                    "edupub.sectioning.body_missing_heading",
+                    Vec::new(),
                 );
             }
             None => {}
@@ -223,12 +229,14 @@ pub(crate) fn check_sectioning_and_headings(
         match find_heading(n) {
             Some(h) => check_own_heading(n, h, path, report),
             None if !has_aria_label && n.tag_name().name() != "nav" => {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "section does not have a heading",
                     path,
                     Position::of(n),
+                    "edupub.sectioning.missing_heading",
+                    vec![n.tag_name().name().to_string()],
                 );
             }
             None => {}
@@ -249,12 +257,14 @@ pub(crate) fn check_sectioning_and_headings(
             .parent_element()
             .is_some_and(|p| matches!(p.tag_name().name(), "header" | "figcaption"));
         if !parent_ok {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "Section subtitles must be wrapped in a header element",
                 path,
                 Position::of(n),
+                "edupub.sectioning.subtitle_not_wrapped",
+                Vec::new(),
             );
         }
     }
@@ -314,18 +324,22 @@ pub(crate) fn check_teacher_edition_and_accessibility(
 
     if !is_edupub_pub && (is_teacher_edition || profile == Some("edupub")) {
         match metadata {
-            Some(md) => report.push_at_pos(
+            Some(md) => report.push_full(
                 RSC_005,
                 Severity::Error,
                 "The dc:type identifier \"edupub\" is required",
                 opf_path,
                 Position::of(md),
+                "edupub.metadata.missing_dc_type",
+                Vec::new(),
             ),
-            None => report.push_at(
+            None => report.push_at_rule(
                 RSC_005,
                 Severity::Error,
                 "The dc:type identifier \"edupub\" is required",
                 opf_path,
+                "edupub.metadata.missing_dc_type",
+                Vec::new(),
             ),
         }
         if !is_teacher_edition {
@@ -368,20 +382,24 @@ pub(crate) fn check_teacher_edition_and_accessibility(
             .map(elem_text)
             .collect();
         if features.is_empty() {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "At least one schema:accessibilityFeature declaration is required",
                 opf_path,
                 Position::of(md),
+                "edupub.metadata.missing_accessibility_feature",
+                Vec::new(),
             );
         } else if features.iter().any(|f| f == "none") {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "value \"none\" is not valid in edupub",
                 opf_path,
                 Position::of(md),
+                "edupub.metadata.invalid_accessibility_feature_none",
+                Vec::new(),
             );
         }
     }
@@ -448,20 +466,24 @@ pub(crate) fn check_multi_rendition_dc_type(
     }
 
     if !is_edupub(pub_dc_type.as_deref()) {
-        report.push_at(
+        report.push_at_rule(
             RSC_005,
             Severity::Error,
             "META-INF/metadata.xml is missing the publication-level dc:type",
             METADATA,
+            "edupub.multi_rendition.missing_publication_dc_type",
+            Vec::new(),
         );
     }
     for (opf_path, dc_type) in &rendition_dc_types {
         if !is_edupub(dc_type.as_deref()) {
-            report.push_at(
+            report.push_at_rule(
                 RSC_005,
                 Severity::Error,
                 "this rendition is missing dc:type for an edupub multi-rendition publication",
                 opf_path.clone(),
+                "edupub.multi_rendition.missing_rendition_dc_type",
+                Vec::new(),
             );
         }
     }

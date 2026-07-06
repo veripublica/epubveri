@@ -35,11 +35,13 @@ pub(crate) fn check_preview_publication(
         // else, not the source-identification checks below cascading on
         // content that was never meant to satisfy them.
         if profile == Some("preview") {
-            report.push_at(
+            report.push_at_rule(
                 RSC_005,
                 Severity::Error,
                 "An EPUB Preview publication must have a \"preview\" dc:type",
                 opf_path,
+                "previews.metadata.missing_dc_type",
+                Vec::new(),
             );
         }
         return;
@@ -61,12 +63,14 @@ pub(crate) fn check_preview_publication(
         }
         Some(text) => {
             if package_identifier_text.is_some_and(|id| id == text) {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "A Preview Publication must not use the same package identifier as its source Publication",
                     opf_path,
                     Position::of(md),
+                    "previews.metadata.identifier_matches_source",
+                    Vec::new(),
                 );
             }
         }
@@ -102,12 +106,14 @@ pub(crate) fn check_embedded_preview(
             })
             .count();
         if manifest_count != 1 {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "A preview collection must include exactly one child \"manifest\" collection",
                 opf_path,
                 Position::of(coll),
+                "previews.collection.wrong_manifest_count",
+                vec![manifest_count.to_string()],
             );
         }
         let links: Vec<_> = coll
@@ -115,12 +121,14 @@ pub(crate) fn check_embedded_preview(
             .filter(|n| n.is_element() && n.tag_name().name() == "link")
             .collect();
         if links.is_empty() {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "A preview collection must include at least one child \"link\" element",
                 opf_path,
                 Position::of(coll),
+                "previews.collection.no_links",
+                Vec::new(),
             );
         }
         for link in links {

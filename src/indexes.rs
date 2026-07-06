@@ -35,12 +35,14 @@ pub(crate) fn check_content_model(doc: &roxmltree::Document, path: &str, report:
             .filter(|n| n.is_element() && has_type_token(*n, "index-entry-list"))
             .count();
         if count != 1 {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "An \"index\" must contain one and only one \"index-entry-list\"",
                 path,
                 Position::of(idx),
+                "indexes.content_model.wrong_entry_list_count",
+                vec![count.to_string()],
             );
         }
     }
@@ -114,12 +116,14 @@ fn check_index_group(
         .children()
         .any(|n| n.is_element() && n.tag_name().name() == "collection")
     {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "An \"index-group\" collection must not have child collections",
             opf_path,
             Position::of(coll),
+            "indexes.collection.index_group_has_subcollections",
+            Vec::new(),
         );
     }
     check_links_are_xhtml(coll, items, base_dir, opf_path, report);
@@ -139,12 +143,14 @@ fn check_index_collection(
         if sub.attribute("role") == Some("index-group") {
             check_index_group(sub, items, base_dir, opf_path, report);
         } else {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "An \"index\" collection must not have sub-collections other than \"index-group\"",
                 opf_path,
                 Position::of(sub),
+                "indexes.collection.invalid_index_subcollection",
+                Vec::new(),
             );
         }
     }
@@ -171,12 +177,14 @@ pub(crate) fn check_collections(
     {
         match coll.attribute("role") {
             Some("index-group") => {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "An \"index-group\" collection must be a child of an \"index\" collection",
                     opf_path,
                     Position::of(coll),
+                    "indexes.collection.orphan_index_group",
+                    Vec::new(),
                 );
             }
             Some("index") => check_index_collection(coll, items, base_dir, opf_path, report),

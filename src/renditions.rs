@@ -64,12 +64,14 @@ fn check_metadata_file(ocf: &mut Ocf, report: &mut Report) {
         })
         .count();
     if count != 1 {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "the dcterms:modified meta element must occur exactly once",
             METADATA,
             Position::of(doc.root_element()),
+            "renditions.metadata.dcterms_modified_cardinality",
+            vec![count.to_string()],
         );
     }
 }
@@ -107,23 +109,27 @@ fn check_rendition_selection(container_doc: &roxmltree::Document, report: &mut R
                 "media" => {
                     let value = attr.value();
                     if !(value.contains('(') && value.contains(')')) {
-                        report.push_at_pos(
+                        report.push_full(
                             RSC_005,
                             Severity::Error,
                             "value of attribute \"rendition:media\" is invalid",
                             CONTAINER,
                             Position::of(*rf),
+                            "renditions.rootfile.invalid_media_selection",
+                            vec![value.to_string()],
                         );
                     }
                 }
                 "layout" => {}
                 other => {
-                    report.push_at_pos(
+                    report.push_full(
                         RSC_005,
                         Severity::Error,
                         format!("attribute \"rendition:{other}\" not allowed here"),
                         CONTAINER,
                         Position::of(*rf),
+                        "renditions.rootfile.unknown_selection_attribute",
+                        vec![other.to_string()],
                     );
                 }
             }
@@ -146,24 +152,28 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
         })
         .collect();
     if let Some(second) = mapping_links.get(1) {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "the Container Document must not reference more than one mapping document",
             CONTAINER,
             Position::of(*second),
+            "renditions.mapping.multiple_mapping_documents",
+            Vec::new(),
         );
     }
     let Some(link) = mapping_links.first() else {
         return;
     };
     if link.attribute("media-type") != Some("application/xhtml+xml") {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "the media type of Rendition Mapping Documents must be \"application/xhtml+xml\"",
             CONTAINER,
             Position::of(*link),
+            "renditions.mapping.wrong_media_type",
+            Vec::new(),
         );
         return;
     }
@@ -185,12 +195,14 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
             && n.attribute("content") == Some("1.0")
     });
     if !has_version_meta {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "a meta tag with the name \"epub.multiple.renditions.version\" and value \"1.0\" is required",
             href,
             Position::of(doc.root_element()),
+            "renditions.mapping.missing_version_meta",
+            Vec::new(),
         );
     }
 
@@ -203,22 +215,26 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
         .filter(|n| n.attribute((EPUB_NS, "type")) == Some("resource-map"))
         .count();
     if resource_map_count != 1 {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "a Rendition Mapping Document must contain exactly one \"resource-map\" nav element",
             href,
             Position::of(doc.root_element()),
+            "renditions.mapping.wrong_resource_map_count",
+            vec![resource_map_count.to_string()],
         );
     }
     for nav in &navs {
         if nav.attribute((EPUB_NS, "type")).is_none() {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 "a nav element of a Rendition Mapping Document must identify its nature in an epub:type attribute",
                 href,
                 Position::of(*nav),
+                "renditions.mapping.nav_missing_epub_type",
+                Vec::new(),
             );
         }
     }

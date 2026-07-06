@@ -97,12 +97,14 @@ fn check_presentation_content(node: roxmltree::Node, path: &str, report: &mut Re
             continue;
         }
         if !PRESENTATION_ELEMENTS.contains(&name) {
-            report.push_at_pos(
+            report.push_full(
                 RSC_005,
                 Severity::Error,
                 format!("element \"{name}\" not allowed here"),
                 path,
                 Position::of(child),
+                "mathml.presentation.unrecognized_element",
+                vec![name.to_string()],
             );
             // Don't recurse further into an already-rejected subtree -
             // confirmed via the real corpus fixture, which reports exactly
@@ -122,7 +124,7 @@ fn check_annotation_xml(anno: roxmltree::Node, path: &str, report: &mut Report) 
     let is_svg = encoding.is_some_and(|e| SVG_ENCODINGS.contains(&e));
 
     if encoding.is_some() && !(is_content || is_presentation || is_xhtml || is_svg) {
-        report.push_at_pos(
+        report.push_full(
             RSC_005,
             Severity::Error,
             "value of attribute \"encoding\" is invalid; must be equal to one of \
@@ -131,6 +133,8 @@ fn check_annotation_xml(anno: roxmltree::Node, path: &str, report: &mut Report) 
                 .to_string(),
             path,
             Position::of(anno),
+            "mathml.annotation_xml.invalid_encoding",
+            vec![encoding.unwrap_or("").to_string()],
         );
         // Avoid a cascading, contradictory content-model finding once the
         // encoding itself is already known to be bogus.
@@ -140,21 +144,25 @@ fn check_annotation_xml(anno: roxmltree::Node, path: &str, report: &mut Report) 
     if is_content {
         match anno.attribute("name") {
             None => {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "element \"annotation-xml\" missing required attribute \"name\"",
                     path,
                     Position::of(anno),
+                    "mathml.annotation_xml.missing_name",
+                    Vec::new(),
                 );
             }
             Some(n) if n != "contentequiv" => {
-                report.push_at_pos(
+                report.push_full(
                     RSC_005,
                     Severity::Error,
                     "value of attribute \"name\" is invalid",
                     path,
                     Position::of(anno),
+                    "mathml.annotation_xml.invalid_name",
+                    vec![n.to_string()],
                 );
             }
             _ => {}

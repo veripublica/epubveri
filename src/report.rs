@@ -66,6 +66,20 @@ pub struct Message {
     pub text: String,
     pub location: Option<String>,
     pub position: Option<Position>,
+    /// epubveri's own stable, semantic sub-code (e.g.
+    /// `"opf.spine.duplicate_itemref"`), distinguishing the many unrelated
+    /// violations a shared, epubcheck-compatible `id` (esp. `RSC-005`) can
+    /// mean. `None` until a check site is retrofitted - rollout is
+    /// incremental, by priority, not all at once (see issue #2). `id`
+    /// itself never absorbs this: it stays exactly the epubcheck-
+    /// compatibility contract it always was.
+    pub rule: Option<&'static str>,
+    /// The positional values interpolated into `text` (mirroring
+    /// epubcheck's own Java message-template `{0}`/`{1}` approach) - lets
+    /// a consumer eventually re-render `text` from a localized template
+    /// keyed by `rule`, instead of parsing the English sentence. Empty
+    /// when `rule` is `None` or the message has no interpolated values.
+    pub params: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -85,6 +99,8 @@ impl Report {
             text: text.into(),
             location: None,
             position: None,
+            rule: None,
+            params: Vec::new(),
         });
     }
 
@@ -101,6 +117,8 @@ impl Report {
             text: text.into(),
             location: Some(location.into()),
             position: None,
+            rule: None,
+            params: Vec::new(),
         });
     }
 
@@ -120,6 +138,60 @@ impl Report {
             text: text.into(),
             location: Some(location.into()),
             position: Some(position),
+            rule: None,
+            params: Vec::new(),
+        });
+    }
+
+    /// Like `push_at`, but also records a stable semantic sub-code
+    /// (`rule`) and the values interpolated into `text` (`params`) - for
+    /// sites retrofitted for issue #2's `rule`/`params` rollout where no
+    /// node (and so no `Position`) is available. See `push_full` for the
+    /// position-carrying equivalent.
+    pub fn push_at_rule(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        location: impl Into<String>,
+        rule: &'static str,
+        params: Vec<String>,
+    ) {
+        self.messages.push(Message {
+            id,
+            severity,
+            text: text.into(),
+            location: Some(location.into()),
+            position: None,
+            rule: Some(rule),
+            params,
+        });
+    }
+
+    /// Like `push_at_pos`, but also records a stable semantic sub-code
+    /// (`rule`) and the values interpolated into `text` (`params`) - see
+    /// `Message::rule`/`Message::params`. The most complete variant;
+    /// used only at call sites retrofitted for issue #2's incremental
+    /// `rule`/`params` rollout (`RSC-005` first).
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_full(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        location: impl Into<String>,
+        position: Position,
+        rule: &'static str,
+        params: Vec<String>,
+    ) {
+        self.messages.push(Message {
+            id,
+            severity,
+            text: text.into(),
+            location: Some(location.into()),
+            position: Some(position),
+            rule: Some(rule),
+            params,
         });
     }
 
