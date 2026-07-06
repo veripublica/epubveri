@@ -16,6 +16,11 @@ on:
         description: "Existing tag/release to attach binaries to (e.g. v0.4.0)"
         required: true
 
+# GITHUB_TOKEN defaults to read-only; softprops/action-gh-release needs
+# write access to attach files to an existing release.
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
