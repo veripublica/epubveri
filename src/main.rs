@@ -89,7 +89,10 @@ fn main() -> ExitCode {
                 let loc = m
                     .location
                     .as_deref()
-                    .map(|l| format!(" [{l}]"))
+                    .map(|l| match m.position {
+                        Some(p) => format!(" [{l}:{}:{}]", p.line, p.column),
+                        None => format!(" [{l}]"),
+                    })
                     .unwrap_or_default();
                 println!("{} {}: {}{}", m.severity, m.id, m.text, loc);
             }

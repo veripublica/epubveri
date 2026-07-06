@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 fn elem_text(n: roxmltree::Node) -> String {
     n.descendants()
@@ -51,20 +51,22 @@ pub(crate) fn check_preview_publication(
         .map(elem_text);
     match source {
         None => {
-            report.push_at(
+            report.push_at_pos(
                 RSC_017,
                 Severity::Warning,
                 "An EPUB Preview publication should link back to its source Publication",
                 opf_path,
+                Position::of(md),
             );
         }
         Some(text) => {
             if package_identifier_text.is_some_and(|id| id == text) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "A Preview Publication must not use the same package identifier as its source Publication",
                     opf_path,
+                    Position::of(md),
                 );
             }
         }
@@ -100,11 +102,12 @@ pub(crate) fn check_embedded_preview(
             })
             .count();
         if manifest_count != 1 {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "A preview collection must include exactly one child \"manifest\" collection",
                 opf_path,
+                Position::of(coll),
             );
         }
         let links: Vec<_> = coll
@@ -112,11 +115,12 @@ pub(crate) fn check_embedded_preview(
             .filter(|n| n.is_element() && n.tag_name().name() == "link")
             .collect();
         if links.is_empty() {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "A preview collection must include at least one child \"link\" element",
                 opf_path,
+                Position::of(coll),
             );
         }
         for link in links {
@@ -124,11 +128,12 @@ pub(crate) fn check_embedded_preview(
                 continue;
             };
             if href.contains("epubcfi(") {
-                report.push_at(
+                report.push_at_pos(
                     OPF_076,
                     Severity::Error,
                     "a preview link must not use an EPUB CFI fragment",
                     opf_path,
+                    Position::of(link),
                 );
             }
             if crate::opf::is_external(href) {
@@ -140,11 +145,12 @@ pub(crate) fn check_embedded_preview(
                 .values()
                 .any(|(p, mt)| crate::opf::nfc(p) == resolved && mt == "application/xhtml+xml");
             if !is_xhtml {
-                report.push_at(
+                report.push_at_pos(
                     OPF_075,
                     Severity::Error,
                     "a preview link must target an XHTML Content Document",
                     opf_path,
+                    Position::of(link),
                 );
             }
         }

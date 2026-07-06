@@ -8,7 +8,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::ids::*;
 use crate::ocf::{parse_xml, Ocf};
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
 fn parent_dir(path: &str) -> String {
@@ -205,16 +205,22 @@ const RESERVED_PREFIXES: &[(&str, &str)] = &[
 /// flags the itemref-override form of the deprecated `rendition:spread`
 /// "portrait" value (OPF-086), same as the global-value check in
 /// `schemas/package.sch`.
-fn check_itemref_rendition_conflicts(props: &str, path: &str, report: &mut Report) {
+fn check_itemref_rendition_conflicts(
+    props: &str,
+    path: &str,
+    ir: roxmltree::Node,
+    report: &mut Report,
+) {
     let tokens: Vec<&str> = props.split_whitespace().collect();
     for kind in ["layout", "orientation", "spread", "flow"] {
         let prefix = format!("rendition:{kind}-");
         if tokens.iter().filter(|t| t.starts_with(&prefix)).count() > 1 {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 format!("rendition:{kind} spine override values are mutually exclusive"),
                 path.to_string(),
+                Position::of(ir),
             );
         }
     }
@@ -224,19 +230,21 @@ fn check_itemref_rendition_conflicts(props: &str, path: &str, report: &mut Repor
         .count()
         > 1
     {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "page-spread-* spine override values are mutually exclusive",
             path.to_string(),
+            Position::of(ir),
         );
     }
     if tokens.iter().any(|t| *t == "rendition:spread-portrait") {
-        report.push_at(
+        report.push_at_pos(
             OPF_086,
             Severity::Warning,
             "the \"portrait\" value of the \"rendition:spread\" property is deprecated",
             path.to_string(),
+            Position::of(ir),
         );
     }
 }
@@ -292,22 +300,24 @@ fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, report: &mut Repor
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(lang) = n.attribute((XML_NS, "lang")) {
             if !is_valid_lang_tag(lang) {
-                report.push_at(
+                report.push_at_pos(
                     OPF_092,
                     Severity::Error,
                     format!("language tag '{lang}' is not well-formed"),
                     opf_path,
+                    Position::of(n),
                 );
             }
         }
         if n.tag_name().name() == "link" {
             if let Some(hreflang) = n.attribute("hreflang") {
                 if !is_valid_lang_tag(hreflang) {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_092,
                         Severity::Error,
                         format!("hreflang value '{hreflang}' is not well-formed"),
                         opf_path,
+                        Position::of(n),
                     );
                 }
             }
@@ -321,11 +331,12 @@ fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, report: &mut Repor
                 .trim()
                 .to_string();
             if !text.is_empty() && !is_valid_lang_tag(&text) {
-                report.push_at(
+                report.push_at_pos(
                     OPF_092,
                     Severity::Error,
                     format!("dc:language value '{text}' is not well-formed"),
                     opf_path,
+                    Position::of(n),
                 );
             }
         }
@@ -477,11 +488,12 @@ fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mu
             continue;
         };
         if !is_valid_uuid(uuid_part) {
-            report.push_at(
+            report.push_at_pos(
                 OPF_085,
                 Severity::Warning,
                 format!("dc:identifier '{text}' does not look like a valid UUID"),
                 opf_path,
+                Position::of(n),
             );
         }
     }
@@ -529,22 +541,24 @@ fn check_meta_property_scheme_shape(
         if let Some(refines) = n.attribute("refines") {
             let refines = refines.trim();
             if !refines.is_empty() && !refines.starts_with('#') && !refines.contains("://") {
-                report.push_at(
+                report.push_at_pos(
                     RSC_017,
                     Severity::Warning,
                     "@refines should use a fragment identifier pointing to its manifest item",
                     opf_path,
+                    Position::of(n),
                 );
             }
         }
         if let Some(scheme) = n.attribute("scheme") {
             let scheme = scheme.trim();
             if !scheme.is_empty() && !scheme.contains(':') {
-                report.push_at(
+                report.push_at_pos(
                     OPF_027,
                     Severity::Error,
                     format!("unknown scheme value '{scheme}' (must be prefixed)"),
                     opf_path,
+                    Position::of(n),
                 );
             }
         }
@@ -554,11 +568,12 @@ fn check_meta_property_scheme_shape(
                 && !property.contains(' ')
                 && !is_well_formed_ncname_or_prefixed(property)
             {
-                report.push_at(
+                report.push_at_pos(
                     OPF_026,
                     Severity::Error,
                     format!("meta property '{property}' is not well-formed"),
                     opf_path,
+                    Position::of(n),
                 );
             }
         }
@@ -636,49 +651,55 @@ fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize) {
 fn check_prefix_declaration(
     prefix_attr: &str,
     path: &str,
+    node: roxmltree::Node,
     report: &mut Report,
 ) -> HashMap<String, String> {
     let (pairs, syntax_errors) = parse_prefix_value(prefix_attr);
     for _ in 0..syntax_errors {
-        report.push_at(
+        report.push_at_pos(
             OPF_004,
             Severity::Error,
             "the \"prefix\" attribute value has a syntax error",
             path,
+            Position::of(node),
         );
     }
     for (name, uri) in &pairs {
         if name == "_" {
-            report.push_at(
+            report.push_at_pos(
                 OPF_007,
                 Severity::Error,
                 "the prefix \"_\" must not be declared",
                 path,
+                Position::of(node),
             );
         }
         if DEFAULT_VOCAB_URIS.contains(&uri.as_str()) {
-            report.push_at(
+            report.push_at_pos(
                 OPF_007,
                 Severity::Error,
                 format!("prefix '{name}' must not be assigned to a default-vocabulary URI"),
                 path,
+                Position::of(node),
             );
         }
         if uri == DC_ELEMENTS_NS {
-            report.push_at(
+            report.push_at_pos(
                 OPF_007,
                 Severity::Error,
                 format!("prefix '{name}' must not be mapped to the Dublin Core elements namespace"),
                 path,
+                Position::of(node),
             );
         }
         if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| n == name) {
             if uri != default_uri {
-                report.push_at(
+                report.push_at_pos(
                     OPF_007,
                     Severity::Warning,
                     format!("the '{name}' prefix is reserved and must not be redeclared"),
                     path,
+                    Position::of(node),
                 );
             }
         }
@@ -694,6 +715,7 @@ fn check_prefix_usage(
     text: &str,
     declared: &HashMap<String, String>,
     path: &str,
+    node: roxmltree::Node,
     report: &mut Report,
 ) {
     for tok in text.split_whitespace() {
@@ -706,11 +728,12 @@ fn check_prefix_usage(
         if declared.contains_key(prefix) {
             continue;
         }
-        report.push_at(
+        report.push_at_pos(
             OPF_028,
             Severity::Error,
             format!("undeclared prefix '{prefix}' used in '{tok}'"),
             path,
+            Position::of(node),
         );
     }
 }
@@ -724,11 +747,12 @@ fn check_prefix_placement(doc: &roxmltree::Document, path: &str, report: &mut Re
         if n.attribute(("http://www.idpf.org/2007/ops", "prefix"))
             .is_some()
         {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "attribute \"epub:prefix\" not allowed here",
                 path,
+                Position::of(n),
             );
         }
     }
@@ -861,11 +885,12 @@ fn check_collection_roles(doc: &roxmltree::Document, opf_path: &str, report: &mu
             }
         }
         if !valid {
-            report.push_at(
+            report.push_at_pos(
                 OPF_070,
                 Severity::Warning,
                 format!("collection role '{role}' is not a valid URL"),
                 opf_path,
+                Position::of(n),
             );
         }
     }
@@ -890,11 +915,12 @@ fn check_guide_duplicates(doc: &roxmltree::Document, opf_path: &str, report: &mu
                 && other.attribute("href") == r.attribute("href")
         });
         if dup_exists {
-            report.push_at(
+            report.push_at_pos(
                 RSC_017,
                 Severity::Warning,
                 "duplicate \"reference\" elements with the same \"type\" and \"href\" attributes",
                 opf_path,
+                Position::of(*r),
             );
         }
     }
@@ -927,28 +953,31 @@ fn check_guide_references(
         let resolved = nfc(&resolve(base_dir, path_part));
         match items.values().find(|(p, _)| nfc(p) == resolved) {
             None => {
-                report.push_at(
+                report.push_at_pos(
                     OPF_031,
                     Severity::Error,
                     format!("guide reference '{href}' is not declared in the manifest"),
                     opf_path,
+                    Position::of(r),
                 );
                 if !name_index.contains_key(&resolved) {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_007,
                         Severity::Error,
                         format!("guide reference '{href}' does not resolve to a real resource"),
                         opf_path,
+                        Position::of(r),
                     );
                 }
             }
             Some((_, mt)) => {
                 if !is_content_document_type(mt) {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_032,
                         Severity::Error,
                         format!("guide reference '{href}' does not target a Content Document"),
                         opf_path,
+                        Position::of(r),
                     );
                 }
             }
@@ -990,21 +1019,23 @@ fn check_ncx_content_fragments(
         };
         let resolved = nfc(&resolve(&dir, target));
         if !name_index.contains_key(&resolved) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_007,
                 Severity::Error,
                 format!("NCX content src '{src}' does not resolve to a real resource"),
                 ncx_path,
+                Position::of(n),
             );
             continue;
         }
         if let Some((_, mt)) = items.values().find(|(p, _)| nfc(p) == resolved) {
             if !is_content_document_type(mt) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_010,
                     Severity::Error,
                     format!("NCX content src '{src}' does not target an OPS document"),
                     ncx_path,
+                    Position::of(n),
                 );
                 continue;
             }
@@ -1028,11 +1059,12 @@ fn check_ncx_content_fragments(
             id_cache.insert(resolved.clone(), ids);
         }
         if !id_cache[&resolved].contains_key(frag) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_012,
                 Severity::Error,
                 format!("fragment identifier '{frag}' is not defined in '{target}'"),
                 ncx_path,
+                Position::of(n),
             );
         }
     }
@@ -1220,24 +1252,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
     let pkg = doc.root_element();
     if pkg.tag_name().name() != "package" {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "OPF root element is not <package>",
             opf_path,
+            Position::of(pkg),
         );
         return;
     }
     let declared_prefixes = pkg
         .attribute("prefix")
-        .map(|p| check_prefix_declaration(p, opf_path, report))
+        .map(|p| check_prefix_declaration(p, opf_path, pkg, report))
         .unwrap_or_default();
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(v) = n.attribute("property") {
-            check_prefix_usage(v, &declared_prefixes, opf_path, report);
+            check_prefix_usage(v, &declared_prefixes, opf_path, n, report);
         }
         if let Some(v) = n.attribute("properties") {
-            check_prefix_usage(v, &declared_prefixes, opf_path, report);
+            check_prefix_usage(v, &declared_prefixes, opf_path, n, report);
         }
     }
     check_lang_tags(&doc, opf_path, report);
@@ -1246,33 +1279,36 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     check_meta_property_scheme_shape(&doc, opf_path, report);
     check_collection_roles(&doc, opf_path, report);
     check_guide_duplicates(&doc, opf_path, report);
-    if pkg
+    if let Some(bindings) = pkg
         .children()
-        .any(|n| n.is_element() && n.tag_name().name() == "bindings")
+        .find(|n| n.is_element() && n.tag_name().name() == "bindings")
     {
-        report.push_at(
+        report.push_at_pos(
             RSC_017,
             Severity::Warning,
             "the \"bindings\" element is deprecated",
             opf_path,
+            Position::of(bindings),
         );
     }
 
     // --- version ---
     let version = pkg.attribute("version").unwrap_or("");
     if version.is_empty() {
-        report.push_at(
+        report.push_at_pos(
             OPF_001,
             Severity::Error,
             "<package> is missing the required 'version' attribute",
             opf_path,
+            Position::of(pkg),
         );
     } else if !(version.starts_with("2.") || version.starts_with("3.")) {
-        report.push_at(
+        report.push_at_pos(
             OPF_001,
             Severity::Error,
             format!("Unrecognized EPUB version '{version}'"),
             opf_path,
+            Position::of(pkg),
         );
     }
     let is_epub3 = version.starts_with("3.");
@@ -1320,11 +1356,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // Schema validation against our own (permissive) package-document RNG.
     // Additive: a structurally non-conformant package is reported as RSC-005.
     if !crate::rng::validate_node(&crate::rng::package_grammar(), pkg) {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "OPF does not conform to the EPUB package-document schema",
             opf_path,
+            Position::of(pkg),
         );
     }
 
@@ -1369,11 +1406,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .position(|n| n.tag_name().name() == "manifest");
         if let (Some(m), Some(mf)) = (metadata_pos, manifest_pos) {
             if mf < m {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "the \"metadata\" element must come before the \"manifest\" element",
                     opf_path,
+                    Position::of(pkg),
                 );
             }
         }
@@ -1402,11 +1440,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // finding to RSC-005/Error uniformly, which doesn't fit a
         // deprecation warning with its own dedicated code).
         if meta_property_text("rendition:spread").as_deref() == Some("portrait") {
-            report.push_at(
+            report.push_at_pos(
                 OPF_086,
                 Severity::Warning,
                 "the \"portrait\" value of the \"rendition:spread\" property is deprecated",
                 opf_path,
+                Position::of(md),
             );
         }
         // rendition:X custom/unknown properties (OPF-027) and the
@@ -1437,28 +1476,31 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 if property.starts_with("rendition:")
                     && !KNOWN_RENDITION_PROPERTIES.contains(&property)
                 {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_027,
                         Severity::Error,
                         format!("unknown rendition property '{property}'"),
                         opf_path,
+                        Position::of(n),
                     );
                 }
                 if property.starts_with("a11y:") && !KNOWN_A11Y_META_PROPERTIES.contains(&property)
                 {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_027,
                         Severity::Error,
                         format!("unknown a11y property '{property}'"),
                         opf_path,
+                        Position::of(n),
                     );
                 }
                 if property == "meta-auth" {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_017,
                         Severity::Warning,
                         "the meta-auth property is deprecated",
                         opf_path,
+                        Position::of(n),
                     );
                 }
             }
@@ -1477,11 +1519,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         }) {
             let text = elem_text(n);
             if crate::smil::parse_clock_value(&text).is_none() {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("media:duration value '{text}' must be a valid SMIL3 clock value"),
                     opf_path,
+                    Position::of(n),
                 );
             }
         }
@@ -1494,11 +1537,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 && n.tag_name().name() == "meta"
                 && n.attribute("property") == Some("rendition:viewport")
         }) {
-            report.push_at(
+            report.push_at_pos(
                 OPF_086,
                 Severity::Warning,
                 "the \"rendition:viewport\" property is deprecated",
                 opf_path,
+                Position::of(n),
             );
             let text = elem_text(n);
             let syntax_ok = text
@@ -1515,11 +1559,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     _ => false,
                 });
             if !syntax_ok {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("The value of the \"rendition:viewport\" property must be of the form 'width=w,height=h' ('{text}')"),
                     opf_path,
+                    Position::of(n),
                 );
             }
         }
@@ -1574,11 +1619,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .any(|n| n.is_element() && n.tag_name().name() == local)
         };
         if !has("title") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "Required metadata dc:title is missing",
                 opf_path,
+                Position::of(md),
             );
         } else if is_epub2 {
             // EPUB 3 already reports an empty dc:title as RSC-005 (via
@@ -1595,7 +1641,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .filter_map(|t| t.text())
                     .collect();
                 if text.trim().is_empty() {
-                    report.push_at(OPF_055, Severity::Warning, "dc:title is empty", opf_path);
+                    report.push_at_pos(
+                        OPF_055,
+                        Severity::Warning,
+                        "dc:title is empty",
+                        opf_path,
+                        Position::of(n),
+                    );
                 }
             }
         }
@@ -1617,7 +1669,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .collect();
             if !is_valid_dc_date(text.trim()) {
                 if is_epub3 {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_053,
                         Severity::Warning,
                         format!(
@@ -1625,9 +1677,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             text.trim()
                         ),
                         opf_path,
+                        Position::of(n),
                     );
                 } else {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_054,
                         Severity::Error,
                         format!(
@@ -1635,6 +1688,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             text.trim()
                         ),
                         opf_path,
+                        Position::of(n),
                     );
                 }
             }
@@ -1657,11 +1711,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .filter_map(|t| t.text())
                     .collect();
                 if !is_valid_dcterms_modified(text.trim()) {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         "dcterms:modified must be of the form 'CCYY-MM-DDThh:mm:ssZ'",
                         opf_path,
+                        Position::of(modified),
                     );
                 }
             }
@@ -1681,21 +1736,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if let Some(role) = n.attribute((OPF_NS_ROLE, "role")) {
                 let valid = role.len() == 3 && role.bytes().all(|b| b.is_ascii_lowercase());
                 if !valid {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_052,
                         Severity::Error,
                         format!("'{role}' is not a recognized MARC relator code"),
                         opf_path,
+                        Position::of(n),
                     );
                 }
             }
         }
         if !has("language") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "Required metadata dc:language is missing",
                 opf_path,
+                Position::of(md),
             );
         }
         let identifiers: Vec<_> = md
@@ -1703,11 +1760,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
             .collect();
         if identifiers.is_empty() {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "Required metadata dc:identifier is missing",
                 opf_path,
+                Position::of(md),
             );
         }
         if let Some(uid) = pkg.attribute("unique-identifier").map(str::trim) {
@@ -1724,28 +1782,31 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     );
                 }
                 None => {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_030,
                         Severity::Error,
                         format!(
                             "package unique-identifier '{uid}' does not match any dc:identifier id"
                         ),
                         opf_path,
+                        Position::of(pkg),
                     );
                 }
             }
         } else {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "<package> is missing the required attribute \"unique-identifier\"",
                 opf_path,
+                Position::of(pkg),
             );
-            report.push_at(
+            report.push_at_pos(
                 OPF_048,
                 Severity::Error,
                 "<package> is missing its required unique-identifier attribute",
                 opf_path,
+                Position::of(pkg),
             );
         }
 
@@ -1777,21 +1838,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if !parts.is_empty() {
                 let sum: f64 = parts.iter().sum();
                 if (total - sum).abs() > 1.0 {
-                    report.push_at(
+                    report.push_at_pos(
                         MED_016,
                         Severity::Warning,
                         "media:duration total does not match the sum of overlay durations",
                         opf_path,
+                        Position::of(md),
                     );
                 }
             }
         }
     } else {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "OPF is missing the <metadata> element",
             opf_path,
+            Position::of(pkg),
         );
     }
 
@@ -1852,69 +1915,77 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             let (id, href, mt) = match (id, href, mt) {
                 (Some(i), Some(h), Some(m)) => (i.trim(), h, m),
                 _ => {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         format!("manifest <item> is missing id/href/media-type (id={id:?})"),
                         opf_path,
+                        Position::of(item),
                     );
                     continue;
                 }
             };
             if !seen.insert(id.to_string()) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("duplicate manifest item id '{id}'"),
                     opf_path,
+                    Position::of(item),
                 );
             }
             if href.contains(' ') {
-                report.push_at(
+                report.push_at_pos(
                     RSC_020,
                     Severity::Error,
                     format!("manifest item href '{href}' contains unencoded spaces"),
                     opf_path,
+                    Position::of(item),
                 );
             }
             if href.contains('#') {
-                report.push_at(
+                report.push_at_pos(
                     OPF_091,
                     Severity::Error,
                     format!("manifest item href '{href}' must not have a fragment identifier"),
                     opf_path,
+                    Position::of(item),
                 );
             }
             if href.trim_start().starts_with("data:") {
-                report.push_at(
+                report.push_at_pos(
                     RSC_029,
                     Severity::Error,
                     format!("manifest item '{id}' href must not be a data URL"),
                     opf_path,
+                    Position::of(item),
                 );
             }
             if href.trim_start().starts_with("file:") {
-                report.push_at(
+                report.push_at_pos(
                     RSC_030,
                     Severity::Error,
                     format!("manifest item '{id}' href is a file URL, which is not allowed"),
                     opf_path,
+                    Position::of(item),
                 );
             }
             if crate::cmt::is_non_preferred_core_media_type(mt) {
-                report.push_at(
+                report.push_at_pos(
                     OPF_090,
                     Severity::Info,
                     format!("media-type '{mt}' is a non-preferred (but valid) Core Media Type"),
                     opf_path,
+                    Position::of(item),
                 );
             }
             if mt == "text/x-oeb1-css" {
-                report.push_at(
+                report.push_at_pos(
                     OPF_037,
                     Severity::Warning,
                     "media-type 'text/x-oeb1-css' is a deprecated OEB 1.x construct",
                     opf_path,
+                    Position::of(item),
                 );
             }
             // resolve()'s query-stripping and path-segment handling are
@@ -1936,45 +2007,50 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             let resolved_nfc = nfc(&resolved);
             if !is_external(href) {
                 if href_leaks_container_root(&base_dir, href) {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_026,
                         Severity::Error,
                         format!("manifest item '{id}' href '{href}' is path-absolute or escapes the container root"),
                         opf_path,
+                        Position::of(item),
                     );
                 }
                 if href.contains('?') {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_033,
                         Severity::Error,
                         format!("manifest item '{id}' href '{href}' must not have a query string"),
                         opf_path,
+                        Position::of(item),
                     );
                 }
                 if resolved.contains(' ') {
-                    report.push_at(
+                    report.push_at_pos(
                         PKG_010,
                         Severity::Warning,
                         format!("resource '{resolved}' has a space in its name"),
                         opf_path,
+                        Position::of(item),
                     );
                 }
                 if resolved_nfc == opf_own_name {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_099,
                         Severity::Error,
                         format!("manifest item '{id}' references the package document itself"),
                         opf_path,
+                        Position::of(item),
                     );
                 }
                 if let Some(first_id) = resource_seen.get(&resolved_nfc) {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_074,
                         Severity::Error,
                         format!(
                             "manifest item '{id}' represents the same resource as item '{first_id}'"
                         ),
                         opf_path,
+                        Position::of(item),
                     );
                 } else {
                     resource_seen.insert(resolved_nfc.clone(), id.to_string());
@@ -1986,36 +2062,40 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     if token == "cover-image" {
                         cover_image_count += 1;
                         if !mt.starts_with("image/") {
-                            report.push_at(
+                            report.push_at_pos(
                                 OPF_012,
                                 Severity::Error,
                                 "the \"cover-image\" property must only be used on an image",
                                 opf_path,
+                                Position::of(item),
                             );
                         }
                     } else if token == "search-key-map"
                         && mt != "application/vnd.epub.search-key-map+xml"
                     {
-                        report.push_at(
+                        report.push_at_pos(
                             OPF_012,
                             Severity::Error,
                             format!(
                                 "property \"search-key-map\" is not defined for media type '{mt}'"
                             ),
                             opf_path,
+                            Position::of(item),
                         );
                     } else if token == "nav" && mt != "application/xhtml+xml" {
-                        report.push_at(
+                        report.push_at_pos(
                             OPF_012,
                             Severity::Error,
                             format!("property \"nav\" is not defined for media type '{mt}'"),
                             opf_path,
+                            Position::of(item),
                         );
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_005,
                             Severity::Error,
                             "the nav document must be an XHTML Content Document",
                             opf_path,
+                            Position::of(item),
                         );
                     } else {
                         // A genuinely custom (non-reserved) prefix is
@@ -2032,33 +2112,36 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             None => !KNOWN_ITEM_PROPERTIES.contains(&token),
                         };
                         if unknown {
-                            report.push_at(
+                            report.push_at_pos(
                                 OPF_027,
                                 Severity::Error,
                                 format!("unknown manifest item property '{token}'"),
                                 opf_path,
+                                Position::of(item),
                             );
                         }
                     }
                 }
             }
             if is_epub3 && item.attribute("fallback-style").is_some() {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "the \"fallback-style\" attribute is an obsolete EPUB 2 construct",
                     opf_path,
+                    Position::of(item),
                 );
             } else if let Some(fs) = item.attribute("fallback-style") {
                 fallback_style_map.insert(id.to_string(), fs.trim().to_string());
             }
             if let Some(fb) = item.attribute("fallback").map(str::trim) {
                 if fb == id {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_045,
                         Severity::Error,
                         format!("item '{id}' cannot fall back to itself"),
                         opf_path,
+                        Position::of(item),
                     );
                 }
             }
@@ -2077,10 +2160,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 data_nav_items.push((resolved.clone(), mt.to_string()));
             }
             if !is_external(href) && !name_index.contains_key(&nfc(&resolved)) {
-                report.push(
+                report.push_at_pos(
                     RSC_001,
                     Severity::Error,
                     format!("manifest item '{id}' references a missing resource '{href}'"),
+                    opf_path,
+                    Position::of(item),
                 );
                 // PKG-009/012: real epubcheck's single-package-document
                 // check mode has no actual container to inspect, so it
@@ -2096,19 +2181,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 for segment in href_path.split('/').filter(|s| !s.is_empty()) {
                     let decoded = percent_decode(segment);
                     if crate::filename::has_forbidden_char(&decoded) {
-                        report.push_at(
+                        report.push_at_pos(
                             PKG_009,
                             Severity::Error,
                             format!("manifest item '{id}' href segment '{decoded}' contains a forbidden character"),
                             opf_path,
+                            Position::of(item),
                         );
                     }
                     if crate::filename::has_non_ascii(&decoded) {
-                        report.push_at(
+                        report.push_at_pos(
                             PKG_012,
                             Severity::Info,
                             format!("manifest item '{id}' href segment '{decoded}' contains non-ASCII characters"),
                             opf_path,
+                            Position::of(item),
                         );
                     }
                 }
@@ -2128,20 +2215,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             // caught separately when it's referenced via `<img>`
             // (`resources-remote-svg-contentdoc-error`).
             if is_remote_url(href) && mt == "application/xhtml+xml" {
-                report.push_at(
+                report.push_at_pos(
                     RSC_006,
                     Severity::Error,
                     format!("Content Document '{href}' must not be remote"),
                     opf_path,
+                    Position::of(item),
                 );
             }
             if let Some(mo) = item.attribute("media-overlay") {
                 if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         "the media-overlay attribute is only allowed on EPUB Content Documents",
                         opf_path,
+                        Position::of(item),
                     );
                 }
                 media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
@@ -2152,19 +2241,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             items.insert(id.to_string(), (resolved, mt.to_string()));
         }
         if cover_image_count > 1 {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "the \"cover-image\" property must occur at most once in the manifest",
                 opf_path,
+                Position::of(mn),
             );
         }
     } else {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "OPF is missing the <manifest> element",
             opf_path,
+            Position::of(pkg),
         );
     }
     for target in fallback_map.values() {
@@ -2255,11 +2346,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 && n.attribute("refines").is_none()
         });
         if !media_overlay_attrs.is_empty() && !has_global_duration {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "the global media:duration meta element not set",
                 opf_path,
+                Position::of(md),
             );
         }
         let overlay_ids: HashSet<&str> = media_overlay_attrs
@@ -2274,11 +2366,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && n.attribute("refines").map(|r| r.trim_start_matches('#')) == Some(overlay_id)
             });
             if !has_item_duration {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("the item media:duration meta element not set for '{overlay_id}'"),
                     opf_path,
+                    Position::of(md),
                 );
             }
         }
@@ -2301,11 +2394,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .split_whitespace()
             .collect();
         if rel_tokens.contains(&"alternate") && rel_tokens.len() > 1 {
-            report.push_at(
+            report.push_at_pos(
                 OPF_089,
                 Severity::Error,
                 "the \"alternate\" keyword must not be combined with other link relationships",
                 opf_path,
+                Position::of(link),
             );
         }
         // The real EPUB Accessibility 1.1 a11y: link-rel vocabulary
@@ -2315,11 +2409,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         const KNOWN_A11Y_LINK_RELS: &[&str] = &["a11y:certifierCredential", "a11y:certifierReport"];
         for token in &rel_tokens {
             if token.starts_with("a11y:") && !KNOWN_A11Y_LINK_RELS.contains(token) {
-                report.push_at(
+                report.push_at_pos(
                     OPF_027,
                     Severity::Error,
                     format!("unknown a11y link relationship '{token}'"),
                     opf_path,
+                    Position::of(link),
                 );
             }
         }
@@ -2329,11 +2424,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         if let Some(props) = link.attribute("properties") {
             for token in props.split_whitespace() {
                 if token != "onix" && !token.contains(':') {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_027,
                         Severity::Error,
                         format!("unknown link property '{token}'"),
                         opf_path,
+                        Position::of(link),
                     );
                 }
             }
@@ -2348,11 +2444,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         if rel_tokens.contains(&"voicing") {
             if let Some(mt) = media_type {
                 if !mt.starts_with("audio/") {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_095,
                         Severity::Error,
                         format!("a \"voicing\" link's media-type '{mt}' must be an audio type"),
                         opf_path,
+                        Position::of(link),
                     );
                 }
             }
@@ -2363,63 +2460,69 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let href = href.trim();
         if let Some(frag) = href.strip_prefix('#') {
             if items.contains_key(frag) {
-                report.push_at(
+                report.push_at_pos(
                     OPF_098,
                     Severity::Error,
                     "a link target must not reference a manifest item id",
                     opf_path,
+                    Position::of(link),
                 );
             }
             continue;
         }
         if href.starts_with("data:") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_029,
                 Severity::Error,
                 "a package link href must not be a data URL",
                 opf_path,
+                Position::of(link),
             );
             continue;
         }
         if href.starts_with("file:") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_030,
                 Severity::Error,
                 "a package link href must not be a file URL",
                 opf_path,
+                Position::of(link),
             );
             continue;
         }
         if is_external(href) {
             if media_type_always_required && media_type.is_none() {
-                report.push_at(
+                report.push_at_pos(
                     OPF_094,
                     Severity::Error,
                     "a \"record\"/\"voicing\" link must declare a media-type even when remote",
                     opf_path,
+                    Position::of(link),
                 );
             }
             continue;
         }
         if href.contains('?') {
-            report.push_at(
+            report.push_at_pos(
                 RSC_033,
                 Severity::Error,
                 format!("package link href '{href}' must not have a query string"),
                 opf_path,
+                Position::of(link),
             );
         }
         let resolved = resolve(&base_dir, href);
         if !name_index.contains_key(&nfc(&resolved)) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_007,
                 Severity::Warning,
                 format!("link references a missing resource '{href}'"),
                 opf_path,
+                Position::of(link),
             );
         }
         if media_type.is_none() {
-            report.push_at(
+            report.push_at_pos(
                 if media_type_always_required {
                     OPF_094
                 } else {
@@ -2428,6 +2531,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 Severity::Error,
                 "a link to a local resource must declare a media-type",
                 opf_path,
+                Position::of(link),
             );
         }
     }
@@ -2463,18 +2567,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // regardless of whether it resolves; if it *also* doesn't resolve
         // to a real manifest item, that's additionally OPF-063.
         if let Some(page_map) = sp.attribute("page-map") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "attribute \"page-map\" not allowed here",
                 opf_path,
+                Position::of(sp),
             );
             if !items.contains_key(page_map.trim()) {
-                report.push_at(
+                report.push_at_pos(
                     OPF_063,
                     Severity::Warning,
                     format!("page-map reference '{page_map}' was not found in the manifest"),
                     opf_path,
+                    Position::of(sp),
                 );
             }
         }
@@ -2490,21 +2596,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .iter()
             .all(|ir| ir.attribute("linear").map(str::trim) == Some("no"))
         {
-            report.push_at(
+            report.push_at_pos(
                 OPF_033,
                 Severity::Error,
                 "<spine> contains no linear resources",
                 opf_path,
+                Position::of(sp),
             );
         }
         let mut spine_seen: HashSet<&str> = HashSet::new();
         for (position, ir) in refs.into_iter().enumerate() {
             match ir.attribute("idref").map(str::trim) {
-                None => report.push_at(
+                None => report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "spine <itemref> is missing 'idref'",
                     opf_path,
+                    Position::of(ir),
                 ),
                 Some(idref) => {
                     if !spine_seen.insert(idref) {
@@ -2512,19 +2620,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         // EPUB2's own dedicated fixture confirms OPF-034,
                         // but the identically-shaped EPUB3 fixture expects
                         // RSC-005 instead.
-                        report.push_at(
+                        report.push_at_pos(
                             if is_epub3 { RSC_005 } else { OPF_034 },
                             Severity::Error,
                             format!("spine references manifest item id '{idref}' more than once"),
                             opf_path,
+                            Position::of(ir),
                         );
                     }
                     match items.get(idref) {
-                        None => report.push_at(
+                        None => report.push_at_pos(
                             OPF_049,
                             Severity::Error,
                             format!("spine itemref idref '{idref}' was not found in the manifest"),
                             opf_path,
+                            Position::of(ir),
                         ),
                         Some((path, mt)) => {
                             spine_order.entry(nfc(path)).or_insert(position);
@@ -2556,25 +2666,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                                     // A real fixture confirms an image is
                                     // its own dedicated (error-level)
                                     // case, not the generic warning.
-                                    report.push_at(
+                                    report.push_at_pos(
                                         OPF_042,
                                         Severity::Error,
                                         format!("spine item idref '{idref}' is an image, not a Content Document"),
                                         opf_path,
+                                        Position::of(ir),
                                     );
                                 } else {
-                                    report.push_at(
+                                    report.push_at_pos(
                                         OPF_043,
                                         Severity::Warning,
                                         format!("spine item idref '{idref}' has non-content media-type '{mt}' with no verified fallback"),
                                         opf_path,
+                                        Position::of(ir),
                                     );
                                 }
                             }
 
                             // --- Fixed-layout viewport/viewBox checks ---
                             let props = ir.attribute("properties").unwrap_or("");
-                            check_itemref_rendition_conflicts(props, opf_path, report);
+                            check_itemref_rendition_conflicts(props, opf_path, ir, report);
                             let is_fixed_layout = if props
                                 .split_whitespace()
                                 .any(|p| p == "rendition:layout-reflowable")
@@ -2621,28 +2733,31 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         match sp.attribute("toc").map(str::trim) {
             None => {
                 if is_epub2 {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         "EPUB 2 <spine> is missing the required 'toc' (NCX) attribute",
                         opf_path,
+                        Position::of(sp),
                     );
                 }
             }
             Some(toc) => match items.get(toc) {
-                None => report.push_at(
+                None => report.push_at_pos(
                     OPF_049,
                     Severity::Error,
                     format!("spine 'toc' idref '{toc}' was not found in the manifest"),
                     opf_path,
+                    Position::of(sp),
                 ),
                 Some((ncx_path, mt)) => {
                     if mt != NCX {
-                        report.push_at(
+                        report.push_at_pos(
                             OPF_050,
                             Severity::Error,
                             format!("spine 'toc' references '{toc}' with media-type '{mt}'; an NCX ({NCX}) is expected"),
                             opf_path,
+                            Position::of(sp),
                         );
                     } else if let Some(uid_text) = &package_identifier_text {
                         if let Some(orig) = name_index.get(&nfc(ncx_path)).cloned() {
@@ -2666,11 +2781,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             },
         }
     } else {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "OPF is missing the <spine> element",
             opf_path,
+            Position::of(pkg),
         );
     }
 
@@ -2706,19 +2822,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // --- EPUB 3 navigation document ---
     // epubcheck enforces this via its package Schematron and reports RSC-005.
     if is_epub3 && !nav_present {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "EPUB 3 requires a navigation document (a manifest item with properties=\"nav\")",
             opf_path,
+            Position::of(pkg),
         );
     }
     if nav_count > 1 {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "only one manifest item may declare the \"nav\" property",
             opf_path,
+            Position::of(pkg),
         );
     }
 
@@ -2840,11 +2958,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             } else if manifest_index_paths.contains(&doc_key)
                 || collection_index_paths.contains(&doc_key)
             {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "At least one \"index\" element must be present in a document declared as an index in the OPF",
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
             crate::indexes::check_content_model(&d, &path, report);
@@ -2853,12 +2972,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let declared_prefixes = d
             .root_element()
             .attribute(("http://www.idpf.org/2007/ops", "prefix"))
-            .map(|p| check_prefix_declaration(p, &path, report))
+            .map(|p| check_prefix_declaration(p, &path, d.root_element(), report))
             .unwrap_or_default();
         check_prefix_placement(&d, &path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                check_prefix_usage(v, &declared_prefixes, &path, report);
+                check_prefix_usage(v, &declared_prefixes, &path, n, report);
             }
         }
 
@@ -2900,13 +3019,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     }
                     let target = nfc(&resolve(&dir_here, &href));
                     if fixed_layout_docs.get(&target) == Some(&false) {
-                        report.push_at(
+                        report.push_at_pos(
                             NAV_009,
                             Severity::Error,
                             format!(
                                 "region-based nav target '{href}' is not a fixed-layout document"
                             ),
                             path.clone(),
+                            Position::of(region_nav),
                         );
                     }
                 }
@@ -2920,11 +3040,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // Schema validation against our own XHTML content-document RNG.
         // Additive: a non-conformant content document is reported as RSC-005.
         if !crate::rng::validate_node(&xhtml_grammar, d.root_element()) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "content document does not conform to the EPUB XHTML content-model schema",
                 path.clone(),
+                Position::of(d.root_element()),
             );
         }
 
@@ -2999,20 +3120,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .filter_map(|n| n.text())
                     .collect();
                 if text.trim().is_empty() {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         "\"title\" must not be empty",
                         path.clone(),
+                        Position::of(title),
                     );
                 }
             }
             None => {
-                report.push_at(
+                report.push_at_pos(
                     RSC_017,
                     Severity::Warning,
                     "The \"head\" element should have a \"title\" child element.",
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
         }
@@ -3023,11 +3146,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             for n in d.descendants().filter(|n| n.is_element()) {
                 if let Some(id) = n.attribute("id") {
                     if !seen.insert(id) {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_005,
                             Severity::Error,
                             format!("Duplicate ID \"{id}\""),
                             path.clone(),
+                            Position::of(n),
                         );
                     }
                 }
@@ -3053,11 +3177,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     if let Some(v) = n.attribute(*attr) {
                         for token in v.split_whitespace() {
                             if !ids.contains(token) {
-                                report.push_at(
+                                report.push_at_pos(
                                     RSC_005,
                                     Severity::Error,
                                     format!("attribute \"{attr}\" must refer to elements in the same document (target ID missing)"),
                                     path.clone(),
+                                    Position::of(n),
                                 );
                             }
                         }
@@ -3071,11 +3196,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     if let Some(v) = n.attribute("for") {
                         for token in v.split_whitespace() {
                             if !ids.contains(token) {
-                                report.push_at(
+                                report.push_at_pos(
                                     RSC_005,
                                     Severity::Error,
                                     "attribute \"for\" must refer to elements in the same document (target ID missing)",
                                     path.clone(),
+                                    Position::of(n),
                                 );
                             }
                         }
@@ -3086,11 +3212,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     if let Some(v) = n.attribute(*attr) {
                         let v = v.trim();
                         if !v.is_empty() && !ids.contains(v) {
-                            report.push_at(
+                            report.push_at_pos(
                                 RSC_005,
                                 Severity::Error,
                                 format!("attribute \"{attr}\" must refer to elements in the same document (target ID missing)"),
                                 path.clone(),
+                                Position::of(n),
                             );
                         }
                     }
@@ -3104,11 +3231,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .filter(|n| n.is_element() && n.tag_name().name() == "img")
         {
             if n.attribute("src").is_some_and(|v| v.trim().is_empty()) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "\"img\" element's \"src\" attribute must not be empty",
                     path.clone(),
+                    Position::of(n),
                 );
             }
         }
@@ -3120,11 +3248,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 n.attribute(("http://www.w3.org/XML/1998/namespace", "lang")),
             ) {
                 if lang.trim() != xml_lang.trim() {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         "lang and xml:lang attributes must have the same value",
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3143,11 +3272,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         {
             if let Some(usemap) = n.attribute("usemap") {
                 if !usemap.starts_with('#') {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         format!("value of attribute \"usemap\" is invalid: \"{usemap}\""),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3166,11 +3296,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             n.is_element() && n.tag_name().name() == "meta" && n.attribute("charset").is_some()
         });
         if has_http_equiv_content_type && has_charset_meta {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
                 path.clone(),
+                Position::of(d.root_element()),
             );
         }
         for n in d.descendants().filter(|n| {
@@ -3183,11 +3314,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .attribute("content")
                 .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
             {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
                     path.clone(),
+                    Position::of(n),
                 );
             }
         }
@@ -3215,13 +3347,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 _ => continue,
             };
             if !n.has_attribute(required_attr) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!(
                         "element \"{tag}\" missing required attribute \"{required_attr}\" (if the itemprop is specified on this element type, that attribute must also be present)"
                     ),
                     path.clone(),
+                    Position::of(n),
                 );
             }
         }
@@ -3235,11 +3368,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .skip(1)
                 .any(|c| c.is_element() && c.tag_name().name() == "dfn")
             {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "a \"dfn\" element must not contain a nested \"dfn\" element",
                     path.clone(),
+                    Position::of(n),
                 );
             }
         }
@@ -3253,29 +3387,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && n.tag_name().name() == "trigger"
                     && n.tag_name().namespace() == Some(EPUB_NS)
             }) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_017,
                     Severity::Warning,
                     "The \"epub:trigger\" element is deprecated",
                     path.clone(),
+                    Position::of(n),
                 );
                 if let Some(r) = n.attribute("ref") {
                     if !ids.contains(r) {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_005,
                             Severity::Error,
                             "The ref attribute must refer to an element in the same document",
                             path.clone(),
+                            Position::of(n),
                         );
                     }
                 }
                 if let Some(o) = n.attribute(("http://www.w3.org/2001/xml-events", "observer")) {
                     if !ids.contains(o) {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_005,
                             Severity::Error,
                             "The ev:observer attribute must refer to an element in the same document",
                             path.clone(),
+                            Position::of(n),
                         );
                     }
                 }
@@ -3298,11 +3435,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         {
             for token in n.attribute("role").unwrap().split_whitespace() {
                 if DEPRECATED_ARIA_ROLES.contains(&token) {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_017,
                         Severity::Warning,
                         format!("\"{token}\" role is deprecated"),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3338,11 +3476,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     continue;
                 }
                 if !crate::smil::is_default_vocab_type(token) {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_088,
                         Severity::Info,
                         format!("epub:type value '{token}' is not in the default vocabulary"),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
                 // "endnote" specifically is deprecated only when used
@@ -3358,11 +3497,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             .is_some_and(|t| t.split_whitespace().any(|tok| tok == "endnotes"))
                     });
                 if DEPRECATED_SSV.contains(&token) && !endnote_exempt {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_086,
                         Severity::Info,
                         format!("epub:type value '{token}' is deprecated"),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
                 let redundant = matches!(
@@ -3377,11 +3517,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         | ("aside", "aside")
                 );
                 if redundant {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_087,
                         Severity::Info,
                         format!("epub:type value '{token}' only restates the semantic of its host element \"{tag}\""),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3392,11 +3533,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // not an error (the document may still be usable).
         for ns in d.root_element().namespaces() {
             if ns.name() == Some("epub") && ns.uri() != EPUB_NS {
-                report.push_at(
+                report.push_at_pos(
                     HTM_010,
                     Severity::Info,
                     format!("Namespace \"{}\" is unusual", ns.uri()),
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
         }
@@ -3418,11 +3560,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && c.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
             });
             if !n.has_attribute("alttext") && !has_annotation {
-                report.push_at(
+                report.push_at_pos(
                     ACC_009,
                     Severity::Info,
                     "MathML markup has no alternative text",
                     path.clone(),
+                    Position::of(n),
                 );
             }
         }
@@ -3434,11 +3577,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         {
             if let Some(v) = n.attribute("datetime") {
                 if !crate::htm::is_valid_html5_datetime(v) {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         format!("value of attribute \"datetime\" is invalid: \"{v}\""),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3455,11 +3599,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             n.is_element() && n.tag_name().name() == "meta" && n.attribute("charset").is_some()
         });
         if has_http_equiv_content_type && has_charset_meta {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
                 path.clone(),
+                Position::of(d.root_element()),
             );
         }
 
@@ -3469,16 +3614,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // unrelated native <switch> element (conditional rendering), which
         // a local-name-only match would misidentify as epub:switch.
         const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
-        for _ in d.descendants().filter(|n| {
+        for n in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "switch"
                 && n.tag_name().namespace() == Some(EPUB_NS)
         }) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_017,
                 Severity::Warning,
                 "The \"epub:switch\" element is deprecated",
                 path.clone(),
+                Position::of(n),
             );
         }
 
@@ -3527,13 +3673,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             let resolved = nfc(&resolve(&dir, target));
             if let Some((_, actual_type)) = items.values().find(|(ip, _)| nfc(ip) == resolved) {
                 if !actual_type.eq_ignore_ascii_case(declared_type) {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_013,
                         Severity::Warning,
                         format!(
                             "declared type \"{declared_type}\" doesn't match the resource's actual media-type \"{actual_type}\""
                         ),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3573,18 +3720,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 };
                 if crate::url::is_absolute(href) {
                     if crate::url::has_syntax_error(href) {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_020,
                             Severity::Error,
                             format!("URL '{href}' is not conforming"),
                             path.clone(),
+                            Position::of(a),
                         );
                     } else if crate::url::has_unregistered_scheme(href) {
-                        report.push_at(
+                        report.push_at_pos(
                             HTM_025,
                             Severity::Warning,
                             format!("URL '{href}' uses an unregistered scheme"),
                             path.clone(),
+                            Position::of(a),
                         );
                     }
                 }
@@ -3601,13 +3750,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     continue;
                 }
                 if remote_base {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_006,
                         Severity::Error,
                         format!(
                             "relative reference '{href}' resolves to a remote resource via base"
                         ),
                         path.clone(),
+                        Position::of(a),
                     );
                     continue;
                 }
@@ -3656,11 +3806,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     frag_id_cache.insert(target_nfc.clone(), ids);
                 }
                 if !frag_id_cache[&target_nfc].contains_key(frag) {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_012,
                         Severity::Error,
                         format!("fragment identifier '{frag}' is not defined in '{target_nfc}'"),
                         path.clone(),
+                        Position::of(a),
                     );
                     continue;
                 }
@@ -3674,11 +3825,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             && target_node.tag_name().namespace()
                                 == Some("http://www.w3.org/2000/svg")
                         {
-                            report.push_at(
+                            report.push_at_pos(
                                 RSC_014,
                                 Severity::Error,
                                 format!("hyperlink '{href}' targets an SVG symbol (incompatible resource type)"),
                                 path.clone(),
+                                Position::of(a),
                             );
                         }
                     }
@@ -3697,13 +3849,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         }) {
             if let Some(href) = n.attribute("href") {
                 if !is_external(href) && href.contains('#') {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_013,
                         Severity::Error,
                         format!(
                             "stylesheet reference '{href}' must not have a fragment identifier"
                         ),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3736,13 +3889,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                                 .values()
                                 .any(|(ip, mt)| nfc(ip) == resolved && mt == "image/svg+xml");
                         if !is_svg {
-                            report.push_at(
+                            report.push_at_pos(
                                 RSC_009,
                                 Severity::Warning,
                                 format!(
                                     "non-SVG image '{v}' is referenced with a fragment identifier"
                                 ),
                                 path.clone(),
+                                Position::of(n),
                             );
                         }
                     }
@@ -3762,11 +3916,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         // this must check manifest declaration (`items`),
                         // not container file existence (`name_index`).
                         if !items.values().any(|(ip, _)| nfc(ip) == resolved) {
-                            report.push_at(
+                            report.push_at_pos(
                                 RSC_008,
                                 Severity::Error,
                                 format!("srcset candidate '{url}' is not declared in the manifest"),
                                 path.clone(),
+                                Position::of(n),
                             );
                         }
                     }
@@ -3786,11 +3941,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
             if let Some(v) = href {
                 if !is_external(v) && !v.contains('#') {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_015,
                         Severity::Error,
                         format!("\"use\" element's href '{v}' has no fragment identifier"),
                         path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -3826,11 +3982,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         // false positive found via a real `nav-landmarks-
                         // valid` fixture using exactly that shape).
                         if is_remote_url(href) {
-                            report.push_at(
+                            report.push_at_pos(
                                 NAV_010,
                                 Severity::Error,
                                 format!("external link '{href}' in a toc/page-list/landmarks nav"),
                                 path.clone(),
+                                Position::of(a),
                             );
                         }
                     }
@@ -3901,11 +4058,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
                 for w in keys.windows(2) {
                     if w[0] > w[1] {
-                        report.push_at(
+                        report.push_at_pos(
                             NAV_011,
                             Severity::Warning,
                             "toc nav link order does not match reading order",
                             path.clone(),
+                            Position::of(toc_nav),
                         );
                     }
                 }
@@ -3940,11 +4098,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
                 if let Some(v) = node.attribute(attr) {
                     if v.trim_start().starts_with("file:") {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_030,
                             Severity::Error,
                             format!("'{v}' is a file URL, which is not allowed"),
                             path.clone(),
+                            Position::of(node),
                         );
                         continue;
                     }
@@ -4017,11 +4176,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         // (and a CSS @import target, handled separately in
                         // css.rs) - every other "this content-doc
                         // reference doesn't resolve" case is RSC-007.
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_007,
                             Severity::Error,
                             format!("reference to a resource missing from the publication: '{v}'"),
                             path.clone(),
+                            Position::of(node),
                         );
                     }
                 }
@@ -4039,19 +4199,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")));
                 if let Some(href) = href {
                     if href.trim_start().starts_with("data:") {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_029,
                             Severity::Error,
                             "a hyperlink href must not be a data URL",
                             path.clone(),
+                            Position::of(node),
                         );
                     } else if !is_external(href) {
                         if href.contains('?') {
-                            report.push_at(
+                            report.push_at_pos(
                                 RSC_033,
                                 Severity::Error,
                                 format!("hyperlink href '{href}' must not have a query string"),
                                 path.clone(),
+                                Position::of(node),
                             );
                         }
                         if node.tag_name().name() == "a" {
@@ -4171,11 +4333,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 if is_plain_stylesheet {
                     if let Some(class) = node.attribute("class") {
                         if class.split_whitespace().count() > 1 {
-                            report.push_at(
+                            report.push_at_pos(
                                 CSS_005,
                                 Severity::Info,
                                 "link element's class names conflicting alt style tags",
                                 path.clone(),
+                                Position::of(node),
                             );
                         }
                     }
@@ -4186,19 +4349,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 if is_alt_stylesheet {
                     match node.attribute("title") {
                         None => {
-                            report.push_at(
+                            report.push_at_pos(
                                 CSS_015,
                                 Severity::Error,
                                 "an alternate stylesheet link must have a title attribute",
                                 path.clone(),
+                                Position::of(node),
                             );
                         }
                         Some(t) if t.trim().is_empty() => {
-                            report.push_at(
+                            report.push_at_pos(
                                 CSS_015,
                                 Severity::Error,
                                 "an alternate stylesheet link's title must not be empty",
                                 path.clone(),
+                                Position::of(node),
                             );
                         }
                         Some(_) => {}
@@ -4236,31 +4401,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             ] {
                 let declared_here = declared_tokens.contains(&name);
                 if used && !declared_here {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_014,
                         Severity::Error,
                         format!(
                             "content document uses {name} but doesn't declare the \"{name}\" property"
                         ),
                         path.clone(),
+                        Position::of(d.root_element()),
                     );
                 } else if declared_here && !used {
-                    report.push_at(
+                    report.push_at_pos(
                         unused_id,
                         unused_sev,
                         format!(
                             "the \"{name}\" property is declared but doesn't appear to be needed"
                         ),
                         path.clone(),
+                        Position::of(d.root_element()),
                     );
                 }
             }
             if has_switch && !declared_tokens.contains(&"switch") {
-                report.push_at(
+                report.push_at_pos(
                     OPF_014,
                     Severity::Error,
                     "content document uses epub:switch but doesn't declare the \"switch\" property",
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
             // "index" only gets the "declared but unused" direction
@@ -4273,11 +4441,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             // (confirmed the hard way: a naive uniform version false-
             // positived on `index-whole-pub-valid`).
             if declared_tokens.contains(&"index") && crate::indexes::index_elements(&d).is_empty() {
-                report.push_at(
+                report.push_at_pos(
                     OPF_015,
                     Severity::Error,
                     "the \"index\" property is declared but doesn't appear to be needed",
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
         }
@@ -4294,11 +4463,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 continue;
             }
             if !remote_manifest.contains_key(r) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_008,
                     Severity::Error,
                     format!("remote resource '{r}' is not declared in the manifest"),
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
         }
@@ -4311,33 +4481,36 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .get(r)
                 .is_some_and(|mt| mt.starts_with("image/"))
             {
-                report.push_at(
+                report.push_at_pos(
                     RSC_006,
                     Severity::Error,
                     format!("remote image '{r}' is referenced from an \"a\" element"),
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
         }
         // RSC-006: img/iframe/script/stylesheet/non-exempt-object always
         // disallow a remote resource, regardless of manifest declaration.
         for r in &restricted_remote_refs {
-            report.push_at(
+            report.push_at_pos(
                 RSC_006,
                 Severity::Error,
                 format!("remote resource '{r}' is not allowed in this context"),
                 path.clone(),
+                Position::of(d.root_element()),
             );
         }
         // RSC-031: any remote reference (exempt or restricted) using a
         // plain `http://` URL instead of `https://`.
         for r in &remote_refs {
             if r.starts_with("http://") {
-                report.push_at(
+                report.push_at_pos(
                     RSC_031,
                     Severity::Warning,
                     format!("remote resource '{r}' should use https"),
                     path.clone(),
+                    Position::of(d.root_element()),
                 );
             }
         }
@@ -4355,11 +4528,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         && collection_index_paths.is_empty()
         && !any_index_content
     {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "At least one \"index\" element must be present in a document declared as an index in the OPF",
             opf_path,
+            Position::of(pkg),
         );
     }
 
@@ -4370,11 +4544,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // whole-publication bool.
     let is_dictionary_pub = opf_dc_type.as_deref() == Some("dictionary");
     if !is_dictionary_pub && !dictionary_marked_docs.is_empty() {
-        report.push_at(
+        report.push_at_pos(
             OPF_079,
             Severity::Warning,
             "dictionary content was detected, but the dc:type identifier \"dictionary\" is not declared",
             opf_path,
+            Position::of(pkg),
         );
     }
 
@@ -4397,21 +4572,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             nfc(p) == *target && (mt == "application/xhtml+xml" || mt == "image/svg+xml")
         });
         if is_content_doc && !spine_order.contains_key(target) && name_index.contains_key(target) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_011,
                 Severity::Error,
                 format!("'{target}' is hyperlinked but not listed in the spine"),
                 opf_path,
+                Position::of(pkg),
             );
         }
     }
     for path in &non_linear_paths {
         if !hyperlink_targets.contains(path) {
-            report.push_at(
+            report.push_at_pos(
                 OPF_096,
                 Severity::Error,
                 format!("non-linear content '{path}' is not reachable from the reading order"),
                 opf_path,
+                Position::of(pkg),
             );
         }
     }
@@ -4465,12 +4642,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let declared_prefixes = d
             .root_element()
             .attribute(("http://www.idpf.org/2007/ops", "prefix"))
-            .map(|p| check_prefix_declaration(p, doc_path, report))
+            .map(|p| check_prefix_declaration(p, doc_path, d.root_element(), report))
             .unwrap_or_default();
         check_prefix_placement(&d, doc_path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                check_prefix_usage(v, &declared_prefixes, doc_path, report);
+                check_prefix_usage(v, &declared_prefixes, doc_path, n, report);
             }
         }
         // OPF-014: a standalone SVG content document embedding a remote
@@ -4492,11 +4669,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .cloned()
                     .unwrap_or_default();
                 if !declared.split_whitespace().any(|t| t == "remote-resources") {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_014,
                         Severity::Error,
                         "content document uses a remote font but doesn't declare the \"remote-resources\" property",
                         doc_path.clone(),
+                        Position::of(d.root_element()),
                     );
                 }
             }
@@ -4536,11 +4714,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
             if let Some(v) = href {
                 if !is_external(v) && !v.contains('#') {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_015,
                         Severity::Error,
                         format!("\"use\" element's href '{v}' has no fragment identifier"),
                         doc_path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -4557,11 +4736,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 if p.target == "xml-stylesheet" {
                     if let Some(href) = p.value.and_then(extract_pi_href) {
                         if is_remote_url(&href) {
-                            report.push_at(
+                            report.push_at_pos(
                                 RSC_006,
                                 Severity::Error,
                                 format!("remote stylesheet '{href}' is not allowed"),
                                 doc_path.clone(),
+                                Position::of(pi),
                             );
                         }
                     }
@@ -4578,11 +4758,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
                 for import_url in crate::css::import_targets(&sheet) {
                     if is_remote_url(&import_url) {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_006,
                             Severity::Error,
                             format!("remote stylesheet import '{import_url}' is not allowed"),
                             doc_path.clone(),
+                            Position::of(n),
                         );
                     }
                 }
@@ -4595,11 +4776,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             {
                 if let Some(href) = n.attribute("href") {
                     if is_remote_url(href) {
-                        report.push_at(
+                        report.push_at_pos(
                             RSC_006,
                             Severity::Error,
                             format!("remote stylesheet '{href}' is not allowed"),
                             doc_path.clone(),
+                            Position::of(n),
                         );
                     }
                 }
@@ -4756,21 +4938,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         if let Ok(smil_doc) = parse_xml(&smil_text) {
             let smil_root = smil_doc.root_element();
             if smil_root.attribute("prefix").is_some() {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "attribute \"prefix\" not allowed here",
                     path.as_str(),
+                    Position::of(smil_root),
                 );
             }
             let declared_prefixes = smil_root
                 .attribute(("http://www.idpf.org/2007/ops", "prefix"))
-                .map(|p| check_prefix_declaration(p, &path, report))
+                .map(|p| check_prefix_declaration(p, &path, smil_root, report))
                 .unwrap_or_default();
             check_prefix_placement(&smil_doc, &path, report);
             for n in smil_doc.descendants().filter(|n| n.is_element()) {
                 if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                    check_prefix_usage(v, &declared_prefixes, &path, report);
+                    check_prefix_usage(v, &declared_prefixes, &path, n, report);
                 }
             }
         }
@@ -4820,11 +5003,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .get(&overlay_path)
                     .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"))
             {
-                report.push_at(
+                report.push_at_pos(
                     OPF_014,
                     Severity::Error,
                     "media overlay uses a remote resource but doesn't declare the \"remote-resources\" property",
                     path.clone(),
+                    Position::of(smil_doc.root_element()),
                 );
             }
         }
@@ -4973,11 +5157,12 @@ fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
             .count();
         if count != 1 {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "A \"distributable-object\" collection must include exactly one identifier",
                 opf_path,
+                Position::of(coll),
             );
         }
     }
@@ -5040,23 +5225,25 @@ fn check_dictionaries(
             let path_part = href.split(['#', '?']).next().unwrap_or(&href);
             let resolved = nfc(&resolve(&skm_dir, path_part));
             if !name_index.contains_key(&resolved) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_007,
                     Severity::Error,
                     format!("search-key-group href '{href}' does not resolve to a real resource"),
                     path.as_str(),
+                    Position::of(d.root_element()),
                 );
                 continue;
             }
             if let Some((_, target_mt)) = items.values().find(|(p, _)| nfc(p) == resolved) {
                 if target_mt != "application/xhtml+xml" && target_mt != "image/svg+xml" {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_021,
                         Severity::Error,
                         format!(
                             "search-key-group href '{href}' does not target a Content Document"
                         ),
                         path.as_str(),
+                        Position::of(d.root_element()),
                     );
                 }
             }
@@ -5072,11 +5259,12 @@ fn check_dictionaries(
         // the full structural check suite cascading on top of content
         // that was never meant to satisfy it.
         if profile == Some("dict") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "The dc:type identifier \"dictionary\" is required",
                 opf_path,
+                Position::of(*pkg),
             );
         }
         return;
@@ -5117,40 +5305,40 @@ fn check_dictionaries(
                 .map(node_text)
                 .collect()
         };
+        let report_here = |report: &mut Report, id, text: String| match scope {
+            Some(s) => report.push_at_pos(id, Severity::Error, text, opf_path, Position::of(s)),
+            None => report.push_at(id, Severity::Error, text, opf_path),
+        };
         let sources = metas("source-language");
         if sources.is_empty() {
-            report.push_at(
+            report_here(
+                report,
                 RSC_005,
-                Severity::Error,
-                "a dictionary must declare its source language",
-                opf_path,
+                "a dictionary must declare its source language".to_string(),
             );
         } else if sources.len() > 1 {
-            report.push_at(
+            report_here(
+                report,
                 RSC_005,
-                Severity::Error,
-                "a dictionary must not declare more than one source language",
-                opf_path,
+                "a dictionary must not declare more than one source language".to_string(),
             );
         }
         let targets = metas("target-language");
         if targets.is_empty() {
             if require_target {
-                report.push_at(
+                report_here(
+                    report,
                     RSC_005,
-                    Severity::Error,
-                    "a dictionary must declare its source language",
-                    opf_path,
+                    "a dictionary must declare its source language".to_string(),
                 );
             }
         } else {
             for t in targets {
                 if !dc_languages.contains(&t) {
-                    report.push_at(
+                    report_here(
+                        report,
                         RSC_005,
-                        Severity::Error,
                         format!("target-language '{t}' must also be declared as \"dc:language\""),
-                        opf_path,
                     );
                 }
             }
@@ -5168,11 +5356,12 @@ fn check_dictionaries(
 
     if dictionary_collections.is_empty() {
         if dictionary_marked_docs.is_empty() {
-            report.push_at(
+            report.push_at_pos(
                 OPF_078,
                 Severity::Error,
                 "no content document was found with dictionary content",
                 opf_path,
+                Position::of(*pkg),
             );
         }
         check_languages(metadata, false, report);
@@ -5182,20 +5371,22 @@ fn check_dictionaries(
             .filter(|(_, props)| has_prop(props, "search-key-map"))
             .collect();
         if candidates.is_empty() {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "a dictionary publication must contain exactly one Search Key Map document",
                 opf_path,
+                Position::of(*pkg),
             );
         } else if candidates.len() == 1 {
             let (_, props) = candidates[0];
             if !has_prop(props, "dictionary") {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "the Search Key Map document must have the \"dictionary\" property",
                     opf_path,
+                    Position::of(*pkg),
                 );
             }
         }
@@ -5208,11 +5399,12 @@ fn check_dictionaries(
             }) {
                 let text = node_text(dt);
                 if !matches!(text.as_str(), "monolingual" | "bilingual" | "multilingual") {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         format!("\"dictionary-type\" metadata must be one of monolingual/bilingual/multilingual ('{text}')"),
                         opf_path,
+                        Position::of(dt),
                     );
                 }
             }
@@ -5226,11 +5418,12 @@ fn check_dictionaries(
             .children()
             .any(|n| n.is_element() && n.tag_name().name() == "collection");
         if has_subcollection {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "a dictionary collection must not have sub-collections",
                 opf_path,
+                Position::of(*collection),
             );
         }
 
@@ -5252,13 +5445,14 @@ fn check_dictionaries(
             }
             match items.values().find(|(p, _)| nfc(p) == resolved) {
                 None => {
-                    report.push_at(
+                    report.push_at_pos(
                         OPF_081,
                         Severity::Error,
                         format!(
                             "dictionary collection link '{href}' was not found in the manifest"
                         ),
                         opf_path,
+                        Position::of(link),
                     );
                 }
                 Some((_, mt)) => {
@@ -5267,48 +5461,53 @@ fn check_dictionaries(
                         skm_count += 1;
                         if let Some(&first) = skm_owner.get(&resolved) {
                             if first != idx {
-                                report.push_at(
+                                report.push_at_pos(
                                     RSC_005,
                                     Severity::Error,
                                     format!("Search Key Map document '{href}' is referenced in more than one dictionary collection"),
                                     opf_path,
+                                    Position::of(link),
                                 );
                             }
                         } else {
                             skm_owner.insert(resolved.clone(), idx);
                         }
                     } else if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
-                        report.push_at(
+                        report.push_at_pos(
                             OPF_084,
                             Severity::Error,
                             format!("dictionary collection link '{href}' is neither a Search Key Map Document nor an XHTML Content Document"),
                             opf_path,
+                            Position::of(link),
                         );
                     }
                 }
             }
         }
         match skm_count {
-            0 => report.push_at(
+            0 => report.push_at_pos(
                 OPF_083,
                 Severity::Error,
                 "a dictionary collection must contain no Search Key Map Document",
                 opf_path,
+                Position::of(*collection),
             ),
             1 => {}
-            _ => report.push_at(
+            _ => report.push_at_pos(
                 OPF_082,
                 Severity::Error,
                 "a dictionary collection must not contain more than one Search Key Map Document",
                 opf_path,
+                Position::of(*collection),
             ),
         }
         if !has_dict_content {
-            report.push_at(
+            report.push_at_pos(
                 OPF_078,
                 Severity::Error,
                 "no content document was found with dictionary content",
                 opf_path,
+                Position::of(*collection),
             );
         }
 
@@ -5352,11 +5551,12 @@ fn check_html_declared_as_xhtml(
         let Ok(d) = parse_xml(&text) else { continue };
         let root = d.root_element();
         if root.tag_name().name() == "html" && root.tag_name().namespace() == Some(XHTML_NS) {
-            report.push_at(
+            report.push_at_pos(
                 OPF_035,
                 Severity::Warning,
                 format!("manifest item '{path}' is XHTML but declared as text/html"),
                 path.as_str(),
+                Position::of(root),
             );
         }
     }
@@ -5626,11 +5826,12 @@ fn check_font_obfuscation(
             .find(|(path, _)| nfc(path) == resolved)
             .map(|(_, mt)| mt.as_str());
         if !media_type.is_some_and(|mt| FONT_CORE_MEDIA_TYPES.contains(&mt)) {
-            report.push_at(
+            report.push_at_pos(
                 PKG_026,
                 Severity::Error,
                 format!("obfuscated resource '{uri}' is not a font Core Media Type"),
                 ENC,
+                Position::of(enc_data),
             );
         }
     }

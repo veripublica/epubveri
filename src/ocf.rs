@@ -7,7 +7,7 @@ use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 /// Parse an XML document, allowing a `<!DOCTYPE>` declaration. Real-world
 /// EPUB content documents commonly have one (e.g. `<!DOCTYPE html>`);
@@ -343,12 +343,13 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
         .collect();
 
     if paths.is_empty() {
-        report.push_at(
+        report.push_at_pos(
             RSC_003,
             Severity::Error,
             "container.xml has no <rootfile> with media-type \
              'application/oebps-package+xml' and a full-path (OPF location)",
             CONTAINER,
+            Position::of(doc.root_element()),
         );
     }
 
@@ -358,11 +359,12 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     // violation.
     for child in doc.root_element().children().filter(|n| n.is_element()) {
         if !matches!(child.tag_name().name(), "rootfiles" | "links") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 format!("element \"{}\" not allowed here", child.tag_name().name()),
                 CONTAINER,
+                Position::of(child),
             );
         }
     }
@@ -395,11 +397,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     };
 
     if doc.root_element().tag_name().name() != "encryption" {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "expected element \"encryption\" as the root of META-INF/encryption.xml",
             ENC,
+            Position::of(doc.root_element()),
         );
         return;
     }
@@ -418,11 +421,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attribute("Id") {
             if by_id.get(id).copied().unwrap_or(0) > 1 {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("Duplicate \"Id\" value '{id}'"),
                     ENC,
+                    Position::of(n),
                 );
             }
         }
@@ -436,21 +440,23 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     {
         if let Some(method) = n.attribute("Method") {
             if !matches!(method, "0" | "8") {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "value of attribute \"Method\" is invalid",
                     ENC,
+                    Position::of(n),
                 );
             }
         }
         if let Some(len) = n.attribute("OriginalLength") {
             if len.is_empty() || !len.bytes().all(|b| b.is_ascii_digit()) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "value of attribute \"OriginalLength\" is invalid",
                     ENC,
+                    Position::of(n),
                 );
             }
         }
@@ -461,10 +467,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         .filter(|n| n.is_element() && n.tag_name().name() == "CipherReference")
     {
         if let Some(uri) = n.attribute("URI") {
-            report.push(
+            report.push_at_pos(
                 RSC_004,
                 Severity::Info,
                 format!("File \"{uri}\" is encrypted; its content will not be checked"),
+                ENC,
+                Position::of(n),
             );
         }
     }
@@ -493,11 +501,12 @@ pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
         }
     };
     if doc.root_element().tag_name().name() != "signatures" {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "expected element \"signatures\" as the root of META-INF/signatures.xml",
             SIG,
+            Position::of(doc.root_element()),
         );
     }
 }

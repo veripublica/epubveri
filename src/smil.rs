@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 const CORE_AUDIO_TYPES: [&str; 2] = ["audio/mpeg", "audio/mp4"];
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
@@ -49,11 +49,12 @@ pub(crate) fn check(
     {
         for child in head.children().filter(|n| n.is_element()) {
             if child.tag_name().name() == "meta" {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "element \"meta\" not allowed here (must be inside a \"metadata\" element)",
                     smil_path,
+                    Position::of(child),
                 );
             }
         }
@@ -104,11 +105,12 @@ pub(crate) fn check(
         let value = n.attribute((EPUB_NS, "type")).unwrap();
         for token in value.split_whitespace() {
             if !token.contains(':') && !is_default_vocab_type(token) {
-                report.push_at(
+                report.push_at_pos(
                     OPF_088,
                     Severity::Info,
                     format!("epub:type value '{token}' is not in the default vocabulary"),
                     smil_path,
+                    Position::of(n),
                 );
             }
         }
@@ -158,6 +160,7 @@ pub(crate) fn is_default_vocab_type(token: &str) -> bool {
         "footnote",
         "footnotes",
         "foreword",
+        "frontmatter",
         "fulltitlepage",
         "glossary",
         "glossdef",
@@ -268,11 +271,12 @@ fn check_container(
             (true, "text") => {
                 text_seen += 1;
                 if text_seen > 1 {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         "element \"text\" not allowed here (a <par> may only contain one)",
                         smil_path,
+                        Position::of(child),
                     );
                 } else {
                     check_text(child, smil_path, base_dir, name_index, report, text_targets);
@@ -282,19 +286,21 @@ fn check_container(
                 check_audio(child, smil_path, base_dir, name_index, media_types, report);
             }
             (true, "seq") | (true, "par") => {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "a <par> element must not contain a nested <seq>/<par>",
                     smil_path,
+                    Position::of(child),
                 );
             }
             (false, "text") | (false, "audio") => {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "media clips must be inside a <par> element",
                     smil_path,
+                    Position::of(child),
                 );
             }
             _ => {}
@@ -327,16 +333,17 @@ fn check_text(
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
-        report.push_at(
+        report.push_at_pos(
             RSC_001,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
+            Position::of(node),
         );
         return;
     }
     if let Some(f) = frag {
-        check_fragment_scheme(path_part, f, smil_path, report);
+        check_fragment_scheme(path_part, f, smil_path, node, report);
         text_targets.push((resolved_nfc, f.to_string()));
     }
 }
@@ -348,26 +355,34 @@ fn check_text(
 /// `mediaoverlays-textref-fragment-schemebased-warning`) and anything else
 /// on SVG (confirmed via `mediaoverlays-textref-svg-fragment-invalid-warning`,
 /// e.g. `#box=0,0,50,50`) are warned about, not hard errors.
-fn check_fragment_scheme(path_part: &str, frag: &str, smil_path: &str, report: &mut Report) {
+fn check_fragment_scheme(
+    path_part: &str,
+    frag: &str,
+    smil_path: &str,
+    node: roxmltree::Node,
+    report: &mut Report,
+) {
     let lower = path_part.to_ascii_lowercase();
     if lower.ends_with(".xhtml") || lower.ends_with(".html") || lower.ends_with(".htm") {
         if frag.contains('(') {
-            report.push_at(
+            report.push_at_pos(
                 MED_017,
                 Severity::Warning,
                 format!("scheme-based fragment '{frag}' should be a plain id"),
                 smil_path,
+                Position::of(node),
             );
         }
     } else if lower.ends_with(".svg") {
         let is_plain_id = !frag.contains(['(', '=', ',']);
         let is_svg_view = frag.starts_with("svgView(");
         if !is_plain_id && !is_svg_view {
-            report.push_at(
+            report.push_at_pos(
                 MED_018,
                 Severity::Warning,
                 format!("invalid SVG fragment identifier '{frag}'"),
                 smil_path,
+                Position::of(node),
             );
         }
     }
@@ -389,29 +404,32 @@ fn check_audio(
     }
     let (path_part, frag) = split_fragment(src);
     if frag.is_some() {
-        report.push_at(
+        report.push_at_pos(
             MED_014,
             Severity::Error,
             format!("audio 'src' has a URL fragment '{src}' (use clipBegin/clipEnd instead)"),
             smil_path,
+            Position::of(node),
         );
     }
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
-        report.push_at(
+        report.push_at_pos(
             RSC_001,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
+            Position::of(node),
         );
     } else if let Some(media_type) = media_types.get(&resolved_nfc) {
         if !CORE_AUDIO_TYPES.contains(&media_type.as_str()) {
-            report.push_at(
+            report.push_at_pos(
                 MED_005,
                 Severity::Error,
                 format!("audio resource '{src}' is not a Core Media Type ({media_type})"),
                 smil_path,
+                Position::of(node),
             );
         }
     }
@@ -419,11 +437,12 @@ fn check_audio(
     for attr_name in ["clipBegin", "clipEnd"] {
         if let Some(v) = node.attribute(attr_name) {
             if parse_clock_value(v).is_none() {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("{attr_name} value '{v}' is not a valid SMIL clock value"),
                     smil_path,
+                    Position::of(node),
                 );
             }
         }
@@ -432,18 +451,20 @@ fn check_audio(
     let end = node.attribute("clipEnd").and_then(parse_clock_value);
     if let (Some(b), Some(e)) = (begin, end) {
         if b > e {
-            report.push_at(
+            report.push_at_pos(
                 MED_008,
                 Severity::Error,
                 "clipBegin is after clipEnd",
                 smil_path,
+                Position::of(node),
             );
         } else if b == e {
-            report.push_at(
+            report.push_at_pos(
                 MED_009,
                 Severity::Error,
                 "clipBegin equals clipEnd",
                 smil_path,
+                Position::of(node),
             );
         }
     }
@@ -814,6 +835,33 @@ mod tests {
         let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
         let (findings, _) = run(smil, &names, &HashMap::new());
         assert_eq!(findings, vec![OPF_088]);
+    }
+
+    #[test]
+    fn unknown_epubtype_reports_position_of_the_offending_element() {
+        // The `<body epub:type="chapter unknown">` element is on line 2 -
+        // the finding's position must point there, not just carry a bare
+        // file path (the whole reason `Position` was added: issue #1).
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+            <body epub:type="chapter unknown"><par id="p"><text src="c.xhtml#t"/><audio src="c.mp3"/></par></body>
+        </smil>"#;
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let mut report = Report::new();
+        check(
+            smil,
+            "content.smil",
+            "OEBPS",
+            &names,
+            &HashMap::new(),
+            &mut report,
+        );
+        let finding = report
+            .messages
+            .iter()
+            .find(|m| m.id == OPF_088)
+            .expect("expected an OPF-088 finding");
+        let position = finding.position.expect("expected a position");
+        assert_eq!(position.line, 2);
     }
 
     #[test]

@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -35,11 +35,12 @@ pub(crate) fn check_content_model(doc: &roxmltree::Document, path: &str, report:
             .filter(|n| n.is_element() && has_type_token(*n, "index-entry-list"))
             .count();
         if count != 1 {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "An \"index\" must contain one and only one \"index-entry-list\"",
                 path,
+                Position::of(idx),
             );
         }
     }
@@ -90,11 +91,12 @@ fn check_links_are_xhtml(
         let resolved = crate::opf::nfc(&crate::opf::resolve(base_dir, href));
         if let Some((_, mt)) = items.values().find(|(p, _)| crate::opf::nfc(p) == resolved) {
             if mt != "application/xhtml+xml" {
-                report.push_at(
+                report.push_at_pos(
                     OPF_071,
                     Severity::Error,
                     "Index collections must only contain resources pointing to XHTML Content Documents",
                     opf_path,
+                    Position::of(link),
                 );
             }
         }
@@ -112,11 +114,12 @@ fn check_index_group(
         .children()
         .any(|n| n.is_element() && n.tag_name().name() == "collection")
     {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "An \"index-group\" collection must not have child collections",
             opf_path,
+            Position::of(coll),
         );
     }
     check_links_are_xhtml(coll, items, base_dir, opf_path, report);
@@ -136,11 +139,12 @@ fn check_index_collection(
         if sub.attribute("role") == Some("index-group") {
             check_index_group(sub, items, base_dir, opf_path, report);
         } else {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "An \"index\" collection must not have sub-collections other than \"index-group\"",
                 opf_path,
+                Position::of(sub),
             );
         }
     }
@@ -167,11 +171,12 @@ pub(crate) fn check_collections(
     {
         match coll.attribute("role") {
             Some("index-group") => {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "An \"index-group\" collection must be a child of an \"index\" collection",
                     opf_path,
+                    Position::of(coll),
                 );
             }
             Some("index") => check_index_collection(coll, items, base_dir, opf_path, report),

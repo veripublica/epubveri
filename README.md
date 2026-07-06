@@ -128,8 +128,9 @@ define.
 epubveri is **pre-1.0 and under active development.** This is not a
 drop-in replacement for epubcheck yet, and this project is deliberately
 upfront about that rather than overclaiming. (It's published as of
-`0.1.0`: the Rust crate on [crates.io](https://crates.io/crates/epubveri)
-and a WebAssembly build on npm as `@veripublica/epubveri-wasm`.)
+`0.2.0`: the Rust crate on [crates.io](https://crates.io/crates/epubveri)
+and a WebAssembly build on npm as `@veripublica/epubveri-wasm`. See
+[`CHANGELOG.md`](./CHANGELOG.md) for what's changed between releases.)
 
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
@@ -164,18 +165,23 @@ Example output:
 ```
 $ ./target/release/epubveri my-broken-book.epub
 ERROR OPF-002: OPF package document not found: OEBPS/content.opf
-— 1 error(s), 0 warning(s): INVALID
+ERROR RSC-005: spine references manifest item id 'ch1' more than once [OEBPS/content.opf:15:5]
+— 2 error(s), 0 warning(s): INVALID
 ```
 
 The exit code follows Unix convention: `0` if the book is valid, `1` if
 it found at least one error, `2` if something went wrong just trying to
 read the file (e.g. it isn't a ZIP at all).
 
+Where available (most checks; a few — schematron-derived findings, CSS
+checks, and ZIP-container-level checks — don't have one), findings also
+carry the exact `line:column` of the offending element, as shown above.
+
 **Using it as a library** (inside your own Rust project), add it from
 crates.io (`cargo add epubveri`, or in your `Cargo.toml`):
 
 ```toml
-epubveri = "0.1"
+epubveri = "0.2"
 ```
 
 Then:

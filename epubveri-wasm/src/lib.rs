@@ -17,6 +17,14 @@ use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
+/// A 1-indexed line/column position, mirroring [`epubveri::report::Position`].
+#[derive(Serialize, Tsify)]
+#[tsify(into_wasm_abi)]
+pub struct Position {
+    pub line: u32,
+    pub column: u32,
+}
+
 /// One diagnostic, mirroring [`epubveri::report::Message`] with the message ID
 /// and severity flattened to strings for the JS boundary.
 #[derive(Serialize, Tsify)]
@@ -30,6 +38,8 @@ pub struct Message {
     pub text: String,
     /// Optional location hint (path / element), when the check provides one.
     pub location: Option<String>,
+    /// Optional exact source position, when the check provides one.
+    pub position: Option<Position>,
 }
 
 /// The full validation result for one EPUB.
@@ -70,6 +80,10 @@ pub fn validate(bytes: &[u8], profile: Option<String>) -> Report {
                 severity: m.severity.to_string(),
                 text: m.text.clone(),
                 location: m.location.clone(),
+                position: m.position.map(|p| Position {
+                    line: p.line,
+                    column: p.column,
+                }),
             })
             .collect(),
     }

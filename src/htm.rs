@@ -9,7 +9,17 @@
 //! already-parsed document.
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
+
+/// The byte offset of `needle` within `haystack`, assuming `needle` is
+/// literally a subslice of `haystack` (as produced by `&haystack[a..b]` or
+/// `.trim_start()`/`.find()`-derived slicing, never a reallocated copy) -
+/// lets the raw byte/text scans below (which work with `&str` slices, not
+/// `roxmltree` nodes) still report a precise `Position` via
+/// `Position::of_offset`.
+fn offset_in(haystack: &str, needle: &str) -> usize {
+    needle.as_ptr() as usize - haystack.as_ptr() as usize
+}
 
 /// Raw byte/text scans on a content document — independent of whether it
 /// parses as well-formed XML, so these still fire even when e.g. a UTF-16
@@ -36,11 +46,12 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
         return;
     }
     if crate::css::has_utf16_bom(bytes) {
-        report.push_at(
+        report.push_at_pos(
             HTM_058,
             Severity::Error,
             "content document is not UTF-8 encoded",
             path,
+            Position::of_offset(text, 0),
         );
     }
 
@@ -51,11 +62,12 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
     {
         let decl = &text.trim_start()[..decl_end + "<?xml".len() + "?>".len()];
         if decl.contains("version=\"1.1\"") || decl.contains("version='1.1'") {
-            report.push_at(
+            report.push_at_pos(
                 HTM_001,
                 Severity::Error,
                 "XML declaration must not use version 1.1",
                 path,
+                Position::of_offset(text, offset_in(text, decl)),
             );
         }
     }
@@ -71,14 +83,14 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
 /// these two conditions can be caught. Numeric character references
 /// (`&#39;`/`&#x27;`) are always well-formed and out of scope here — only
 /// named references (`&foo;`) are checked.
-fn check_entities(text: &str, path: &str, report: &mut Report) {
-    let declared = declared_entity_names(text);
+fn check_entities(orig_text: &str, path: &str, report: &mut Report) {
+    let declared = declared_entity_names(orig_text);
     const PREDEFINED: &[&str] = &["amp", "lt", "gt", "apos", "quot"];
     // `&foo;` inside a comment or CDATA section is literal text, not a
     // real entity reference (confirmed via a real corpus fixture titled
     // exactly this) - mask any '&' found there so the scan below skips it,
     // without disturbing any other byte offset in the text.
-    let masked = mask_comments_and_cdata(text);
+    let masked = mask_comments_and_cdata(orig_text);
     let text = masked.as_str();
     let bytes = text.as_bytes();
     let mut i = 0;
@@ -99,18 +111,20 @@ fn check_entities(text: &str, path: &str, report: &mut Report) {
         let name = &after[..name_len];
         let terminated = bytes.get(amp + 1 + name_len) == Some(&b';');
         if !terminated {
-            report.push_at(
+            report.push_at_pos(
                 RSC_016,
                 Severity::Error,
                 format!("entity reference '&{name}' must end with the ';' delimiter"),
                 path,
+                Position::of_offset(orig_text, amp),
             );
         } else if !PREDEFINED.contains(&name) && !declared.iter().any(|d| d == name) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_016,
                 Severity::Error,
                 format!("entity '{name}' was referenced, but not declared"),
                 path,
+                Position::of_offset(orig_text, amp),
             );
         }
         i = amp + 1 + name_len;
@@ -200,11 +214,12 @@ fn check_doctype_epub2(text: &str, path: &str, report: &mut Report) {
         return;
     };
     if !KNOWN_PUBLIC_IDS.iter().any(|id| doctype.contains(id)) {
-        report.push_at(
+        report.push_at_pos(
             HTM_004,
             Severity::Error,
             "DOCTYPE does not have a recognized XHTML PUBLIC identifier",
             path,
+            Position::of_offset(text, offset_in(text, doctype)),
         );
     }
 }
@@ -214,11 +229,12 @@ fn check_doctype(text: &str, path: &str, report: &mut Report) {
         return;
     };
     if doctype.contains(" PUBLIC ") {
-        report.push_at(
+        report.push_at_pos(
             HTM_004,
             Severity::Error,
             "DOCTYPE has an obsolete PUBLIC identifier",
             path,
+            Position::of_offset(text, offset_in(text, doctype)),
         );
     }
     if let (Some(open), Some(close)) = (doctype.find('['), doctype.rfind(']')) {
@@ -229,11 +245,12 @@ fn check_doctype(text: &str, path: &str, report: &mut Report) {
                 let Some(end) = rest.find('>') else { continue };
                 let decl = &rest[..end];
                 if decl.contains("SYSTEM") || decl.contains("PUBLIC") {
-                    report.push_at(
+                    report.push_at_pos(
                         HTM_003,
                         Severity::Error,
                         "entity is declared external (SYSTEM/PUBLIC)",
                         path,
+                        Position::of_offset(text, offset_in(text, decl)),
                     );
                 }
             }
@@ -258,11 +275,12 @@ pub(crate) fn check_opf_doctype(text: &str, opf_path: &str, report: &mut Report)
         .next()
         .unwrap_or("");
     if root_name != "package" {
-        report.push_at(
+        report.push_at_pos(
             HTM_009,
             Severity::Error,
             format!("OPF document's DOCTYPE root '{root_name}' does not match <package>"),
             opf_path,
+            Position::of_offset(text, offset_in(text, root_name)),
         );
     }
 }
@@ -327,21 +345,23 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
         if node.tag_name().namespace() == Some(XHTML_NS)
             && HTML5_ONLY_ELEMENTS.contains(&node.tag_name().name())
         {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 format!("element \"{}\" not allowed here", node.tag_name().name()),
                 path,
+                Position::of(node),
             );
         }
         for attr in node.attributes() {
             if let Some(ns) = attr.namespace() {
                 if !KNOWN_NAMESPACES.contains(&ns) {
-                    report.push_at(
+                    report.push_at_pos(
                         RSC_005,
                         Severity::Error,
                         format!("attribute \"{}\" not allowed here", attr.name()),
                         path,
+                        Position::of(node),
                     );
                 }
             }
@@ -353,11 +373,12 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
                     && d.tag_name().name() == "a"
             });
             if nested {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "The \"a\" element cannot contain any nested \"a\" elements",
                     path,
+                    Position::of(node),
                 );
             }
         }
@@ -375,11 +396,12 @@ pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, rep
         if node.tag_name().namespace() == Some(XHTML_NS)
             && matches!(node.tag_name().name(), "base" | "embed" | "rp")
         {
-            report.push_at(
+            report.push_at_pos(
                 HTM_055,
                 Severity::Info,
                 format!("'{}' is a discouraged construct", node.tag_name().name()),
                 path,
+                Position::of(node),
             );
         }
 
@@ -387,30 +409,33 @@ pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, rep
             match attr.namespace() {
                 Some(ns) if ns == SSML_NS && attr.name() == "ph" => {
                     if attr.value().trim().is_empty() {
-                        report.push_at(
+                        report.push_at_pos(
                             HTM_007,
                             Severity::Warning,
                             "ssml:ph must not be empty",
                             path,
+                            Position::of(node),
                         );
                     }
                 }
                 Some(ns) if !KNOWN_NAMESPACES.contains(&ns) && reserved_namespace_host(ns) => {
-                    report.push_at(
+                    report.push_at_pos(
                         HTM_054,
                         Severity::Error,
                         format!("attribute uses a reserved namespace '{ns}'"),
                         path,
+                        Position::of(node),
                     );
                 }
                 None => {
                     if let Some(rest) = attr.name().strip_prefix("data-") {
                         if !is_valid_data_attr_suffix(rest) {
-                            report.push_at(
+                            report.push_at_pos(
                                 HTM_061,
                                 Severity::Error,
                                 format!("'data-{rest}' is not a valid data-* attribute name"),
                                 path,
+                                Position::of(node),
                             );
                         }
                     }

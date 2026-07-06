@@ -4,7 +4,7 @@
 //! needs the OPF's own manifest/container context and lives in `opf.rs`.
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -38,11 +38,12 @@ pub(crate) fn check_content_doc(doc: &roxmltree::Document, path: &str, report: &
             .filter(|c| c.is_element() && c.tag_name().name() == "article")
             .collect();
         if articles.is_empty() {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "A \"dictionary\" must have at least one article child",
                 path,
+                Position::of(n),
             );
             continue;
         }
@@ -51,11 +52,12 @@ pub(crate) fn check_content_doc(doc: &roxmltree::Document, path: &str, report: &
                 .descendants()
                 .any(|d| d.is_element() && d.tag_name().name() == "dfn");
             if !has_dfn {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "A dictionary entry must have at least one \"dfn\" descendant",
                     path,
+                    Position::of(article),
                 );
             }
         }
@@ -74,11 +76,12 @@ pub(crate) fn check_skm(doc: &roxmltree::Document, path: &str, report: &mut Repo
         .filter(|c| c.is_element() && c.tag_name().name() == "search-key-group")
         .collect();
     if groups.is_empty() {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "element \"search-key-map\" incomplete; missing required element \"search-key-group\"",
             path,
+            Position::of(root),
         );
     }
     groups

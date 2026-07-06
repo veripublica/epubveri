@@ -5,7 +5,7 @@
 //! internal structure was never parsed.
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &mut Report) {
     let Ok(d) = crate::ocf::parse_xml(ncx_xml) else {
@@ -24,7 +24,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
         }) {
             if let Some(content) = meta.attribute("content") {
                 if content.trim() != package_uid.trim() {
-                    report.push_at(
+                    report.push_at_pos(
                         NCX_001,
                         Severity::Error,
                         format!(
@@ -33,6 +33,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
                             package_uid.trim()
                         ),
                         ncx_path,
+                        Position::of(meta),
                     );
                 }
             }
@@ -67,11 +68,12 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attribute("id") {
             if !is_valid_ncname(id) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("value of attribute \"id\" is invalid: '{id}'"),
                     ncx_path,
+                    Position::of(n),
                 );
             }
             *by_id.entry(id).or_insert(0) += 1;
@@ -80,11 +82,12 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attribute("id") {
             if by_id.get(id).copied().unwrap_or(0) > 1 {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("The \"id\" attribute does not have a unique value: '{id}'"),
                     ncx_path,
+                    Position::of(n),
                 );
             }
         }
@@ -108,11 +111,12 @@ fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &m
     {
         if let Some(ty) = n.attribute("type") {
             if !matches!(ty, "front" | "normal" | "special") {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("value of attribute \"type\" is invalid: '{ty}'"),
                     ncx_path,
+                    Position::of(n),
                 );
             }
         }
@@ -135,7 +139,13 @@ fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Rep
         .filter_map(|n| n.text())
         .collect();
     if text.trim().is_empty() {
-        report.push_at(NCX_006, Severity::Info, "empty text label", ncx_path);
+        report.push_at_pos(
+            NCX_006,
+            Severity::Info,
+            "empty text label",
+            ncx_path,
+            Position::of(text_el),
+        );
     }
 }
 

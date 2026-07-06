@@ -11,7 +11,7 @@
 //! dedicated error codes to target.
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 pub(crate) fn is_edupub(dc_type: Option<&str>) -> bool {
     dc_type == Some("edupub")
@@ -26,11 +26,12 @@ pub(crate) fn is_edupub(dc_type: Option<&str>) -> bool {
 pub(crate) fn check_content_doc(d: &roxmltree::Document, path: &str, report: &mut Report) {
     for node in d.descendants().filter(|n| n.is_element()) {
         if node.attribute("itemscope").is_some() {
-            report.push_at(
+            report.push_at_pos(
                 HTM_051,
                 Severity::Warning,
                 "HTML5 microdata items are not allowed in an edupub content document",
                 path,
+                Position::of(node),
             );
         }
     }
@@ -124,11 +125,12 @@ fn check_heading_img_alt(h: roxmltree::Node, path: &str, report: &mut Report) {
         if img.tag_name().name() == "img" {
             let alt = img.attribute("alt").unwrap_or("").trim();
             if alt.is_empty() {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "Empty ranked heading detected",
                     path,
+                    Position::of(h),
                 );
             }
         }
@@ -149,11 +151,12 @@ fn check_aria_label_match(
     };
     let heading_text = node_text(heading);
     if !heading_text.is_empty() && label.trim() == heading_text {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "The value of the \"aria-label\" attribute must not be the same as the content of the heading",
             path,
+            Position::of(container),
         );
     }
 }
@@ -200,11 +203,12 @@ pub(crate) fn check_sectioning_and_headings(
         match heading {
             Some(h) => check_own_heading(body, h, path, report),
             None if !has_aria_label => {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "The body element requires a heading when it is used as an implied section",
                     path,
+                    Position::of(body),
                 );
             }
             None => {}
@@ -219,11 +223,12 @@ pub(crate) fn check_sectioning_and_headings(
         match find_heading(n) {
             Some(h) => check_own_heading(n, h, path, report),
             None if !has_aria_label && n.tag_name().name() != "nav" => {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     "section does not have a heading",
                     path,
+                    Position::of(n),
                 );
             }
             None => {}
@@ -244,11 +249,12 @@ pub(crate) fn check_sectioning_and_headings(
             .parent_element()
             .is_some_and(|p| matches!(p.tag_name().name(), "header" | "figcaption"));
         if !parent_ok {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "Section subtitles must be wrapped in a header element",
                 path,
+                Position::of(n),
             );
         }
     }
@@ -307,12 +313,21 @@ pub(crate) fn check_teacher_edition_and_accessibility(
     let is_teacher_edition = dc_types.iter().any(|t| t == "teacher-edition");
 
     if !is_edupub_pub && (is_teacher_edition || profile == Some("edupub")) {
-        report.push_at(
-            RSC_005,
-            Severity::Error,
-            "The dc:type identifier \"edupub\" is required",
-            opf_path,
-        );
+        match metadata {
+            Some(md) => report.push_at_pos(
+                RSC_005,
+                Severity::Error,
+                "The dc:type identifier \"edupub\" is required",
+                opf_path,
+                Position::of(md),
+            ),
+            None => report.push_at(
+                RSC_005,
+                Severity::Error,
+                "The dc:type identifier \"edupub\" is required",
+                opf_path,
+            ),
+        }
         if !is_teacher_edition {
             // Pure profile-forced detection with no other real edupub
             // signal at all - a real fixture (a bare, single-Package-
@@ -332,11 +347,12 @@ pub(crate) fn check_teacher_edition_and_accessibility(
                 && n.tag_name().namespace() == Some(DC_NS)
         });
         if !has_source {
-            report.push_at(
+            report.push_at_pos(
                 RSC_017,
                 Severity::Warning,
                 "A teacher\u{2019}s edition should identify the corresponding student edition",
                 opf_path,
+                Position::of(md),
             );
         }
     }
@@ -352,18 +368,20 @@ pub(crate) fn check_teacher_edition_and_accessibility(
             .map(elem_text)
             .collect();
         if features.is_empty() {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "At least one schema:accessibilityFeature declaration is required",
                 opf_path,
+                Position::of(md),
             );
         } else if features.iter().any(|f| f == "none") {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "value \"none\" is not valid in edupub",
                 opf_path,
+                Position::of(md),
             );
         }
     }

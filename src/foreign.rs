@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use crate::ids::{MED_003, MED_007, RSC_032};
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Category {
@@ -152,17 +152,19 @@ fn check_single(
     status: &HashMap<String, ResourceStatus>,
     elname: &str,
     path: &str,
+    node: roxmltree::Node,
     report: &mut Report,
 ) {
     let Some((category, reaches_core)) = resolve_ref(dir, href, status) else {
         return;
     };
     if category == Category::Foreign && !reaches_core {
-        report.push_at(
+        report.push_at_pos(
             RSC_032,
             Severity::Error,
             format!("{elname} references a foreign resource '{href}' with no fallback"),
             path,
+            Position::of(node),
         );
     }
 }
@@ -178,6 +180,7 @@ fn check_candidate_group(
     status: &HashMap<String, ResourceStatus>,
     elname: &str,
     path: &str,
+    node: roxmltree::Node,
     report: &mut Report,
 ) {
     let mut any_known = false;
@@ -197,11 +200,12 @@ fn check_candidate_group(
         }
     }
     if any_known && !any_ok {
-        report.push_at(
+        report.push_at_pos(
             RSC_032,
             Severity::Error,
             format!("{elname} references only foreign resources with no fallback"),
             path,
+            Position::of(node),
         );
     }
 }
@@ -238,7 +242,7 @@ fn check_audio_video(
     let name = node.tag_name().name();
     if name == "video" {
         if let Some(poster) = node.attribute("poster") {
-            check_single(poster, dir, status, "video poster", path, report);
+            check_single(poster, dir, status, "video poster", path, node, report);
         }
     }
     let mut candidates: Vec<&str> = Vec::new();
@@ -255,7 +259,7 @@ fn check_audio_video(
         }
     }
     if !candidates.is_empty() {
-        check_candidate_group(&candidates, dir, status, name, path, report);
+        check_candidate_group(&candidates, dir, status, name, path, node, report);
     }
 }
 
@@ -293,11 +297,12 @@ fn check_picture(
                     }
                 }
                 if any_foreign {
-                    report.push_at(
+                    report.push_at_pos(
                         MED_007,
                         Severity::Error,
                         "picture source references a foreign resource with no type attribute",
                         path,
+                        Position::of(child),
                     );
                 }
             }
@@ -306,11 +311,12 @@ fn check_picture(
                     if resolve_ref(dir, &href, status)
                         .is_some_and(|(cat, _)| cat == Category::Foreign)
                     {
-                        report.push_at(
+                        report.push_at_pos(
                             MED_003,
                             Severity::Error,
                             format!("picture img fallback references a foreign resource '{href}'"),
                             path,
+                            Position::of(child),
                         );
                     }
                 }
@@ -356,19 +362,19 @@ pub(crate) fn check_content_doc(
         }
         if name == "img" {
             for href in img_candidates(node) {
-                check_single(&href, dir, status, "img", path, report);
+                check_single(&href, dir, status, "img", path, node, report);
             }
         } else if name == "embed" {
             if let Some(src) = node.attribute("src") {
-                check_single(src, dir, status, "embed", path, report);
+                check_single(src, dir, status, "embed", path, node, report);
             }
         } else if name == "input" && node.attribute("type") == Some("image") {
             if let Some(src) = node.attribute("src") {
-                check_single(src, dir, status, "input", path, report);
+                check_single(src, dir, status, "input", path, node, report);
             }
         } else if name == "math" && node.tag_name().namespace() == Some(MATHML_NS) {
             if let Some(altimg) = node.attribute("altimg") {
-                check_single(altimg, dir, status, "math altimg", path, report);
+                check_single(altimg, dir, status, "math altimg", path, node, report);
             }
         }
     }

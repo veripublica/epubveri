@@ -19,6 +19,45 @@ impl fmt::Display for Severity {
     }
 }
 
+/// A 1-indexed line/column position in a source file's original text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub line: u32,
+    pub column: u32,
+}
+
+impl Position {
+    /// Position of `node` in its document's original text. DOM-based
+    /// checks always have a `roxmltree::Node` in scope for the violation
+    /// being reported, so this needs no extra plumbing.
+    pub(crate) fn of(node: roxmltree::Node) -> Position {
+        let p = node.document().text_pos_at(node.range().start);
+        Position {
+            line: p.row,
+            column: p.col,
+        }
+    }
+
+    /// Position of a byte `offset` into raw `text`. For checks that scan
+    /// bytes/text directly instead of a parsed `roxmltree::Document`
+    /// (e.g. `htm.rs`'s XML-declaration/DOCTYPE checks, which must still
+    /// fire on documents that don't parse as well-formed XML).
+    ///
+    /// Column is counted in **chars**, not bytes, to match `Position::of`
+    /// (which delegates to `roxmltree`'s own char-based column counting) -
+    /// counting bytes instead would silently disagree with `of` on any line
+    /// containing multi-byte UTF-8 text before the offset.
+    pub(crate) fn of_offset(text: &str, offset: usize) -> Position {
+        let before = &text[..offset.min(text.len())];
+        let line = before.bytes().filter(|&b| b == b'\n').count() as u32 + 1;
+        let column = match before.rfind('\n') {
+            Some(nl) => before[nl + 1..].chars().count() as u32 + 1,
+            None => before.chars().count() as u32 + 1,
+        };
+        Position { line, column }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Message {
     /// epubcheck-compatible message ID (e.g. "RSC-001"). See `ids.rs`.
@@ -26,6 +65,7 @@ pub struct Message {
     pub severity: Severity,
     pub text: String,
     pub location: Option<String>,
+    pub position: Option<Position>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -44,6 +84,7 @@ impl Report {
             severity,
             text: text.into(),
             location: None,
+            position: None,
         });
     }
 
@@ -59,6 +100,26 @@ impl Report {
             severity,
             text: text.into(),
             location: Some(location.into()),
+            position: None,
+        });
+    }
+
+    /// Like `push_at`, but also records the exact source position of the
+    /// violation (see `Position::of`/`Position::of_offset`).
+    pub fn push_at_pos(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        location: impl Into<String>,
+        position: Position,
+    ) {
+        self.messages.push(Message {
+            id,
+            severity,
+            text: text.into(),
+            location: Some(location.into()),
+            position: Some(position),
         });
     }
 
@@ -78,5 +139,63 @@ impl Report {
 
     pub fn is_valid(&self) -> bool {
         self.errors() == 0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn of_offset_first_line_first_column() {
+        assert_eq!(
+            Position::of_offset("<a/>", 0),
+            Position { line: 1, column: 1 }
+        );
+    }
+
+    #[test]
+    fn of_offset_advances_line_and_resets_column_after_newline() {
+        let text = "line one\nline two\nline three";
+        // Offset of the 'l' starting "line three".
+        let offset = text.find("line three").unwrap();
+        assert_eq!(
+            Position::of_offset(text, offset),
+            Position { line: 3, column: 1 }
+        );
+    }
+
+    #[test]
+    fn of_offset_counts_chars_not_bytes_for_multibyte_utf8() {
+        // "café" has 4 chars but 5 bytes (é is 2 bytes) - the offset right
+        // after it must report column 5 (char count), not 6 (byte count),
+        // to stay consistent with `Position::of`'s roxmltree-backed,
+        // char-based column counting.
+        let text = "café<br/>";
+        let offset = text.find("<br/>").unwrap();
+        assert_eq!(
+            Position::of_offset(text, offset),
+            Position { line: 1, column: 5 }
+        );
+    }
+
+    #[test]
+    fn of_matches_of_offset_for_the_same_node_position() {
+        // A node preceded by multi-byte UTF-8 text on an earlier line -
+        // `Position::of` (via roxmltree) and `Position::of_offset` (the
+        // hand-rolled equivalent used for raw byte/text scans) must agree,
+        // since both are surfaced through the same `Message.position`
+        // field and consumers shouldn't see the counting convention change
+        // depending on which check produced a given finding.
+        let xml = "<root><a>café</a>\n<child/></root>";
+        let doc = crate::ocf::parse_xml(xml).unwrap();
+        let child = doc
+            .descendants()
+            .find(|n| n.tag_name().name() == "child")
+            .unwrap();
+        let via_node = Position::of(child);
+        let offset = xml.rfind("<child/>").unwrap();
+        let via_offset = Position::of_offset(xml, offset);
+        assert_eq!(via_node, via_offset);
     }
 }

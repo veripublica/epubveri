@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
@@ -117,11 +117,12 @@ pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &m
         }
         let name = child.tag_name().name();
         if !is_recognized_element(name) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_025,
                 Severity::Info,
                 format!("element \"{name}\" not allowed here"),
                 path,
+                Position::of(child),
             );
         }
         if matches!(name, "foreignObject" | "title") {
@@ -180,11 +181,12 @@ fn check_one_epub_attribute(
     if attr.name() == "type" {
         let name = n.tag_name().name();
         if EPUB_TYPE_FORBIDDEN_ELEMENTS.contains(&name) || !is_recognized_element(name) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 "attribute \"epub:type\" not allowed here",
                 path,
+                Position::of(n),
             );
         }
     } else if attr.name() == "prefix" {
@@ -193,11 +195,12 @@ fn check_one_epub_attribute(
         // (confirmed via a real fixture declaring `epub:prefix` on an
         // SVG root and expecting zero findings).
     } else {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             format!("attribute \"epub:{}\" not allowed here", attr.name()),
             path,
+            Position::of(n),
         );
     }
 }
@@ -222,11 +225,12 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
     for n in svg_root.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attribute("id") {
             if !is_valid_ncname(id) {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("value of attribute \"id\" is invalid: '{id}'"),
                     path,
+                    Position::of(n),
                 );
             }
             *by_id.entry(id).or_insert(0) += 1;
@@ -235,11 +239,12 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
     for n in svg_root.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attribute("id") {
             if by_id.get(id).copied().unwrap_or(0) > 1 {
-                report.push_at(
+                report.push_at_pos(
                     RSC_005,
                     Severity::Error,
                     format!("Duplicate \"id\" value '{id}'"),
                     path,
+                    Position::of(n),
                 );
             }
         }
@@ -264,11 +269,12 @@ pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &
                 .filter_map(|d| d.text())
                 .any(|t| !t.trim().is_empty());
         if !has_label {
-            report.push_at(
+            report.push_at_pos(
                 ACC_011,
                 Severity::Info,
                 "SVG link has no accessible label",
                 path,
+                Position::of(a),
             );
         }
     }
@@ -282,11 +288,12 @@ pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &
 fn check_href_attribute(n: roxmltree::Node, path: &str, report: &mut Report) {
     let name = n.tag_name().name();
     if !matches!(name, "a" | "area" | "link" | "base") && n.has_attribute("href") {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "attribute \"href\" not allowed here",
             path,
+            Position::of(n),
         );
     }
 }
@@ -302,7 +309,7 @@ pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &m
     for n in title.descendants().skip(1).filter(|n| n.is_element()) {
         let ns = n.tag_name().namespace();
         if ns != Some(XHTML_NS) {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 format!(
@@ -310,6 +317,7 @@ pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &m
                     ns.unwrap_or("")
                 ),
                 path,
+                Position::of(n),
             );
             continue;
         }
@@ -400,11 +408,12 @@ pub(crate) fn check_foreign_object(
         return;
     };
     if !crate::rng::validate_node(&crate::rng::xhtml_grammar(), doc.root_element()) {
-        report.push_at(
+        report.push_at_pos(
             RSC_005,
             Severity::Error,
             "foreignObject content does not conform to the EPUB XHTML content-model schema",
             path,
+            Position::of(fo),
         );
     }
     for n in fo

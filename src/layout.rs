@@ -11,7 +11,7 @@
 //! ignored, matching the real corpus's own fixtures.
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 /// Checks a fixed-layout XHTML content document's viewport declaration.
 pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: &mut Report) {
@@ -25,40 +25,48 @@ pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: 
         .collect();
 
     if metas.is_empty() {
-        report.push_at(
+        report.push_at_pos(
             HTM_046,
             Severity::Error,
             "fixed-layout content document has no viewport meta element",
             path,
+            Position::of(d.root_element()),
         );
         return;
     }
 
-    for _ in metas.iter().skip(1) {
-        report.push_at(
+    for m in metas.iter().skip(1) {
+        report.push_at_pos(
             HTM_060,
             Severity::Info,
             "additional viewport meta elements are not checked",
             path,
+            Position::of(*m),
         );
     }
 
-    check_viewport_content(metas[0].attribute("content").unwrap_or(""), path, report);
+    check_viewport_content(
+        metas[0].attribute("content").unwrap_or(""),
+        path,
+        metas[0],
+        report,
+    );
 }
 
 /// A reflowable document's viewport metadata isn't validated at all - just
 /// usage-flagged if present (confirmed via the real corpus: "no other
 /// errors or warnings are reported" alongside the usage finding).
 pub(crate) fn check_reflowable_viewport(d: &roxmltree::Document, path: &str, report: &mut Report) {
-    let has_viewport = d.descendants().any(|n| {
+    let viewport = d.descendants().find(|n| {
         n.is_element() && n.tag_name().name() == "meta" && n.attribute("name") == Some("viewport")
     });
-    if has_viewport {
-        report.push_at(
+    if let Some(n) = viewport {
+        report.push_at_pos(
             HTM_060,
             Severity::Info,
             "viewport metadata is not checked in reflowable content documents",
             path,
+            Position::of(n),
         );
     }
 }
@@ -67,16 +75,17 @@ pub(crate) fn check_reflowable_viewport(d: &roxmltree::Document, path: &str, rep
 pub(crate) fn check_svg_viewbox(d: &roxmltree::Document, path: &str, report: &mut Report) {
     let root = d.root_element();
     if root.tag_name().name() == "svg" && root.attribute("viewBox").is_none() {
-        report.push_at(
+        report.push_at_pos(
             HTM_048,
             Severity::Error,
             "fixed-layout SVG has no viewBox attribute",
             path,
+            Position::of(root),
         );
     }
 }
 
-fn check_viewport_content(content: &str, path: &str, report: &mut Report) {
+fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, report: &mut Report) {
     let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     let mut has_blank_value = false;
 
@@ -96,22 +105,24 @@ fn check_viewport_content(content: &str, path: &str, report: &mut Report) {
                 if value.is_empty() {
                     has_blank_value = true;
                 } else if !is_valid_viewport_value(key, value) {
-                    report.push_at(
+                    report.push_at_pos(
                         HTM_057,
                         Severity::Error,
                         format!("viewport '{key}' value '{value}' is not valid"),
                         path,
+                        Position::of(node),
                     );
                 }
             }
             None => {
                 if matches!(piece, "width" | "height") {
                     *seen.entry(piece).or_insert(0) += 1;
-                    report.push_at(
+                    report.push_at_pos(
                         HTM_057,
                         Severity::Error,
                         format!("viewport '{piece}' has no value"),
                         path,
+                        Position::of(node),
                     );
                 }
             }
@@ -119,30 +130,33 @@ fn check_viewport_content(content: &str, path: &str, report: &mut Report) {
     }
 
     if has_blank_value {
-        report.push_at(
+        report.push_at_pos(
             HTM_047,
             Severity::Error,
             "viewport content has a blank value",
             path,
+            Position::of(node),
         );
     }
 
     for key in ["width", "height"] {
         match seen.get(key) {
             None => {
-                report.push_at(
+                report.push_at_pos(
                     HTM_056,
                     Severity::Error,
                     format!("viewport is missing the '{key}' key"),
                     path,
+                    Position::of(node),
                 );
             }
             Some(&n) if n > 1 => {
-                report.push_at(
+                report.push_at_pos(
                     HTM_059,
                     Severity::Error,
                     format!("viewport '{key}' key appears more than once"),
                     path,
+                    Position::of(node),
                 );
             }
             _ => {}
