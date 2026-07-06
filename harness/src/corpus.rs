@@ -444,13 +444,27 @@ fn run(path: &Path, cli_profile: Option<&str>) -> (Vec<String>, Vec<String>, i32
     let mut ids = Vec::with_capacity(report.messages.len());
     let mut error_ids = Vec::new();
     for m in &report.messages {
-        ids.push(m.id.to_string());
+        // Same a/b/c sub-case normalization `id_re()` already applies to
+        // expected ids parsed from feature-file text (e.g. "OPF-096b" ->
+        // "OPF-096") - our own reported ids need it too, or a real,
+        // correct sub-case id (e.g. OPF-096b, added for the scripted-book
+        // usage-vs-error distinction) would score as a mismatch against
+        // an expectation the parser already normalized away.
+        let id = normalize_id(m.id);
+        ids.push(id.clone());
         if m.severity == epubveri::report::Severity::Error {
-            error_ids.push(m.id.to_string());
+            error_ids.push(id);
         }
     }
     let rc = if report.is_valid() { 0 } else { 1 };
     (ids, error_ids, rc)
+}
+
+fn normalize_id(id: &str) -> String {
+    id_re()
+        .captures(id)
+        .map(|c| c[1].to_string())
+        .unwrap_or_else(|| id.to_string())
 }
 
 fn family(id: &str) -> &str {

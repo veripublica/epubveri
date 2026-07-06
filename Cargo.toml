@@ -1,6 +1,6 @@
 [package]
 name = "epubveri"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alternative to epubcheck."
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"

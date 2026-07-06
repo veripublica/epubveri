@@ -2905,6 +2905,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // listed in the spine) and OPF-096 (a linear="no" spine item not
     // reachable via any hyperlink or the nav).
     let mut hyperlink_targets: HashSet<String> = HashSet::new();
+    // Whether *any* content document in the whole book uses scripting -
+    // mirrors real epubcheck's book-wide `FeatureEnum.HAS_SCRIPTS` (not
+    // scoped to any one document): when true, OPF-096's "non-linear
+    // content unreachable" check is downgraded from an error to a usage
+    // note (OPF-096b), since script could add navigation/hyperlinks
+    // dynamically that this static analysis can't see.
+    let mut book_has_scripts = false;
     // Resolved paths of every content document carrying an
     // epub:type="dictionary" marker anywhere - for the EPUB Dictionaries &
     // Glossaries OPF-078/079 cross-checks in `check_dictionaries` below
@@ -4376,6 +4383,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 crate::css::check_style_attribute(style, &path, report);
             }
         }
+        book_has_scripts |= has_script;
 
         // Content-model properties (remote-resources/scripted/svg/switch)
         // are an EPUB 3 manifest-item concept; EPUB 2 has no `properties`
@@ -4583,9 +4591,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     }
     for path in &non_linear_paths {
         if !hyperlink_targets.contains(path) {
+            // Real epubcheck downgrades this from an error to a usage note
+            // when the book uses scripting anywhere - script could add
+            // navigation/hyperlinks dynamically that this static analysis
+            // can't see (confirmed against epubcheck's own
+            // `OPFChecker30`: `FeatureEnum.HAS_SCRIPTS` gates
+            // `OPF-096` vs `OPF-096b`).
+            let (id, severity) = if book_has_scripts {
+                (OPF_096B, Severity::Info)
+            } else {
+                (OPF_096, Severity::Error)
+            };
             report.push_at_pos(
-                OPF_096,
-                Severity::Error,
+                id,
+                severity,
                 format!("non-linear content '{path}' is not reachable from the reading order"),
                 opf_path,
                 Position::of(pkg),

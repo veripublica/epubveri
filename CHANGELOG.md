@@ -8,6 +8,22 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.2.1] - 2026-07-06
+
+### Fixed
+
+- `OPF-096` ("non-linear spine content isn't reachable from the reading
+  order") is now downgraded to a usage-level `OPF-096b` when the book uses
+  scripting anywhere — matching real epubcheck, which allows for script
+  adding navigation/hyperlinks dynamically that static analysis can't see.
+  Previously always reported as a hard error, which could misfire on a
+  legitimate pattern such as a `nav.xhtml` placed in the spine as
+  `linear="no"` in a scripted book.
+
+Thanks to forum user **DNSB** ([MobileRead
+thread](https://www.mobileread.com/forums/showthread.php?t=374286)) for
+finding this. See [issue #3](https://github.com/veripublica/epubveri/issues/3).
+
 ## [0.2.0] - 2026-07-06
 
 ### Added
