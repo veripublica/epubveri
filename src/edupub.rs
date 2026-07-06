@@ -361,12 +361,14 @@ pub(crate) fn check_teacher_edition_and_accessibility(
                 && n.tag_name().namespace() == Some(DC_NS)
         });
         if !has_source {
-            report.push_at_pos(
+            report.push_full(
                 RSC_017,
                 Severity::Warning,
                 "A teacher\u{2019}s edition should identify the corresponding student edition",
                 opf_path,
                 Position::of(md),
+                "edupub.metadata.teacher_edition_missing_source",
+                Vec::new(),
             );
         }
     }

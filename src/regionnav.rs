@@ -184,12 +184,14 @@ fn check_a_label(a: roxmltree::Node, path: &str, report: &mut Report) {
         .filter(|n| n.is_text())
         .any(|n| n.text().is_some_and(|t| !t.trim().is_empty()));
     if has_text {
-        report.push_at_pos(
+        report.push_full(
             RSC_017,
             Severity::Warning,
             "\"a\" elements in region-based navs should not contain text labels",
             path,
             Position::of(a),
+            "regionnav.li.anchor_has_text_label",
+            Vec::new(),
         );
     }
 }

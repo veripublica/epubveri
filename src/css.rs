@@ -135,15 +135,24 @@ pub(crate) fn check(
     }
 
     for _ in 0..bad_tokens {
-        report.push_at(CSS_008, Severity::Error, "CSS syntax error", css_path);
+        report.push_at_rule(
+            CSS_008,
+            Severity::Error,
+            "CSS syntax error",
+            css_path,
+            "css.stylesheet.bad_token",
+            Vec::new(),
+        );
     }
     for url in urls {
         if url.trim_start().starts_with("file:") {
-            report.push_at(
+            report.push_at_rule(
                 RSC_030,
                 Severity::Error,
                 format!("'{url}' is a file URL, which is not allowed"),
                 css_path,
+                "css.url.file_scheme_not_allowed",
+                vec![url.clone()],
             );
             continue;
         }
@@ -166,27 +175,33 @@ pub(crate) fn check(
         // just `@import`.
         match (declared, present) {
             (true, false) => {
-                report.push_at(
+                report.push_at_rule(
                     RSC_001,
                     Severity::Error,
                     format!("references a missing resource '{url}'"),
                     css_path,
+                    "css.url.declared_resource_missing",
+                    vec![url.clone()],
                 );
             }
             (false, true) => {
-                report.push_at(
+                report.push_at_rule(
                     RSC_008,
                     Severity::Error,
                     format!("resource '{url}' is not declared in the manifest"),
                     css_path,
+                    "css.url.undeclared_resource",
+                    vec![url.clone()],
                 );
             }
             (false, false) => {
-                report.push_at(
+                report.push_at_rule(
                     RSC_007,
                     Severity::Error,
                     format!("references a missing resource '{url}'"),
                     css_path,
+                    "css.url.missing_resource",
+                    vec![url.clone()],
                 );
             }
             (true, true) => {}
@@ -247,7 +262,14 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
             Some(_) => true,
         };
         if malformed {
-            report.push_at(CSS_008, Severity::Error, "CSS syntax error", css_path);
+            report.push_at_rule(
+                CSS_008,
+                Severity::Error,
+                "CSS syntax error",
+                css_path,
+                "css.declaration.malformed_shape",
+                Vec::new(),
+            );
         } else if let Some(ComponentValue::Token(Token::Ident(name))) = first {
             if FLAGGED_PROPERTIES
                 .iter()

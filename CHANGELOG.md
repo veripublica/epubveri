@@ -8,6 +8,22 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.4.0] - 2026-07-06
+
+### Added
+
+- The `rule`/`params` sub-code introduced in 0.3.0 (for `RSC-005` only) is
+  now populated at **every message ID with 2 or more call sites** across
+  the crate — 36 additional IDs (`RSC-006` through `RSC-033`, `OPF-001`
+  through `OPF-092`, `CSS-008`/`CSS-015`, `HTM-004`/`HTM-057`/`HTM-060`,
+  `PKG-007`/`008`/`009`/`012`), on top of the `RSC-005` sites already
+  done. IDs used at exactly one call site are left as-is — `id` alone is
+  already unambiguous there.
+- New `Report::push_rule` method (alongside the existing `push`/`push_at`/
+  `push_at_pos`/`push_at_rule`/`push_full`) for the handful of sites with
+  a `rule`/`params` pair but no `location` at all — a whole-container
+  failure (corrupt/empty ZIP) detected before any file is identified.
+
 ## [0.3.0] - 2026-07-06
 
 ### Added

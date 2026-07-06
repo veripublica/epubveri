@@ -91,12 +91,14 @@ fn check_li(li: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
     }
     if let Some(ol) = nested_ol {
         if matches!(ty, "page-list" | "landmarks") {
-            report.push_at_pos(
+            report.push_full(
                 RSC_017,
                 Severity::Warning,
                 format!("the \"{ty}\" nav must have no nested sublists"),
                 path,
                 Position::of(*ol),
+                "navdoc.nav.nested_sublist_not_allowed",
+                vec![ty.to_string()],
             );
         }
         check_ol(*ol, ty, path, report);
@@ -214,12 +216,14 @@ fn check_toc_links(
         let resolved = crate::opf::nfc(&crate::opf::resolve(dir, path_part));
         if let Some((_, mt)) = items.values().find(|(p, _)| crate::opf::nfc(p) == resolved) {
             if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
-                report.push_at_pos(
+                report.push_full(
                     RSC_010,
                     Severity::Error,
                     format!("toc nav link '{href}' does not target a Content Document"),
                     path,
                     Position::of(a),
+                    "navdoc.toc.link_not_content_document",
+                    vec![href.to_string()],
                 );
             }
         }

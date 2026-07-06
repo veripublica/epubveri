@@ -143,6 +143,30 @@ impl Report {
         });
     }
 
+    /// Like `push`, but also records a stable semantic sub-code (`rule`)
+    /// and the values interpolated into `text` (`params`) - for sites
+    /// retrofitted for issue #2's `rule`/`params` rollout where there's
+    /// no `location` at all (e.g. a whole-container failure detected
+    /// before any file/OPF is even identified).
+    pub fn push_rule(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        rule: &'static str,
+        params: Vec<String>,
+    ) {
+        self.messages.push(Message {
+            id,
+            severity,
+            text: text.into(),
+            location: None,
+            position: None,
+            rule: Some(rule),
+            params,
+        });
+    }
+
     /// Like `push_at`, but also records a stable semantic sub-code
     /// (`rule`) and the values interpolated into `text` (`params`) - for
     /// sites retrofitted for issue #2's `rule`/`params` rollout where no

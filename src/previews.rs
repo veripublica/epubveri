@@ -53,12 +53,14 @@ pub(crate) fn check_preview_publication(
         .map(elem_text);
     match source {
         None => {
-            report.push_at_pos(
+            report.push_full(
                 RSC_017,
                 Severity::Warning,
                 "An EPUB Preview publication should link back to its source Publication",
                 opf_path,
                 Position::of(md),
+                "previews.metadata.missing_source_link",
+                Vec::new(),
             );
         }
         Some(text) => {

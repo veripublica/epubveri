@@ -111,20 +111,24 @@ fn check_entities(orig_text: &str, path: &str, report: &mut Report) {
         let name = &after[..name_len];
         let terminated = bytes.get(amp + 1 + name_len) == Some(&b';');
         if !terminated {
-            report.push_at_pos(
+            report.push_full(
                 RSC_016,
                 Severity::Error,
                 format!("entity reference '&{name}' must end with the ';' delimiter"),
                 path,
                 Position::of_offset(orig_text, amp),
+                "htm.entity.missing_semicolon",
+                vec![name.to_string()],
             );
         } else if !PREDEFINED.contains(&name) && !declared.iter().any(|d| d == name) {
-            report.push_at_pos(
+            report.push_full(
                 RSC_016,
                 Severity::Error,
                 format!("entity '{name}' was referenced, but not declared"),
                 path,
                 Position::of_offset(orig_text, amp),
+                "htm.entity.undeclared",
+                vec![name.to_string()],
             );
         }
         i = amp + 1 + name_len;
@@ -214,12 +218,14 @@ fn check_doctype_epub2(text: &str, path: &str, report: &mut Report) {
         return;
     };
     if !KNOWN_PUBLIC_IDS.iter().any(|id| doctype.contains(id)) {
-        report.push_at_pos(
+        report.push_full(
             HTM_004,
             Severity::Error,
             "DOCTYPE does not have a recognized XHTML PUBLIC identifier",
             path,
             Position::of_offset(text, offset_in(text, doctype)),
+            "htm.doctype.epub2_unrecognized_public_id",
+            Vec::new(),
         );
     }
 }
@@ -229,12 +235,14 @@ fn check_doctype(text: &str, path: &str, report: &mut Report) {
         return;
     };
     if doctype.contains(" PUBLIC ") {
-        report.push_at_pos(
+        report.push_full(
             HTM_004,
             Severity::Error,
             "DOCTYPE has an obsolete PUBLIC identifier",
             path,
             Position::of_offset(text, offset_in(text, doctype)),
+            "htm.doctype.epub3_obsolete_public_id",
+            Vec::new(),
         );
     }
     if let (Some(open), Some(close)) = (doctype.find('['), doctype.rfind(']')) {

@@ -107,12 +107,14 @@ pub(crate) fn check(
         let value = n.attribute((EPUB_NS, "type")).unwrap();
         for token in value.split_whitespace() {
             if !token.contains(':') && !is_default_vocab_type(token) {
-                report.push_at_pos(
+                report.push_full(
                     OPF_088,
                     Severity::Info,
                     format!("epub:type value '{token}' is not in the default vocabulary"),
                     smil_path,
                     Position::of(n),
+                    "opf.content_document.epub_type_not_default_vocab",
+                    vec![token.to_string()],
                 );
             }
         }
@@ -341,12 +343,14 @@ fn check_text(
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
-        report.push_at_pos(
+        report.push_full(
             RSC_001,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
             Position::of(node),
+            "smil.text.missing_resource",
+            vec![src.to_string()],
         );
         return;
     }
@@ -423,12 +427,14 @@ fn check_audio(
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
-        report.push_at_pos(
+        report.push_full(
             RSC_001,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
             Position::of(node),
+            "smil.audio.missing_resource",
+            vec![src.to_string()],
         );
     } else if let Some(media_type) = media_types.get(&resolved_nfc) {
         if !CORE_AUDIO_TYPES.contains(&media_type.as_str()) {

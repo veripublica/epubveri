@@ -96,12 +96,14 @@ fn check_rendition_selection(container_doc: &roxmltree::Document, report: &mut R
             .filter(|a| a.namespace() == Some(RENDITION_NS))
             .collect();
         if i > 0 && selection_attrs.is_empty() {
-            report.push_at_pos(
+            report.push_full(
                 RSC_017,
                 Severity::Warning,
                 "at least one rendition selection attribute should be specified for each non-first rootfile element",
                 CONTAINER,
                 Position::of(*rf),
+                "renditions.rootfile.missing_selection_attribute",
+                Vec::new(),
             );
         }
         for attr in &selection_attrs {

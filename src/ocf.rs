@@ -98,7 +98,13 @@ impl Ocf {
 pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     if bytes.is_empty() {
         report.push(PKG_003, Severity::Error, "the EPUB file is empty");
-        report.push(PKG_008, Severity::Error, "the zip file is empty");
+        report.push_rule(
+            PKG_008,
+            Severity::Error,
+            "the zip file is empty",
+            "ocf.container.empty_zip",
+            Vec::new(),
+        );
         return None;
     }
     // If the bytes are actually a recognizable *other* file format (e.g. a
@@ -127,21 +133,25 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                     "Not a valid EPUB container (corrupted ZIP header)",
                 );
             }
-            report.push(
+            report.push_rule(
                 PKG_008,
                 Severity::Error,
                 format!("could not open zip file: {e}"),
+                "ocf.container.unreadable_zip",
+                vec![e.to_string()],
             );
             return None;
         }
     };
 
     if let Some(name) = duplicate_entry_name {
-        report.push_at(
+        report.push_at_rule(
             OPF_060,
             Severity::Error,
             format!("file name '{name}' is used by more than one ZIP entry"),
             name.as_str(),
+            "ocf.container.exact_duplicate_entry",
+            vec![name.clone()],
         );
     }
 
@@ -176,11 +186,13 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             // fixture flagging a forbidden character inside META-INF).
             for segment in name.split('/').filter(|s| !s.is_empty()) {
                 if crate::filename::has_forbidden_char(segment) {
-                    report.push_at(
+                    report.push_at_rule(
                         PKG_009,
                         Severity::Error,
                         format!("file name '{segment}' contains a forbidden character"),
                         name.as_str(),
+                        "ocf.filename.forbidden_char",
+                        vec![segment.to_string()],
                     );
                 }
                 if crate::filename::ends_with_full_stop(segment) {
@@ -192,11 +204,13 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                     );
                 }
                 if crate::filename::has_non_ascii(segment) {
-                    report.push_at(
+                    report.push_at_rule(
                         PKG_012,
                         Severity::Info,
                         format!("file name '{segment}' contains non-ASCII characters"),
                         name.as_str(),
+                        "ocf.filename.non_ascii",
+                        vec![segment.to_string()],
                     );
                 }
             }
@@ -216,11 +230,13 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             let key = crate::filename::canonical_fold_key(name);
             if let Some(_first) = seen.get(key.as_str()) {
                 if reported.insert(name.clone()) {
-                    report.push_at(
+                    report.push_at_rule(
                         OPF_060,
                         Severity::Error,
                         format!("file name '{name}' collides with another entry after case-folding/normalization"),
                         name.as_str(),
+                        "ocf.container.case_fold_collision",
+                        vec![name.clone()],
                     );
                 }
             } else {
@@ -261,10 +277,12 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         );
     } else {
         if !first_stored {
-            report.push(
+            report.push_rule(
                 PKG_007,
                 Severity::Error,
                 "The 'mimetype' file must be stored uncompressed",
+                "ocf.mimetype.not_stored_uncompressed",
+                Vec::new(),
             );
         }
         if first_has_extra {
@@ -281,13 +299,15 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     if ocf.has("mimetype") {
         if let Some(b) = ocf.read("mimetype") {
             if b != b"application/epub+zip" {
-                report.push(
+                report.push_rule(
                     PKG_007,
                     Severity::Error,
                     format!(
                         "'mimetype' must contain exactly 'application/epub+zip' (found {:?})",
                         String::from_utf8_lossy(&b)
                     ),
+                    "ocf.mimetype.wrong_content",
+                    vec![String::from_utf8_lossy(&b).into_owned()],
                 );
             }
         }
