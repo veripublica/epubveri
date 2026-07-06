@@ -1,0 +1,79 @@
+name: Release binaries
+
+# Builds the `epubveri` CLI for Linux/macOS/Windows and attaches the
+# archives to the matching GitHub Release - pure Rust, no C deps, so each
+# target builds natively on its own runner (no cross-compilation toolchain
+# needed). Triggered automatically when a `v*` tag is pushed (the same tags
+# already used for GitHub Releases); `workflow_dispatch` allows a manual
+# re-run against an existing tag (e.g. to backfill a release made before
+# this workflow existed).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag/release to attach binaries to (e.g. v0.4.0)"
+        required: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Add target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build (release)
+        run: cargo build --release --locked --bin epubveri --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          stage="epubveri-${{ matrix.target }}"
+          mkdir "$stage"
+          cp "target/${{ matrix.target }}/release/epubveri" "$stage/"
+          cp LICENSE LICENSE-COMMERCIAL.md README.md "$stage/"
+          tar czf "$stage.tar.gz" "$stage"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $stage = "epubveri-${{ matrix.target }}"
+          New-Item -ItemType Directory -Path $stage | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/epubveri.exe" $stage/
+          Copy-Item LICENSE, LICENSE-COMMERCIAL.md, README.md $stage/
+          Compress-Archive -Path $stage -DestinationPath "$stage.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: epubveri-${{ matrix.target }}
+          path: |
+            epubveri-${{ matrix.target }}.tar.gz
+            epubveri-${{ matrix.target }}.zip
+          if-no-files-found: ignore
+
+      - name: Attach to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            epubveri-${{ matrix.target }}.tar.gz
+            epubveri-${{ matrix.target }}.zip

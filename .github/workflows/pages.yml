@@ -1,0 +1,69 @@
+name: Deploy WASM demo to GitHub Pages
+
+# Builds epubveri-wasm (--target web) and deploys epubveri-wasm/demo/ +
+# the freshly-built pkg/ to GitHub Pages, so anyone can validate an EPUB
+# entirely client-side with zero install (no Rust, no binary download) -
+# the fastest way to try epubveri at all. Runs on every push to main so
+# the demo always reflects the latest code; workflow_dispatch allows a
+# manual re-deploy.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Add wasm target
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build epubveri-wasm (web target)
+        run: wasm-pack build epubveri-wasm --target web --out-name epubveri
+
+      - name: Assemble Pages site
+        run: |
+          set -euo pipefail
+          mkdir -p site
+          cp -r epubveri-wasm/demo site/demo
+          cp -r epubveri-wasm/pkg site/pkg
+          # Land the demo at the site root too, so the root URL works
+          # without needing to know about /demo/ - the import path
+          # ("../pkg/...") only resolves one level down, so this root copy
+          # points at the same already-built pkg/ instead of duplicating it.
+          # The replacement keeps a leading "./" - a bare "pkg/..." isn't a
+          # valid ES module specifier (confirmed the hard way: browsers
+          # reject it with "Relative references must start with either
+          # \"/\", \"./\", or \"../\"").
+          sed 's#\.\./pkg/#./pkg/#' epubveri-wasm/demo/index.html > site/index.html
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
