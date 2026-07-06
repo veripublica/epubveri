@@ -146,8 +146,17 @@ to be valid or to trip exactly one specific rule. As of this writing:
 
 ## Trying it out
 
-You'll need [Rust installed](https://www.rust-lang.org/tools/install)
-(the `cargo` command). Then, from a clone of this repo:
+**Don't want to install Rust just to try it?** Pre-built binaries for
+Linux, macOS (Intel + Apple Silicon), and Windows are attached to every
+[GitHub Release](https://github.com/veripublica/epubveri/releases) —
+download the archive for your platform, unpack it, and run the
+`epubveri` binary directly. No toolchain needed. (Or skip binaries
+entirely and [try it in your browser](#use-it-in-the-browser-wasm) —
+zero download, zero install.)
+
+To build it from source, you'll need [Rust
+installed](https://www.rust-lang.org/tools/install) (the `cargo`
+command). Then, from a clone of this repo:
 
 ```sh
 # Build it once:
@@ -211,6 +220,10 @@ compiles to **WebAssembly** and runs entirely in the browser (or any
 JavaScript runtime) — the `.epub` never leaves the page, and there's no
 server to run. This is the thing real epubcheck can't do: it's Java, so
 browser/app embedding means shipping or hosting a JVM.
+
+**The fastest way to try epubveri at all, with zero install:**
+[**veripublica.github.io/epubveri**](https://veripublica.github.io/epubveri/) —
+drop in a `.epub`, get a report, entirely client-side.
 
 The bindings live in the [`epubveri-wasm/`](epubveri-wasm/) workspace
 crate and publish to npm as **`@veripublica/epubveri-wasm`**. Once installed
