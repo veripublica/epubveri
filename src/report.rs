@@ -56,6 +56,19 @@ impl Position {
         };
         Position { line, column }
     }
+
+    /// Position reported by a `roxmltree` parse error (its own row/column).
+    /// For the "not well-formed XML" branches, which have a concrete parse
+    /// error but no parsed node to point at - surfacing the exact spot the
+    /// parser failed is far more actionable for a downstream fixer (e.g.
+    /// epublift) than a bare file name.
+    pub(crate) fn of_parse_error(err: &roxmltree::Error) -> Position {
+        let p = err.pos();
+        Position {
+            line: p.row,
+            column: p.col,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

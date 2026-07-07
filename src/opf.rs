@@ -1345,11 +1345,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
-            report.push_at_rule(
+            report.push_full(
                 RSC_016,
                 Severity::Error,
                 format!("OPF is not well-formed XML: {e}"),
                 opf_path,
+                Position::of_parse_error(&e),
                 "opf.package.malformed_xml",
                 Vec::new(),
             );

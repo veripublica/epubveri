@@ -339,11 +339,12 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 format!("META-INF/container.xml is not well-formed XML: {e}"),
                 CONTAINER,
+                Position::of_parse_error(&e),
             );
             return Vec::new();
         }
@@ -408,11 +409,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 format!("META-INF/encryption.xml is not well-formed XML: {e}"),
                 ENC,
+                Position::of_parse_error(&e),
             );
             return;
         }
@@ -521,11 +523,12 @@ pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
-            report.push_at(
+            report.push_at_pos(
                 RSC_005,
                 Severity::Error,
                 format!("META-INF/signatures.xml is not well-formed XML: {e}"),
                 SIG,
+                Position::of_parse_error(&e),
             );
             return;
         }

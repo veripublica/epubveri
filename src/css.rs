@@ -123,7 +123,21 @@ pub(crate) fn check(
                     } else {
                         collect_urls(&block.values, &mut urls);
                     }
-                    check_declaration_shapes(&block.values, css_path, report);
+                    // A conditional-group at-rule (`@media`, `@supports`, …)
+                    // contains nested *rules*, not declarations - its block
+                    // must be walked as a rule list, or every nested rule's
+                    // selector gets mis-flagged as a malformed declaration
+                    // (issue #5: Vellum media-query stylesheets fired CSS-008
+                    // once per `@media` block). Every other at-rule
+                    // (`@font-face`, `@page`, …) has a declaration block.
+                    if GROUPING_AT_RULES
+                        .iter()
+                        .any(|g| a.name.eq_ignore_ascii_case(g))
+                    {
+                        check_rule_list_block(&block.values, css_path, report);
+                    } else {
+                        check_declaration_shapes(&block.values, css_path, report);
+                    }
                 }
                 if a.name.eq_ignore_ascii_case("import") {
                     if let Some(target) = import_target(&a.prelude) {
@@ -248,6 +262,42 @@ fn is_effectively_empty(values: &[ComponentValue]) -> bool {
 /// unclosed block's own contents, which then obviously doesn't parse as a
 /// clean declaration list either). Both show up here as "this
 /// semicolon-delimited chunk doesn't start with `ident :`."
+/// Conditional-group at-rules: their block holds nested *rules*, not
+/// declarations (CSS Conditional Rules / Nesting). Names are matched
+/// without the leading `@`, case-insensitively.
+const GROUPING_AT_RULES: &[&str] = &[
+    "media",
+    "supports",
+    "container",
+    "layer",
+    "scope",
+    "document",
+    "-moz-document",
+];
+
+/// Walk the block of a conditional-group at-rule, which holds nested rules
+/// rather than declarations. For each nested rule's block, check the
+/// declarations inside it: a further grouping at-rule (a nested `@media`)
+/// recurses as a rule list; anything else is a qualified rule whose block
+/// is an ordinary declaration list. The rule *preludes* (selectors /
+/// conditions) are deliberately not shape-checked here - they are not
+/// declarations (issue #5). A nested block is recognised as a grouping one
+/// by containing a block of its own, mirroring how the top level dispatches.
+fn check_rule_list_block(block_values: &[ComponentValue], css_path: &str, report: &mut Report) {
+    for v in block_values {
+        if let ComponentValue::Block(b) = v {
+            if b.values
+                .iter()
+                .any(|nv| matches!(nv, ComponentValue::Block(_)))
+            {
+                check_rule_list_block(&b.values, css_path, report);
+            } else {
+                check_declaration_shapes(&b.values, css_path, report);
+            }
+        }
+    }
+}
+
 fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, report: &mut Report) {
     for chunk in block_values.split(|v| matches!(v, ComponentValue::Token(Token::Semicolon))) {
         let mut iter = chunk
@@ -640,6 +690,28 @@ mod tests {
         let css = "body {\n  color: black;\n\np {\n  font-size: 1em;\n}\n";
         let findings = run(css, &empty_index());
         assert!(findings.contains(&CSS_008));
+    }
+
+    #[test]
+    fn media_query_nested_rules_are_not_syntax_errors() {
+        // Issue #5: a Vellum-style `@media` block holds nested rules, whose
+        // selectors must not be mis-read as malformed declarations.
+        let css = "@media screen and (max-width: 420px) {\n\
+                   \x20 div.list-text-feature { padding-right: 0px; }\n\
+                   \x20 blockquote.verse { padding-left: 1.5em; }\n\
+                   }";
+        assert!(run(css, &empty_index()).is_empty());
+    }
+
+    #[test]
+    fn nested_media_queries_are_not_syntax_errors() {
+        // A grouping at-rule nested inside another must recurse, not flag.
+        let css = "@supports (display: grid) {\n\
+                   \x20 @media screen {\n\
+                   \x20   p.body { color: red; }\n\
+                   \x20 }\n\
+                   }";
+        assert!(run(css, &empty_index()).is_empty());
     }
 
     #[test]

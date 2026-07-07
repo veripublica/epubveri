@@ -8,6 +8,32 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.4.3] - 2026-07-08
+
+### Fixed
+
+- **Media-query (and other conditional-group) stylesheets were wrongly
+  flooded with `CSS-008` "CSS syntax error"** ([issue
+  #5](https://github.com/veripublica/epubveri/issues/5), reported by DNSB
+  against a Vellum-generated book). The block of a conditional-group
+  at-rule (`@media`, `@supports`, `@container`, …) holds nested *rules*,
+  not declarations; each nested rule's selector was being mis-read as a
+  malformed declaration, so a stylesheet fired one false `CSS-008` per
+  `@media` block. Such blocks are now walked as rule lists — the
+  declarations inside the nested rules are still checked, and a genuinely
+  malformed declaration (or an unclosed qualified rule) is still reported.
+
+### Changed
+
+- **Malformed-XML findings now report the exact line/column where parsing
+  failed.** A not-well-formed OPF package document (`RSC-016`) or
+  `META-INF` container/encryption/signatures file (`RSC-005`) previously
+  reported only the file name; each now points at the precise spot the XML
+  parser gave up, which makes these findings directly actionable for a
+  producer fixing them programmatically. (Position coverage across all
+  finding call sites is now ~82%; the remainder — CSS checks and
+  whole-container/ZIP-structure checks — have no single line to point at.)
+
 ## [0.4.2] - 2026-07-08
 
 ### Fixed

@@ -128,7 +128,7 @@ define.
 epubveri is **pre-1.0 and under active development.** This is not a
 drop-in replacement for epubcheck yet, and this project is deliberately
 upfront about that rather than overclaiming. (It's published as of
-`0.4.2`: the Rust crate on [crates.io](https://crates.io/crates/epubveri)
+`0.4.3`: the Rust crate on [crates.io](https://crates.io/crates/epubveri)
 and a WebAssembly build on npm as `@veripublica/epubveri-wasm`. See
 [`CHANGELOG.md`](./CHANGELOG.md) for what's changed between releases.)
 
@@ -187,9 +187,13 @@ The exit code follows Unix convention: `0` if the book is valid, `1` if
 it found at least one error, `2` if something went wrong just trying to
 read the file (e.g. it isn't a ZIP at all).
 
-Where available (most checks; a few — schematron-derived findings, CSS
-checks, and ZIP-container-level checks — don't have one), findings also
-carry the exact `line:column` of the offending element, as shown above.
+Where available (the large majority of checks; a few — CSS checks, and
+whole-container/ZIP-structure checks such as a missing file or a bad
+`mimetype` — have no single line to point at), findings also carry the
+exact `line:column` of the offending element, as shown above. This
+includes the exact spot a malformed OPF or `container.xml` fails to
+parse, which makes findings straightforward for a producer to act on
+programmatically.
 
 **Using it as a library** (inside your own Rust project), add it from
 crates.io (`cargo add epubveri`, or in your `Cargo.toml`):
