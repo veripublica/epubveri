@@ -146,6 +146,11 @@ to be valid or to trip exactly one specific rule. As of this writing:
 
 ## Trying it out
 
+> **New to command-line tools?** There's a step-by-step, no-experience-needed
+> walkthrough — which file to download, how to get past the first-run
+> security prompt on macOS/Windows, how to run it, and how to read the
+> output — in **[docs/USAGE.md](docs/USAGE.md)**.
+
 **Don't want to install Rust just to try it?** Pre-built binaries for
 Linux, macOS (Intel + Apple Silicon), and Windows are attached to every
 [GitHub Release](https://github.com/veripublica/epubveri/releases) —
