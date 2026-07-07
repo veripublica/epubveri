@@ -8,6 +8,35 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.4.2] - 2026-07-08
+
+### Fixed
+
+- **`dc:date` full timestamps were wrongly rejected** ([issue
+  #4](https://github.com/veripublica/epubveri/issues/4), reported by
+  JSWolf). A value like `2025-04-24T17:00:00Z` — a valid W3C-DTF (ISO 8601)
+  timestamp — was flagged `OPF-054` ("doesn't conform to ISO 8601"). The
+  date validator only accepted the date-only forms (`YYYY`, `YYYY-MM`,
+  `YYYY-MM-DD`); it now also accepts a full timestamp (`T`, a time, and a
+  `Z` or `±hh:mm` timezone designator).
+- **A non-linear navigation document was wrongly flagged as unreachable**
+  ([issue #5](https://github.com/veripublica/epubveri/issues/5), reported
+  by DNSB). A nav (toc) document placed in the spine as `linear="no"` with
+  no hyperlink pointing at it triggered `OPF-096` ("non-linear content is
+  not reachable from the reading order"). The navigation document is always
+  reachable through the reading system's own navigation controls, so it is
+  now exempt from this check (matching epubcheck 5.3). Genuinely-unreachable
+  non-linear *content* documents are still reported.
+
+### Changed
+
+- **Schematron-derived findings now carry line/column positions.** These
+  were the one documented family that reported only a file path after
+  0.2.0's position work; each now points at the exact element the rule
+  matched (e.g. an empty `<meta property="">`). Completes the line/column
+  coverage requested in [issue
+  #1](https://github.com/veripublica/epubveri/issues/1).
+
 ## [0.4.1] - 2026-07-07
 
 ### Fixed

@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use roxmltree::{Document, Node};
 
+use crate::report::Position;
 use crate::xpath::ast::{Axis, Expr, NameTest, Path, PathStart, Step};
 use crate::xpath::{eval, Env, NodeRef, Value};
 
@@ -204,10 +205,14 @@ fn parse_check(n: Node, kind: CheckKind) -> Result<Check, String> {
 
 /// Run a loaded schema against a document, returning one message per fired
 /// check (a failing `assert` or a true `report`), in document/pattern/rule
-/// order. The caller (e.g. `opf::check`) decides how to report these (this
-/// project reports Schematron findings as `RSC-005`, matching how epubcheck
-/// itself surfaces nearly all of them under that one catch-all code).
-pub fn run<'input>(schema: &Schema, doc: &Document<'input>) -> Vec<String> {
+/// order. Each message carries the exact source `Position` of the context
+/// node the rule matched (the offending element itself, e.g. the empty
+/// `<meta>`), so Schematron-derived findings can report line/column just
+/// like the hand-coded checks. The caller (e.g. `opf::check`) decides how
+/// to report these (this project reports Schematron findings as `RSC-005`,
+/// matching how epubcheck itself surfaces nearly all of them under that one
+/// catch-all code).
+pub fn run<'input>(schema: &Schema, doc: &Document<'input>) -> Vec<(String, Position)> {
     let root = doc.root_element();
     let namespaces = &schema.namespaces;
 
@@ -255,7 +260,10 @@ pub fn run<'input>(schema: &Schema, doc: &Document<'input>) -> Vec<String> {
                         CheckKind::Report => test_true,
                     };
                     if fires {
-                        messages.push(render_message(&check.message, &env, node));
+                        messages.push((
+                            render_message(&check.message, &env, node),
+                            Position::of(node),
+                        ));
                     }
                 }
             }
@@ -382,9 +390,9 @@ mod tests {
         "#;
         let schema = load(sch).unwrap();
         let doc = Document::parse(r#"<root><a id="x"/><b id="x"/><c id="y"/></root>"#).unwrap();
-        let messages = run(&schema, &doc);
+        let texts: Vec<String> = run(&schema, &doc).into_iter().map(|(t, _)| t).collect();
         assert_eq!(
-            messages,
+            texts,
             vec!["Duplicate id".to_string(), "Duplicate id".to_string()]
         );
     }
@@ -421,8 +429,9 @@ mod tests {
         let schema = load(sch).unwrap();
         let doc =
             Document::parse(r#"<root xmlns:epub="urn:test:epub"><epub:switch/></root>"#).unwrap();
+        let texts: Vec<String> = run(&schema, &doc).into_iter().map(|(t, _)| t).collect();
         assert_eq!(
-            run(&schema, &doc),
+            texts,
             vec!["WARNING: epub:switch is deprecated".to_string()]
         );
     }
@@ -440,7 +449,8 @@ mod tests {
         "#;
         let schema = load(sch).unwrap();
         let doc = Document::parse(r#"<root><a id="x"/></root>"#).unwrap();
-        assert_eq!(run(&schema, &doc), vec!["bad id \"x\"".to_string()]);
+        let texts: Vec<String> = run(&schema, &doc).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(texts, vec!["bad id \"x\"".to_string()]);
     }
 
     #[test]
@@ -467,8 +477,9 @@ mod tests {
             r#"<opf:package xmlns:opf="urn:test:opf" unique-identifier="missing"><opf:metadata><opf:identifier id="id"/></opf:metadata></opf:package>"#,
         )
         .unwrap();
+        let texts: Vec<String> = run(&schema, &bad_doc).into_iter().map(|(t, _)| t).collect();
         assert_eq!(
-            run(&schema, &bad_doc),
+            texts,
             vec!["unique-identifier does not resolve".to_string()]
         );
     }

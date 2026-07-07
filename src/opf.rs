@@ -406,32 +406,93 @@ fn check_refines_cycles(doc: &roxmltree::Document, opf_path: &str, report: &mut 
 
 /// OPF-085: a `dc:identifier` starting with `urn:uuid:` must be followed
 /// by a syntactically valid UUID (8-4-4-4-12 hex groups).
-/// A Dublin Core date: `YYYY`, `YYYY-MM`, or `YYYY-MM-DD` (the W3C-DTF
-/// profile of ISO 8601 that `dc:date` actually uses) - a bare year is the
-/// common, valid case (a real fixture's own "no other errors" pairing
-/// with a specific-year value elsewhere in this codebase already relies
-/// on this), an empty string or a natural-language date are both
-/// rejected uniformly by not matching any of the three shapes.
+/// A W3C-DTF date - the ISO 8601 profile `dc:date` actually uses. The
+/// date-only forms are `YYYY`, `YYYY-MM`, and `YYYY-MM-DD` (a bare year is
+/// the common, valid case); a full timestamp appends `T`, a time, and a
+/// mandatory timezone designator, e.g. `2025-04-24T17:00:00Z` - a form real
+/// books commonly use and epubcheck accepts without complaint (issue #4).
+/// An empty string or a natural-language date match no shape and are
+/// rejected. Non-ASCII input can't be a valid date and is refused up front,
+/// which also keeps every byte index on a char boundary so the slicing
+/// below can't panic.
 fn is_valid_dc_date(s: &str) -> bool {
-    let digits_in = |slice: &str| slice.bytes().all(|b| b.is_ascii_digit());
+    if !s.is_ascii() {
+        return false;
+    }
     match s.len() {
-        4 => digits_in(s),
+        4 => s.bytes().all(|b| b.is_ascii_digit()),
         7 => {
-            s.as_bytes().get(4) == Some(&b'-')
-                && digits_in(&s[0..4])
-                && digits_in(&s[5..7])
-                && (1..=12).contains(&s[5..7].parse().unwrap_or(0))
+            s.as_bytes()[4] == b'-'
+                && s[0..4].bytes().all(|b| b.is_ascii_digit())
+                && two_digit_in_range(&s[5..7], 1, 12)
         }
-        10 => {
-            s.as_bytes().get(4) == Some(&b'-')
-                && s.as_bytes().get(7) == Some(&b'-')
-                && digits_in(&s[0..4])
-                && digits_in(&s[5..7])
-                && digits_in(&s[8..10])
-                && (1..=12).contains(&s[5..7].parse().unwrap_or(0))
-                && (1..=31).contains(&s[8..10].parse().unwrap_or(0))
+        10 => is_wcdtf_full_date(s),
+        _ => {
+            s.len() > 10
+                && is_wcdtf_full_date(&s[0..10])
+                && s.as_bytes()[10] == b'T'
+                && is_wcdtf_time_with_tz(&s[11..])
         }
-        _ => false,
+    }
+}
+
+/// Exactly two ASCII digits whose value falls within `lo..=hi`.
+fn two_digit_in_range(s: &str, lo: u32, hi: u32) -> bool {
+    s.len() == 2
+        && s.bytes().all(|b| b.is_ascii_digit())
+        && s.parse::<u32>().is_ok_and(|v| (lo..=hi).contains(&v))
+}
+
+/// A W3C-DTF calendar date `YYYY-MM-DD` (month 01-12, day 01-31). Assumes
+/// ASCII input (guaranteed by the sole caller, `is_valid_dc_date`).
+fn is_wcdtf_full_date(s: &str) -> bool {
+    s.len() == 10
+        && s.as_bytes()[4] == b'-'
+        && s.as_bytes()[7] == b'-'
+        && s[0..4].bytes().all(|b| b.is_ascii_digit())
+        && two_digit_in_range(&s[5..7], 1, 12)
+        && two_digit_in_range(&s[8..10], 1, 31)
+}
+
+/// The time-of-day part of a W3C-DTF timestamp - `hh:mm`, `hh:mm:ss`, or
+/// `hh:mm:ss.s+` - followed by a mandatory timezone designator, either `Z`
+/// or a numeric offset `±hh:mm`. Assumes ASCII input.
+fn is_wcdtf_time_with_tz(s: &str) -> bool {
+    // Peel off the (required) timezone designator first.
+    let time = if let Some(t) = s.strip_suffix('Z') {
+        t
+    } else {
+        if s.len() < 6 {
+            return false;
+        }
+        let (t, tz) = s.split_at(s.len() - 6);
+        let z = tz.as_bytes();
+        if (z[0] != b'+' && z[0] != b'-') || z[3] != b':' {
+            return false;
+        }
+        if !two_digit_in_range(&tz[1..3], 0, 23) || !two_digit_in_range(&tz[4..6], 0, 59) {
+            return false;
+        }
+        t
+    };
+    // hh:mm, with an optional :ss and an optional .fraction on the seconds.
+    let mut parts = time.splitn(3, ':');
+    let (Some(hh), Some(mm)) = (parts.next(), parts.next()) else {
+        return false;
+    };
+    if !two_digit_in_range(hh, 0, 23) || !two_digit_in_range(mm, 0, 59) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(sec) => match sec.split_once('.') {
+            None => two_digit_in_range(sec, 0, 59),
+            Some((ss, frac)) => {
+                two_digit_in_range(ss, 0, 59)
+                    && !frac.is_empty()
+                    && frac.bytes().all(|b| b.is_ascii_digit())
+            }
+        },
     }
 }
 
@@ -1427,9 +1488,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
     // Schematron rules our own RNG can't express (id uniqueness,
     // unique-identifier resolution, dcterms:modified cardinality, @refines
-    // targets). Same additive pattern, reported as RSC-005.
-    for message in crate::schematron::run(&crate::schematron::package_schema(), &doc) {
-        report.push_at(RSC_005, Severity::Error, message, opf_path);
+    // targets). Same additive pattern, reported as RSC-005. Each finding
+    // carries the position of the context element the rule matched, so
+    // Schematron output now gets line/column too (previously it was the
+    // one documented family that couldn't).
+    for (message, position) in crate::schematron::run(&crate::schematron::package_schema(), &doc) {
+        report.push_at_pos(RSC_005, Severity::Error, message, opf_path, position);
     }
 
     // --- required metadata ---
@@ -4843,7 +4907,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             );
         }
     }
+    // The navigation document (toc) is always reachable through the reading
+    // system's own navigation controls, so a non-linear nav is never truly
+    // "unreachable from the reading order" - flagging it is a false positive
+    // (epubcheck 5.3 doesn't either; issue #5). Exempt it before the
+    // hyperlink-reachability test below. `nav_path` is stored non-NFC, while
+    // `non_linear_paths` holds NFC-normalized paths, so normalize to compare.
+    let nav_path_nfc = nav_path.as_deref().map(nfc);
     for path in &non_linear_paths {
+        if nav_path_nfc.as_deref() == Some(path.as_str()) {
+            continue;
+        }
         if !hyperlink_targets.contains(path) {
             // Real epubcheck downgrades this from an error to a usage note
             // when the book uses scripting anywhere - script could add
@@ -6171,5 +6245,41 @@ fn check_font_obfuscation(
                 Position::of(enc_data),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_valid_dc_date;
+
+    #[test]
+    fn dc_date_accepts_date_only_forms() {
+        assert!(is_valid_dc_date("2011"));
+        assert!(is_valid_dc_date("2011-05"));
+        assert!(is_valid_dc_date("2011-05-04"));
+    }
+
+    #[test]
+    fn dc_date_accepts_full_timestamps() {
+        // The form from issue #4 (JSWolf's book) that was wrongly rejected.
+        assert!(is_valid_dc_date("2025-04-24T17:00:00Z"));
+        // Other valid W3C-DTF timestamp shapes.
+        assert!(is_valid_dc_date("2025-04-24T17:00Z"));
+        assert!(is_valid_dc_date("2025-04-24T17:00:00.5Z"));
+        assert!(is_valid_dc_date("2025-04-24T17:00:00+03:00"));
+        assert!(is_valid_dc_date("2025-04-24T17:00:00-05:30"));
+    }
+
+    #[test]
+    fn dc_date_rejects_invalid_values() {
+        assert!(!is_valid_dc_date(""));
+        assert!(!is_valid_dc_date("Anno Domini Twenty"));
+        assert!(!is_valid_dc_date("20010-11-08")); // 5-digit year
+        assert!(!is_valid_dc_date("2025-13-01")); // month 13
+        assert!(!is_valid_dc_date("2025-04-32")); // day 32
+        assert!(!is_valid_dc_date("2025-04-24 17:00:00Z")); // space, not 'T'
+        assert!(!is_valid_dc_date("2025-04-24T25:00:00Z")); // hour 25
+        assert!(!is_valid_dc_date("2025-04-24T17:00:00")); // missing timezone
+        assert!(!is_valid_dc_date("2025-04-24T17:00:00X")); // bad timezone
     }
 }
