@@ -166,7 +166,14 @@
           const text = document.createElement("td");
           text.textContent = m.text;
           const loc = document.createElement("td");
-          loc.textContent = m.location ?? "";
+          // Show the exact line:column when the finding carries one (most do;
+          // a few families - e.g. Schematron/CSS/container-level - legitimately
+          // don't), mirroring the CLI's "path:line:col" format.
+          let locText = m.location ?? "";
+          if (locText && m.position) {
+            locText += `:${m.position.line}:${m.position.column}`;
+          }
+          loc.textContent = locText;
           tr.append(sev, id, text, loc);
           tbodyEl.appendChild(tr);
         }
