@@ -122,7 +122,7 @@
   <!-- 5.5.5 The meta element -->
 
   <pattern id="opf-meta-property-not-empty">
-    <rule context="opf:meta">
+    <rule context="opf:meta[@property]">
       <assert test="string-length(normalize-space(@property)) &gt; 0"
         >value of attribute "property" is invalid (must not be empty)</assert>
     </rule>

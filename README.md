@@ -128,7 +128,7 @@ define.
 epubveri is **pre-1.0 and under active development.** This is not a
 drop-in replacement for epubcheck yet, and this project is deliberately
 upfront about that rather than overclaiming. (It's published as of
-`0.4.0`: the Rust crate on [crates.io](https://crates.io/crates/epubveri)
+`0.4.1`: the Rust crate on [crates.io](https://crates.io/crates/epubveri)
 and a WebAssembly build on npm as `@veripublica/epubveri-wasm`. See
 [`CHANGELOG.md`](./CHANGELOG.md) for what's changed between releases.)
 

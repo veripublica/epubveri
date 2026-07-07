@@ -8,6 +8,26 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.4.1] - 2026-07-07
+
+### Fixed
+
+- The `opf-meta-property-not-empty` Schematron rule (behind `RSC-005`,
+  "value of attribute 'property' is invalid (must not be empty)") was
+  scoped to `opf:meta` — *every* `<meta>` element — instead of
+  `opf:meta[@property]`. This meant any legacy, `property`-less `<meta>`
+  (e.g. the extremely common OPF2-style `<meta name="cover"
+  content="..."/>`) was wrongly flagged, since an absent `@property`
+  normalizes to an empty string too. The corpus's own fixture for this
+  rule only ever exercised `property=""` / `property="   "`, so the gap
+  wasn't caught by the recall metric. Rescoped to match the rule's actual
+  intent: only meta elements that already carry a `property` attribute are
+  checked for emptiness.
+
+Thanks to forum user **DNSB** ([MobileRead
+thread](https://www.mobileread.com/forums/showthread.php?t=374286)) for
+the report, via [issue #1](https://github.com/veripublica/epubveri/issues/1).
+
 ## [0.4.0] - 2026-07-06
 
 ### Added
