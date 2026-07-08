@@ -151,13 +151,15 @@ to be valid or to trip exactly one specific rule. As of this writing:
 > security prompt on macOS/Windows, how to run it, and how to read the
 > output — in **[docs/USAGE.md](docs/USAGE.md)**.
 
-**Don't want to install Rust just to try it?** Pre-built binaries for
-Linux, macOS (Intel + Apple Silicon), and Windows are attached to every
-[GitHub Release](https://github.com/veripublica/epubveri/releases) —
-download the archive for your platform, unpack it, and run the
-`epubveri` binary directly. No toolchain needed. (Or skip binaries
-entirely and [try it in your browser](#use-it-in-the-browser-wasm) —
-zero download, zero install.)
+**Don't want to install Rust just to try it?** Pre-built binaries are
+attached to every [GitHub
+Release](https://github.com/veripublica/epubveri/releases), covering
+macOS (Intel + Apple Silicon), Windows (x64 + ARM), and Linux (x64 +
+ARM, each as a fully static `musl` build that runs on any distribution,
+plus a dynamically-linked `gnu` variant) — download the archive for your
+platform, unpack it, and run the `epubveri` binary directly. No toolchain
+needed. (Or skip binaries entirely and [try it in your
+browser](#use-it-in-the-browser-wasm) — zero download, zero install.)
 
 To build it from source, you'll need [Rust
 installed](https://www.rust-lang.org/tools/install) (the `cargo`

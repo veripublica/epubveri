@@ -40,12 +40,25 @@ and download the one archive that matches your computer:
 |---|---|
 | **Mac** with Apple Silicon (M1/M2/M3/M4) | `epubveri-aarch64-apple-darwin.tar.gz` |
 | **Mac** with an Intel chip (older Macs) | `epubveri-x86_64-apple-darwin.tar.gz` |
-| **Windows** | `epubveri-x86_64-pc-windows-msvc.zip` |
-| **Linux** | `epubveri-x86_64-unknown-linux-gnu.tar.gz` |
+| **Windows** (almost all PCs) | `epubveri-x86_64-pc-windows-msvc.zip` |
+| **Windows on ARM** (e.g. Surface Pro X, Snapdragon laptops) | `epubveri-aarch64-pc-windows-msvc.zip` |
+| **Linux** (Intel/AMD — most PCs and servers) | `epubveri-x86_64-unknown-linux-musl.tar.gz` |
+| **Linux on ARM** (Raspberry Pi, ARM servers) | `epubveri-aarch64-unknown-linux-musl.tar.gz` |
 
-> Not sure which Mac you have? Click the Apple menu → **About This Mac**.
+> **Not sure which Mac you have?** Click the Apple menu → **About This Mac**.
 > If the chip says "Apple", pick Apple Silicon; if it says "Intel", pick
 > Intel.
+>
+> **Not sure about Windows?** Pick the regular **Windows** file — nearly all
+> PCs are that kind. Only choose *Windows on ARM* if you know your laptop
+> uses an ARM/Snapdragon chip.
+>
+> **Which Linux file?** The ones listed above are **`musl` builds** — a
+> single self-contained program with no dependencies that runs on any Linux
+> distribution (including Alpine and older systems). If you specifically
+> prefer a dynamically-linked build, a `…-linux-gnu.tar.gz` is also published
+> for each architecture on the same release page; the `musl` one is the safe
+> default.
 
 ### Step 2 — Unpack it
 
