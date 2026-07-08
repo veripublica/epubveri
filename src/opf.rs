@@ -4514,6 +4514,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             "opf.content_document.hyperlink_data_url",
                             Vec::new(),
                         );
+                    } else if href.trim_start().starts_with('#') {
+                        // A fragment-only href is an internal link into the
+                        // document's own content; `is_external` (below)
+                        // treats it as external and would drop it, but for
+                        // OPF-096 reachability epubcheck counts such a
+                        // self-reference as a hyperlink pointing at *this*
+                        // resource - enough to make a non-linear resource
+                        // reachable (Kevin Hendricks, issue #1: "the same
+                        // internal link trick works for any xhtml file listed
+                        // as non-linear and always has"). Record the document
+                        // as a target of itself.
+                        if node.tag_name().name() == "a" {
+                            hyperlink_targets.insert(nfc(&path));
+                        }
                     } else if !is_external(href) {
                         if href.contains('?') {
                             report.push_full(
@@ -4908,17 +4922,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             );
         }
     }
-    // The navigation document (toc) is always reachable through the reading
-    // system's own navigation controls, so a non-linear nav is never truly
-    // "unreachable from the reading order" - flagging it is a false positive
-    // (epubcheck 5.3 doesn't either; issue #5). Exempt it before the
-    // hyperlink-reachability test below. `nav_path` is stored non-NFC, while
-    // `non_linear_paths` holds NFC-normalized paths, so normalize to compare.
-    let nav_path_nfc = nav_path.as_deref().map(nfc);
+    // Reachability is purely "does any <a> hyperlink resolve to this
+    // resource" - including a link the resource makes to *itself*. That is
+    // exactly how epubcheck has always treated it (Kevin Hendricks, issue
+    // #1: a Sigil-built nav is reachable because its own landmarks section
+    // links to the nav, and "the same internal link trick works for any
+    // xhtml file listed as non-linear and always has"). So the toc nav is
+    // NOT special-cased here: a nav that self-links via its landmarks (the
+    // normal Sigil shape) is already in `hyperlink_targets` and passes,
+    // while a non-linear nav with genuinely no link to it is flagged, which
+    // is what epubcheck does too. Both self-link forms feed the set: a
+    // full-href landmark link (`href="nav.xhtml"`) via the resolve() insert,
+    // and a fragment-only self-link (`href="#..."`) via the self-reference
+    // insert - see the hyperlink-collection pass above.
     for path in &non_linear_paths {
-        if nav_path_nfc.as_deref() == Some(path.as_str()) {
-            continue;
-        }
         if !hyperlink_targets.contains(path) {
             // Real epubcheck downgrades this from an error to a usage note
             // when the book uses scripting anywhere - script could add
@@ -6282,5 +6299,102 @@ mod tests {
         assert!(!is_valid_dc_date("2025-04-24T25:00:00Z")); // hour 25
         assert!(!is_valid_dc_date("2025-04-24T17:00:00")); // missing timezone
         assert!(!is_valid_dc_date("2025-04-24T17:00:00X")); // bad timezone
+    }
+
+    // --- OPF-096 non-linear reachability via a self-link (issue #1) ---
+
+    /// Build a minimal valid EPUB 3 whose spine has a linear `ch1` plus the
+    /// toc nav marked `linear="no"`, with the nav's body supplied by the
+    /// caller. Used to exercise OPF-096 reachability: whether the non-linear
+    /// nav is reachable depends only on whether some `<a>` (here, one inside
+    /// the nav itself) links to it.
+    fn epub_with_nav_body(nav_body: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/><itemref idref="nav" linear="no"/></spine>
+</package>"#;
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>Hi</p></body></html>"#;
+
+        let nav = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body>{nav_body}</body></html>"#
+        );
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            // mimetype must be first and stored (uncompressed).
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", nav.as_str()),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    fn has_opf_096(nav_body: &str) -> bool {
+        let report = crate::validate_bytes(epub_with_nav_body(nav_body));
+        report.messages.iter().any(|m| m.id == crate::ids::OPF_096)
+    }
+
+    #[test]
+    fn non_linear_nav_reachable_via_landmark_self_link() {
+        // The Sigil shape Kevin Hendricks described (issue #1): the nav's
+        // own landmarks section links to the nav (`href="nav.xhtml"`), which
+        // makes it reachable - no OPF-096.
+        let nav = r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>
+<nav epub:type="landmarks"><ol><li><a epub:type="toc" href="nav.xhtml">TOC</a></li></ol></nav>"#;
+        assert!(!has_opf_096(nav));
+    }
+
+    #[test]
+    fn non_linear_nav_reachable_via_fragment_only_self_link() {
+        // "The same internal link trick works for any xhtml file" - a
+        // fragment-only self-link (`href="#toc"`) also counts as reaching
+        // the document itself.
+        let nav = r##"<nav epub:type="toc" id="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li><li><a href="#toc">Self</a></li></ol></nav>"##;
+        assert!(!has_opf_096(nav));
+    }
+
+    #[test]
+    fn non_linear_nav_with_no_incoming_link_is_flagged() {
+        // A non-linear nav that nothing links to (not even itself) IS
+        // flagged, exactly as epubcheck does - the categorical nav exemption
+        // that used to suppress this was wrong (issue #1, Kevin: "epubcheck
+        // will complain in the exact same way").
+        let nav = r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>"#;
+        assert!(has_opf_096(nav));
     }
 }
