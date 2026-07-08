@@ -1,12 +1,15 @@
 name: Release binaries
 
-# Builds the `epubveri` CLI for Linux/macOS/Windows and attaches the
-# archives to the matching GitHub Release - pure Rust, no C deps, so each
-# target builds natively on its own runner (no cross-compilation toolchain
-# needed). Triggered automatically when a `v*` tag is pushed (the same tags
-# already used for GitHub Releases); `workflow_dispatch` allows a manual
-# re-run against an existing tag (e.g. to backfill a release made before
-# this workflow existed).
+# Builds the `epubveri` CLI for a broad set of Linux/macOS/Windows targets
+# and attaches the archives to the matching GitHub Release. Pure Rust with
+# no C dependencies, so every target builds on a runner of its own native
+# architecture (x86_64 and ARM64 runners for both Linux and macOS; the one
+# genuine cross-compile is ARM64 Windows, which the MSVC toolchain links
+# from the x86_64 Windows runner). The only per-target setup is `musl-tools`
+# for the static-musl Linux builds. Triggered automatically when a `v*` tag
+# is pushed (the same tags already used for GitHub Releases);
+# `workflow_dispatch` allows a manual re-run against an existing tag (e.g. to
+# backfill a release with newly-added targets).
 on:
   push:
     tags: ["v*"]
@@ -27,18 +30,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Linux x86_64 - glibc (portable across mainstream distros) and
+          # musl (fully static, runs anywhere incl. Alpine / very old glibc).
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+          # Linux ARM64 - native on GitHub's ARM64 runner (Raspberry Pi,
+          # Graviton/Ampere servers, ARM CI).
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+          # macOS - Intel and Apple Silicon.
           - target: x86_64-apple-darwin
             os: macos-latest
           - target: aarch64-apple-darwin
             os: macos-latest
+          # Windows - x86_64 (native) and ARM64 (cross-linked by MSVC).
           - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: aarch64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - name: Check out
         uses: actions/checkout@v5
+
+      # The static-musl targets link with musl-gcc; every other target uses
+      # the runner's default toolchain as-is.
+      - name: Install musl tools
+        if: contains(matrix.target, 'musl')
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Add target
         run: rustup target add ${{ matrix.target }}
