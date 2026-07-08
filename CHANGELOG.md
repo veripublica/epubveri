@@ -8,6 +8,35 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.4.4] - 2026-07-08
+
+### Added
+
+- **CSS findings now report an exact line/column**, closing epubveri's last
+  position gap — CSS was the only finding family that could carry just a
+  file name. Every CSS finding (`CSS-001`, `CSS-002`, `CSS-008`, `CSS-019`,
+  and the `RSC-001`/`RSC-007`/`RSC-008`/`RSC-030` resource references found
+  inside stylesheets) now points at the offending token, e.g. `CSS-001: use
+  of the 'direction' property is not recommended [OEBPS/style.css:3:3]`.
+  Built on [styloria](https://github.com/veripublica/styloria) 0.2's new
+  source-span parse tree. ([issue
+  #1](https://github.com/veripublica/epubveri/issues/1), requested by Kevin
+  Hendricks for Sigil integration.)
+
+### Fixed
+
+- **Non-linear content reachability (`OPF-096`) now matches epubcheck's
+  self-link rule.** A `linear="no"` spine item is reachable if any hyperlink
+  points at it — *including a link the document makes to itself* (a nav's
+  landmarks self-link such as `href="nav.xhtml"`, or a fragment-only
+  `href="#…"`), which is how epubcheck has always treated it. The 0.4.2
+  release instead exempted the toc nav categorically; that was
+  over-correction — it wrongly silenced a non-linear nav that nothing links
+  to. The nav is no longer special-cased: a self-linking nav still passes,
+  and a genuinely unreachable one is flagged, exactly as epubcheck does.
+  ([issue #1](https://github.com/veripublica/epubveri/issues/1), thanks to
+  Kevin Hendricks for the pinpointed behavior.)
+
 ## [0.4.3] - 2026-07-08
 
 ### Fixed
