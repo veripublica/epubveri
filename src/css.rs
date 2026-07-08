@@ -1,7 +1,7 @@
 //! CSS checks, via the `styloria` parser (a sibling project,
 //! `github.com/veripublica/styloria` — a pure-Rust CSS3 tokenizer/core-
 //! grammar parser/serializer with no selector or property-value grammar
-//! yet). Everything here is built on that existing phase-1 output only:
+//! yet):
 //! - `CSS-008`: any `BadString`/`BadUrl` token anywhere in the stylesheet
 //!   (styloria's tokenizer never hard-fails, so these tokens are the
 //!   signal that *something* was malformed).
@@ -15,14 +15,24 @@
 //!   nested rules inside e.g. `@media` blocks for free, since styloria's
 //!   core grammar represents a nested rule's `{ ... }` as an ordinary
 //!   `ComponentValue::Block` that the walk below already recurses into.
+//!
+//! The finding-emitting pass (`check`) walks styloria's **span-carrying**
+//! parse tree (`styloria::spanned`), so every CSS finding now reports the
+//! exact `line:column` of the offending token — the last finding family in
+//! epubveri that used to carry only a file path (issue #1; Kevin Hendricks /
+//! Sigil asked for CSS positions specifically). The position-less pub
+//! helpers below (`stylesheet_urls`, `import_targets`, `selector_class_names`,
+//! `font_face_src_urls`) are still consumed by `opf.rs` off the plain
+//! `styloria::Stylesheet`, so they keep the plain parser — they don't need
+//! positions.
 
 use std::collections::{HashMap, HashSet};
 
-use styloria::{ComponentValue, Parser, Rule, Token};
+use styloria::{spanned, ComponentValue, Parser, Rule, Span, Spanned, Token};
 
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 
 /// Decode raw CSS bytes, honoring a UTF-16 BOM if present. Without this, a
 /// legitimately UTF-16-encoded stylesheet (real, and `@charset`-declarable
@@ -73,7 +83,11 @@ pub(crate) fn check(
     raw_bytes: Option<&[u8]>,
     report: &mut Report,
 ) {
-    let sheet = Parser::parse_stylesheet(css);
+    // Span-carrying parse: every finding below points at the exact
+    // line:column of the offending token (via `Position::of_offset`, the
+    // same byte-offset→line:col helper the rest of epubveri uses, so CSS
+    // positions count columns in chars just like every other finding).
+    let sheet = spanned::parse_stylesheet(css);
 
     // Encoding checks only make sense for a standalone CSS file — an inline
     // <style> block's encoding is already resolved as part of its XHTML
@@ -87,8 +101,10 @@ pub(crate) fn check(
                 css_path,
             );
         }
-        if let Some(charset) = sheet.rules.iter().find_map(|r| match r {
-            Rule::At(a) if a.name.eq_ignore_ascii_case("charset") => charset_value(&a.prelude),
+        if let Some(charset) = sheet.rules.iter().find_map(|r| match &r.node {
+            spanned::Rule::At(a) if a.name.eq_ignore_ascii_case("charset") => {
+                charset_value_spanned(&a.prelude)
+            }
             _ => None,
         }) {
             if !charset.eq_ignore_ascii_case("utf-8") && !charset.eq_ignore_ascii_case("utf-16") {
@@ -102,26 +118,34 @@ pub(crate) fn check(
         }
     }
 
-    let mut bad_tokens = 0usize;
-    let mut urls: Vec<String> = Vec::new();
+    // Each collected item keeps the span of the token that produced it, so
+    // the deferred CSS-008 / RSC-00x findings below can report its position.
+    let mut bad_spans: Vec<Span> = Vec::new();
+    let mut urls: Vec<Spanned<String>> = Vec::new();
     for rule in &sheet.rules {
-        match rule {
-            Rule::Qualified(q) => {
-                count_bad_tokens(&q.prelude, &mut bad_tokens);
-                count_bad_tokens(&q.block.values, &mut bad_tokens);
-                collect_urls(&q.prelude, &mut urls);
-                collect_urls(&q.block.values, &mut urls);
-                check_declaration_shapes(&q.block.values, css_path, report);
+        match &rule.node {
+            spanned::Rule::Qualified(q) => {
+                collect_bad_spans(&q.prelude, &mut bad_spans);
+                collect_bad_spans(&q.block.node.values, &mut bad_spans);
+                collect_urls_spanned(&q.prelude, &mut urls);
+                collect_urls_spanned(&q.block.node.values, &mut urls);
+                check_declaration_shapes_spanned(&q.block.node.values, css, css_path, report);
             }
-            Rule::At(a) => {
-                count_bad_tokens(&a.prelude, &mut bad_tokens);
-                collect_urls(&a.prelude, &mut urls);
+            spanned::Rule::At(a) => {
+                collect_bad_spans(&a.prelude, &mut bad_spans);
+                collect_urls_spanned(&a.prelude, &mut urls);
                 if let Some(block) = &a.block {
-                    count_bad_tokens(&block.values, &mut bad_tokens);
+                    collect_bad_spans(&block.node.values, &mut bad_spans);
                     if a.name.eq_ignore_ascii_case("font-face") {
-                        check_font_face(&block.values, css_path, report);
+                        check_font_face_spanned(
+                            &block.node.values,
+                            a.name_span,
+                            css,
+                            css_path,
+                            report,
+                        );
                     } else {
-                        collect_urls(&block.values, &mut urls);
+                        collect_urls_spanned(&block.node.values, &mut urls);
                     }
                     // A conditional-group at-rule (`@media`, `@supports`, …)
                     // contains nested *rules*, not declarations - its block
@@ -134,13 +158,13 @@ pub(crate) fn check(
                         .iter()
                         .any(|g| a.name.eq_ignore_ascii_case(g))
                     {
-                        check_rule_list_block(&block.values, css_path, report);
+                        check_rule_list_block_spanned(&block.node.values, css, css_path, report);
                     } else {
-                        check_declaration_shapes(&block.values, css_path, report);
+                        check_declaration_shapes_spanned(&block.node.values, css, css_path, report);
                     }
                 }
                 if a.name.eq_ignore_ascii_case("import") {
-                    if let Some(target) = import_target(&a.prelude) {
+                    if let Some(target) = import_target_spanned(&a.prelude) {
                         urls.push(target);
                     }
                 }
@@ -148,23 +172,27 @@ pub(crate) fn check(
         }
     }
 
-    for _ in 0..bad_tokens {
-        report.push_at_rule(
+    for span in bad_spans {
+        report.push_full(
             CSS_008,
             Severity::Error,
             "CSS syntax error",
             css_path,
+            Position::of_offset(css, span.start),
             "css.stylesheet.bad_token",
             Vec::new(),
         );
     }
-    for url in urls {
+    for u in urls {
+        let url = u.node;
+        let pos = Position::of_offset(css, u.span.start);
         if url.trim_start().starts_with("file:") {
-            report.push_at_rule(
+            report.push_full(
                 RSC_030,
                 Severity::Error,
                 format!("'{url}' is a file URL, which is not allowed"),
                 css_path,
+                pos,
                 "css.url.file_scheme_not_allowed",
                 vec![url.clone()],
             );
@@ -189,31 +217,34 @@ pub(crate) fn check(
         // just `@import`.
         match (declared, present) {
             (true, false) => {
-                report.push_at_rule(
+                report.push_full(
                     RSC_001,
                     Severity::Error,
                     format!("references a missing resource '{url}'"),
                     css_path,
+                    pos,
                     "css.url.declared_resource_missing",
                     vec![url.clone()],
                 );
             }
             (false, true) => {
-                report.push_at_rule(
+                report.push_full(
                     RSC_008,
                     Severity::Error,
                     format!("resource '{url}' is not declared in the manifest"),
                     css_path,
+                    pos,
                     "css.url.undeclared_resource",
                     vec![url.clone()],
                 );
             }
             (false, false) => {
-                report.push_at_rule(
+                report.push_full(
                     RSC_007,
                     Severity::Error,
                     format!("references a missing resource '{url}'"),
                     css_path,
+                    pos,
                     "css.url.missing_resource",
                     vec![url.clone()],
                 );
@@ -237,19 +268,19 @@ pub(crate) fn check_style_attribute(value: &str, path: &str, report: &mut Report
     }
 }
 
-fn charset_value(prelude: &[ComponentValue]) -> Option<String> {
-    prelude.iter().find_map(|v| match v {
-        ComponentValue::Token(Token::String(s)) => Some(s.to_string()),
+fn charset_value_spanned(prelude: &[Spanned<spanned::ComponentValue>]) -> Option<String> {
+    prelude.iter().find_map(|v| match &v.node {
+        spanned::ComponentValue::Token(Token::String(s)) => Some(s.to_string()),
         _ => None,
     })
 }
 
 const FLAGGED_PROPERTIES: [&str; 2] = ["direction", "unicode-bidi"];
 
-fn is_effectively_empty(values: &[ComponentValue]) -> bool {
+fn is_effectively_empty_spanned(values: &[Spanned<spanned::ComponentValue>]) -> bool {
     values
         .iter()
-        .all(|v| matches!(v, ComponentValue::Token(Token::Whitespace)))
+        .all(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)))
 }
 
 /// Beyond outright `BadString`/`BadUrl` tokens, real-world "CSS syntax
@@ -283,16 +314,86 @@ const GROUPING_AT_RULES: &[&str] = &[
 /// conditions) are deliberately not shape-checked here - they are not
 /// declarations (issue #5). A nested block is recognised as a grouping one
 /// by containing a block of its own, mirroring how the top level dispatches.
-fn check_rule_list_block(block_values: &[ComponentValue], css_path: &str, report: &mut Report) {
+fn check_rule_list_block_spanned(
+    block_values: &[Spanned<spanned::ComponentValue>],
+    css: &str,
+    css_path: &str,
+    report: &mut Report,
+) {
     for v in block_values {
-        if let ComponentValue::Block(b) = v {
+        if let spanned::ComponentValue::Block(b) = &v.node {
             if b.values
                 .iter()
-                .any(|nv| matches!(nv, ComponentValue::Block(_)))
+                .any(|nv| matches!(&nv.node, spanned::ComponentValue::Block(_)))
             {
-                check_rule_list_block(&b.values, css_path, report);
+                check_rule_list_block_spanned(&b.values, css, css_path, report);
             } else {
-                check_declaration_shapes(&b.values, css_path, report);
+                check_declaration_shapes_spanned(&b.values, css, css_path, report);
+            }
+        }
+    }
+}
+
+/// Span-carrying twin of [`check_declaration_shapes`] used by the
+/// finding-emitting `check` pass, so CSS-008 (malformed declaration) and
+/// CSS-001 (flagged property) point at the exact token. The plain
+/// [`check_declaration_shapes`] is kept for `check_style_attribute`, whose
+/// fragment-relative offsets don't map back to a document position.
+fn check_declaration_shapes_spanned(
+    block_values: &[Spanned<spanned::ComponentValue>],
+    css: &str,
+    css_path: &str,
+    report: &mut Report,
+) {
+    for chunk in
+        block_values.split(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Semicolon)))
+    {
+        let mut iter = chunk
+            .iter()
+            .filter(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)));
+        let first = iter.next();
+        let malformed = match first.map(|f| &f.node) {
+            None => false,
+            Some(spanned::ComponentValue::Token(Token::Ident(_))) => !matches!(
+                iter.next().map(|v| &v.node),
+                Some(spanned::ComponentValue::Token(Token::Colon))
+            ),
+            Some(_) => true,
+        };
+        if malformed {
+            if let Some(f) = first {
+                report.push_full(
+                    CSS_008,
+                    Severity::Error,
+                    "CSS syntax error",
+                    css_path,
+                    Position::of_offset(css, f.span.start),
+                    "css.declaration.malformed_shape",
+                    Vec::new(),
+                );
+            }
+        } else if let Some(f) = first {
+            if let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node {
+                if FLAGGED_PROPERTIES
+                    .iter()
+                    .any(|p| name.eq_ignore_ascii_case(p))
+                {
+                    report.push_at_pos(
+                        CSS_001,
+                        Severity::Error,
+                        format!("use of the '{name}' property is not recommended"),
+                        css_path,
+                        Position::of_offset(css, f.span.start),
+                    );
+                }
+            }
+        }
+        // A malformed chunk can still contain a nested block (e.g. an
+        // unclosed rule swallowing a whole well-formed sibling rule) —
+        // recurse so declarations inside it still get checked too.
+        for v in chunk {
+            if let spanned::ComponentValue::Block(b) = &v.node {
+                check_declaration_shapes_spanned(&b.values, css, css_path, report);
             }
         }
     }
@@ -344,37 +445,51 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
     }
 }
 
-fn check_font_face(block_values: &[ComponentValue], css_path: &str, report: &mut Report) {
-    if is_effectively_empty(block_values) {
-        report.push_at(
+fn check_font_face_spanned(
+    block_values: &[Spanned<spanned::ComponentValue>],
+    name_span: Span,
+    css: &str,
+    css_path: &str,
+    report: &mut Report,
+) {
+    if is_effectively_empty_spanned(block_values) {
+        // An empty block has no token to point at, so anchor CSS-019 at the
+        // `@font-face` keyword itself.
+        report.push_at_pos(
             CSS_019,
             Severity::Warning,
             "@font-face has an empty declaration block",
             css_path,
+            Position::of_offset(css, name_span.start),
         );
         return;
     }
-    for chunk in block_values.split(|v| matches!(v, ComponentValue::Token(Token::Semicolon))) {
+    for chunk in
+        block_values.split(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Semicolon)))
+    {
         let mut iter = chunk
             .iter()
-            .filter(|v| !matches!(v, ComponentValue::Token(Token::Whitespace)));
-        let Some(ComponentValue::Token(Token::Ident(name))) = iter.next() else {
+            .filter(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)));
+        let Some(f) = iter.next() else { continue };
+        let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node else {
             continue;
         };
         if !name.eq_ignore_ascii_case("src") {
             continue;
         }
-        let Some(ComponentValue::Token(Token::Colon)) = iter.next() else {
+        let Some(colon) = iter.next() else { continue };
+        if !matches!(&colon.node, spanned::ComponentValue::Token(Token::Colon)) {
             continue;
-        };
+        }
         let mut src_urls = Vec::new();
-        collect_urls(chunk, &mut src_urls);
-        if src_urls.iter().any(|u| u.is_empty()) {
-            report.push_at(
+        collect_urls_spanned(chunk, &mut src_urls);
+        if let Some(empty) = src_urls.iter().find(|u| u.node.is_empty()) {
+            report.push_at_pos(
                 CSS_002,
                 Severity::Error,
                 "@font-face 'src' has an empty url()",
                 css_path,
+                Position::of_offset(css, empty.span.start),
             );
         }
     }
@@ -430,15 +545,61 @@ fn import_target(prelude: &[ComponentValue]) -> Option<String> {
     })
 }
 
-fn count_bad_tokens(values: &[ComponentValue], out: &mut usize) {
+/// Collect the span of every `BadString`/`BadUrl` token in the tree (the
+/// span-carrying twin of the old bad-token *count*), so each CSS-008 can
+/// report the exact position of the malformed token.
+fn collect_bad_spans(values: &[Spanned<spanned::ComponentValue>], out: &mut Vec<Span>) {
     for v in values {
-        match v {
-            ComponentValue::Token(Token::BadString | Token::BadUrl) => *out += 1,
-            ComponentValue::Function { args, .. } => count_bad_tokens(args, out),
-            ComponentValue::Block(b) => count_bad_tokens(&b.values, out),
+        match &v.node {
+            spanned::ComponentValue::Token(Token::BadString | Token::BadUrl) => out.push(v.span),
+            spanned::ComponentValue::Function { args, .. } => collect_bad_spans(args, out),
+            spanned::ComponentValue::Block(b) => collect_bad_spans(&b.values, out),
             _ => {}
         }
     }
+}
+
+/// Span-carrying twin of [`collect_urls`]: each collected `url()` target
+/// keeps the span of the `url(...)` token/function it came from, so the
+/// deferred RSC-00x resource findings can report its position. The whole
+/// `url(...)` span is used (not just the inner string) so the caret lands
+/// on the construct a reader looks for.
+fn collect_urls_spanned(
+    values: &[Spanned<spanned::ComponentValue>],
+    out: &mut Vec<Spanned<String>>,
+) {
+    for v in values {
+        match &v.node {
+            spanned::ComponentValue::Token(Token::Url(s)) => {
+                out.push(Spanned::new(s.to_string(), v.span))
+            }
+            spanned::ComponentValue::Function { name, args } => {
+                if name.eq_ignore_ascii_case("url") {
+                    if let Some(first) = args.first() {
+                        if let spanned::ComponentValue::Token(Token::String(s)) = &first.node {
+                            out.push(Spanned::new(s.to_string(), v.span));
+                        }
+                    }
+                } else {
+                    collect_urls_spanned(args, out);
+                }
+            }
+            spanned::ComponentValue::Block(b) => collect_urls_spanned(&b.values, out),
+            _ => {}
+        }
+    }
+}
+
+/// Span-carrying twin of [`import_target`] for `@import "foo.css";` (the
+/// bare-string form). The `url()` form is already covered by
+/// [`collect_urls_spanned`].
+fn import_target_spanned(prelude: &[Spanned<spanned::ComponentValue>]) -> Option<Spanned<String>> {
+    prelude.iter().find_map(|v| match &v.node {
+        spanned::ComponentValue::Token(Token::String(s)) => {
+            Some(Spanned::new(s.to_string(), v.span))
+        }
+        _ => None,
+    })
 }
 
 fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>) {
@@ -587,6 +748,31 @@ mod tests {
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
+    }
+
+    /// Run `check` and return the full report, for tests that assert on the
+    /// `line:column` position now carried by every CSS finding.
+    fn run_report(css: &str, name_index: &HashMap<String, String>) -> Report {
+        let mut report = Report::new();
+        check(
+            css,
+            "style.css",
+            "OEBPS",
+            name_index,
+            &HashSet::new(),
+            None,
+            &mut report,
+        );
+        report
+    }
+
+    fn pos_of(report: &Report, id: &str) -> Position {
+        report
+            .messages
+            .iter()
+            .find(|m| m.id == id)
+            .and_then(|m| m.position)
+            .unwrap_or_else(|| panic!("no {id} finding with a position"))
     }
 
     fn run_bytes(bytes: &[u8]) -> Vec<&'static str> {
@@ -794,5 +980,48 @@ mod tests {
     fn external_urls_are_not_checked() {
         let css = "body { background: url(https://example.com/x.png); }";
         assert!(run(css, &empty_index()).is_empty());
+    }
+
+    #[test]
+    fn css001_carries_property_position() {
+        // The `direction` property is on line 2, starting at column 3.
+        let css = "body {\n  direction: rtl;\n}";
+        let pos = pos_of(&run_report(css, &empty_index()), CSS_001);
+        assert_eq!((pos.line, pos.column), (2, 3));
+    }
+
+    #[test]
+    fn css008_malformed_declaration_carries_position() {
+        // The stray-dot declaration `span.bold: bold;` is on line 2, col 3.
+        let css = "body {\n  span.bold: bold;\n}";
+        let pos = pos_of(&run_report(css, &empty_index()), CSS_008);
+        assert_eq!((pos.line, pos.column), (2, 3));
+    }
+
+    #[test]
+    fn css008_bad_token_carries_position() {
+        // An unterminated string is a BadString token; it starts at the
+        // `content` value on line 2.
+        let css = "body {\n  content: \"unterminated\n }";
+        let pos = pos_of(&run_report(css, &empty_index()), CSS_008);
+        assert_eq!(pos.line, 2);
+    }
+
+    #[test]
+    fn rsc_url_finding_carries_position() {
+        // A missing background image nested in a media query - the RSC-007
+        // should point at the `url(...)` on line 2.
+        let css = "@media screen {\n  body { background: url(missing.png); }\n}";
+        let pos = pos_of(&run_report(css, &empty_index()), RSC_007);
+        assert_eq!(pos.line, 2);
+    }
+
+    #[test]
+    fn font_face_position_points_at_at_rule() {
+        // CSS-019 has no token inside an empty block, so it anchors at the
+        // `@font-face` keyword on line 2.
+        let css = "body { color: red; }\n@font-face {}";
+        let pos = pos_of(&run_report(css, &empty_index()), CSS_019);
+        assert_eq!(pos.line, 2);
     }
 }

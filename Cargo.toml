@@ -35,7 +35,7 @@ unicode-normalization = "0.1"
 # consumed from crates.io like any external user (dogfooding). For local
 # co-development of styloria, add an uncommitted override:
 #   [patch.crates-io] styloria = { path = "../styloria" }
-styloria = "0.1"
+styloria = "0.2"
 
 [profile.release]
 opt-level = 2
