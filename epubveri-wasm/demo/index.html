@@ -10,16 +10,10 @@
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./demo.css" />
     <style>
-      /* Page-local only — everything else is in the shared template files. */
+      /* Page-local only — everything else is in the shared template files. The
+         binding now returns the envelope's lowercase severity, so template v2's
+         native .sev.<severity> classes apply directly (no shim). */
       .id { white-space: nowrap; }
-
-      /* Severity shim: the wasm binding still emits UPPERCASE severity
-         ("ERROR"), while template v2 carries only the envelope's lowercase
-         classes. Delete this block when the binding returns the envelope's
-         lowercase severity (issue #8). */
-      .sev.ERROR { color: var(--err); }
-      .sev.WARNING { color: var(--warn); }
-      .sev.INFO { color: var(--muted); }
     </style>
   </head>
   <body>
@@ -94,40 +88,46 @@
       }
 
       function render(report, name, ms) {
+        // `report` is the envelope's inputs[i] shape: { status, summary, items }.
         statusEl.textContent = `Validated ${name} in ${ms} ms.`;
         resultEl.hidden = false;
-        verdictEl.className = "verdict " + (report.valid ? "valid" : "invalid");
-        verdictEl.textContent = report.valid ? "✓ VALID" : "✗ INVALID";
-        countsEl.textContent = `${report.errors} error(s), ${report.warnings} warning(s), ${report.messages.length} message(s) total`;
+        const ok = report.status === "ok";
+        verdictEl.className = "verdict " + (ok ? "valid" : "invalid");
+        verdictEl.textContent = ok ? "✓ VALID" : "✗ INVALID";
+        const s = report.summary;
+        const fatalHead = s.fatals ? `${s.fatals} fatal, ` : "";
+        countsEl.textContent = `${fatalHead}${s.errors} error(s), ${s.warnings} warning(s), ${report.items.length} finding(s) total`;
 
         tbodyEl.textContent = "";
-        if (report.messages.length === 0) {
+        if (report.items.length === 0) {
           tableEl.hidden = true;
           return;
         }
         tableEl.hidden = false;
-        for (const m of report.messages) {
+        for (const it of report.items) {
           const tr = document.createElement("tr");
           const sev = document.createElement("td");
-          sev.className = "sev " + m.severity;
-          sev.textContent = m.severity;
-          const id = document.createElement("td");
-          id.className = "id";
+          // Class is the envelope's lowercase severity (template v2 colours it);
+          // display it uppercased, epubcheck-style.
+          sev.className = "sev " + it.severity;
+          sev.textContent = it.severity.toUpperCase();
+          const code = document.createElement("td");
+          code.className = "id";
           const c = document.createElement("code");
-          c.textContent = m.id;
-          id.appendChild(c);
+          c.textContent = it.code;
+          code.appendChild(c);
           const text = document.createElement("td");
-          text.textContent = m.text;
+          text.textContent = it.message;
           const loc = document.createElement("td");
           // Show the exact line:column when the finding carries one (most do;
           // a few families - e.g. Schematron/CSS/container-level - legitimately
           // don't), mirroring the CLI's "path:line:col" format.
-          let locText = m.location ?? "";
-          if (locText && m.position) {
-            locText += `:${m.position.line}:${m.position.column}`;
+          let locText = it.location ?? "";
+          if (locText && it.position) {
+            locText += `:${it.position.line}:${it.position.column}`;
           }
           loc.textContent = locText;
-          tr.append(sev, id, text, loc);
+          tr.append(sev, code, text, loc);
           tbodyEl.appendChild(tr);
         }
       }

@@ -2,69 +2,90 @@
 //! browser (or any JS runtime), with no JVM, no server round-trip, no C deps.
 //!
 //! This crate is a thin boundary: it hands raw `.epub` bytes to the core
-//! [`epubveri::validate_bytes_with_profile`] and maps its [`epubveri::report::Report`]
-//! into serde+tsify structs so JS/TS callers get a plain object with a real
-//! generated `.d.ts`.
+//! [`epubveri::validate_bytes_with_profile`] and maps its
+//! [`epubveri::report::Report`] into the veripublica machine envelope's
+//! **`inputs[i]` shape** (FORMATS.md §1.2) — minus the CLI-only `path`/`error`
+//! fields, since a JS caller has neither. A caller therefore reads the *same*
+//! object the CLI's `--format json` emits for each input: one shape, one parser,
+//! across CLI, CI and the browser demo. These structs mirror
+//! [`epubveri::envelope`]; keep them in step.
 //!
 //! ```js
 //! import init, { validate } from "epubveri-wasm";
 //! await init();
 //! const report = validate(new Uint8Array(epubArrayBuffer), undefined);
-//! // report.valid, report.errors, report.messages[i].id, ...
+//! // report.status === "ok" | "problems"
+//! // report.summary.errors, report.items[i].code, report.items[i].severity, ...
 //! ```
 
 use serde::Serialize;
 use tsify_next::Tsify;
 use wasm_bindgen::prelude::*;
 
-/// A 1-indexed line/column position, mirroring [`epubveri::report::Position`].
+/// One EPUB's validation result — the envelope's `inputs[i]` object without
+/// `path`/`error` (a wasm caller has no path, and in-memory bytes are always
+/// readable, so there is no unprocessable/`"error"` case here).
 #[derive(Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
+pub struct Report {
+    /// `"ok"` (valid) or `"problems"` (error/fatal findings remain). The
+    /// warning/info/usage-only case is `"ok"` — those never fail a book.
+    pub status: String,
+    pub summary: Summary,
+    pub items: Vec<Item>,
+}
+
+/// Small aggregate counts, mirroring the envelope's per-input `summary`
+/// (`fatals` omitted when zero, exactly as the CLI envelope emits it).
+#[derive(Serialize, Tsify)]
+pub struct Summary {
+    #[serde(skip_serializing_if = "is_zero")]
+    pub fatals: usize,
+    pub errors: usize,
+    pub warnings: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+/// One finding, in the shared item shape (FORMATS.md §1.3).
+#[derive(Serialize, Tsify)]
+pub struct Item {
+    /// Always `"finding"` for a verifier.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// epubcheck-compatible message ID, e.g. `"RSC-005"`.
+    pub code: String,
+    /// epubveri's finer semantic sub-code, when the site carries one.
+    pub rule: Option<String>,
+    /// Lowercase severity: `"fatal" | "error" | "warning" | "info" | "usage"`.
+    pub severity: String,
+    /// Container-relative path the finding concerns, when known.
+    pub location: Option<String>,
+    /// Exact source position, when known.
+    pub position: Option<Position>,
+    /// Human-readable message text (epubveri's own wording).
+    pub message: String,
+    /// Tool-specific extras — carries the message's interpolation `params`.
+    pub data: Option<Data>,
+}
+
+/// A 1-indexed line/column position, mirroring [`epubveri::report::Position`].
+#[derive(Serialize, Tsify)]
 pub struct Position {
     pub line: u32,
     pub column: u32,
 }
 
-/// One diagnostic, mirroring [`epubveri::report::Message`] with the message ID
-/// and severity flattened to strings for the JS boundary.
+/// Tool-specific item extras.
 #[derive(Serialize, Tsify)]
-#[tsify(into_wasm_abi)]
-pub struct Message {
-    /// epubcheck-compatible message ID, e.g. `"RSC-005"`.
-    pub id: String,
-    /// `"ERROR"`, `"WARNING"`, or `"INFO"`.
-    pub severity: String,
-    /// Human-readable message text (epubveri's own wording).
-    pub text: String,
-    /// Optional location hint (path / element), when the check provides one.
-    pub location: Option<String>,
-    /// Optional exact source position, when the check provides one.
-    pub position: Option<Position>,
-    /// epubveri's own stable, semantic sub-code distinguishing sub-cases
-    /// of a shared `id` (e.g. `"opf.spine.duplicate_itemref"`), when the
-    /// check has been retrofitted for it (incremental rollout, see
-    /// epubveri issue #2). `None` otherwise.
-    pub rule: Option<String>,
-    /// The positional values interpolated into `text`, when `rule` is
-    /// present. Empty otherwise.
+pub struct Data {
     pub params: Vec<String>,
 }
 
-/// The full validation result for one EPUB.
-#[derive(Serialize, Tsify)]
-#[tsify(into_wasm_abi)]
-pub struct Report {
-    /// `true` when there are zero `ERROR`-severity messages (warnings are allowed).
-    pub valid: bool,
-    /// Count of `ERROR`-severity messages.
-    pub errors: usize,
-    /// Count of `WARNING`-severity messages.
-    pub warnings: usize,
-    /// Every diagnostic, in the order the validator produced them.
-    pub messages: Vec<Message>,
-}
-
-/// Validate raw EPUB bytes and return a typed [`Report`].
+/// Validate raw EPUB bytes and return the typed [`Report`] (an envelope
+/// `inputs[i]` object).
 ///
 /// `profile` mirrors the CLI `--profile` flag — pass `"dict"`, `"edupub"`,
 /// `"idx"`, `"preview"`, or `undefined`/`null` for default behavior. Unknown
@@ -77,23 +98,29 @@ pub struct Report {
 pub fn validate(bytes: &[u8], profile: Option<String>) -> Report {
     let report = epubveri::validate_bytes_with_profile(bytes.to_vec(), profile.as_deref());
     Report {
-        valid: report.is_valid(),
-        errors: report.errors(),
-        warnings: report.warnings(),
-        messages: report
+        status: if report.is_valid() { "ok" } else { "problems" }.to_string(),
+        summary: Summary {
+            fatals: report.fatals(),
+            errors: report.errors(),
+            warnings: report.warnings(),
+        },
+        items: report
             .messages
             .iter()
-            .map(|m| Message {
-                id: m.id.to_string(),
-                severity: m.severity.to_string(),
-                text: m.text.clone(),
+            .map(|m| Item {
+                kind: "finding".to_string(),
+                code: m.id.to_string(),
+                rule: m.rule.map(str::to_string),
+                severity: m.severity.as_str().to_string(),
                 location: m.location.clone(),
                 position: m.position.map(|p| Position {
                     line: p.line,
                     column: p.column,
                 }),
-                rule: m.rule.map(str::to_string),
-                params: m.params.clone(),
+                message: m.text.clone(),
+                data: (!m.params.is_empty()).then(|| Data {
+                    params: m.params.clone(),
+                }),
             })
             .collect(),
     }

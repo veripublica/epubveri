@@ -26,11 +26,15 @@ import { validate, version } from "@veripublica/epubveri-wasm";
 const bytes = new Uint8Array(await file.arrayBuffer()); // a File / fetched .epub
 const report = validate(bytes, undefined); // second arg: profile or undefined
 
-console.log(report.valid, report.errors, report.warnings);
-for (const m of report.messages) {
-  console.log(`${m.severity} ${m.id}: ${m.text}`, m.location ?? "");
+console.log(report.status, report.summary); // "ok" | "problems", { errors, warnings }
+for (const it of report.items) {
+  console.log(`${it.severity} ${it.code}: ${it.message}`, it.location ?? "");
 }
 ```
+
+`report` is the veripublica machine envelope's `inputs[i]` shape — the *same*
+object the CLI's `--format json` emits per input (minus `path`), so one parser
+reads CLI, CI and browser output alike.
 
 Using it **directly in a browser without a bundler**? Build the `web` target
 instead (`wasm-pack build . --target web`), which exposes an async `init()` you
@@ -40,16 +44,19 @@ instead (`wasm-pack build . --target web`), which exposes an async `init()` you
 
 ```ts
 interface Report {
-  valid: boolean;        // true when there are zero ERROR-severity messages
-  errors: number;
-  warnings: number;
-  messages: Message[];
+  status: string;        // "ok" (valid) | "problems" (error/fatal findings remain)
+  summary: { fatals?: number; errors: number; warnings: number };
+  items: Item[];
 }
-interface Message {
-  id: string;            // epubcheck-compatible, e.g. "RSC-005"
-  severity: string;      // "ERROR" | "WARNING" | "INFO"
-  text: string;          // epubveri's own message wording
-  location?: string;     // path/element hint, when available
+interface Item {
+  type: string;          // "finding"
+  code: string;          // epubcheck-compatible, e.g. "RSC-005"
+  rule?: string;         // epubveri's finer sub-code, when present
+  severity: string;      // "fatal" | "error" | "warning" | "info" | "usage"
+  location?: string;     // container-relative path, when available
+  position?: { line: number; column: number };
+  message: string;       // epubveri's own message wording
+  data?: { params: string[] };
 }
 
 function validate(bytes: Uint8Array, profile?: string | null): Report;
