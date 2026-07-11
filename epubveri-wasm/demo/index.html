@@ -14,6 +14,7 @@
          binding now returns the envelope's lowercase severity, so template v2's
          native .sev.<severity> classes apply directly (no shim). */
       .id { white-space: nowrap; }
+      #download { margin-bottom: 1rem; } /* layout spacing above the table */
     </style>
   </head>
   <body>
@@ -31,6 +32,7 @@
       <section id="result" hidden>
         <div class="verdict" id="verdict"></div>
         <div class="counts" id="counts"></div>
+        <button type="button" id="download">Download JSON</button>
         <table id="table" hidden>
           <thead>
             <tr><th>Severity</th><th>ID</th><th>Message</th><th>Location</th></tr>
@@ -65,8 +67,12 @@
       const countsEl = document.getElementById("counts");
       const tableEl = document.getElementById("table");
       const tbodyEl = document.getElementById("tbody");
+      const downloadEl = document.getElementById("download");
 
       let ready = false;
+      // The last rendered report + its file name, for the JSON download.
+      let lastReport = null;
+      let lastName = "report.epub";
       init()
         .then(() => {
           ready = true;
@@ -89,6 +95,8 @@
 
       function render(report, name, ms) {
         // `report` is the envelope's inputs[i] shape: { status, summary, items }.
+        lastReport = report;
+        lastName = name;
         statusEl.textContent = `Validated ${name} in ${ms} ms.`;
         resultEl.hidden = false;
         const ok = report.status === "ok";
@@ -131,6 +139,31 @@
           tbodyEl.appendChild(tr);
         }
       }
+
+      // Download the result as a whole FORMATS.md envelope — byte-for-byte what
+      // the CLI's `--format json` emits (the binding returns just the inputs[i]
+      // object, so wrap it in the single-input envelope it belongs to).
+      downloadEl.addEventListener("click", () => {
+        if (!lastReport) return;
+        const envelope = {
+          tool: "epubveri",
+          tool_version: version(),
+          convention: "0.4",
+          status: lastReport.status,
+          // The binding omits `path` (it has none); the demo knows the dropped
+          // file's name, so it fills the envelope's input `path` with it.
+          inputs: [{ path: lastName, ...lastReport }],
+        };
+        const blob = new Blob([JSON.stringify(envelope, null, 2)], {
+          type: "application/json",
+        });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = lastName.replace(/\.epub$/i, "") + ".epubveri.json";
+        a.click();
+        URL.revokeObjectURL(url);
+      });
 
       fileEl.addEventListener("change", () => {
         if (fileEl.files.length) run(fileEl.files[0]);
