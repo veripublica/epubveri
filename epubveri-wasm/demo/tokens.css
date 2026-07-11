@@ -1,0 +1,86 @@
+/* veripublica family-web — tokens.css — template v2
+ * https://github.com/veripublica/family-web
+ *
+ * The family's design tokens: one copy. Extracted 2026-07-10 from
+ * epubveri-wasm and epubsana-wasm's demo pages, where this block was
+ * byte-identical. Consumers copy this file next to their demo page and link
+ * it; local overrides go in the page's own stylesheet, never in a fork of
+ * this one.
+ *
+ * THEME. Three states, and the third one is the point:
+ *   no data-theme on <html>  → auto: the OS decides (unchanged from v1)
+ *   data-theme="dark"        → dark,  whatever the OS says
+ *   data-theme="light"       → light, whatever the OS says
+ * Setting the attribute is all a consumer has to do; light-dark() reads the
+ * used color-scheme, so flipping color-scheme flips every token at once and no
+ * value is written twice. skeleton.html carries an optional toggle that sets
+ * it — a consumer that doesn't want a toggle simply doesn't copy that part, and
+ * still gets the auto behaviour. (issue #3)
+ *
+ * SEVERITY. The severity tokens (--fatal, --err, --warn, --usage; `info`
+ * deliberately reuses --muted) are listed in rank order and every one clears
+ * WCAG AA on its mode's --bg. Note --fatal is *lighter* than --err in dark
+ * mode, not darker: on a dark background there is no red above --err with both
+ * enough contrast and enough separation from it, so --fatal is chosen for
+ * legibility and the rank is carried by the background wash on .sev.fatal
+ * instead. Do not "fix" it by darkening. (Measured; see issue #1.)
+ */
+:root {
+  color-scheme: light dark;
+  /*                light      dark    */
+  --bg: light-dark(#ffffff, #16161a);
+  --fg: light-dark(#1a1a1a, #e8e8ea);
+  --muted: light-dark(#666666, #9a9aa2);
+  --border: light-dark(#dddddd, #33333a);
+  --card: light-dark(#f7f7f8, #1f1f25);
+  --ok: light-dark(#1a7f37, #4ac26b);
+  --fatal: light-dark(#82071e, #ffa198);
+  --err: light-dark(#cf222e, #ff6b74);
+  --warn: light-dark(#9a6700, #d9a441);
+  --usage: light-dark(#476b74, #8aa8b0);
+  --accent: light-dark(#4b3fce, #9d94ff);
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] { color-scheme: dark; }
+
+/* FLOOR — for browsers without light-dark() (Baseline newly available, May
+ * 2024; Safari's version is bound to the OS, so this tail does not close on its
+ * own). Without it, every var(--x) above would be invalid at computed-value
+ * time and the whole semantic color layer — severity ramp, verdict chip, link
+ * color — would vanish *silently*: a legible page that has stopped saying
+ * anything. So the floor restates the values under the v1 structure, and these
+ * browsers get exactly the v1 behaviour: auto light/dark, no toggle. (demo.css
+ * hides the toggle via the same @supports test, so it is never a dead control.)
+ *
+ * These values must match the light-dark() pairs above. Delete this whole block
+ * — not part of it — once the support bar moves; nothing else depends on it. */
+@supports not (color: light-dark(#000000, #ffffff)) {
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --border: #dddddd;
+    --card: #f7f7f8;
+    --ok: #1a7f37;
+    --fatal: #82071e;
+    --err: #cf222e;
+    --warn: #9a6700;
+    --usage: #476b74;
+    --accent: #4b3fce;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a;
+      --fg: #e8e8ea;
+      --muted: #9a9aa2;
+      --border: #33333a;
+      --card: #1f1f25;
+      --ok: #4ac26b;
+      --fatal: #ffa198;
+      --err: #ff6b74;
+      --warn: #d9a441;
+      --usage: #8aa8b0;
+      --accent: #9d94ff;
+    }
+  }
+}

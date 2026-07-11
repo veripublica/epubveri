@@ -1,0 +1,187 @@
+/* veripublica family-web — demo.css — template v2
+ * https://github.com/veripublica/family-web
+ *
+ * The shared skeleton of the family's WASM demo pages. Requires tokens.css.
+ *
+ * Two layers, marked below:
+ *  - BASE: byte-identical in both existing demos at extraction time
+ *    (2026-07-10), except .counts, which had already drifted (.9rem in
+ *    epubveri, .95rem in epubsana) — canonicalized here at .9rem.
+ *  - COMPONENTS: primitives that existed in ONE demo and are promoted to the
+ *    family level so the next tool reuses them instead of inventing its own.
+ *    Provenance is noted per block. Tool-specific vocabulary (epubsana's
+ *    badge tiers, its fix cards; epubveri's table columns) stays in each
+ *    page's local styles.
+ */
+
+/* ============================== BASE ============================== */
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+  padding: 2rem 1rem 4rem;
+}
+main { max-width: 820px; margin: 0 auto; }
+h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+h1 .demo-tag { color: var(--muted); font-weight: 400; }
+.sub { color: var(--muted); margin: 0 0 1.5rem; }
+
+.drop {
+  display: block;
+  position: relative;
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  padding: 2.5rem 1rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .15s, background .15s;
+  background: var(--card);
+}
+.drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--card)); }
+.drop strong { color: var(--accent); }
+
+/* The file input is hidden but NOT removed. `display: none` — what v1 shipped —
+ * takes an element out of the accessibility tree and makes it unfocusable, and a
+ * <label> cannot take focus in its place. The result was a demo whose only
+ * interaction was mouse-only: no Tab stop, nothing to announce. (#5)
+ *
+ * .drop is positioned so focusing the input scrolls to the drop zone, not to
+ * wherever an ancestor happens to sit. */
+.drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.status { margin: 1.25rem 0; font-size: .9rem; color: var(--muted); }
+.counts { color: var(--muted); font-size: .9rem; margin: 1rem 0 .5rem; }
+
+code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+footer { margin-top: 3rem; color: var(--muted); font-size: .8rem; }
+a { color: var(--accent); }
+
+/* Checkbox, radio, range, progress — one line, and it is the whole feature. The
+ * native controls are kept: they follow color-scheme by themselves, they are
+ * accessible by default, and on mobile they are better than anything we would
+ * draw with pseudo-elements. A demo that needs a checkbox writes the <input> and
+ * is done — no CSS, no issue. (#6) */
+:root { accent-color: var(--accent); }
+
+/* Focus. There was no :focus rule of any kind in the template until v2 — the
+ * entire layer was missing, which is how #5 (a keyboard-unreachable drop zone)
+ * survived a release. The ring is --accent, and it clears WCAG 2.2 SC 1.4.11's
+ * 3:1 against every color it can land beside:
+ *
+ *   light   vs --bg 7.24   vs --card 6.76   vs --border 5.33
+ *   dark    vs --bg 6.97   vs --card 6.33   vs --border 4.84
+ *
+ * :focus-visible, so a mouse click leaves no ring behind. A browser without it
+ * keeps the UA's own outline — a plainer ring, but never no ring. */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ========================== COMPONENTS ============================ */
+
+/* The tint behind a state chip (.verdict, .sev.fatal). Not a color, so it does
+ * not belong in tokens.css — it is a property of this component layer.
+ *
+ * 8%, not the 14% v1 shipped with: at 14% *both* light-mode verdict variants
+ * failed WCAG AA on their own wash (.valid 4.20:1, .invalid 4.27:1 — the pass
+ * verdict, the one most readers see, was the worse of the two). 8% is the
+ * strongest tint at which every chip clears the bar in both modes:
+ *
+ *   light  .verdict.valid 4.57  .verdict.invalid 4.71  .sev.fatal 9.00
+ *   dark   .verdict.valid 7.00  .verdict.invalid 5.89  .sev.fatal 8.08
+ *
+ * One value, because three chips carrying three copies of the number is how one
+ * of them ends up wrong again — which is exactly how this was found. (issue #4) */
+:root { --wash: 8%; }
+
+/* Family footer nav — new in template v1: the line that makes the family
+ * visible. One link per sibling; the current tool renders itself as plain
+ * text, not a link. */
+.family { margin-top: .5rem; }
+.family a, .family span { margin-right: .6rem; white-space: nowrap; }
+
+/* Theme toggle — the control for tokens.css's data-theme hook (#3). Optional:
+ * a demo that doesn't want it drops the button and its script from the page and
+ * still gets the auto behaviour, because the hook lives in the tokens.
+ *
+ * Hidden unless light-dark() actually works — the same test that guards the
+ * floor in tokens.css. Without light-dark() the attribute would move the
+ * scrollbars and nothing else, and a control that appears to do something while
+ * doing nothing is worse than no control. */
+.theme-toggle { display: none; }
+@supports (color: light-dark(#000000, #ffffff)) {
+  .theme-toggle {
+    display: inline-block;
+    font-size: .8rem;
+    background: none;
+    color: var(--muted);
+    /* .25rem, not the .1rem this shipped with in #3: that computed to 24.4px
+     * tall against WCAG 2.2 SC 2.5.8's 24px minimum — passing by 0.4px is not
+     * passing, it is a rounding error that happens to land right. Now 29.2px. */
+    padding: .25rem .5rem;
+    margin-left: .3rem;
+  }
+  .theme-toggle:hover { color: var(--fg); border-color: var(--muted); }
+}
+
+/* Verdict chip — from epubveri. Any tool with a pass/fail answer uses this. */
+.verdict {
+  display: inline-flex; align-items: center; gap: .5rem;
+  font-weight: 700; font-size: 1.1rem; padding: .4rem .8rem;
+  border-radius: 8px; margin: 1rem 0 .5rem;
+}
+.verdict.valid { color: var(--ok); background: color-mix(in srgb, var(--ok) var(--wash), transparent); }
+.verdict.invalid { color: var(--err); background: color-mix(in srgb, var(--err) var(--wash), transparent); }
+
+/* Severity colors — from epubveri, widened to the family's five-value
+ * vocabulary (conventions v0.4.0, FORMATS.md §1.3).
+ *
+ * The class names are the envelope's `severity` string written straight into
+ * the DOM — lowercase, no aliases. A demo still emitting the old uppercase
+ * spelling keeps its own rule locally until it converges; the shared file does
+ * not carry both spellings, because carrying both is how the two spellings
+ * survive.
+ *
+ * fatal gets a background wash on top of its color. That is not decoration: in
+ * dark mode no red outranks --err on intensity, so color alone cannot say
+ * "worse than error" — the wash does. Same --wash the .verdict chip uses. */
+.sev { font-weight: 700; white-space: nowrap; }
+.sev.fatal {
+  color: var(--fatal);
+  background: color-mix(in srgb, var(--fatal) var(--wash), transparent);
+  padding: .05rem .35rem;
+  border-radius: 5px;
+}
+.sev.error { color: var(--err); }
+.sev.warning { color: var(--warn); }
+.sev.info { color: var(--muted); }
+.sev.usage { color: var(--usage); }
+
+/* Findings table — from epubveri. */
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; }
+
+/* Buttons and select — button from epubsana; select added in v2 with the
+ * identical shape, before any tool asked for it (#6). A <select> carries no
+ * tool-specific meaning, so there is nothing to get wrong by guessing — and
+ * having it ready is what stops the second demo from inventing a different one.
+ *
+ * The native appearance is kept, arrow and popup included. The UA's dropdown is
+ * faster, more accessible and far better on a phone than anything we would draw. */
+button, select {
+  font: inherit; cursor: pointer; border: 1px solid var(--border);
+  background: var(--card); color: var(--fg); border-radius: 8px; padding: .45rem .85rem;
+}
+button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+button:disabled, select:disabled { opacity: .45; cursor: default; }
+
+/* Badge base — from epubsana. Semantic variants (which badge means what)
+ * are each tool's own vocabulary and live in its local styles. */
+.badge {
+  font-size: .7rem; font-weight: 700; padding: .15rem .5rem;
+  border-radius: 6px; text-transform: uppercase; letter-spacing: .03em;
+  white-space: nowrap;
+}
