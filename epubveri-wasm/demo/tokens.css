@@ -1,4 +1,4 @@
-/* veripublica family-web — tokens.css — template v2
+/* veripublica family-web — tokens.css — template v3
  * https://github.com/veripublica/family-web
  *
  * The family's design tokens: one copy. Extracted 2026-07-10 from
@@ -13,9 +13,10 @@
  *   data-theme="light"       → light, whatever the OS says
  * Setting the attribute is all a consumer has to do; light-dark() reads the
  * used color-scheme, so flipping color-scheme flips every token at once and no
- * value is written twice. skeleton.html carries an optional toggle that sets
- * it — a consumer that doesn't want a toggle simply doesn't copy that part, and
- * still gets the auto behaviour. (issue #3)
+ * value is written twice. skeleton.html carries the toggle that sets it, and
+ * every demo ships it (#7) — light/dark is not a per-page coin flip. A consumer
+ * with its own layout (the conventions site takes this file alone, no skeleton)
+ * gets the hook regardless and supplies its own control. (issues #3, #7)
  *
  * SEVERITY. The severity tokens (--fatal, --err, --warn, --usage; `info`
  * deliberately reuses --muted) are listed in rank order and every one clears

@@ -1,4 +1,4 @@
-/* veripublica family-web — demo.css — template v2
+/* veripublica family-web — demo.css — template v3
  * https://github.com/veripublica/family-web
  *
  * The shared skeleton of the family's WASM demo pages. Requires tokens.css.
@@ -28,6 +28,18 @@ main { max-width: 820px; margin: 0 auto; }
 h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
 h1 .demo-tag { color: var(--muted); font-weight: 400; }
 .sub { color: var(--muted); margin: 0 0 1.5rem; }
+
+/* Topbar — the heading and the theme toggle, one line, toggle hard right.
+ *
+ * The template fixes this position rather than leaving it to each demo (#7). A
+ * standard control placed differently on every page is only half standard. And
+ * top-right is where readers have learned to look: in the footer the toggle was
+ * a scavenger hunt, worst on a long findings table — which is precisely when a
+ * reader reaches for dark.
+ *
+ * Flex rather than absolute positioning, so a long tool name can never collide
+ * with the button at narrow widths. */
+.topbar { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
 
 .drop {
   display: block;
@@ -96,20 +108,38 @@ a { color: var(--accent); }
  * of them ends up wrong again — which is exactly how this was found. (issue #4) */
 :root { --wash: 8%; }
 
-/* Family footer nav — new in template v1: the line that makes the family
- * visible. One link per sibling; the current tool renders itself as plain
- * text, not a link. */
+/* Family footer nav — new in template v1: the line that makes the family visible.
+ *
+ * It lists the tools a reader can USE, not the machinery behind them (#10):
+ * epubveri, epubsana, epublift are things a visitor might run; conventions,
+ * family-web and styloria are specs, templates and libraries, one hop away via the
+ * veripublica link. The nav had no membership rule for two versions, which is how
+ * `conventions` ended up on a page written for publishers.
+ *
+ * Every sibling is a link, the current tool included (v3, #8). v1 rendered the
+ * current tool as dead text, on the usual instinct that you don't link to the page
+ * you're on — but these links do not go to the page you're on. They go to GitHub,
+ * and the current tool's repository is the one link a visitor is most likely to
+ * want. aria-current="page" keeps the "you are here" signal, for a screen reader
+ * as well as an eye. */
 .family { margin-top: .5rem; }
-.family a, .family span { margin-right: .6rem; white-space: nowrap; }
+.family a { margin-right: .6rem; white-space: nowrap; }
+/* Weight, not color. The page has a color grammar — --accent means "link",
+ * --fg means "text" — and recoloring this one link to --fg would make it the
+ * only link on the page saying "I am not clickable" in color while saying "I am"
+ * with its underline. Weight says "you are here" without touching that axis. */
+.family a[aria-current="page"] { font-weight: 600; }
 
-/* Theme toggle — the control for tokens.css's data-theme hook (#3). Optional:
- * a demo that doesn't want it drops the button and its script from the page and
- * still gets the auto behaviour, because the hook lives in the tokens.
+/* Theme toggle — the control for tokens.css's data-theme hook (#3). Standard,
+ * not optional (#7): every demo ships it. Light/dark cannot be a per-page coin
+ * flip — a reader who finds this control on one family page and not the next has
+ * learned nothing about either tool, only that the family is inconsistent.
  *
  * Hidden unless light-dark() actually works — the same test that guards the
  * floor in tokens.css. Without light-dark() the attribute would move the
  * scrollbars and nothing else, and a control that appears to do something while
- * doing nothing is worse than no control. */
+ * doing nothing is worse than no control. "Standard" means every demo ships it,
+ * not that it always renders. */
 .theme-toggle { display: none; }
 @supports (color: light-dark(#000000, #ffffff)) {
   .theme-toggle {
@@ -121,7 +151,7 @@ a { color: var(--accent); }
      * tall against WCAG 2.2 SC 2.5.8's 24px minimum — passing by 0.4px is not
      * passing, it is a rounding error that happens to land right. Now 29.2px. */
     padding: .25rem .5rem;
-    margin-left: .3rem;
+    flex: none;
   }
   .theme-toggle:hover { color: var(--fg); border-color: var(--muted); }
 }

@@ -1,14 +1,26 @@
 <!doctype html>
-<!-- family-web template v2 (family-web v0.2.0) — https://github.com/veripublica/family-web
+<!-- family-web template v3 (family-web v0.3.0) — https://github.com/veripublica/family-web
      Shared look via tokens.css + demo.css (copied, never edited here).
      Only tool-specific styles live in the inline <style> below. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>epubveri — EPUB validation in the browser (WASM)</title>
+    <title>epubveri — EPUB validation in your browser</title>
     <link rel="stylesheet" href="./tokens.css" />
     <link rel="stylesheet" href="./demo.css" />
+    <script>
+      // Theme, part 1 of 2 (part 2 is the toggle button in the topbar). MUST
+      // stay here: in <head>, inline, not deferred — it runs before first paint
+      // so a reader who chose dark never sees a white flash. Guarded on
+      // light-dark(); try/catch because localStorage can throw when blocked.
+      try {
+        if (CSS.supports("color", "light-dark(#000,#fff)")) {
+          const t = localStorage.getItem("theme");
+          if (t === "dark" || t === "light") document.documentElement.dataset.theme = t;
+        }
+      } catch {}
+    </script>
     <style>
       /* Page-local only — everything else is in the shared template files. The
          binding now returns the envelope's lowercase severity, so template v2's
@@ -19,7 +31,38 @@
   </head>
   <body>
     <main>
-      <h1>epubveri <span class="demo-tag">· WASM demo</span></h1>
+      <div class="topbar">
+        <h1>epubveri</h1>
+        <!-- Theme, part 2 of 2: the standard top-right toggle (family-web v3).
+             Hides itself where light-dark() is unsupported (demo.css). -->
+        <button class="theme-toggle" id="theme" type="button"></button>
+        <script>
+          (() => {
+            const root = document.documentElement;
+            const btn = document.getElementById("theme");
+            const cycle = ["auto", "dark", "light"];
+            const label = { auto: "◐ auto", dark: "☾ dark", light: "☀ light" };
+            const save = (v) => {
+              try {
+                v ? localStorage.setItem("theme", v) : localStorage.removeItem("theme");
+              } catch {}
+            };
+            const current = () => root.dataset.theme || "auto";
+            const paint = () => {
+              btn.textContent = label[current()];
+              btn.title = "Theme: " + current() + " — click to change";
+            };
+            btn.addEventListener("click", () => {
+              const next = cycle[(cycle.indexOf(current()) + 1) % cycle.length];
+              if (next === "auto") delete root.dataset.theme;
+              else root.dataset.theme = next;
+              save(next === "auto" ? null : next);
+              paint();
+            });
+            paint();
+          })();
+        </script>
+      </div>
       <p class="sub">A pure-Rust EPUB validator running entirely in your browser — no JVM, no upload, no server. Your file never leaves this page.</p>
 
       <label class="drop" id="drop">
@@ -46,10 +89,9 @@
         <code>epubveri-wasm</code> crate. <span id="ver"></span>
         <nav class="family">
           A <a href="https://github.com/veripublica">veripublica</a> tool ·
-          <span>epubveri</span>
+          <a href="https://github.com/veripublica/epubveri" aria-current="page">epubveri</a>
           <a href="https://github.com/veripublica/epubsana">epubsana</a>
           <a href="https://github.com/veripublica/epublift">epublift</a>
-          <a href="https://github.com/veripublica/conventions">conventions</a>
         </nav>
       </footer>
     </main>
