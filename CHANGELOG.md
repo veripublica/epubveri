@@ -8,6 +8,22 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.1] - 2026-07-12
+
+### Fixed
+
+- **Two EPUB 3-only metadata rules no longer fire on EPUB 2 books.** An EPUB 2
+  package with more than one `dc:date` — the common creation/modification pair
+  that tools like Sigil and Calibre write — was wrongly reported `RSC-005`
+  *"element 'dc:date' not allowed here (only one dc:date element is allowed)"*
+  and shown INVALID; and a legacy OpenType font drew a spurious `OPF-090`
+  *"non-preferred Core Media Type"*. Both are EPUB 3 concepts (EPUB 2
+  legitimately carries several `dc:date` elements distinguished by `opf:event`,
+  and Core Media Types are an EPUB 3 notion), so they are now scoped to EPUB 3
+  — an EPUB 2 book validates exactly as epubcheck does.
+  ([issue #9](https://github.com/veripublica/epubveri/issues/9), reported on the
+  Sigil PageEdit User Guide.)
+
 ## [0.5.0] - 2026-07-11
 
 This release adopts the **[veripublica CLI convention
