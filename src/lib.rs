@@ -8,6 +8,13 @@
 //! `HTM-…`, …). A WebAssembly build ships separately as the `epubveri-wasm`
 //! crate.
 
+/// The crate version, carrying git build metadata (`+<short-hash>[.dirty]`)
+/// when built from a checkout — the one string the CLI's `-V`, this crate's
+/// embedders, and the wasm binding's `version()` all print (veripublica
+/// conventions v0.4, CLI.md §3.1). A build with no git (e.g. a crates.io
+/// tarball) falls back silently to the plain SemVer, set by `build.rs`.
+pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), env!("EPUBVERI_BUILD"));
+
 pub mod cmt;
 pub mod css;
 pub mod dict;

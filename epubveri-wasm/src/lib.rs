@@ -126,8 +126,10 @@ pub fn validate(bytes: &[u8], profile: Option<String>) -> Report {
     }
 }
 
-/// The `epubveri-wasm` crate version (matches this crate's `Cargo.toml`).
+/// The validator version — [`epubveri::VERSION`], the one string the CLI's
+/// `-V` and the demo footer also print, with git build metadata
+/// (`+<short-hash>[.dirty]`) when built from a checkout.
 #[wasm_bindgen]
 pub fn version() -> String {
-    env!("CARGO_PKG_VERSION").to_string()
+    epubveri::VERSION.to_string()
 }

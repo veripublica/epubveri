@@ -219,7 +219,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Cli::Version => {
-            println!("epubveri {}", env!("CARGO_PKG_VERSION"));
+            println!("epubveri {}", epubveri::VERSION);
             ExitCode::SUCCESS
         }
         Cli::Usage(msg) => {
