@@ -51,6 +51,12 @@ jobs:
           # reject it with "Relative references must start with either
           # \"/\", \"./\", or \"../\"").
           sed 's#\.\./pkg/#./pkg/#' epubveri-wasm/demo/index.html > site/index.html
+          # The root index.html links ./tokens.css and ./demo.css (the shared
+          # family-web template stylesheets). pkg/ is already copied to the root
+          # above, but these were not — so copy them beside the root index or
+          # the root page renders unstyled while /demo/ (which has its own copy)
+          # stays fine.
+          cp epubveri-wasm/demo/tokens.css epubveri-wasm/demo/demo.css site/
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
