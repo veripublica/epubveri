@@ -42,7 +42,9 @@ impl Envelope {
         };
         Envelope {
             tool: "epubveri",
-            tool_version: env!("CARGO_PKG_VERSION"),
+            // The same string -V and the wasm binding print (build metadata
+            // included) — one version, every surface.
+            tool_version: crate::VERSION,
             convention: CONVENTION,
             status,
             inputs,
