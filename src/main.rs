@@ -28,18 +28,18 @@ USAGE:
 OPTIONS:
     -i, --input <PATH>     The input. The only input form; positional paths are
                            not accepted. Repeat to validate several inputs.
-        --format <FORMAT>  Report format: human (the default) or ids. json is
-                           reserved for the shared machine format and not yet
-                           supported.
+        --format <FORMAT>  Report format: human (the default), json, or ids.
+                           json is the shared machine envelope (one JSON object,
+                           see the veripublica FORMATS spec).
         --profile <NAME>   Also check against an EPUB extension profile: one of
                            dict, edupub, idx, preview.
     -V, --version          Print epubveri <version> to stdout and exit 0.
     -h, --help             Print this help to stdout and exit 0.
 
 EXAMPLES:
-    epubveri -i book.epub              # validate one book
-    epubveri -i a.epub -i b.epub       # validate several; the exit code aggregates
-    epubveri --format ids -i book.epub # print only the message IDs, one per line
+    epubveri -i book.epub               # validate one book
+    epubveri -i a.epub -i b.epub        # validate several; the exit code aggregates
+    epubveri --format json -i book.epub # emit the machine envelope on stdout
 
 EXIT CODES:
     0   every input is valid (no errors).
@@ -178,8 +178,8 @@ fn parse(args: &[String]) -> Cli {
     // Reject an out-of-set value for an enum option (§3.5) — after the scan, so
     // a `-h` anywhere still short-circuits to help rather than this error.
     if let Some(f) = &format {
-        if f != "human" && f != "ids" {
-            fail!("invalid value '{f}' for --format; supported values: human, ids");
+        if !["human", "json", "ids"].contains(&f.as_str()) {
+            fail!("invalid value '{f}' for --format; supported values: human, json, ids");
         }
     }
     if let Some(p) = &profile {
@@ -236,25 +236,51 @@ fn main() -> ExitCode {
 }
 
 /// Validate every input, report on each, and aggregate the exit code: `2` if
-/// any input could not be read, else `1` if any has errors, else `0`.
+/// any input could not be read, else `1` if any has errors/fatals, else `0`.
 fn run(inputs: &[String], format: &str, profile: Option<&str>) -> ExitCode {
-    let multi = inputs.len() > 1;
+    // Validate everything first; an input that can't be read carries its own
+    // message rather than a verdict.
+    let results: Vec<(&String, Result<epubveri::report::Report, String>)> = inputs
+        .iter()
+        .map(|path| {
+            let r = epubveri::validate_path_with_profile(Path::new(path), profile)
+                .map_err(|e| format!("cannot read {path}: {e}"));
+            (path, r)
+        })
+        .collect();
+
     let mut worst: u8 = 0;
-    for path in inputs {
-        match epubveri::validate_path_with_profile(Path::new(path), profile) {
-            Ok(report) => {
-                print_report(&report, path, format, multi);
-                if !report.is_valid() {
-                    worst = worst.max(1);
-                }
-            }
-            Err(e) => {
-                // An input that could not be read yields no verdict (§6): exit 2.
-                eprintln!("error: cannot read {path}: {e}");
-                worst = worst.max(2);
+    for (_, r) in &results {
+        worst = worst.max(match r {
+            Ok(report) if report.is_valid() => 0,
+            Ok(_) => 1,
+            Err(_) => 2, // no verdict was possible (§6)
+        });
+    }
+
+    if format == "json" {
+        // One JSON object on stdout; an unreadable input is described *inside*
+        // it (status "error"), not on stderr.
+        let envelope = epubveri::envelope::Envelope::new(
+            results
+                .into_iter()
+                .map(|(path, r)| match r {
+                    Ok(report) => epubveri::envelope::Input::from_report(path.clone(), &report),
+                    Err(e) => epubveri::envelope::Input::from_error(path.clone(), e),
+                })
+                .collect(),
+        );
+        println!("{}", serde_json::to_string_pretty(&envelope).unwrap());
+    } else {
+        let multi = results.len() > 1;
+        for (path, r) in &results {
+            match r {
+                Ok(report) => print_report(report, path, format, multi),
+                Err(e) => eprintln!("error: {e}"),
             }
         }
     }
+
     match worst {
         0 => ExitCode::SUCCESS,
         n => ExitCode::from(n),
@@ -397,13 +423,21 @@ mod tests {
     #[test]
     fn unknown_enum_values_are_rejected() {
         assert_eq!(
-            parse_str(&["-i", "a.epub", "--format", "json"]),
-            Cli::Usage("invalid value 'json' for --format; supported values: human, ids".into())
+            parse_str(&["-i", "a.epub", "--format", "xml"]),
+            Cli::Usage(
+                "invalid value 'xml' for --format; supported values: human, json, ids".into()
+            )
         );
         assert!(matches!(
             parse_str(&["-i", "a.epub", "--profile", "nope"]),
             Cli::Usage(_)
         ));
+    }
+
+    #[test]
+    fn json_is_an_accepted_format() {
+        let (_, format, _) = run_of(&["--format", "json", "-i", "a.epub"]);
+        assert_eq!(format, "json");
     }
 
     #[test]

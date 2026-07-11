@@ -36,6 +36,11 @@ unicode-normalization = "0.1"
 # co-development of styloria, add an uncommitted override:
 #   [patch.crates-io] styloria = { path = "../styloria" }
 styloria = "0.2"
+# The `--format json` machine envelope (FORMATS.md). Both are pure Rust, so the
+# no-C-deps rule holds; the same serde types back the wasm binding's return
+# value, so CLI, CI and the demo read one shape.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 
 [profile.release]
 opt-level = 2

@@ -80,6 +80,8 @@ name = "epubveri"
 version = "0.4.4"
 dependencies = [
  "roxmltree",
+ "serde",
+ "serde_json",
  "styloria",
  "unicode-normalization",
  "zip",
