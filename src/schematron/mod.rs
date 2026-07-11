@@ -483,4 +483,30 @@ mod tests {
             vec!["unique-identifier does not resolve".to_string()]
         );
     }
+
+    #[test]
+    fn dc_date_cardinality_is_epub3_only() {
+        // Issue #9: an EPUB 2 book legitimately carries several dc:date elements
+        // distinguished by opf:event (creation/modification/publication), so the
+        // "only one dc:date" rule must apply to EPUB 3 packages only.
+        fn flags_second_date(version: &str) -> bool {
+            let opf = format!(
+                concat!(
+                    r#"<package xmlns="http://www.idpf.org/2007/opf" version="{v}" unique-identifier="id">"#,
+                    r#"<metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">"#,
+                    r#"<dc:identifier id="id">x</dc:identifier>"#,
+                    r#"<dc:date>2013-04-14</dc:date>"#,
+                    r#"<dc:date opf:event="modification">2019-10-31</dc:date>"#,
+                    r#"</metadata><manifest/><spine/></package>"#,
+                ),
+                v = version,
+            );
+            let doc = Document::parse(&opf).unwrap();
+            run(&package_schema(), &doc)
+                .iter()
+                .any(|(m, _)| m.contains("only one dc:date"))
+        }
+        assert!(!flags_second_date("2.0"), "EPUB 2 allows multiple dc:date");
+        assert!(flags_second_date("3.0"), "EPUB 3 allows only one dc:date");
+    }
 }

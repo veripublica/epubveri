@@ -110,10 +110,12 @@
     </rule>
   </pattern>
 
-  <!-- 5.5.4.4 The dc:date element -->
-
+  <!-- 5.5.4.4 The dc:date element. "Only one dc:date" is an EPUB 3 rule; EPUB 2
+       legitimately carries several dc:date elements distinguished by
+       opf:event (creation, modification, publication), so this is scoped to
+       version="3.*" packages - matching dcterms:modified and dc:title above. -->
   <pattern id="opf-date-cardinality">
-    <rule context="opf:metadata[dc:date]">
+    <rule context="opf:package[starts-with(@version, '3')]/opf:metadata[dc:date]">
       <assert test="count(dc:date) = 1"
         >element "dc:date" not allowed here (only one dc:date element is allowed)</assert>
     </rule>

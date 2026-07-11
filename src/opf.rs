@@ -2133,7 +2133,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     vec![id.to_string()],
                 );
             }
-            if crate::cmt::is_non_preferred_core_media_type(mt) {
+            // "Core Media Types" (and their preferred/non-preferred split) are
+            // an EPUB 3 concept; EPUB 2 has no such preference, so OPF-090 is
+            // EPUB 3 only (issue #9: a legacy .otf font wrongly flagged in an
+            // EPUB 2 book that epubcheck reports clean).
+            if is_epub3 && crate::cmt::is_non_preferred_core_media_type(mt) {
                 report.push_at_pos(
                     OPF_090,
                     Severity::Usage,
