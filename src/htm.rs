@@ -113,7 +113,7 @@ fn check_entities(orig_text: &str, path: &str, report: &mut Report) {
         if !terminated {
             report.push_full(
                 RSC_016,
-                Severity::Error,
+                Severity::Fatal,
                 format!("entity reference '&{name}' must end with the ';' delimiter"),
                 path,
                 Position::of_offset(orig_text, amp),
@@ -123,7 +123,7 @@ fn check_entities(orig_text: &str, path: &str, report: &mut Report) {
         } else if !PREDEFINED.contains(&name) && !declared.iter().any(|d| d == name) {
             report.push_full(
                 RSC_016,
-                Severity::Error,
+                Severity::Fatal,
                 format!("entity '{name}' was referenced, but not declared"),
                 path,
                 Position::of_offset(orig_text, amp),
@@ -412,7 +412,7 @@ pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, rep
         {
             report.push_at_pos(
                 HTM_055,
-                Severity::Info,
+                Severity::Usage,
                 format!("'{}' is a discouraged construct", node.tag_name().name()),
                 path,
                 Position::of(node),

@@ -1242,7 +1242,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
             if !is_utf16 {
                 report.push_at_rule(
                     RSC_016,
-                    Severity::Error,
+                    Severity::Fatal,
                     format!("declared encoding '{declared}' does not match the file's actual UTF-16 encoding"),
                     opf_path,
                     "opf.encoding.mismatched_utf16",
@@ -1302,7 +1302,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
             if !is_known {
                 report.push_at_rule(
                     RSC_016,
-                    Severity::Error,
+                    Severity::Fatal,
                     format!("unrecognized encoding '{enc}'"),
                     opf_path,
                     "opf.encoding.unrecognized",
@@ -1332,7 +1332,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         None => {
             report.push(
                 OPF_002,
-                Severity::Error,
+                Severity::Fatal,
                 format!("OPF package document not found: {opf_path}"),
             );
             return;
@@ -1347,7 +1347,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         Err(e) => {
             report.push_full(
                 RSC_016,
-                Severity::Error,
+                Severity::Fatal,
                 format!("OPF is not well-formed XML: {e}"),
                 opf_path,
                 Position::of_parse_error(&e),
@@ -2136,7 +2136,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if crate::cmt::is_non_preferred_core_media_type(mt) {
                 report.push_at_pos(
                     OPF_090,
-                    Severity::Info,
+                    Severity::Usage,
                     format!("media-type '{mt}' is a non-preferred (but valid) Core Media Type"),
                     opf_path,
                     Position::of(item),
@@ -2375,7 +2375,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     if crate::filename::has_non_ascii(&decoded) {
                         report.push_full(
                             PKG_012,
-                            Severity::Info,
+                            Severity::Usage,
                             format!("manifest item '{id}' href segment '{decoded}' contains non-ASCII characters"),
                             opf_path,
                             Position::of(item),
@@ -3103,7 +3103,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if !manifest_paths.contains(&key) {
                 report.push_at(
                     OPF_003,
-                    Severity::Info,
+                    Severity::Usage,
                     format!("container resource '{name}' is not listed in the manifest"),
                     opf_path,
                 );
@@ -3760,7 +3760,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 if !crate::smil::is_default_vocab_type(token) {
                     report.push_full(
                         OPF_088,
-                        Severity::Info,
+                        Severity::Usage,
                         format!("epub:type value '{token}' is not in the default vocabulary"),
                         path.clone(),
                         Position::of(n),
@@ -3805,7 +3805,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 if redundant {
                     report.push_at_pos(
                         OPF_087,
-                        Severity::Info,
+                        Severity::Usage,
                         format!("epub:type value '{token}' only restates the semantic of its host element \"{tag}\""),
                         path.clone(),
                         Position::of(n),
@@ -3821,7 +3821,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if ns.name() == Some("epub") && ns.uri() != EPUB_NS {
                 report.push_at_pos(
                     HTM_010,
-                    Severity::Info,
+                    Severity::Usage,
                     format!("Namespace \"{}\" is unusual", ns.uri()),
                     path.clone(),
                     Position::of(d.root_element()),
@@ -3848,7 +3848,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if !n.has_attribute("alttext") && !has_annotation {
                 report.push_at_pos(
                     ACC_009,
-                    Severity::Info,
+                    Severity::Usage,
                     "MathML markup has no alternative text",
                     path.clone(),
                     Position::of(n),
@@ -4659,7 +4659,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         if class.split_whitespace().count() > 1 {
                             report.push_at_pos(
                                 CSS_005,
-                                Severity::Info,
+                                Severity::Usage,
                                 "link element's class names conflicting alt style tags",
                                 path.clone(),
                                 Position::of(node),
@@ -4944,7 +4944,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             // `OPFChecker30`: `FeatureEnum.HAS_SCRIPTS` gates
             // `OPF-096` vs `OPF-096b`).
             let (id, severity) = if book_has_scripts {
-                (OPF_096B, Severity::Info)
+                (OPF_096B, Severity::Usage)
             } else {
                 (OPF_096, Severity::Error)
             };
@@ -5184,7 +5184,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if classes.contains(well_known) {
                 report.push_at(
                     CSS_029,
-                    Severity::Info,
+                    Severity::Usage,
                     format!("well-known media-overlay class '{well_known}' is used but not declared in the package metadata"),
                     doc_path.clone(),
                 );
@@ -5433,7 +5433,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if !in_order && indices.len() >= 2 {
                 report.push_at(
                     MED_015,
-                    Severity::Info,
+                    Severity::Usage,
                     "media overlay <text> order does not match the content document's DOM order",
                     path.clone(),
                 );

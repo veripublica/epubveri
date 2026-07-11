@@ -147,7 +147,7 @@ fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Rep
     if text.trim().is_empty() {
         report.push_at_pos(
             NCX_006,
-            Severity::Info,
+            Severity::Usage,
             "empty text label",
             ncx_path,
             Position::of(text_el),

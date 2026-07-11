@@ -452,7 +452,14 @@ fn run(path: &Path, cli_profile: Option<&str>) -> (Vec<String>, Vec<String>, i32
         // an expectation the parser already normalized away.
         let id = normalize_id(m.id);
         ids.push(id.clone());
-        if m.severity == epubveri::report::Severity::Error {
+        // "Flagged an error" for scoring is error-AND-above (conventions v0.4
+        // §6 threshold): a fatal is the strongest error, not a lesser one, so
+        // it must count here or a fatal-only expectation would score as a miss
+        // now that these findings carry Severity::Fatal rather than Error.
+        if matches!(
+            m.severity,
+            epubveri::report::Severity::Error | epubveri::report::Severity::Fatal
+        ) {
             error_ids.push(id);
         }
     }

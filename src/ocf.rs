@@ -100,7 +100,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         report.push(PKG_003, Severity::Error, "the EPUB file is empty");
         report.push_rule(
             PKG_008,
-            Severity::Error,
+            Severity::Fatal,
             "the zip file is empty",
             "ocf.container.empty_zip",
             Vec::new(),
@@ -129,13 +129,13 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             if looks_like_other_format {
                 report.push(
                     PKG_004,
-                    Severity::Error,
+                    Severity::Fatal,
                     "Not a valid EPUB container (corrupted ZIP header)",
                 );
             }
             report.push_rule(
                 PKG_008,
-                Severity::Error,
+                Severity::Fatal,
                 format!("could not open zip file: {e}"),
                 "ocf.container.unreadable_zip",
                 vec![e.to_string()],
@@ -169,7 +169,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             if std::str::from_utf8(f.name_raw()).is_err() {
                 report.push(
                     PKG_027,
-                    Severity::Error,
+                    Severity::Fatal,
                     "a ZIP entry's file name is not valid UTF-8",
                 );
                 return None;
@@ -206,7 +206,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                 if crate::filename::has_non_ascii(segment) {
                     report.push_at_rule(
                         PKG_012,
-                        Severity::Info,
+                        Severity::Usage,
                         format!("file name '{segment}' contains non-ASCII characters"),
                         name.as_str(),
                         "ocf.filename.non_ascii",
@@ -326,7 +326,7 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     if !ocf.has(CONTAINER) {
         report.push(
             RSC_002,
-            Severity::Error,
+            Severity::Fatal,
             "Required META-INF/container.xml is missing",
         );
         return Vec::new();

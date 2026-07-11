@@ -119,7 +119,7 @@ pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &m
         if !is_recognized_element(name) {
             report.push_at_pos(
                 RSC_025,
-                Severity::Info,
+                Severity::Usage,
                 format!("element \"{name}\" not allowed here"),
                 path,
                 Position::of(child),
@@ -279,7 +279,7 @@ pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &
         if !has_label {
             report.push_at_pos(
                 ACC_011,
-                Severity::Info,
+                Severity::Usage,
                 "SVG link has no accessible label",
                 path,
                 Position::of(a),

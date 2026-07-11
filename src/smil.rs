@@ -109,7 +109,7 @@ pub(crate) fn check(
             if !token.contains(':') && !is_default_vocab_type(token) {
                 report.push_full(
                     OPF_088,
-                    Severity::Info,
+                    Severity::Usage,
                     format!("epub:type value '{token}' is not in the default vocabulary"),
                     smil_path,
                     Position::of(n),

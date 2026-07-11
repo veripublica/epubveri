@@ -2,19 +2,44 @@
 
 use std::fmt;
 
+/// Severity of a diagnostic, in rank order, mirroring epubcheck's five-value
+/// vocabulary — the same set the shared machine format reserves (FORMATS.md
+/// §1.3, conventions v0.4). `Fatal` means processing of the input stopped;
+/// `Usage` is an advisory that sits *below* `Info` — surfaced, never a failure.
+/// Only `Error` and `Fatal` cross the valid/invalid line (see [`Report::is_valid`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
+    Fatal,
     Error,
     Warning,
     Info,
+    Usage,
+}
+
+impl Severity {
+    /// The lowercase spelling the shared json envelope uses (FORMATS.md §1.3).
+    /// The uppercase [`Display`](fmt::Display) form is for the human CLI report.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Severity::Fatal => "fatal",
+            Severity::Error => "error",
+            Severity::Warning => "warning",
+            Severity::Info => "info",
+            Severity::Usage => "usage",
+        }
+    }
 }
 
 impl fmt::Display for Severity {
+    // Uppercase, epubcheck-familiar, for the human CLI report. The json envelope
+    // spells severity lowercase instead — use [`Severity::as_str`] there.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
+            Severity::Fatal => "FATAL",
             Severity::Error => "ERROR",
             Severity::Warning => "WARNING",
             Severity::Info => "INFO",
+            Severity::Usage => "USAGE",
         })
     }
 }
@@ -232,28 +257,58 @@ impl Report {
         });
     }
 
+    fn count(&self, sev: Severity) -> usize {
+        self.messages.iter().filter(|m| m.severity == sev).count()
+    }
+
     pub fn errors(&self) -> usize {
-        self.messages
-            .iter()
-            .filter(|m| m.severity == Severity::Error)
-            .count()
+        self.count(Severity::Error)
+    }
+
+    /// Count of `Fatal`-severity findings — a defect that stopped processing.
+    /// Kept separate from [`errors`](Self::errors): a consumer reading
+    /// `{errors: N}` sees the same number it always did, and asks for fatals by
+    /// name. Both count toward [`is_valid`](Self::is_valid).
+    pub fn fatals(&self) -> usize {
+        self.count(Severity::Fatal)
     }
 
     pub fn warnings(&self) -> usize {
-        self.messages
-            .iter()
-            .filter(|m| m.severity == Severity::Warning)
-            .count()
+        self.count(Severity::Warning)
     }
 
+    /// Valid = no `error`- or `fatal`-severity findings (conventions v0.4 §6's
+    /// verifier threshold). Warnings, info and usage findings are reported but
+    /// never make a book invalid.
     pub fn is_valid(&self) -> bool {
-        self.errors() == 0
+        self.errors() == 0 && self.fatals() == 0
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The migration trap (conventions v0.4 §6, unfold note): the valid/invalid
+    // line is error-AND-above. A warning-only book is valid; the moment a fatal
+    // appears the book is invalid — and a fatal is never miscounted as an error.
+    #[test]
+    fn fatal_and_error_invalidate_a_book_but_a_warning_does_not() {
+        let mut r = Report::new();
+        r.push("HTM-060", Severity::Warning, "a warning");
+        r.push("OPF-090", Severity::Usage, "an advisory");
+        r.push("HTM-055", Severity::Info, "a note");
+        assert!(
+            r.is_valid(),
+            "warning/info/usage alone must stay valid (exit 0)"
+        );
+
+        r.push("PKG-006", Severity::Fatal, "the container stopped us");
+        assert!(!r.is_valid(), "a fatal must make the book invalid (exit 1)");
+        assert_eq!(r.errors(), 0, "a fatal is not counted as an error");
+        assert_eq!(r.fatals(), 1);
+        assert_eq!(r.warnings(), 1);
+    }
 
     #[test]
     fn of_offset_first_line_first_column() {
