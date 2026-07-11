@@ -90,7 +90,7 @@ jobs:
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: epubveri-${{ matrix.target }}
           path: |
