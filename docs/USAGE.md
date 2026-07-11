@@ -102,20 +102,21 @@ epubveri is a command-line tool, so you run it from a terminal:
   the Start menu).
 - **Linux**: open your terminal.
 
-Then type the program's location, a space, and the book's location. The
-easiest way to avoid typing long paths is to **drag the file into the
-terminal window** — it fills in the full path for you:
+Then type the program's location, ` -i ` (the book is always passed with
+`-i`), and the book's location. The easiest way to avoid typing long paths is
+to **drag the file into the terminal window** — it fills in the full path for
+you:
 
 ```sh
-# Type the program name (or drag the epubveri file in), a space,
+# Type the program name (or drag the epubveri file in), then type " -i ",
 # then drag your .epub file in, and press Enter:
-~/Downloads/epubveri  ~/Desktop/my-book.epub
+~/Downloads/epubveri -i ~/Desktop/my-book.epub
 ```
 
 On Windows it looks like this (from PowerShell):
 
 ```powershell
-C:\Users\you\Downloads\epubveri.exe  C:\Users\you\Desktop\my-book.epub
+C:\Users\you\Downloads\epubveri.exe -i C:\Users\you\Desktop\my-book.epub
 ```
 
 That's it. To see all options at any time, run `epubveri --help`.
@@ -127,15 +128,18 @@ That's it. To see all options at any time, run `epubveri --help`.
 A typical run looks like this:
 
 ```
-ERROR OPF-002: OPF package document not found: OEBPS/content.opf
-ERROR RSC-005: spine references manifest item id 'ch1' more than once [OEBPS/content.opf:15:5]
-— 2 error(s), 0 warning(s): INVALID
+ERROR RSC-005: EPUB 3 requires a navigation document (a manifest item with properties="nav") [OEBPS/content.opf:2:1]
+USAGE OPF-003: container resource 'OEBPS/nav.xhtml' is not listed in the manifest [OEBPS/content.opf]
+— 1 error(s), 0 warning(s): INVALID
 ```
 
 Reading a line from left to right:
 
-- **`ERROR` / `WARNING` / `INFO`** — how serious it is. Only **errors**
-  make a book invalid; warnings and info are advisories.
+- **`FATAL` / `ERROR` / `WARNING` / `INFO` / `USAGE`** — how serious it is, the
+  same five levels epubcheck uses. Only **errors** and **fatals** make a book
+  invalid; warnings, info and usage notes are advisories that are reported but
+  don't fail the book. (A `FATAL` is a problem that stops epubveri from checking
+  any further, like a file that isn't valid XML.)
 - **`RSC-005`** — a short code identifying the kind of problem. These are
   the **same codes epubcheck uses**, so you can look any of them up in
   [epubcheck's message documentation](https://www.w3.org/publishing/epubcheck/docs/messages/)
@@ -150,8 +154,13 @@ The last line is the summary and verdict: **VALID** or **INVALID**.
 ### The exit code (for scripting)
 
 If you're calling epubveri from a script, it also returns a standard exit
-code: **`0`** = valid, **`1`** = at least one error was found, **`2`** =
-something went wrong reading the file (e.g. it isn't really a ZIP/EPUB).
+code: **`0`** = valid, **`1`** = at least one error or fatal was found, **`2`**
+= the tool couldn't run or couldn't read an input at all (a missing or
+unreadable file). A file that *is* readable but broken — even one that isn't a
+valid ZIP — still gets a verdict (a `FATAL` finding, exit `1`), not exit `2`.
+
+With more than one `-i`, epubveri validates every book and reports on each; the
+exit code is the worst across them.
 
 ---
 
@@ -161,7 +170,14 @@ something went wrong reading the file (e.g. it isn't really a ZIP/EPUB).
 the list of message IDs:
 
 ```sh
-epubveri --format ids my-book.epub
+epubveri --format ids -i my-book.epub
+```
+
+**Machine-readable output** — for a tool, a CI job, or another program, print
+the shared JSON envelope (one object; the browser demo can save the same file):
+
+```sh
+epubveri --format json -i my-book.epub
 ```
 
 **Extension profiles** — if your book targets a specific EPUB extension,
@@ -170,7 +186,7 @@ you can additionally enforce its rules (same idea as epubcheck's
 Glossaries), `edupub` (EDUPUB), `idx` (Indexes), and `preview` (Previews):
 
 ```sh
-epubveri --profile dict my-dictionary.epub
+epubveri --profile dict -i my-dictionary.epub
 ```
 
 ---

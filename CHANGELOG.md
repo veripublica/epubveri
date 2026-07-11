@@ -8,6 +8,68 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.0] - 2026-07-11
+
+This release adopts the **[veripublica CLI convention
+v0.4](https://github.com/veripublica/conventions)** — the shared command-line
+and machine-output contract the tool family follows. The invocation changes, so
+this is a breaking release (a minor bump, per pre-1.0 SemVer). epubveri now
+states *"Conforms to veripublica conventions v0.4"* in its `--help`.
+([tracking issue #8](https://github.com/veripublica/epubveri/issues/8).)
+
+### Changed
+
+- **The input is now passed with `-i`/`--input`, never as a positional path.**
+  `epubveri book.epub` becomes `epubveri -i book.epub`. A bare path is now a
+  usage error that shows the corrected form. **Repeat `-i` to validate several
+  books in one run** — each is reported, and the exit code is the worst across
+  them.
+- **Unrecognized input fails loudly (exit `2`) instead of being silently
+  misread.** An unknown flag, an out-of-set `--format`/`--profile` value, or the
+  same single-valued option given twice now stops with a short message pointing
+  at `--help`, rather than being swallowed as a file name or falling back to a
+  default.
+- **Findings now carry epubcheck's five severity levels** —
+  `fatal | error | warning | info | usage` — instead of folding fatals into
+  errors and usage-level notes into info. Only `error` and `fatal` make a book
+  invalid; `warning`/`info`/`usage` are reported but do not. Fifteen conditions
+  (e.g. a missing or unreadable OPF, a corrupt container, malformed XML) are now
+  `fatal`, and twenty advisory notes (e.g. `OPF-090`, `OPF-003`, `RSC-025`) are
+  now `usage`, matching epubcheck's own classification.
+- **Exit codes are clarified.** A broken-but-readable file — even one that isn't
+  a valid ZIP — now gets a *verdict* (a `fatal` finding, exit `1`); exit `2` is
+  reserved for the tool being unable to run or read an input at all.
+
+### Added
+
+- **`--format json`** — the shared veripublica machine envelope
+  ([FORMATS.md](https://github.com/veripublica/conventions/blob/main/FORMATS.md)):
+  one JSON object with the tool, version, convention key, aggregate status, and
+  one self-contained object per input carrying its findings. The
+  `epubveri-wasm` binding returns the same per-input shape, and the browser demo
+  can **download it as `<book-name>.epubveri.json`** — byte-for-byte what the CLI
+  emits. ([issue #11](https://github.com/veripublica/epubveri/issues/11).)
+- **`-V`/`--version` carries git build metadata** — `0.5.0+<short-hash>`, with
+  `.dirty` when built from a modified tree, falling back silently to the plain
+  version when there is no checkout (a crates.io build). The CLI's `-V`, the wasm
+  `version()`, and the demo footer all print this one string, so a bug report
+  from any surface pins the exact source. ([conventions issue #20].)
+- **`--help` gained an EXAMPLES section, an EXIT CODES summary, and the
+  conformance line**; usage errors now point the reader at `--help`.
+
+### Fixed
+
+- **`epubveri -v` (and any unknown flag) now reports a real usage error** —
+  `error: unexpected option '-v' (see --help)` — instead of the misleading
+  `cannot read -v`. ([issue #7](https://github.com/veripublica/epubveri/issues/7).)
+
+### Demo
+
+- The in-browser WASM demo adopted the shared **family-web template v2**,
+  which fixes two live accessibility defects (a keyboard-unreachable drop zone
+  and a verdict chip failing WCAG AA contrast) and colours all five severity
+  levels. ([issue #10](https://github.com/veripublica/epubveri/issues/10).)
+
 ## [0.4.4] - 2026-07-08
 
 ### Added

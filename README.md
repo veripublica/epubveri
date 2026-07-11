@@ -170,24 +170,37 @@ command). Then, from a clone of this repo:
 cargo build --release
 
 # Validate a book, human-readable output:
-./target/release/epubveri path/to/book.epub
+./target/release/epubveri -i path/to/book.epub
 
-# Just the list of error/warning codes (useful for scripting):
-./target/release/epubveri --format ids path/to/book.epub
+# Just the message-ID codes (useful for scripting):
+./target/release/epubveri --format ids -i path/to/book.epub
+
+# The shared machine envelope — one JSON object (see the veripublica FORMATS spec):
+./target/release/epubveri --format json -i path/to/book.epub
 ```
+
+The input is always given with `-i`; pass `-i` more than once to validate
+several books in one run (the exit code aggregates). Exit `0` = valid, `1` =
+findings, `2` = the tool could not run or read an input.
 
 Example output:
 
 ```
-$ ./target/release/epubveri my-broken-book.epub
-ERROR OPF-002: OPF package document not found: OEBPS/content.opf
-ERROR RSC-005: spine references manifest item id 'ch1' more than once [OEBPS/content.opf:15:5]
-— 2 error(s), 0 warning(s): INVALID
+$ ./target/release/epubveri -i my-broken-book.epub
+ERROR RSC-005: EPUB 3 requires a navigation document (a manifest item with properties="nav") [OEBPS/content.opf:2:1]
+USAGE OPF-003: container resource 'OEBPS/nav.xhtml' is not listed in the manifest [OEBPS/content.opf]
+— 1 error(s), 0 warning(s): INVALID
 ```
 
-The exit code follows Unix convention: `0` if the book is valid, `1` if
-it found at least one error, `2` if something went wrong just trying to
-read the file (e.g. it isn't a ZIP at all).
+Findings carry epubcheck's five severity levels — `FATAL`, `ERROR`,
+`WARNING`, `INFO`, `USAGE` (lowercase in `--format json`). Only `ERROR` and
+`FATAL` make a book invalid; `WARNING`/`INFO`/`USAGE` are reported but do not.
+
+The exit code follows Unix convention: `0` if the book is valid, `1` if it
+found at least one error- or fatal-level problem, `2` if the tool could not
+run or could not read an input at all (a missing or unreadable file). A file
+that *is* readable but broken — even one that isn't a valid ZIP — still gets a
+verdict (a `FATAL` finding, exit `1`), not exit `2`.
 
 Where available (the large majority of checks; a few — CSS checks, and
 whole-container/ZIP-structure checks such as a missing file or a bad
@@ -221,7 +234,7 @@ rules. epubveri supports the same four profiles (`dict`, `edupub`,
 `idx`, `preview`) the same way:
 
 ```sh
-./target/release/epubveri --profile dict my-dictionary.epub
+./target/release/epubveri --profile dict -i my-dictionary.epub
 ```
 
 ## Use it in the browser (WASM)
