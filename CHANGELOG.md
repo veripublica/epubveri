@@ -8,6 +8,28 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.2] - 2026-07-12
+
+### Fixed
+
+- **Malformed content documents are no longer silently accepted.** A content
+  document that was not well-formed XML — for example an unclosed `<p>` — was
+  skipped without a word, so the book validated clean (a false negative). It is
+  now reported as a fatal `RSC-016` at the exact line and column, the same way a
+  malformed package document already was. Undeclared/malformed named-entity
+  references (e.g. `&nbsp;` with no declaration) keep their existing single
+  `RSC-016` and are not double-reported.
+  ([issue #12](https://github.com/veripublica/epubveri/issues/12), reported by
+  Doitsu on the MobileRead forum.)
+
+### Changed
+
+- **A deprecated `epub:type` value is now reported as usage-level `OPF-086b`**
+  (previously info-level `OPF-086`), matching epubcheck — which distinguishes
+  the usage-level `OPF-086b` for a deprecated semantic from the warning-level
+  `OPF-086` it uses for deprecated rendition/viewport properties. The set of
+  deprecated values and the `endnote`-inside-`endnotes` exemption are unchanged.
+
 ## [0.5.1] - 2026-07-12
 
 ### Fixed
