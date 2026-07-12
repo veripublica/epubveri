@@ -3808,9 +3808,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             .is_some_and(|t| t.split_whitespace().any(|tok| tok == "endnotes"))
                     });
                 if DEPRECATED_SSV.contains(&token) && !endnote_exempt {
+                    // epubcheck reports a deprecated epub:type semantic as
+                    // usage-level OPF-086b (the corpus'
+                    // `epubtype-deprecated-usage.xhtml`: "usage OPF-086b"),
+                    // a distinct sub-code from the warning-level OPF-086 the
+                    // rendition/viewport deprecations use - same split, and
+                    // same lettered-ID representation, as OPF-096 vs
+                    // OPF-096b. Matches its sibling OPF-088 (usage) in this
+                    // very loop.
                     report.push_full(
-                        OPF_086,
-                        Severity::Info,
+                        OPF_086B,
+                        Severity::Usage,
                         format!("epub:type value '{token}' is deprecated"),
                         path.clone(),
                         Position::of(n),
@@ -6507,6 +6515,29 @@ mod tests {
             report.messages
         );
         assert!(!report.is_valid());
+    }
+
+    #[test]
+    fn deprecated_epub_type_is_usage_level_opf_086b() {
+        // A deprecated epub:type semantic value must be reported as
+        // usage-level OPF-086b (matching epubcheck's
+        // `epubtype-deprecated-usage.xhtml`: "usage OPF-086b"), not the
+        // warning-level OPF-086 used for rendition/viewport deprecations,
+        // and not the plain Info it used to carry. It's advisory, so the
+        // book stays valid.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+            <head><title>t</title></head>\
+            <body><p epub:type=\"bridgehead\">A heading</p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("opf.content_document.deprecated_epub_type"))
+            .expect("expected a deprecated-epub:type finding");
+        assert_eq!(hit.id, crate::ids::OPF_086B);
+        assert_eq!(hit.severity, crate::report::Severity::Usage);
+        assert!(report.is_valid());
     }
 
     #[test]
