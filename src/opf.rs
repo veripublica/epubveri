@@ -3184,8 +3184,31 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // stylesheets, reused here rather than duplicated).
         let t = crate::css::decode_bytes(&b);
         crate::htm::check_raw(&b, &t, &path, is_epub3, report);
-        let Ok(d) = parse_xml(&t) else {
-            continue;
+        let d = match parse_xml(&t) {
+            Ok(d) => d,
+            Err(e) => {
+                // A content document that isn't well-formed XML was, until
+                // now, silently skipped — every check below it never ran and
+                // the book validated clean (a false negative; forum report,
+                // issue #12). Surface it as RSC-016 Fatal at the parse-error
+                // position, mirroring how the OPF's own parse failure is
+                // handled. Entity-reference failures are the one exception:
+                // `check_raw`'s entity scan above already owns those
+                // (undeclared / missing-';' named entities), so skip them
+                // here to avoid double-reporting the same defect.
+                if !crate::ocf::is_entity_reference_error(&e) {
+                    report.push_full(
+                        RSC_016,
+                        Severity::Fatal,
+                        format!("content document is not well-formed XML: {e}"),
+                        path.clone(),
+                        Position::of_parse_error(&e),
+                        "content.malformed_xml",
+                        Vec::new(),
+                    );
+                }
+                continue;
+            }
         };
         crate::htm::check_dom(&d, &path, is_epub3, report);
         if !is_epub3 {
@@ -6400,5 +6423,102 @@ mod tests {
         // will complain in the exact same way").
         let nav = r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>"#;
         assert!(has_opf_096(nav));
+    }
+
+    // --- RSC-016: non-well-formed content documents (forum report, #12) ---
+
+    /// Build a minimal valid EPUB 3 whose spine's `ch1` content document is
+    /// supplied verbatim by the caller — used to feed deliberately malformed
+    /// XHTML through the real content-document loop.
+    fn epub_with_ch1(ch1: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.xhtml", ch1),
+                ("OEBPS/nav.xhtml", NAV),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    fn rsc_016_rules(ch1: &str) -> Vec<&'static str> {
+        crate::validate_bytes(epub_with_ch1(ch1))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_016)
+            .map(|m| m.rule.unwrap_or(""))
+            .collect()
+    }
+
+    #[test]
+    fn malformed_content_document_is_reported_fatal_not_silently_skipped() {
+        // A missing `</p>` end-tag (Doitsu's forum report, #12). Before the
+        // fix the parse failure hit `else { continue }` and the book
+        // validated clean — a false negative. It must now surface as a Fatal
+        // RSC-016 so the book is INVALID.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\n\
+            <body><p>hello world</body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        assert!(
+            report.messages.iter().any(|m| m.id == crate::ids::RSC_016
+                && m.severity == crate::report::Severity::Fatal
+                && m.rule == Some("content.malformed_xml")),
+            "expected a Fatal RSC-016 for the unclosed <p>, got: {:?}",
+            report.messages
+        );
+        assert!(!report.is_valid());
+    }
+
+    #[test]
+    fn undeclared_entity_yields_exactly_one_rsc_016_not_a_duplicate() {
+        // An undeclared `&nbsp;` makes roxmltree's parse fail too, but
+        // `check_raw`'s entity scan already reports it. The parse-failure
+        // branch must suppress entity errors so we don't emit two RSC-016s
+        // for the one defect: exactly one, and it's the entity rule.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\n\
+            <body><p>a&nbsp;b</p></body></html>";
+        let rules = rsc_016_rules(ch1);
+        assert_eq!(rules, vec!["htm.entity.undeclared"], "got: {rules:?}");
     }
 }

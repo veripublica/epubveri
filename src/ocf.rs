@@ -22,6 +22,22 @@ pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree
     roxmltree::Document::parse_with_options(text, opts)
 }
 
+/// Whether a `roxmltree` parse error is an entity-reference problem — an
+/// undeclared named entity (`&nbsp;` with no DTD declaration) or a malformed
+/// one (missing `;`). These are reported separately, and earlier, by
+/// `htm::check_raw`'s raw-text entity scanner (`check_entities`), so when a
+/// document fails to parse *for this reason* it must NOT also be re-reported
+/// as a generic well-formedness `RSC-016` — that would double up two Fatals
+/// on the one defect. Any other parse failure (mismatched/unclosed tags,
+/// stray `<`, …) is a genuine well-formedness error nothing else catches.
+pub(crate) fn is_entity_reference_error(err: &roxmltree::Error) -> bool {
+    matches!(
+        err,
+        roxmltree::Error::UnknownEntityReference(..)
+            | roxmltree::Error::MalformedEntityReference(..)
+    )
+}
+
 /// Manually scans the ZIP's raw bytes for a genuine exact-duplicate entry
 /// name in the central directory - the `zip` crate's own reader can't
 /// expose this (see the call site's comment), so this walks the End-Of-
