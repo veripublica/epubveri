@@ -2607,6 +2607,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 Position::of(link),
             );
         }
+        // Deprecated metadata link-rel keywords (EPUB 3 §D.4.1): the legacy
+        // per-format `*-record` forms are superseded by the generic `record`
+        // keyword plus a `properties` attribute, and `xml-signature` is
+        // dropped entirely. epubcheck reports each as a warning-level
+        // OPF-086 (the same warning family the deprecated rendition/viewport
+        // properties use — distinct from the usage-level OPF-086b for a
+        // deprecated epub:type value).
+        const DEPRECATED_LINK_RELS: &[&str] = &[
+            "marc21xml-record",
+            "mods-record",
+            "onix-record",
+            "xmp-record",
+            "xml-signature",
+        ];
+        for token in &rel_tokens {
+            if DEPRECATED_LINK_RELS.contains(token) {
+                report.push_full(
+                    OPF_086,
+                    Severity::Warning,
+                    format!("the \"{token}\" link keyword is deprecated"),
+                    opf_path,
+                    Position::of(link),
+                    "opf.link.deprecated_rel",
+                    vec![token.to_string()],
+                );
+            }
+        }
         // The real EPUB Accessibility 1.1 a11y: link-rel vocabulary
         // (confirmed via real fixtures: "certifierReport"/
         // "certifierCredential" valid, a lowercase "certifierreport"
@@ -6515,6 +6542,89 @@ mod tests {
             report.messages
         );
         assert!(!report.is_valid());
+    }
+
+    /// Build a minimal valid EPUB 3 with the caller's extra lines injected
+    /// into the OPF `<metadata>` — used to exercise metadata-level checks
+    /// (here, deprecated `<link rel>` keywords).
+    fn epub_with_extra_metadata(extra: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {extra}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav></body></html>"#;
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>Hi</p></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", NAV),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn deprecated_link_rel_keyword_is_warned_as_opf_086() {
+        // A legacy `*-record` metadata link (superseded by `record` +
+        // `properties`) draws a warning-level OPF-086, matching epubcheck's
+        // §D.4.1 deprecation notice.
+        let report = crate::validate_bytes(epub_with_extra_metadata(
+            r#"<link rel="marc21xml-record" href="marc21.xml" media-type="application/marcxml+xml"/>"#,
+        ));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("opf.link.deprecated_rel"))
+            .expect("expected a deprecated-link-rel finding");
+        assert_eq!(hit.id, crate::ids::OPF_086);
+        assert_eq!(hit.severity, crate::report::Severity::Warning);
+        // A current keyword must NOT be flagged.
+        let clean = crate::validate_bytes(epub_with_extra_metadata(
+            r#"<link rel="record" href="onix.xml" media-type="application/xml"/>"#,
+        ));
+        assert!(!clean
+            .messages
+            .iter()
+            .any(|m| m.rule == Some("opf.link.deprecated_rel")));
     }
 
     #[test]
