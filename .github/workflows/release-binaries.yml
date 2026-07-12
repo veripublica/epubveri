@@ -98,10 +98,31 @@ jobs:
             epubveri-${{ matrix.target }}.zip
           if-no-files-found: ignore
 
+      # Populate the GitHub Release body from this version's CHANGELOG.md
+      # section, so the release notes never have to be filled in by hand
+      # (they used to be, and got forgotten for a few releases). Every matrix
+      # job writes the same file and sets the same body — idempotent. `bash`
+      # is available on all runners incl. Windows.
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          ver="${tag#v}"
+          awk -v ver="$ver" '
+            $0 ~ "^## \\[" ver "\\]" {inblk=1; next}
+            inblk && /^## \[/ {exit}
+            inblk { if (!started && $0 ~ /^[[:space:]]*$/) next; started=1; buf[n++]=$0 }
+            END { last=n-1; while (last>=0 && buf[last] ~ /^[[:space:]]*$/) last--; for (i=0;i<=last;i++) print buf[i] }
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          printf '\n\nFull notes: [CHANGELOG.md](https://github.com/veripublica/epubveri/blob/main/CHANGELOG.md). Also on [crates.io](https://crates.io/crates/epubveri/%s).\n' "$ver" >> RELEASE_NOTES.md
+          echo "----- extracted release notes -----"
+          cat RELEASE_NOTES.md
+
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
+          body_path: RELEASE_NOTES.md
           files: |
             epubveri-${{ matrix.target }}.tar.gz
             epubveri-${{ matrix.target }}.zip
