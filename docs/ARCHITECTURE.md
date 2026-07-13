@@ -93,6 +93,26 @@ There's also a small standalone binary, **`src/bin/spike.rs`**, which
 the main crate doesn't already have, so it didn't need its own workspace
 member. See "Testing and measurement" for what it does.
 
+### Behaviour-bearing dependencies: epubveri is the family anchor
+
+A few of epubveri's dependencies don't merely *support* the validator — they
+*are* its behaviour. EPUB is a ZIP container, so the `zip` crate's tolerance for
+slightly-malformed archives directly decides which files epubveri can read at
+all; the same goes for the XML parser (`roxmltree`) and encoding handling. Across
+the veripublica family — epubveri, epubsana, and (in time) epublift all embed the
+`epubveri` crate — these must not diverge: if two tools linked two different
+*majors* of `zip`, the same borderline archive could be readable to one and a
+fatal "not a ZIP" to the next — a user-visible incompatibility no spec rule
+catches, and two copies of `zip` compiled into one binary.
+
+So the practice: **the family tracks epubveri's major version for these
+behaviour-bearing dependencies** (`zip`, the XML parser, encoding); Cargo's
+semver unification handles the rest. And the corollary for epubveri as the
+anchor — **a major bump of a behaviour-bearing dependency is never routine**: it
+can move the fatal-verdict line (what counts as "not a ZIP"), so it earns its own
+release-note line, a run of the edge-case corpus, and the expectation that
+epubsana/epublift follow in their next releases.
+
 ## Module reference
 
 ### Container & package layer
