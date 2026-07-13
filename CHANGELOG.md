@@ -8,6 +8,26 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.3] - 2026-07-13
+
+### Added
+
+- **Deprecated metadata `<link>` relationship keywords are now flagged.** The
+  legacy per-format record keywords (`marc21xml-record`, `mods-record`,
+  `onix-record`, `xmp-record`) — superseded by the generic `record` keyword with
+  a `properties` attribute — and `xml-signature` now draw a warning-level
+  `OPF-086`, matching epubcheck (EPUB 3 §D.4.1).
+
+### Changed
+
+- **Library: `epubveri::envelope` (the `--format json` types) is now generic
+  over its two tool-owned slots** — the per-input `summary` and per-item `data`
+  — so the whole veripublica tool family can build one envelope shape from these
+  reference types. epubveri's own types stay the defaults and `Envelope::new`
+  keeps its signature, so existing callers are unaffected and the JSON epubveri
+  emits is byte-for-byte unchanged. A library-only addition: the CLI, its output,
+  and the WASM binding are untouched.
+
 ## [0.5.2] - 2026-07-12
 
 ### Fixed
