@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::ids::*;
-use crate::ocf::{parse_xml, Ocf};
+use crate::ocf::{Ocf, parse_xml};
 use crate::report::{Position, Report, Severity};
 
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
@@ -6372,7 +6372,7 @@ mod tests {
     /// the nav itself) links to it.
     fn epub_with_nav_body(nav_body: &str) -> Vec<u8> {
         use std::io::Write;
-        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
         const CONTAINER: &str = r#"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -6467,7 +6467,7 @@ mod tests {
     /// XHTML through the real content-document loop.
     fn epub_with_ch1(ch1: &str) -> Vec<u8> {
         use std::io::Write;
-        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
         const CONTAINER: &str = r#"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -6549,7 +6549,7 @@ mod tests {
     /// (here, deprecated `<link rel>` keywords).
     fn epub_with_extra_metadata(extra: &str) -> Vec<u8> {
         use std::io::Write;
-        use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
         const CONTAINER: &str = r#"<?xml version="1.0"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
@@ -6621,10 +6621,12 @@ mod tests {
         let clean = crate::validate_bytes(epub_with_extra_metadata(
             r#"<link rel="record" href="onix.xml" media-type="application/xml"/>"#,
         ));
-        assert!(!clean
-            .messages
-            .iter()
-            .any(|m| m.rule == Some("opf.link.deprecated_rel")));
+        assert!(
+            !clean
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.link.deprecated_rel"))
+        );
     }
 
     #[test]

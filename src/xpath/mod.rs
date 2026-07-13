@@ -12,5 +12,5 @@ pub mod lexer;
 pub mod parser;
 
 pub use ast::Expr;
-pub use eval::{eval, eval_boolean, Env, NodeRef, Value};
+pub use eval::{Env, NodeRef, Value, eval, eval_boolean};
 pub use parser::parse;

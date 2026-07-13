@@ -37,10 +37,10 @@ pub const RSC_001: &str = "RSC-001"; // a referenced file could not be found
 pub const RSC_002: &str = "RSC-002"; // META-INF/container.xml is missing
 pub const RSC_003: &str = "RSC-003"; // no rootfile with the OPF media type in container.xml
 pub const RSC_004: &str = "RSC-004"; // a resource is encrypted; its content is not checked (INFO)
-                                     // RSC-005 is epubcheck's RelaxNG/Schematron catch-all. We emit it for: XML not
-                                     // well-formed; missing required metadata (dc:title / dc:language / dc:identifier);
-                                     // a malformed manifest <item> (missing id/href/media-type); a duplicate manifest
-                                     // id; and a missing EPUB 3 navigation document.
+// RSC-005 is epubcheck's RelaxNG/Schematron catch-all. We emit it for: XML not
+// well-formed; missing required metadata (dc:title / dc:language / dc:identifier);
+// a malformed manifest <item> (missing id/href/media-type); a duplicate manifest
+// id; and a missing EPUB 3 navigation document.
 pub const RSC_005: &str = "RSC-005";
 pub const RSC_006: &str = "RSC-006"; // a remote resource is referenced from an HTML "a" element
 pub const RSC_007: &str = "RSC-007"; // a reference points to a resource missing from the publication

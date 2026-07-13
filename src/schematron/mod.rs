@@ -20,7 +20,7 @@ use roxmltree::{Document, Node};
 
 use crate::report::Position;
 use crate::xpath::ast::{Axis, Expr, NameTest, Path, PathStart, Step};
-use crate::xpath::{eval, Env, NodeRef, Value};
+use crate::xpath::{Env, NodeRef, Value, eval};
 
 const SCH_NS: &str = "http://purl.oclc.org/dsdl/schematron";
 

@@ -10,7 +10,7 @@
 //! container.xml never parsed before this increment).
 
 use crate::ids::*;
-use crate::ocf::{parse_xml, Ocf};
+use crate::ocf::{Ocf, parse_xml};
 use crate::report::{Position, Report, Severity};
 
 const RENDITION_NS: &str = "http://www.idpf.org/2013/rendition";

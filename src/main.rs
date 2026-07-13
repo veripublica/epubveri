@@ -89,7 +89,7 @@ fn parse(args: &[String]) -> Cli {
     }
     // Assign a value to a single-valued option, rejecting a second answer (§3.4).
     macro_rules! set_single {
-        ($slot:expr, $name:literal, $value:expr) => {{
+        ($slot:expr_2021, $name:literal, $value:expr_2021) => {{
             if $slot.is_some() {
                 fail!(concat!("option '", $name, "' given more than once"));
             } else {

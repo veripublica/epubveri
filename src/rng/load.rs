@@ -293,16 +293,20 @@ mod tests {
         assert!(
             !validate_xml(&g, &cvalid().replace("version=\"1.0\"", "version=\"2.0\"")).unwrap()
         );
-        assert!(!validate_xml(
-            &g,
-            &cvalid().replace(" media-type=\"application/oebps-package+xml\"", "")
-        )
-        .unwrap());
-        assert!(!validate_xml(
-            &g,
-            &cvalid().replace("<rootfiles>", "<rootfiles bogus=\"x\">")
-        )
-        .unwrap());
+        assert!(
+            !validate_xml(
+                &g,
+                &cvalid().replace(" media-type=\"application/oebps-package+xml\"", "")
+            )
+            .unwrap()
+        );
+        assert!(
+            !validate_xml(
+                &g,
+                &cvalid().replace("<rootfiles>", "<rootfiles bogus=\"x\">")
+            )
+            .unwrap()
+        );
     }
 
     #[test]
@@ -333,11 +337,13 @@ mod tests {
         let g = load(SECTION_RNG).unwrap();
         assert!(validate_xml(&g, "<section/>").unwrap());
         assert!(validate_xml(&g, "<section><section/></section>").unwrap());
-        assert!(validate_xml(
-            &g,
-            "<section><section><section/></section><section/></section>"
-        )
-        .unwrap());
+        assert!(
+            validate_xml(
+                &g,
+                "<section><section><section/></section><section/></section>"
+            )
+            .unwrap()
+        );
         assert!(!validate_xml(&g, "<section><x/></section>").unwrap());
     }
 }

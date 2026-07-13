@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use styloria::{spanned, ComponentValue, Parser, Rule, Span, Spanned, Token};
+use styloria::{ComponentValue, Parser, Rule, Span, Spanned, Token, spanned};
 
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
@@ -691,8 +691,10 @@ pub(crate) fn selector_class_names(sheet: &styloria::Stylesheet) -> HashSet<Stri
     for rule in &sheet.rules {
         if let Rule::Qualified(q) = rule {
             for pair in q.prelude.windows(2) {
-                if let [ComponentValue::Token(Token::Delim('.')), ComponentValue::Token(Token::Ident(name))] =
-                    pair
+                if let [
+                    ComponentValue::Token(Token::Delim('.')),
+                    ComponentValue::Token(Token::Ident(name)),
+                ] = pair
                 {
                     names.insert(name.to_string());
                 }

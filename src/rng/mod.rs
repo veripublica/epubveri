@@ -11,7 +11,7 @@ pub mod derive;
 pub mod load;
 pub mod pattern;
 
-pub use derive::{validate_node, validate_xml, Grammar};
+pub use derive::{Grammar, validate_node, validate_xml};
 pub use load::load;
 pub use pattern::*;
 

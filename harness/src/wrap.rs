@@ -151,7 +151,8 @@ pub fn wrap_nav_doc(target_full: &Path, target_name: &str, version: &str) -> Pat
         format!(
             "<item id=\"_navtarget\" href=\"{target_name}\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>"
         ),
-        "<item id=\"_content\" href=\"_content.xhtml\" media-type=\"application/xhtml+xml\"/>".to_string(),
+        "<item id=\"_content\" href=\"_content.xhtml\" media-type=\"application/xhtml+xml\"/>"
+            .to_string(),
     ];
     for (i, fn_) in siblings.iter().enumerate() {
         if fn_ == target_name {
