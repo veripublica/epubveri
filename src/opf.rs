@@ -1438,37 +1438,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // attempting to be one in the first place.
     let profile = if is_epub3 { profile } else { None };
 
-    // PKG-025 (EPUB 3 only - a real EPUB 2 fixture, "Ignore unknown files
-    // in the META-INF directory", explicitly stays clean with an
-    // unrecognized META-INF file, contradicting EPUB 3's stricter rule):
-    // only a closed set of well-known files may live directly in
-    // META-INF - anything else (a publication resource stored there,
-    // confirmed via a real EPUB 3 fixture) is an error. Checked here
-    // (not in `ocf::open`) since the container is opened before the
-    // package version is even known.
-    const META_INF_RESERVED_NAMES: [&str; 6] = [
-        "container.xml",
-        "encryption.xml",
-        "manifest.xml",
-        "metadata.xml",
-        "rights.xml",
-        "signatures.xml",
-    ];
-    if is_epub3 {
-        for name in &ocf.names {
-            if let Some(rest) = name.strip_prefix("META-INF/") {
-                if !rest.is_empty() && !META_INF_RESERVED_NAMES.contains(&rest) {
-                    report.push_at(
-                        PKG_025,
-                        Severity::Error,
-                        format!("'{name}' is a publication resource stored inside META-INF"),
-                        name.as_str(),
-                    );
-                }
-            }
-        }
-    }
-
     // Schema validation against our own (permissive) package-document RNG.
     // Additive: a structurally non-conformant package is reported as RSC-005.
     if !crate::rng::validate_node(&crate::rng::package_grammar(), pkg) {
@@ -2475,6 +2444,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             );
         }
     }
+    // PKG-025 (EPUB 3 only - a real EPUB 2 fixture, "Ignore unknown files
+    // in the META-INF directory", explicitly stays clean): a *publication
+    // resource* must not live in META-INF. "Publication resource" means
+    // manifest-declared - epubcheck's own fixture triggers this with
+    // `<item href="../META-INF/image.jpeg">`, i.e. the file is in the
+    // manifest AND stored under META-INF. Undeclared extras there (Apple's
+    // display-options, calibre bookmarks, ...) are container-level metadata
+    // the OCF spec permits, and flagging them was a real-world false
+    // positive (issue #16, reported by Doitsu on the MobileRead forum).
+    // Checked here, after the manifest is parsed, because "declared" is the
+    // deciding half of the condition.
+    if is_epub3 {
+        let declared: HashSet<String> = items.values().map(|(p, _)| nfc(p)).collect();
+        for name in &ocf.names {
+            if let Some(rest) = name.strip_prefix("META-INF/") {
+                if !rest.is_empty() && declared.contains(&nfc(name)) {
+                    report.push_at(
+                        PKG_025,
+                        Severity::Error,
+                        format!("'{name}' is a publication resource stored inside META-INF"),
+                        name.as_str(),
+                    );
+                }
+            }
+        }
+    }
+
     check_guide_references(&doc, &base_dir, &name_index, &items, opf_path, report);
     // OPF-045: a `fallback` chain must not form a cycle - same DFS-cycle-
     // detector shape as OPF-065's `@refines`-cycle check, over
@@ -6600,6 +6596,91 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    #[test]
+    fn pkg_025_only_fires_for_manifest_declared_meta_inf_resources() {
+        // Issue #16 (Doitsu): an UNDECLARED extra file in META-INF (Apple
+        // display options, calibre bookmarks, ...) is container-level
+        // metadata the OCF spec permits - it must NOT draw PKG-025. Only a
+        // manifest-declared resource stored in META-INF is a "publication
+        // resource in META-INF" (epubcheck's own fixture declares
+        // `href="../META-INF/image.jpeg"`).
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let build = |declare_it: bool| -> Vec<u8> {
+            let manifest_extra = if declare_it {
+                r#"<item id="x" href="../META-INF/extra.xml" media-type="application/xml"/>"#
+            } else {
+                ""
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    {manifest_extra}
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav></body></html>"#;
+            const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>Hi</p></body></html>"#;
+
+            let mut buf = Vec::new();
+            {
+                let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                zip.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                zip.write_all(b"application/epub+zip").unwrap();
+                let deflated =
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+                for (name, data) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("META-INF/extra.xml", "<extra/>"),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/ch1.xhtml", CH1),
+                    ("OEBPS/nav.xhtml", NAV),
+                ] {
+                    zip.start_file(name, deflated).unwrap();
+                    zip.write_all(data.as_bytes()).unwrap();
+                }
+                zip.finish().unwrap();
+            }
+            buf
+        };
+
+        let has_pkg_025 = |bytes: Vec<u8>| {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::PKG_025)
+        };
+        assert!(
+            !has_pkg_025(build(false)),
+            "undeclared META-INF extra must stay silent"
+        );
+        assert!(
+            has_pkg_025(build(true)),
+            "manifest-declared META-INF resource must be flagged"
+        );
     }
 
     #[test]
