@@ -9,6 +9,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::ids::*;
 use crate::ocf::{Ocf, parse_xml};
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
 fn parent_dir(path: &str) -> String {
@@ -159,7 +160,7 @@ fn strip_url_fragment(url: &str) -> String {
 fn dom_id_order(d: &roxmltree::Document) -> HashMap<String, usize> {
     let mut order = HashMap::new();
     for (i, n) in d.descendants().filter(|n| n.is_element()).enumerate() {
-        if let Some(id) = n.attribute("id") {
+        if let Some(id) = n.attr_no_ns("id") {
             order.entry(id.to_string()).or_insert(i);
         }
     }
@@ -318,7 +319,7 @@ fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, report: &mut Repor
             }
         }
         if n.tag_name().name() == "link" {
-            if let Some(hreflang) = n.attribute("hreflang") {
+            if let Some(hreflang) = n.attr_no_ns("hreflang") {
                 if !is_valid_lang_tag(hreflang) {
                     report.push_full(
                         OPF_092,
@@ -366,8 +367,8 @@ fn check_refines_cycles(doc: &roxmltree::Document, opf_path: &str, report: &mut 
         .descendants()
         .filter(|n| n.is_element())
         .filter_map(|n| {
-            let id = n.attribute("id")?.trim().to_string();
-            let refines = n.attribute("refines")?.trim();
+            let id = n.attr_no_ns("id")?.trim().to_string();
+            let refines = n.attr_no_ns("refines")?.trim();
             let target = refines.strip_prefix('#')?.to_string();
             Some((id, target))
         })
@@ -611,7 +612,7 @@ fn check_meta_property_scheme_shape(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "meta")
     {
-        if let Some(refines) = n.attribute("refines") {
+        if let Some(refines) = n.attr_no_ns("refines") {
             let refines = refines.trim();
             if !refines.is_empty() && !refines.starts_with('#') && !refines.contains("://") {
                 report.push_full(
@@ -625,7 +626,7 @@ fn check_meta_property_scheme_shape(
                 );
             }
         }
-        if let Some(scheme) = n.attribute("scheme") {
+        if let Some(scheme) = n.attr_no_ns("scheme") {
             let scheme = scheme.trim();
             if !scheme.is_empty() && !scheme.contains(':') {
                 report.push_full(
@@ -639,7 +640,7 @@ fn check_meta_property_scheme_shape(
                 );
             }
         }
-        if let Some(property) = n.attribute("property") {
+        if let Some(property) = n.attr_no_ns("property") {
             let property = property.trim();
             if !property.is_empty()
                 && !property.contains(' ')
@@ -929,12 +930,12 @@ fn collect_svg_class_names(
             }
         }
         if node.tag_name().name() == "link"
-            && node.attribute("rel").is_some_and(|r| {
+            && node.attr_no_ns("rel").is_some_and(|r| {
                 r.split_whitespace()
                     .any(|t| t.eq_ignore_ascii_case("stylesheet"))
             })
         {
-            if let Some(href) = node.attribute("href") {
+            if let Some(href) = node.attr_no_ns("href") {
                 classes.extend(read_stylesheet_classes(href, dir, name_index, ocf));
             }
         }
@@ -948,7 +949,7 @@ fn check_collection_roles(doc: &roxmltree::Document, opf_path: &str, report: &mu
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "collection")
     {
-        let Some(role) = n.attribute("role") else {
+        let Some(role) = n.attr_no_ns("role") else {
             continue;
         };
         if !role.contains("://") {
@@ -993,13 +994,13 @@ fn check_guide_duplicates(doc: &roxmltree::Document, opf_path: &str, report: &mu
         .filter(|n| n.is_element() && n.tag_name().name() == "reference")
         .collect();
     for (i, r) in refs.iter().enumerate() {
-        if r.attribute("type").is_none() {
+        if r.attr_no_ns("type").is_none() {
             continue;
         }
         let dup_exists = refs.iter().enumerate().any(|(j, other)| {
             j != i
-                && other.attribute("type") == r.attribute("type")
-                && other.attribute("href") == r.attribute("href")
+                && other.attr_no_ns("type") == r.attr_no_ns("type")
+                && other.attr_no_ns("href") == r.attr_no_ns("href")
         });
         if dup_exists {
             report.push_full(
@@ -1032,7 +1033,7 @@ fn check_guide_references(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "reference")
     {
-        let Some(href) = r.attribute("href") else {
+        let Some(href) = r.attr_no_ns("href") else {
             continue;
         };
         if is_external(href) {
@@ -1098,7 +1099,7 @@ fn check_ncx_content_fragments(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "content")
     {
-        let Some(src) = n.attribute("src") else {
+        let Some(src) = n.attr_no_ns("src") else {
             continue;
         };
         if is_external(src) {
@@ -1372,14 +1373,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         return;
     }
     let declared_prefixes = pkg
-        .attribute("prefix")
+        .attr_no_ns("prefix")
         .map(|p| check_prefix_declaration(p, opf_path, pkg, report))
         .unwrap_or_default();
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(v) = n.attribute("property") {
+        if let Some(v) = n.attr_no_ns("property") {
             check_prefix_usage(v, &declared_prefixes, opf_path, n, report);
         }
-        if let Some(v) = n.attribute("properties") {
+        if let Some(v) = n.attr_no_ns("properties") {
             check_prefix_usage(v, &declared_prefixes, opf_path, n, report);
         }
     }
@@ -1405,7 +1406,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     }
 
     // --- version ---
-    let version = pkg.attribute("version").unwrap_or("");
+    let version = pkg.attr_no_ns("version").unwrap_or("");
     if version.is_empty() {
         report.push_full(
             OPF_001,
@@ -1526,7 +1527,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .find(|n| {
                     n.is_element()
                         && n.tag_name().name() == "meta"
-                        && n.attribute("property") == Some(property)
+                        && n.attr_no_ns("property") == Some(property)
                 })
                 .map(elem_text)
         };
@@ -1570,7 +1571,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "meta")
         {
-            if let Some(property) = n.attribute("property") {
+            if let Some(property) = n.attr_no_ns("property") {
                 if property.starts_with("rendition:")
                     && !KNOWN_RENDITION_PROPERTIES.contains(&property)
                 {
@@ -1619,7 +1620,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         for n in md.children().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("property") == Some("media:duration")
+                && n.attr_no_ns("property") == Some("media:duration")
         }) {
             let text = elem_text(n);
             if crate::smil::parse_clock_value(&text).is_none() {
@@ -1641,7 +1642,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         for n in md.children().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("property") == Some("rendition:viewport")
+                && n.attr_no_ns("property") == Some("rendition:viewport")
         }) {
             report.push_full(
                 OPF_086,
@@ -1697,13 +1698,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         has_pagination_source = md
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "source")
-            .filter_map(|n| n.attribute("id"))
+            .filter_map(|n| n.attr_no_ns("id"))
             .any(|source_id| {
                 md.children().any(|n| {
                     n.is_element()
                         && n.tag_name().name() == "meta"
-                        && n.attribute("property") == Some("source-of")
-                        && n.attribute("refines").map(|r| r.trim_start_matches('#'))
+                        && n.attr_no_ns("property") == Some("source-of")
+                        && n.attr_no_ns("refines").map(|r| r.trim_start_matches('#'))
                             == Some(source_id)
                         && elem_text(n) == "pagination"
                 })
@@ -1714,7 +1715,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .filter(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
-                    && n.attribute("property") == Some("rendition:layout")
+                    && n.attr_no_ns("property") == Some("rendition:layout")
             })
             .any(|n| {
                 let text: String = n
@@ -1815,7 +1816,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if let Some(modified) = md.children().find(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
-                    && n.attribute("property") == Some("dcterms:modified")
+                    && n.attr_no_ns("property") == Some("dcterms:modified")
             }) {
                 let text: String = modified
                     .descendants()
@@ -1886,10 +1887,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 Vec::new(),
             );
         }
-        if let Some(uid) = pkg.attribute("unique-identifier").map(str::trim) {
+        if let Some(uid) = pkg.attr_no_ns("unique-identifier").map(str::trim) {
             let matching = identifiers
                 .iter()
-                .find(|n| n.attribute("id").map(str::trim) == Some(uid));
+                .find(|n| n.attr_no_ns("id").map(str::trim) == Some(uid));
             match matching {
                 Some(n) => {
                     package_identifier_text = Some(
@@ -1941,17 +1942,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .filter(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
-                    && n.attribute("property") == Some("media:duration")
+                    && n.attr_no_ns("property") == Some("media:duration")
             })
             .collect();
         let total = duration_metas
             .iter()
-            .find(|n| n.attribute("refines").is_none())
+            .find(|n| n.attr_no_ns("refines").is_none())
             .and_then(|n| n.text())
             .and_then(crate::smil::parse_clock_value);
         let parts: Option<Vec<f64>> = duration_metas
             .iter()
-            .filter(|n| n.attribute("refines").is_some())
+            .filter(|n| n.attr_no_ns("refines").is_some())
             .map(|n| n.text().and_then(crate::smil::parse_clock_value))
             .collect();
         if let (Some(total), Some(parts)) = (total, parts) {
@@ -2030,9 +2031,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .filter(|n| n.is_element() && n.tag_name().name() == "item")
         {
             let (id, href, mt) = (
-                item.attribute("id"),
-                item.attribute("href"),
-                item.attribute("media-type"),
+                item.attr_no_ns("id"),
+                item.attr_no_ns("href"),
+                item.attr_no_ns("media-type"),
             );
             let (id, href, mt) = match (id, href, mt) {
                 (Some(i), Some(h), Some(m)) => (i.trim(), h, m),
@@ -2194,7 +2195,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     resource_seen.insert(resolved_nfc.clone(), id.to_string());
                 }
             }
-            if let Some(props) = item.attribute("properties") {
+            if let Some(props) = item.attr_no_ns("properties") {
                 item_properties.insert(resolved_nfc.clone(), props.to_string());
                 for token in props.split_whitespace() {
                     if token == "cover-image" {
@@ -2271,7 +2272,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     }
                 }
             }
-            if is_epub3 && item.attribute("fallback-style").is_some() {
+            if is_epub3 && item.attr_no_ns("fallback-style").is_some() {
                 report.push_full(
                     RSC_005,
                     Severity::Error,
@@ -2281,10 +2282,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     "opf.manifest_item.obsolete_fallback_style",
                     Vec::new(),
                 );
-            } else if let Some(fs) = item.attribute("fallback-style") {
+            } else if let Some(fs) = item.attr_no_ns("fallback-style") {
                 fallback_style_map.insert(id.to_string(), fs.trim().to_string());
             }
-            if let Some(fb) = item.attribute("fallback").map(str::trim) {
+            if let Some(fb) = item.attr_no_ns("fallback").map(str::trim) {
                 if fb == id {
                     report.push_full(
                         OPF_045,
@@ -2298,7 +2299,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
             if item
-                .attribute("properties")
+                .attr_no_ns("properties")
                 .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"))
             {
                 nav_present = true;
@@ -2306,7 +2307,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 nav_path = Some(resolved.clone());
             }
             if item
-                .attribute("properties")
+                .attr_no_ns("properties")
                 .is_some_and(|p| p.split_whitespace().any(|t| t == "data-nav"))
             {
                 data_nav_items.push((resolved.clone(), mt.to_string()));
@@ -2383,7 +2384,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     vec![href.to_string()],
                 );
             }
-            if let Some(mo) = item.attribute("media-overlay") {
+            if let Some(mo) = item.attr_no_ns("media-overlay") {
                 if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
                     report.push_full(
                         RSC_005,
@@ -2397,7 +2398,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
                 media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
             }
-            if let Some(fb) = item.attribute("fallback") {
+            if let Some(fb) = item.attr_no_ns("fallback") {
                 fallback_map.insert(id.to_string(), fb.trim().to_string());
             }
             items.insert(id.to_string(), (resolved, mt.to_string()));
@@ -2539,8 +2540,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let has_global_duration = md.children().any(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("property") == Some("media:duration")
-                && n.attribute("refines").is_none()
+                && n.attr_no_ns("property") == Some("media:duration")
+                && n.attr_no_ns("refines").is_none()
         });
         if !media_overlay_attrs.is_empty() && !has_global_duration {
             report.push_full(
@@ -2561,8 +2562,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             let has_item_duration = md.children().any(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
-                    && n.attribute("property") == Some("media:duration")
-                    && n.attribute("refines").map(|r| r.trim_start_matches('#')) == Some(overlay_id)
+                    && n.attr_no_ns("property") == Some("media:duration")
+                    && n.attr_no_ns("refines").map(|r| r.trim_start_matches('#'))
+                        == Some(overlay_id)
             });
             if !has_item_duration {
                 report.push_full(
@@ -2590,7 +2592,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         .filter(|n| n.is_element() && n.tag_name().name() == "link")
     {
         let rel_tokens: Vec<&str> = link
-            .attribute("rel")
+            .attr_no_ns("rel")
             .unwrap_or("")
             .split_whitespace()
             .collect();
@@ -2651,7 +2653,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // The only real link/@properties vocabulary term is "onix"
         // (confirmed via a real fixture pairing it with a custom-prefixed
         // token, both valid) - anything else unprefixed is undefined.
-        if let Some(props) = link.attribute("properties") {
+        if let Some(props) = link.attr_no_ns("properties") {
             for token in props.split_whitespace() {
                 if token != "onix" && !token.contains(':') {
                     report.push_full(
@@ -2672,7 +2674,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // remote".
         let media_type_always_required =
             rel_tokens.iter().any(|t| *t == "record" || *t == "voicing");
-        let media_type = link.attribute("media-type");
+        let media_type = link.attr_no_ns("media-type");
         if rel_tokens.contains(&"voicing") {
             if let Some(mt) = media_type {
                 if !mt.starts_with("audio/") {
@@ -2686,7 +2688,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
         }
-        let Some(href) = link.attribute("href") else {
+        let Some(href) = link.attr_no_ns("href") else {
             continue;
         };
         let href = href.trim();
@@ -2806,7 +2808,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // any use at all is a content-model violation (RSC-005),
         // regardless of whether it resolves; if it *also* doesn't resolve
         // to a real manifest item, that's additionally OPF-063.
-        if let Some(page_map) = sp.attribute("page-map") {
+        if let Some(page_map) = sp.attr_no_ns("page-map") {
             report.push_full(
                 RSC_005,
                 Severity::Error,
@@ -2836,7 +2838,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // linear resources at all.
         if refs
             .iter()
-            .all(|ir| ir.attribute("linear").map(str::trim) == Some("no"))
+            .all(|ir| ir.attr_no_ns("linear").map(str::trim) == Some("no"))
         {
             report.push_at_pos(
                 OPF_033,
@@ -2848,7 +2850,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         }
         let mut spine_seen: HashSet<&str> = HashSet::new();
         for (position, ir) in refs.into_iter().enumerate() {
-            match ir.attribute("idref").map(str::trim) {
+            match ir.attr_no_ns("idref").map(str::trim) {
                 None => report.push_full(
                     RSC_005,
                     Severity::Error,
@@ -2886,7 +2888,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         ),
                         Some((path, mt)) => {
                             spine_order.entry(nfc(path)).or_insert(position);
-                            if ir.attribute("linear").map(str::trim) == Some("no") {
+                            if ir.attr_no_ns("linear").map(str::trim) == Some("no") {
                                 non_linear_paths.push(nfc(path));
                             }
                             // Core content-document media types valid in the
@@ -2933,7 +2935,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             }
 
                             // --- Fixed-layout viewport/viewBox checks ---
-                            let props = ir.attribute("properties").unwrap_or("");
+                            let props = ir.attr_no_ns("properties").unwrap_or("");
                             check_itemref_rendition_conflicts(props, opf_path, ir, report);
                             let is_fixed_layout = if props
                                 .split_whitespace()
@@ -2978,7 +2980,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // Table of contents (NCX): required in EPUB 2, and when present the
         // 'toc' attribute must point to an NCX manifest item.
         const NCX: &str = "application/x-dtbncx+xml";
-        match sp.attribute("toc").map(str::trim) {
+        match sp.attr_no_ns("toc").map(str::trim) {
             None => {
                 if is_epub2 {
                     report.push_full(
@@ -3446,7 +3448,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         {
             let mut seen: HashSet<&str> = HashSet::new();
             for n in d.descendants().filter(|n| n.is_element()) {
-                if let Some(id) = n.attribute("id") {
+                if let Some(id) = n.attr_no_ns("id") {
                     if !seen.insert(id) {
                         report.push_full(
                             RSC_005,
@@ -3465,7 +3467,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // ID-referencing attributes (ARIA + a couple of plain HTML ones)
         // must refer to a real id in the same document.
         {
-            let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attribute("id")).collect();
+            let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attr_no_ns("id")).collect();
             const MULTI_TOKEN: &[&str] = &[
                 "aria-labelledby",
                 "aria-describedby",
@@ -3499,7 +3501,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // <label for>/<input list>, which each name a single id -
                 // confirmed via a real fixture using `<output for="o2 o3">`.
                 if n.tag_name().name() == "output" {
-                    if let Some(v) = n.attribute("for") {
+                    if let Some(v) = n.attr_no_ns("for") {
                         for token in v.split_whitespace() {
                             if !ids.contains(token) {
                                 report.push_full(
@@ -3540,7 +3542,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "img")
         {
-            if n.attribute("src").is_some_and(|v| v.trim().is_empty()) {
+            if n.attr_no_ns("src").is_some_and(|v| v.trim().is_empty()) {
                 report.push_full(
                     RSC_005,
                     Severity::Error,
@@ -3556,7 +3558,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // lang/xml:lang must agree when both are present on the same element.
         for n in d.descendants().filter(|n| n.is_element()) {
             if let (Some(lang), Some(xml_lang)) = (
-                n.attribute("lang"),
+                n.attr_no_ns("lang"),
                 n.attribute(("http://www.w3.org/XML/1998/namespace", "lang")),
             ) {
                 if lang.trim() != xml_lang.trim() {
@@ -3584,7 +3586,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| is_epub3 && n.is_element() && n.tag_name().name() == "img")
         {
-            if let Some(usemap) = n.attribute("usemap") {
+            if let Some(usemap) = n.attr_no_ns("usemap") {
                 if !usemap.starts_with('#') {
                     report.push_full(
                         RSC_005,
@@ -3605,11 +3607,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let has_http_equiv_content_type = d.descendants().any(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("http-equiv")
+                && n.attr_no_ns("http-equiv")
                     .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
         });
         let has_charset_meta = d.descendants().any(|n| {
-            n.is_element() && n.tag_name().name() == "meta" && n.attribute("charset").is_some()
+            n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
         });
         if has_http_equiv_content_type && has_charset_meta {
             report.push_full(
@@ -3625,11 +3627,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         for n in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("http-equiv")
+                && n.attr_no_ns("http-equiv")
                     .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
         }) {
             if !n
-                .attribute("content")
+                .attr_no_ns("content")
                 .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
             {
                 report.push_full(
@@ -3654,7 +3656,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // included for the same family of elements rather than guessed).
         for n in d
             .descendants()
-            .filter(|n| n.is_element() && n.has_attribute("itemprop"))
+            .filter(|n| n.is_element() && n.has_attr_no_ns("itemprop"))
         {
             let (required_attr, tag) = match n.tag_name().name() {
                 t @ ("a" | "area" | "link") => ("href", t),
@@ -3705,7 +3707,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // epub:trigger is deprecated; its ref/ev:observer attributes must
         // each resolve to a real id in the same document.
         {
-            let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attribute("id")).collect();
+            let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attr_no_ns("id")).collect();
             for n in d.descendants().filter(|n| {
                 n.is_element()
                     && n.tag_name().name() == "trigger"
@@ -3720,7 +3722,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     "opf.content_document.deprecated_epub_trigger",
                     Vec::new(),
                 );
-                if let Some(r) = n.attribute("ref") {
+                if let Some(r) = n.attr_no_ns("ref") {
                     if !ids.contains(r) {
                         report.push_full(
                             RSC_005,
@@ -3761,9 +3763,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         const DEPRECATED_ARIA_ROLES: &[&str] = &["doc-endnote", "doc-biblioentry"];
         for n in d
             .descendants()
-            .filter(|n| n.is_element() && n.has_attribute("role"))
+            .filter(|n| n.is_element() && n.has_attr_no_ns("role"))
         {
-            for token in n.attribute("role").unwrap().split_whitespace() {
+            for token in n.attr_no_ns("role").unwrap().split_whitespace() {
                 if DEPRECATED_ARIA_ROLES.contains(&token) {
                     report.push_full(
                         RSC_017,
@@ -3903,7 +3905,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && matches!(c.tag_name().name(), "annotation" | "annotation-xml")
                     && c.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
             });
-            if !n.has_attribute("alttext") && !has_annotation {
+            if !n.has_attr_no_ns("alttext") && !has_annotation {
                 report.push_at_pos(
                     ACC_009,
                     Severity::Usage,
@@ -3919,7 +3921,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "time")
         {
-            if let Some(v) = n.attribute("datetime") {
+            if let Some(v) = n.attr_no_ns("datetime") {
                 if !crate::htm::is_valid_html5_datetime(v) {
                     report.push_full(
                         RSC_005,
@@ -3938,11 +3940,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let has_http_equiv_content_type = d.descendants().any(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("http-equiv")
+                && n.attr_no_ns("http-equiv")
                     .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
         });
         let has_charset_meta = d.descendants().any(|n| {
-            n.is_element() && n.tag_name().name() == "meta" && n.attribute("charset").is_some()
+            n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
         });
         if has_http_equiv_content_type && has_charset_meta {
             report.push_full(
@@ -4000,10 +4002,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
                 _ => continue,
             };
-            let Some(declared_type) = n.attribute("type") else {
+            let Some(declared_type) = n.attr_no_ns("type") else {
                 continue;
             };
-            let Some(href) = n.attribute(href_attr) else {
+            let Some(href) = n.attr_no_ns(href_attr) else {
                 continue;
             };
             let target = if resolve_srcset {
@@ -4050,7 +4052,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             let remote_base = d
                 .descendants()
                 .find(|n| n.is_element() && n.tag_name().name() == "base")
-                .and_then(|n| n.attribute("href"))
+                .and_then(|n| n.attr_no_ns("href"))
                 .filter(|v| is_remote_url(v))
                 .or_else(|| {
                     d.root_element()
@@ -4065,7 +4067,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 .descendants()
                 .filter(|n| n.is_element() && n.tag_name().name() == "a")
             {
-                let Some(href) = a.attribute("href") else {
+                let Some(href) = a.attr_no_ns("href") else {
                     continue;
                 };
                 if crate::url::is_absolute(href) {
@@ -4175,7 +4177,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // navigable links can't target an SVG element definition.
                 if path_part.is_empty() {
                     if let Some(target_node) =
-                        d.descendants().find(|n| n.attribute("id") == Some(frag))
+                        d.descendants().find(|n| n.attr_no_ns("id") == Some(frag))
                     {
                         if target_node.tag_name().name() == "symbol"
                             && target_node.tag_name().namespace()
@@ -4198,12 +4200,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         for n in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "link"
-                && n.attribute("rel").is_some_and(|r| {
+                && n.attr_no_ns("rel").is_some_and(|r| {
                     r.split_whitespace()
                         .any(|t| t.eq_ignore_ascii_case("stylesheet"))
                 })
         }) {
-            if let Some(href) = n.attribute("href") {
+            if let Some(href) = n.attr_no_ns("href") {
                 if !is_external(href) && href.contains('#') {
                     report.push_at_pos(
                         RSC_013,
@@ -4229,7 +4231,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
                 _ => continue,
             };
-            let src = n.attribute(src_attr).or_else(|| {
+            let src = n.attr_no_ns(src_attr).or_else(|| {
                 if tag == "image" {
                     n.attribute(("http://www.w3.org/1999/xlink", "href"))
                 } else {
@@ -4259,7 +4261,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
             if tag == "img" {
-                if let Some(srcset) = n.attribute("srcset") {
+                if let Some(srcset) = n.attr_no_ns("srcset") {
                     for candidate in srcset.split(',') {
                         let url = candidate.trim().split_whitespace().next().unwrap_or("");
                         if url.is_empty() || is_external(url) {
@@ -4295,7 +4297,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .filter(|n| n.is_element() && n.tag_name().name() == "use")
         {
             let href = n
-                .attribute("href")
+                .attr_no_ns("href")
                 .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
             if let Some(v) = href {
                 if !is_external(v) && !v.contains('#') {
@@ -4333,7 +4335,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .descendants()
                     .filter(|n| n.is_element() && n.tag_name().name() == "a")
                 {
-                    if let Some(href) = a.attribute("href") {
+                    if let Some(href) = a.attr_no_ns("href") {
                         // `is_external` also covers fragment-only/data:/
                         // mailto:/tel: hrefs (correct for "should this be
                         // resolved as a container path", wrong here - a
@@ -4377,7 +4379,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .descendants()
                     .filter(|n| n.is_element() && n.tag_name().name() == "a")
                 {
-                    let Some(href) = a.attribute("href") else {
+                    let Some(href) = a.attr_no_ns("href") else {
                         continue;
                     };
                     if is_external(href) {
@@ -4456,7 +4458,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 continue;
             }
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
-                if let Some(v) = node.attribute(attr) {
+                if let Some(v) = node.attr_no_ns(attr) {
                     if v.trim_start().starts_with("file:") {
                         report.push_full(
                             RSC_030,
@@ -4479,7 +4481,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     // treated as "using a remote resource".
                     let is_non_stylesheet_link = tag == "link"
                         && attr == "href"
-                        && !node.attribute("rel").is_some_and(|r| {
+                        && !node.attr_no_ns("rel").is_some_and(|r| {
                             r.split_whitespace()
                                 .any(|t| t.eq_ignore_ascii_case("stylesheet"))
                         });
@@ -4505,7 +4507,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                                 "img" | "iframe" => true,
                                 "script" if attr == "src" => true,
                                 "link" if attr == "href" => {
-                                    node.attribute("rel").is_some_and(|r| {
+                                    node.attr_no_ns("rel").is_some_and(|r| {
                                         r.split_whitespace()
                                             .any(|t| t.eq_ignore_ascii_case("stylesheet"))
                                     })
@@ -4559,7 +4561,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // An SVG `<a>` may use `xlink:href` instead of a bare
                 // `href` (confirmed via `data-url-in-svg-a-href-error`).
                 let href = node
-                    .attribute("href")
+                    .attr_no_ns("href")
                     .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")));
                 if let Some(href) = href {
                     if href.trim_start().starts_with("data:") {
@@ -4605,7 +4607,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
             if node.tag_name().name() == "script" {
-                let script_type = node.attribute("type").unwrap_or("");
+                let script_type = node.attr_no_ns("type").unwrap_or("");
                 if script_type.is_empty()
                     || script_type.eq_ignore_ascii_case("text/javascript")
                     || script_type.eq_ignore_ascii_case("application/javascript")
@@ -4671,12 +4673,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             // below) - its own findings are already reported separately
             // via the manifest text/css loop further down.
             if node.tag_name().name() == "link"
-                && node.attribute("rel").is_some_and(|r| {
+                && node.attr_no_ns("rel").is_some_and(|r| {
                     r.split_whitespace()
                         .any(|t| t.eq_ignore_ascii_case("stylesheet"))
                 })
             {
-                if let Some(href) = node.attribute("href") {
+                if let Some(href) = node.attr_no_ns("href") {
                     if !is_external(href) {
                         let resolved = resolve(&dir, href);
                         if let Some(orig) = name_index.get(&nfc(&resolved)).cloned() {
@@ -4704,7 +4706,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             // only multiple conflicting names are flagged.
             if node.tag_name().name() == "link" {
                 let rel_tokens: Vec<&str> = node
-                    .attribute("rel")
+                    .attr_no_ns("rel")
                     .map(|r| r.split_whitespace().collect())
                     .unwrap_or_default();
                 let is_plain_stylesheet =
@@ -4713,7 +4715,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && rel_tokens[0].eq_ignore_ascii_case("alternate")
                     && rel_tokens[1].eq_ignore_ascii_case("stylesheet");
                 if is_plain_stylesheet {
-                    if let Some(class) = node.attribute("class") {
+                    if let Some(class) = node.attr_no_ns("class") {
                         if class.split_whitespace().count() > 1 {
                             report.push_at_pos(
                                 CSS_005,
@@ -4729,7 +4731,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // non-empty title (missing and present-but-empty are each
                 // their own finding).
                 if is_alt_stylesheet {
-                    match node.attribute("title") {
+                    match node.attr_no_ns("title") {
                         None => {
                             report.push_full(
                                 CSS_015,
@@ -4758,7 +4760,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             }
             // CSS-008: a `style="..."` attribute is a plain declaration
             // list, same malformed-shape check as a stylesheet's own block.
-            if let Some(style) = node.attribute("style") {
+            if let Some(style) = node.attr_no_ns("style") {
                 crate::css::check_style_attribute(style, &path, report);
             }
         }
@@ -5083,7 +5085,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 n.is_element()
                     && n.tag_name().name() == "font-face-uri"
                     && n.attribute(("http://www.w3.org/1999/xlink", "href"))
-                        .or_else(|| n.attribute("href"))
+                        .or_else(|| n.attr_no_ns("href"))
                         .is_some_and(is_remote_url)
             });
             if uses_remote_font {
@@ -5135,7 +5137,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .filter(|n| n.is_element() && n.tag_name().name() == "use")
         {
             let href = n
-                .attribute("href")
+                .attr_no_ns("href")
                 .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
             if let Some(v) = href {
                 if !is_external(v) && !v.contains('#') {
@@ -5200,12 +5202,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
             if n.tag_name().name() == "link"
-                && n.attribute("rel").is_some_and(|r| {
+                && n.attr_no_ns("rel").is_some_and(|r| {
                     r.split_whitespace()
                         .any(|t| t.eq_ignore_ascii_case("stylesheet"))
                 })
             {
-                if let Some(href) = n.attribute("href") {
+                if let Some(href) = n.attr_no_ns("href") {
                     if is_remote_url(href) {
                         report.push_full(
                             RSC_006,
@@ -5374,7 +5376,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // fixture - only the namespaced `epub:prefix` is recognized).
         if let Ok(smil_doc) = parse_xml(&smil_text) {
             let smil_root = smil_doc.root_element();
-            if smil_root.attribute("prefix").is_some() {
+            if smil_root.attr_no_ns("prefix").is_some() {
                 report.push_full(
                     RSC_005,
                     Severity::Error,
@@ -5437,7 +5439,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             let has_remote_audio = smil_doc.descendants().any(|n| {
                 n.is_element()
                     && matches!(n.tag_name().name(), "audio" | "text")
-                    && n.attribute("src").is_some_and(is_remote_url)
+                    && n.attr_no_ns("src").is_some_and(is_remote_url)
             });
             if has_remote_audio
                 && !item_properties
@@ -5590,7 +5592,7 @@ fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &m
     for coll in pkg.descendants().filter(|n| {
         n.is_element()
             && n.tag_name().name() == "collection"
-            && n.attribute("role") == Some("distributable-object")
+            && n.attr_no_ns("role") == Some("distributable-object")
     }) {
         let count = coll
             .children()
@@ -5749,7 +5751,7 @@ fn check_dictionaries(
                 .filter(|n| {
                     n.is_element()
                         && n.tag_name().name() == "meta"
-                        && n.attribute("property") == Some(property)
+                        && n.attr_no_ns("property") == Some(property)
                 })
                 .map(node_text)
                 .collect()
@@ -5823,7 +5825,7 @@ fn check_dictionaries(
         .filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "collection"
-                && n.attribute("role") == Some("dictionary")
+                && n.attr_no_ns("role") == Some("dictionary")
         })
         .collect();
 
@@ -5874,7 +5876,7 @@ fn check_dictionaries(
             if let Some(dt) = md.children().find(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
-                    && n.attribute("property") == Some("dictionary-type")
+                    && n.attr_no_ns("property") == Some("dictionary-type")
             }) {
                 let text = node_text(dt);
                 if !matches!(text.as_str(), "monolingual" | "bilingual" | "multilingual") {
@@ -5916,7 +5918,7 @@ fn check_dictionaries(
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "link")
         {
-            let Some(href) = link.attribute("href") else {
+            let Some(href) = link.attr_no_ns("href") else {
                 continue;
             };
             if is_external(href) {
@@ -6289,14 +6291,14 @@ fn check_font_obfuscation(
         let algorithm = enc_data
             .descendants()
             .find(|n| n.is_element() && n.tag_name().name() == "EncryptionMethod")
-            .and_then(|n| n.attribute("Algorithm"));
+            .and_then(|n| n.attr_no_ns("Algorithm"));
         if algorithm != Some(OBFUSCATION_ALGORITHM) {
             continue;
         }
         let Some(uri) = enc_data
             .descendants()
             .find(|n| n.is_element() && n.tag_name().name() == "CipherReference")
-            .and_then(|n| n.attribute("URI"))
+            .and_then(|n| n.attr_no_ns("URI"))
         else {
             continue;
         };

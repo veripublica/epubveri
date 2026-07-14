@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use roxmltree::{Document, Node};
 
 use crate::report::Position;
+use crate::xmlext::NodeExt;
 use crate::xpath::ast::{Axis, Expr, NameTest, Path, PathStart, Step};
 use crate::xpath::{Env, NodeRef, Value, eval};
 
@@ -100,10 +101,10 @@ pub fn load(xml: &str) -> Result<Schema, String> {
     let mut namespaces = HashMap::new();
     for ns in sch_children(root).filter(|c| lname(*c) == "ns") {
         let prefix = ns
-            .attribute("prefix")
+            .attr_no_ns("prefix")
             .ok_or("<ns> is missing a 'prefix' attribute")?;
         let uri = ns
-            .attribute("uri")
+            .attr_no_ns("uri")
             .ok_or("<ns> is missing a 'uri' attribute")?;
         namespaces.insert(prefix.to_string(), uri.to_string());
     }
@@ -124,11 +125,11 @@ pub fn load(xml: &str) -> Result<Schema, String> {
 
 fn parse_let(n: Node) -> Result<Let, String> {
     let name = n
-        .attribute("name")
+        .attr_no_ns("name")
         .ok_or("<let> is missing a 'name' attribute")?
         .to_string();
     let value_str = n
-        .attribute("value")
+        .attr_no_ns("value")
         .ok_or("<let> is missing a 'value' attribute")?;
     let value = crate::xpath::parse(value_str)
         .map_err(|e| format!("bad <let> value expression '{value_str}': {e}"))?;
@@ -145,7 +146,7 @@ fn parse_pattern(n: Node) -> Result<Pattern, String> {
 
 fn parse_rule(n: Node) -> Result<Rule, String> {
     let context_str = n
-        .attribute("context")
+        .attr_no_ns("context")
         .ok_or("<rule> is missing a 'context' attribute")?;
     let context_expr = crate::xpath::parse(context_str)
         .map_err(|e| format!("bad rule context '{context_str}': {e}"))?;
@@ -175,7 +176,7 @@ fn parse_rule(n: Node) -> Result<Rule, String> {
 
 fn parse_check(n: Node, kind: CheckKind) -> Result<Check, String> {
     let test_str = n
-        .attribute("test")
+        .attr_no_ns("test")
         .ok_or("<assert>/<report> is missing a 'test' attribute")?;
     let test = crate::xpath::parse(test_str)
         .map_err(|e| format!("bad test expression '{test_str}': {e}"))?;
@@ -187,7 +188,7 @@ fn parse_check(n: Node, kind: CheckKind) -> Result<Check, String> {
             }
         } else if is_sch(child) && lname(child) == "value-of" {
             let select_str = child
-                .attribute("select")
+                .attr_no_ns("select")
                 .ok_or("<value-of> is missing a 'select' attribute")?;
             let select = crate::xpath::parse(select_str)
                 .map_err(|e| format!("bad value-of select '{select_str}': {e}"))?;

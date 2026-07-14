@@ -8,6 +8,7 @@ use zip::ZipArchive;
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 /// Parse an XML document, allowing a `<!DOCTYPE>` declaration. Real-world
 /// EPUB content documents commonly have one (e.g. `<!DOCTYPE html>`);
@@ -372,9 +373,9 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
         .filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "rootfile"
-                && n.attribute("media-type") == Some("application/oebps-package+xml")
+                && n.attr_no_ns("media-type") == Some("application/oebps-package+xml")
         })
-        .filter_map(|n| n.attribute("full-path"))
+        .filter_map(|n| n.attr_no_ns("full-path"))
         .filter(|p| !p.is_empty())
         .map(String::from)
         .collect();
@@ -456,12 +457,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     // exactly 2 findings, not 1).
     let mut by_id: HashMap<&str, u32> = HashMap::new();
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attribute("Id") {
+        if let Some(id) = n.attr_no_ns("Id") {
             *by_id.entry(id).or_insert(0) += 1;
         }
     }
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attribute("Id") {
+        if let Some(id) = n.attr_no_ns("Id") {
             if by_id.get(id).copied().unwrap_or(0) > 1 {
                 report.push_full(
                     RSC_005,
@@ -482,7 +483,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "Compression")
     {
-        if let Some(method) = n.attribute("Method") {
+        if let Some(method) = n.attr_no_ns("Method") {
             if !matches!(method, "0" | "8") {
                 report.push_full(
                     RSC_005,
@@ -495,7 +496,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
                 );
             }
         }
-        if let Some(len) = n.attribute("OriginalLength") {
+        if let Some(len) = n.attr_no_ns("OriginalLength") {
             if len.is_empty() || !len.bytes().all(|b| b.is_ascii_digit()) {
                 report.push_full(
                     RSC_005,
@@ -514,7 +515,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "CipherReference")
     {
-        if let Some(uri) = n.attribute("URI") {
+        if let Some(uri) = n.attr_no_ns("URI") {
             report.push_at_pos(
                 RSC_004,
                 Severity::Info,

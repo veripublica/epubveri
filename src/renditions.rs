@@ -12,6 +12,7 @@
 use crate::ids::*;
 use crate::ocf::{Ocf, parse_xml};
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 const RENDITION_NS: &str = "http://www.idpf.org/2013/rendition";
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
@@ -60,7 +61,7 @@ fn check_metadata_file(ocf: &mut Ocf, report: &mut Report) {
         .filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("property") == Some("dcterms:modified")
+                && n.attr_no_ns("property") == Some("dcterms:modified")
         })
         .count();
     if count != 1 {
@@ -87,7 +88,7 @@ fn check_rendition_selection(container_doc: &roxmltree::Document, report: &mut R
         .filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "rootfile"
-                && n.attribute("media-type") == Some("application/oebps-package+xml")
+                && n.attr_no_ns("media-type") == Some("application/oebps-package+xml")
         })
         .collect();
     for (i, rf) in rootfiles.iter().enumerate() {
@@ -149,7 +150,7 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
         .filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "link"
-                && n.attribute("rel")
+                && n.attr_no_ns("rel")
                     .is_some_and(|r| r.split_whitespace().any(|t| t == "mapping"))
         })
         .collect();
@@ -167,7 +168,7 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
     let Some(link) = mapping_links.first() else {
         return;
     };
-    if link.attribute("media-type") != Some("application/xhtml+xml") {
+    if link.attr_no_ns("media-type") != Some("application/xhtml+xml") {
         report.push_full(
             RSC_005,
             Severity::Error,
@@ -179,7 +180,7 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
         );
         return;
     }
-    let Some(href) = link.attribute("href") else {
+    let Some(href) = link.attr_no_ns("href") else {
         return;
     };
     let Some(bytes) = ocf.read(href) else {
@@ -193,8 +194,8 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
     let has_version_meta = doc.descendants().any(|n| {
         n.is_element()
             && n.tag_name().name() == "meta"
-            && n.attribute("name") == Some("epub.multiple.renditions.version")
-            && n.attribute("content") == Some("1.0")
+            && n.attr_no_ns("name") == Some("epub.multiple.renditions.version")
+            && n.attr_no_ns("content") == Some("1.0")
     });
     if !has_version_meta {
         report.push_full(

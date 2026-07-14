@@ -12,6 +12,7 @@
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 pub(crate) fn is_edupub(dc_type: Option<&str>) -> bool {
     dc_type == Some("edupub")
@@ -25,7 +26,7 @@ pub(crate) fn is_edupub(dc_type: Option<&str>) -> bool {
 /// not a second item) but expects exactly one finding, not two.
 pub(crate) fn check_content_doc(d: &roxmltree::Document, path: &str, report: &mut Report) {
     for node in d.descendants().filter(|n| n.is_element()) {
-        if node.attribute("itemscope").is_some() {
+        if node.attr_no_ns("itemscope").is_some() {
             report.push_at_pos(
                 HTM_051,
                 Severity::Warning,
@@ -81,8 +82,8 @@ fn heading_level(n: roxmltree::Node) -> Option<u32> {
             }
         }
     }
-    if n.attribute("role") == Some("heading") {
-        return n.attribute("aria-level").and_then(|v| v.parse().ok());
+    if n.attr_no_ns("role") == Some("heading") {
+        return n.attr_no_ns("aria-level").and_then(|v| v.parse().ok());
     }
     None
 }
@@ -123,7 +124,7 @@ fn check_heading_img_alt(h: roxmltree::Node, path: &str, report: &mut Report) {
     let children: Vec<_> = h.children().filter(|c| c.is_element()).collect();
     if let [img] = children.as_slice() {
         if img.tag_name().name() == "img" {
-            let alt = img.attribute("alt").unwrap_or("").trim();
+            let alt = img.attr_no_ns("alt").unwrap_or("").trim();
             if alt.is_empty() {
                 report.push_full(
                     RSC_005,
@@ -148,7 +149,7 @@ fn check_aria_label_match(
     path: &str,
     report: &mut Report,
 ) {
-    let Some(label) = container.attribute("aria-label") else {
+    let Some(label) = container.attr_no_ns("aria-label") else {
         return;
     };
     let heading_text = node_text(heading);
@@ -203,7 +204,7 @@ pub(crate) fn check_sectioning_and_headings(
 
     if is_body_explicit(body) {
         let heading = find_heading(body);
-        let has_aria_label = body.attribute("aria-label").is_some();
+        let has_aria_label = body.attr_no_ns("aria-label").is_some();
         match heading {
             Some(h) => check_own_heading(body, h, path, report),
             None if !has_aria_label => {
@@ -225,7 +226,7 @@ pub(crate) fn check_sectioning_and_headings(
         .descendants()
         .filter(|n| n.is_element() && matches!(n.tag_name().name(), "section" | "aside" | "nav"))
     {
-        let has_aria_label = n.attribute("aria-label").is_some();
+        let has_aria_label = n.attr_no_ns("aria-label").is_some();
         match find_heading(n) {
             Some(h) => check_own_heading(n, h, path, report),
             None if !has_aria_label && n.tag_name().name() != "nav" => {
@@ -379,7 +380,7 @@ pub(crate) fn check_teacher_edition_and_accessibility(
             .filter(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
-                    && n.attribute("property") == Some("schema:accessibilityFeature")
+                    && n.attr_no_ns("property") == Some("schema:accessibilityFeature")
             })
             .map(elem_text)
             .collect();

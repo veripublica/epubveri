@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use crate::ids::{MED_003, MED_007, RSC_032};
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Category {
@@ -221,7 +222,7 @@ fn check_candidate_group(
 /// where checking `src` too would over-count), otherwise fall back to
 /// plain `src`.
 fn img_candidates(node: roxmltree::Node) -> Vec<String> {
-    if let Some(srcset) = node.attribute("srcset") {
+    if let Some(srcset) = node.attr_no_ns("srcset") {
         srcset
             .split(',')
             .filter_map(|c| {
@@ -229,7 +230,7 @@ fn img_candidates(node: roxmltree::Node) -> Vec<String> {
                 (!u.is_empty()).then(|| u.to_string())
             })
             .collect()
-    } else if let Some(src) = node.attribute("src") {
+    } else if let Some(src) = node.attr_no_ns("src") {
         vec![src.to_string()]
     } else {
         Vec::new()
@@ -245,19 +246,19 @@ fn check_audio_video(
 ) {
     let name = node.tag_name().name();
     if name == "video" {
-        if let Some(poster) = node.attribute("poster") {
+        if let Some(poster) = node.attr_no_ns("poster") {
             check_single(poster, dir, status, "video poster", path, node, report);
         }
     }
     let mut candidates: Vec<&str> = Vec::new();
-    if let Some(src) = node.attribute("src") {
+    if let Some(src) = node.attr_no_ns("src") {
         candidates.push(src);
     } else {
         for child in node
             .children()
             .filter(|c| c.is_element() && c.tag_name().name() == "source")
         {
-            if let Some(src) = child.attribute("src") {
+            if let Some(src) = child.attr_no_ns("src") {
                 candidates.push(src);
             }
         }
@@ -284,10 +285,10 @@ fn check_picture(
     for child in node.children().filter(|c| c.is_element()) {
         match child.tag_name().name() {
             "source" => {
-                if child.attribute("type").is_some() {
+                if child.attr_no_ns("type").is_some() {
                     continue;
                 }
-                let Some(srcset) = child.attribute("srcset") else {
+                let Some(srcset) = child.attr_no_ns("srcset") else {
                     continue;
                 };
                 let mut any_foreign = false;
@@ -369,15 +370,15 @@ pub(crate) fn check_content_doc(
                 check_single(&href, dir, status, "img", path, node, report);
             }
         } else if name == "embed" {
-            if let Some(src) = node.attribute("src") {
+            if let Some(src) = node.attr_no_ns("src") {
                 check_single(src, dir, status, "embed", path, node, report);
             }
-        } else if name == "input" && node.attribute("type") == Some("image") {
-            if let Some(src) = node.attribute("src") {
+        } else if name == "input" && node.attr_no_ns("type") == Some("image") {
+            if let Some(src) = node.attr_no_ns("src") {
                 check_single(src, dir, status, "input", path, node, report);
             }
         } else if name == "math" && node.tag_name().namespace() == Some(MATHML_NS) {
-            if let Some(altimg) = node.attribute("altimg") {
+            if let Some(altimg) = node.attr_no_ns("altimg") {
                 check_single(altimg, dir, status, "math altimg", path, node, report);
             }
         }

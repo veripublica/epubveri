@@ -9,6 +9,7 @@ use std::collections::HashMap;
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -35,7 +36,7 @@ fn has_text_or_image(n: roxmltree::Node) -> bool {
 /// literal string "hidden" are conforming.
 fn check_hidden_attrs(doc: &roxmltree::Document, path: &str, report: &mut Report) {
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(v) = n.attribute("hidden") {
+        if let Some(v) = n.attr_no_ns("hidden") {
             if !matches!(v, "" | "hidden") {
                 report.push_full(
                     RSC_005,
@@ -206,7 +207,7 @@ fn check_toc_links(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "a")
     {
-        let Some(href) = a.attribute("href") else {
+        let Some(href) = a.attr_no_ns("href") else {
             continue;
         };
         if crate::opf::is_external(href) {
@@ -255,7 +256,7 @@ fn check_landmarks(nav: roxmltree::Node, dir: &str, path: &str, report: &mut Rep
                 );
             }
             Some(types) => {
-                if let Some(href) = a.attribute("href") {
+                if let Some(href) = a.attr_no_ns("href") {
                     let (path_part, frag) = match href.split_once('#') {
                         Some((p, f)) => (p, Some(f)),
                         None => (href, None),

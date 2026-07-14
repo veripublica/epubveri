@@ -19,6 +19,7 @@
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 
@@ -117,7 +118,7 @@ fn check_presentation_content(node: roxmltree::Node, path: &str, report: &mut Re
 }
 
 fn check_annotation_xml(anno: roxmltree::Node, path: &str, report: &mut Report) {
-    let encoding = anno.attribute("encoding");
+    let encoding = anno.attr_no_ns("encoding");
     let is_content = encoding.is_some_and(|e| CONTENT_ENCODINGS.contains(&e));
     let is_presentation = encoding.is_some_and(|e| PRESENTATION_ENCODINGS.contains(&e));
     let is_xhtml = encoding.is_some_and(|e| XHTML_ENCODINGS.contains(&e));
@@ -142,7 +143,7 @@ fn check_annotation_xml(anno: roxmltree::Node, path: &str, report: &mut Report) 
     }
 
     if is_content {
-        match anno.attribute("name") {
+        match anno.attr_no_ns("name") {
             None => {
                 report.push_full(
                     RSC_005,

@@ -14,6 +14,7 @@ use roxmltree::Node;
 
 use super::derive::Grammar;
 use super::pattern::*;
+use crate::xmlext::NodeExt;
 
 const RNG_NS: &str = "http://relaxng.org/ns/structure/1.0";
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
@@ -37,8 +38,8 @@ struct Loader {
 pub fn load(xml: &str) -> Result<Grammar, String> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| e.to_string())?;
     let root = doc.root_element();
-    let ns0 = root.attribute("ns").unwrap_or("");
-    let dt0 = root.attribute("datatypeLibrary").unwrap_or("");
+    let ns0 = root.attr_no_ns("ns").unwrap_or("");
+    let dt0 = root.attr_no_ns("datatypeLibrary").unwrap_or("");
 
     if is_rng(root) && lname(root) == "grammar" {
         let def_nodes: Vec<Node> = rng_children(root)
@@ -46,7 +47,7 @@ pub fn load(xml: &str) -> Result<Grammar, String> {
             .collect();
         let mut index = HashMap::new();
         for (i, d) in def_nodes.iter().enumerate() {
-            if let Some(name) = d.attribute("name") {
+            if let Some(name) = d.attr_no_ns("name") {
                 index.insert(name.to_string(), i);
             }
         }
@@ -75,12 +76,12 @@ pub fn load(xml: &str) -> Result<Grammar, String> {
 
 impl Loader {
     fn build<'a>(&self, node: Node<'a, 'a>, ns: &str, dtlib: &str) -> Result<Pat, String> {
-        let ns = node.attribute("ns").unwrap_or(ns);
-        let dtlib = node.attribute("datatypeLibrary").unwrap_or(dtlib);
+        let ns = node.attr_no_ns("ns").unwrap_or(ns);
+        let dtlib = node.attr_no_ns("datatypeLibrary").unwrap_or(dtlib);
         match lname(node) {
             "element" => {
                 let kids: Vec<_> = rng_children(node).collect();
-                let (nc, content) = if let Some(nm) = node.attribute("name") {
+                let (nc, content) = if let Some(nm) = node.attr_no_ns("name") {
                     (
                         self.name_from_str(node, nm, false, ns)?,
                         self.group_nodes(&kids, ns, dtlib)?,
@@ -98,7 +99,7 @@ impl Loader {
             }
             "attribute" => {
                 let kids: Vec<_> = rng_children(node).collect();
-                let (nc, rest): (NameClass, &[Node]) = if let Some(nm) = node.attribute("name") {
+                let (nc, rest): (NameClass, &[Node]) = if let Some(nm) = node.attr_no_ns("name") {
                     (self.name_from_str(node, nm, true, ns)?, &kids)
                 } else {
                     let (first, rest) = kids.split_first().ok_or("<attribute> missing name")?;
@@ -123,15 +124,15 @@ impl Loader {
             "text" => Ok(text()),
             "notAllowed" => Ok(not_allowed()),
             "value" => Ok(value(
-                Datatype::from(dtlib, node.attribute("type").unwrap_or("token")),
+                Datatype::from(dtlib, node.attr_no_ns("type").unwrap_or("token")),
                 node.text().unwrap_or("").to_string(),
             )),
             "data" => Ok(data(Datatype::from(
                 dtlib,
-                node.attribute("type").unwrap_or("token"),
+                node.attr_no_ns("type").unwrap_or("token"),
             ))),
             "ref" => {
-                let name = node.attribute("name").ok_or("<ref> without name")?;
+                let name = node.attr_no_ns("name").ok_or("<ref> without name")?;
                 let i = *self
                     .index
                     .get(name)
@@ -200,7 +201,7 @@ impl Loader {
     }
 
     fn name_class<'a>(&self, node: Node<'a, 'a>, ns: &str) -> Result<NameClass, String> {
-        let ns = node.attribute("ns").unwrap_or(ns);
+        let ns = node.attr_no_ns("ns").unwrap_or(ns);
         match lname(node) {
             "name" => self.name_from_str(node, node.text().unwrap_or("").trim(), false, ns),
             "anyName" => Ok(match self.except_of(node, ns)? {

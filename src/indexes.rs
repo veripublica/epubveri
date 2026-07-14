@@ -10,6 +10,7 @@ use std::collections::HashSet;
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -57,13 +58,13 @@ pub(crate) fn linked_paths(pkg: &roxmltree::Node, base_dir: &str) -> HashSet<Str
     for coll in pkg.descendants().filter(|n| {
         n.is_element()
             && n.tag_name().name() == "collection"
-            && matches!(n.attribute("role"), Some("index") | Some("index-group"))
+            && matches!(n.attr_no_ns("role"), Some("index") | Some("index-group"))
     }) {
         for link in coll
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "link")
         {
-            if let Some(href) = link.attribute("href") {
+            if let Some(href) = link.attr_no_ns("href") {
                 if !crate::opf::is_external(href) {
                     paths.insert(crate::opf::nfc(&crate::opf::resolve(base_dir, href)));
                 }
@@ -84,7 +85,7 @@ fn check_links_are_xhtml(
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "link")
     {
-        let Some(href) = link.attribute("href") else {
+        let Some(href) = link.attr_no_ns("href") else {
             continue;
         };
         if crate::opf::is_external(href) {
@@ -140,7 +141,7 @@ fn check_index_collection(
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "collection")
     {
-        if sub.attribute("role") == Some("index-group") {
+        if sub.attr_no_ns("role") == Some("index-group") {
             check_index_group(sub, items, base_dir, opf_path, report);
         } else {
             report.push_full(
@@ -175,7 +176,7 @@ pub(crate) fn check_collections(
         .children()
         .filter(|n| n.is_element() && n.tag_name().name() == "collection")
     {
-        match coll.attribute("role") {
+        match coll.attr_no_ns("role") {
             Some("index-group") => {
                 report.push_full(
                     RSC_005,

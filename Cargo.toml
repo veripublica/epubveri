@@ -30,7 +30,7 @@ path = "src/main.rs"
 # Pure-Rust only (no C deps): zip's "deflate" feature uses flate2 -> miniz_oxide (Rust),
 # bzip2/zstd (C backends) are left disabled via default-features = false.
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
-roxmltree = "0.20"
+roxmltree = "0.21"
 unicode-normalization = "0.1"
 # CSS parsing: the sibling styloria crate (github.com/veripublica/styloria),
 # consumed from crates.io like any external user (dogfooding). For local

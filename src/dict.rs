@@ -5,6 +5,7 @@
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -92,7 +93,7 @@ pub(crate) fn check_skm(doc: &roxmltree::Document, path: &str, report: &mut Repo
     }
     groups
         .iter()
-        .filter_map(|g| g.attribute("href"))
+        .filter_map(|g| g.attr_no_ns("href"))
         .map(String::from)
         .collect()
 }

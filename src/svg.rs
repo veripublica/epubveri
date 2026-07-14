@@ -18,6 +18,7 @@ use std::collections::HashMap;
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 pub(crate) const SVG_NS: &str = "http://www.w3.org/2000/svg";
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
@@ -227,7 +228,7 @@ fn is_valid_ncname(s: &str) -> bool {
 pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     let mut by_id: HashMap<&str, u32> = HashMap::new();
     for n in svg_root.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attribute("id") {
+        if let Some(id) = n.attr_no_ns("id") {
             if !is_valid_ncname(id) {
                 report.push_full(
                     RSC_005,
@@ -243,7 +244,7 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
         }
     }
     for n in svg_root.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attribute("id") {
+        if let Some(id) = n.attr_no_ns("id") {
             if by_id.get(id).copied().unwrap_or(0) > 1 {
                 report.push_full(
                     RSC_005,
@@ -269,7 +270,7 @@ pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &
         n.is_element() && n.tag_name().name() == "a" && n.tag_name().namespace() == Some(SVG_NS)
     }) {
         let has_label = a.attribute((XLINK_NS, "title")).is_some()
-            || a.attribute("aria-label").is_some()
+            || a.attr_no_ns("aria-label").is_some()
             || a.children()
                 .any(|c| c.is_element() && c.tag_name().name() == "title")
             || a.descendants()
@@ -295,7 +296,7 @@ pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &
 /// isn't caught by the flow-content grammar and needs its own check.
 fn check_href_attribute(n: roxmltree::Node, path: &str, report: &mut Report) {
     let name = n.tag_name().name();
-    if !matches!(name, "a" | "area" | "link" | "base") && n.has_attribute("href") {
+    if !matches!(name, "a" | "area" | "link" | "base") && n.has_attr_no_ns("href") {
         report.push_full(
             RSC_005,
             Severity::Error,
