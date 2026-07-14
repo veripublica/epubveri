@@ -106,15 +106,15 @@ pub(crate) fn check(
                 charset_value_spanned(&a.prelude)
             }
             _ => None,
-        }) {
-            if !charset.eq_ignore_ascii_case("utf-8") && !charset.eq_ignore_ascii_case("utf-16") {
-                report.push_at(
-                    CSS_004,
-                    Severity::Error,
-                    format!("@charset value '{charset}' is not utf-8 or utf-16"),
-                    css_path,
-                );
-            }
+        }) && !charset.eq_ignore_ascii_case("utf-8")
+            && !charset.eq_ignore_ascii_case("utf-16")
+        {
+            report.push_at(
+                CSS_004,
+                Severity::Error,
+                format!("@charset value '{charset}' is not utf-8 or utf-16"),
+                css_path,
+            );
         }
     }
 
@@ -163,10 +163,10 @@ pub(crate) fn check(
                         check_declaration_shapes_spanned(&block.node.values, css, css_path, report);
                     }
                 }
-                if a.name.eq_ignore_ascii_case("import") {
-                    if let Some(target) = import_target_spanned(&a.prelude) {
-                        urls.push(target);
-                    }
+                if a.name.eq_ignore_ascii_case("import")
+                    && let Some(target) = import_target_spanned(&a.prelude)
+                {
+                    urls.push(target);
                 }
             }
         }
@@ -372,21 +372,19 @@ fn check_declaration_shapes_spanned(
                     Vec::new(),
                 );
             }
-        } else if let Some(f) = first {
-            if let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node {
-                if FLAGGED_PROPERTIES
-                    .iter()
-                    .any(|p| name.eq_ignore_ascii_case(p))
-                {
-                    report.push_at_pos(
-                        CSS_001,
-                        Severity::Error,
-                        format!("use of the '{name}' property is not recommended"),
-                        css_path,
-                        Position::of_offset(css, f.span.start),
-                    );
-                }
-            }
+        } else if let Some(f) = first
+            && let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node
+            && FLAGGED_PROPERTIES
+                .iter()
+                .any(|p| name.eq_ignore_ascii_case(p))
+        {
+            report.push_at_pos(
+                CSS_001,
+                Severity::Error,
+                format!("use of the '{name}' property is not recommended"),
+                css_path,
+                Position::of_offset(css, f.span.start),
+            );
         }
         // A malformed chunk can still contain a nested block (e.g. an
         // unclosed rule swallowing a whole well-formed sibling rule) —
@@ -421,18 +419,17 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
                 "css.declaration.malformed_shape",
                 Vec::new(),
             );
-        } else if let Some(ComponentValue::Token(Token::Ident(name))) = first {
-            if FLAGGED_PROPERTIES
+        } else if let Some(ComponentValue::Token(Token::Ident(name))) = first
+            && FLAGGED_PROPERTIES
                 .iter()
                 .any(|p| name.eq_ignore_ascii_case(p))
-            {
-                report.push_at(
-                    CSS_001,
-                    Severity::Error,
-                    format!("use of the '{name}' property is not recommended"),
-                    css_path,
-                );
-            }
+        {
+            report.push_at(
+                CSS_001,
+                Severity::Error,
+                format!("use of the '{name}' property is not recommended"),
+                css_path,
+            );
         }
         // A malformed chunk can still contain a nested block (e.g. an
         // unclosed rule swallowing a whole well-formed sibling rule) —
@@ -575,10 +572,10 @@ fn collect_urls_spanned(
             }
             spanned::ComponentValue::Function { name, args } => {
                 if name.eq_ignore_ascii_case("url") {
-                    if let Some(first) = args.first() {
-                        if let spanned::ComponentValue::Token(Token::String(s)) = &first.node {
-                            out.push(Spanned::new(s.to_string(), v.span));
-                        }
+                    if let Some(first) = args.first()
+                        && let spanned::ComponentValue::Token(Token::String(s)) = &first.node
+                    {
+                        out.push(Spanned::new(s.to_string(), v.span));
                     }
                 } else {
                     collect_urls_spanned(args, out);
@@ -631,10 +628,10 @@ fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>) {
 pub(crate) fn import_targets(sheet: &styloria::Stylesheet) -> Vec<String> {
     let mut urls = Vec::new();
     for rule in &sheet.rules {
-        if let Rule::At(a) = rule {
-            if a.name.eq_ignore_ascii_case("import") {
-                collect_urls(&a.prelude, &mut urls);
-            }
+        if let Rule::At(a) = rule
+            && a.name.eq_ignore_ascii_case("import")
+        {
+            collect_urls(&a.prelude, &mut urls);
         }
     }
     urls
@@ -667,10 +664,10 @@ pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
                 if let Some(block) = &a.block {
                     collect_urls(&block.values, &mut urls);
                 }
-                if a.name.eq_ignore_ascii_case("import") {
-                    if let Some(target) = import_target(&a.prelude) {
-                        urls.push(target);
-                    }
+                if a.name.eq_ignore_ascii_case("import")
+                    && let Some(target) = import_target(&a.prelude)
+                {
+                    urls.push(target);
                 }
             }
         }

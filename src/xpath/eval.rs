@@ -66,10 +66,10 @@ impl<'a, 'input> NodeRef<'a, 'input> {
 fn element_string_value(n: Node) -> String {
     let mut s = String::new();
     for d in n.descendants() {
-        if d.is_text() {
-            if let Some(t) = d.text() {
-                s.push_str(t);
-            }
+        if d.is_text()
+            && let Some(t) = d.text()
+        {
+            s.push_str(t);
         }
     }
     s

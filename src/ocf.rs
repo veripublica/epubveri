@@ -313,21 +313,20 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
 
     let mut ocf = Ocf { archive, names };
 
-    if ocf.has("mimetype") {
-        if let Some(b) = ocf.read("mimetype") {
-            if b != b"application/epub+zip" {
-                report.push_rule(
-                    PKG_007,
-                    Severity::Error,
-                    format!(
-                        "'mimetype' must contain exactly 'application/epub+zip' (found {:?})",
-                        String::from_utf8_lossy(&b)
-                    ),
-                    "ocf.mimetype.wrong_content",
-                    vec![String::from_utf8_lossy(&b).into_owned()],
-                );
-            }
-        }
+    if ocf.has("mimetype")
+        && let Some(b) = ocf.read("mimetype")
+        && b != b"application/epub+zip"
+    {
+        report.push_rule(
+            PKG_007,
+            Severity::Error,
+            format!(
+                "'mimetype' must contain exactly 'application/epub+zip' (found {:?})",
+                String::from_utf8_lossy(&b)
+            ),
+            "ocf.mimetype.wrong_content",
+            vec![String::from_utf8_lossy(&b).into_owned()],
+        );
     }
 
     Some(ocf)
@@ -462,18 +461,18 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         }
     }
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attr_no_ns("Id") {
-            if by_id.get(id).copied().unwrap_or(0) > 1 {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    format!("Duplicate \"Id\" value '{id}'"),
-                    ENC,
-                    Position::of(n),
-                    "ocf.encryption.duplicate_id",
-                    vec![id.to_string()],
-                );
-            }
+        if let Some(id) = n.attr_no_ns("Id")
+            && by_id.get(id).copied().unwrap_or(0) > 1
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                format!("Duplicate \"Id\" value '{id}'"),
+                ENC,
+                Position::of(n),
+                "ocf.encryption.duplicate_id",
+                vec![id.to_string()],
+            );
         }
     }
 
@@ -483,31 +482,31 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "Compression")
     {
-        if let Some(method) = n.attr_no_ns("Method") {
-            if !matches!(method, "0" | "8") {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    "value of attribute \"Method\" is invalid",
-                    ENC,
-                    Position::of(n),
-                    "ocf.encryption.invalid_compression_method",
-                    vec![method.to_string()],
-                );
-            }
+        if let Some(method) = n.attr_no_ns("Method")
+            && !matches!(method, "0" | "8")
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                "value of attribute \"Method\" is invalid",
+                ENC,
+                Position::of(n),
+                "ocf.encryption.invalid_compression_method",
+                vec![method.to_string()],
+            );
         }
-        if let Some(len) = n.attr_no_ns("OriginalLength") {
-            if len.is_empty() || !len.bytes().all(|b| b.is_ascii_digit()) {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    "value of attribute \"OriginalLength\" is invalid",
-                    ENC,
-                    Position::of(n),
-                    "ocf.encryption.invalid_original_length",
-                    vec![len.to_string()],
-                );
-            }
+        if let Some(len) = n.attr_no_ns("OriginalLength")
+            && (len.is_empty() || !len.bytes().all(|b| b.is_ascii_digit()))
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                "value of attribute \"OriginalLength\" is invalid",
+                ENC,
+                Position::of(n),
+                "ocf.encryption.invalid_original_length",
+                vec![len.to_string()],
+            );
         }
     }
 

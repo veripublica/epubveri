@@ -17,28 +17,25 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
     if let Some(head) = root
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "head")
-    {
-        if let Some(meta) = head.children().find(|n| {
+        && let Some(meta) = head.children().find(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
                 && n.attr_no_ns("name") == Some("dtb:uid")
-        }) {
-            if let Some(content) = meta.attr_no_ns("content") {
-                if content.trim() != package_uid.trim() {
-                    report.push_at_pos(
-                        NCX_001,
-                        Severity::Error,
-                        format!(
-                            "dtb:uid '{}' does not match the package's identifier '{}'",
-                            content.trim(),
-                            package_uid.trim()
-                        ),
-                        ncx_path,
-                        Position::of(meta),
-                    );
-                }
-            }
-        }
+        })
+        && let Some(content) = meta.attr_no_ns("content")
+        && content.trim() != package_uid.trim()
+    {
+        report.push_at_pos(
+            NCX_001,
+            Severity::Error,
+            format!(
+                "dtb:uid '{}' does not match the package's identifier '{}'",
+                content.trim(),
+                package_uid.trim()
+            ),
+            ncx_path,
+            Position::of(meta),
+        );
     }
 
     if let Some(doc_title) = root
@@ -83,18 +80,18 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
         }
     }
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attr_no_ns("id") {
-            if by_id.get(id).copied().unwrap_or(0) > 1 {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    format!("The \"id\" attribute does not have a unique value: '{id}'"),
-                    ncx_path,
-                    Position::of(n),
-                    "ncx.ids.duplicate_id",
-                    vec![id.to_string()],
-                );
-            }
+        if let Some(id) = n.attr_no_ns("id")
+            && by_id.get(id).copied().unwrap_or(0) > 1
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                format!("The \"id\" attribute does not have a unique value: '{id}'"),
+                ncx_path,
+                Position::of(n),
+                "ncx.ids.duplicate_id",
+                vec![id.to_string()],
+            );
         }
     }
 }
@@ -114,18 +111,18 @@ fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &m
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "pageTarget")
     {
-        if let Some(ty) = n.attr_no_ns("type") {
-            if !matches!(ty, "front" | "normal" | "special") {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    format!("value of attribute \"type\" is invalid: '{ty}'"),
-                    ncx_path,
-                    Position::of(n),
-                    "ncx.page_target.invalid_type",
-                    vec![ty.to_string()],
-                );
-            }
+        if let Some(ty) = n.attr_no_ns("type")
+            && !matches!(ty, "front" | "normal" | "special")
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                format!("value of attribute \"type\" is invalid: '{ty}'"),
+                ncx_path,
+                Position::of(n),
+                "ncx.page_target.invalid_type",
+                vec![ty.to_string()],
+            );
         }
     }
 }

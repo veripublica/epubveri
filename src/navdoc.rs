@@ -36,18 +36,18 @@ fn has_text_or_image(n: roxmltree::Node) -> bool {
 /// literal string "hidden" are conforming.
 fn check_hidden_attrs(doc: &roxmltree::Document, path: &str, report: &mut Report) {
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(v) = n.attr_no_ns("hidden") {
-            if !matches!(v, "" | "hidden") {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    "value of attribute \"hidden\" is invalid",
-                    path,
-                    Position::of(n),
-                    "navdoc.hidden_attribute.invalid_value",
-                    vec![v.to_string()],
-                );
-            }
+        if let Some(v) = n.attr_no_ns("hidden")
+            && !matches!(v, "" | "hidden")
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                "value of attribute \"hidden\" is invalid",
+                path,
+                Position::of(n),
+                "navdoc.hidden_attribute.invalid_value",
+                vec![v.to_string()],
+            );
         }
     }
 }
@@ -137,14 +137,14 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
     let children: Vec<_> = nav.children().filter(|c| c.is_element()).collect();
     let mut idx = 0;
     let mut heading = None;
-    if let Some(first) = children.first() {
-        if matches!(
+    if let Some(first) = children.first()
+        && matches!(
             first.tag_name().name(),
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
-        ) {
-            heading = Some(*first);
-            idx = 1;
-        }
+        )
+    {
+        heading = Some(*first);
+        idx = 1;
     }
     match heading {
         Some(h) => {
@@ -215,18 +215,19 @@ fn check_toc_links(
         }
         let path_part = href.split(['#', '?']).next().unwrap_or(href);
         let resolved = crate::opf::nfc(&crate::opf::resolve(dir, path_part));
-        if let Some((_, mt)) = items.values().find(|(p, _)| crate::opf::nfc(p) == resolved) {
-            if mt != "application/xhtml+xml" && mt != "image/svg+xml" {
-                report.push_full(
-                    RSC_010,
-                    Severity::Error,
-                    format!("toc nav link '{href}' does not target a Content Document"),
-                    path,
-                    Position::of(a),
-                    "navdoc.toc.link_not_content_document",
-                    vec![href.to_string()],
-                );
-            }
+        if let Some((_, mt)) = items.values().find(|(p, _)| crate::opf::nfc(p) == resolved)
+            && mt != "application/xhtml+xml"
+            && mt != "image/svg+xml"
+        {
+            report.push_full(
+                RSC_010,
+                Severity::Error,
+                format!("toc nav link '{href}' does not target a Content Document"),
+                path,
+                Position::of(a),
+                "navdoc.toc.link_not_content_document",
+                vec![href.to_string()],
+            );
         }
     }
 }

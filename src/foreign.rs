@@ -245,10 +245,10 @@ fn check_audio_video(
     report: &mut Report,
 ) {
     let name = node.tag_name().name();
-    if name == "video" {
-        if let Some(poster) = node.attr_no_ns("poster") {
-            check_single(poster, dir, status, "video poster", path, node, report);
-        }
+    if name == "video"
+        && let Some(poster) = node.attr_no_ns("poster")
+    {
+        check_single(poster, dir, status, "video poster", path, node, report);
     }
     let mut candidates: Vec<&str> = Vec::new();
     if let Some(src) = node.attr_no_ns("src") {
@@ -377,10 +377,11 @@ pub(crate) fn check_content_doc(
             if let Some(src) = node.attr_no_ns("src") {
                 check_single(src, dir, status, "input", path, node, report);
             }
-        } else if name == "math" && node.tag_name().namespace() == Some(MATHML_NS) {
-            if let Some(altimg) = node.attr_no_ns("altimg") {
-                check_single(altimg, dir, status, "math altimg", path, node, report);
-            }
+        } else if name == "math"
+            && node.tag_name().namespace() == Some(MATHML_NS)
+            && let Some(altimg) = node.attr_no_ns("altimg")
+        {
+            check_single(altimg, dir, status, "math altimg", path, node, report);
         }
     }
 }

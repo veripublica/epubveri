@@ -245,22 +245,22 @@ fn check_doctype(text: &str, path: &str, report: &mut Report) {
             Vec::new(),
         );
     }
-    if let (Some(open), Some(close)) = (doctype.find('['), doctype.rfind(']')) {
-        if close > open {
-            let subset = &doctype[open + 1..close];
-            for (i, _) in subset.match_indices("<!ENTITY") {
-                let rest = &subset[i..];
-                let Some(end) = rest.find('>') else { continue };
-                let decl = &rest[..end];
-                if decl.contains("SYSTEM") || decl.contains("PUBLIC") {
-                    report.push_at_pos(
-                        HTM_003,
-                        Severity::Error,
-                        "entity is declared external (SYSTEM/PUBLIC)",
-                        path,
-                        Position::of_offset(text, offset_in(text, decl)),
-                    );
-                }
+    if let (Some(open), Some(close)) = (doctype.find('['), doctype.rfind(']'))
+        && close > open
+    {
+        let subset = &doctype[open + 1..close];
+        for (i, _) in subset.match_indices("<!ENTITY") {
+            let rest = &subset[i..];
+            let Some(end) = rest.find('>') else { continue };
+            let decl = &rest[..end];
+            if decl.contains("SYSTEM") || decl.contains("PUBLIC") {
+                report.push_at_pos(
+                    HTM_003,
+                    Severity::Error,
+                    "entity is declared external (SYSTEM/PUBLIC)",
+                    path,
+                    Position::of_offset(text, offset_in(text, decl)),
+                );
             }
         }
     }
@@ -364,18 +364,18 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
             );
         }
         for attr in node.attributes() {
-            if let Some(ns) = attr.namespace() {
-                if !KNOWN_NAMESPACES.contains(&ns) {
-                    report.push_full(
-                        RSC_005,
-                        Severity::Error,
-                        format!("attribute \"{}\" not allowed here", attr.name()),
-                        path,
-                        Position::of(node),
-                        "htm.epub2_dom.custom_namespaced_attribute",
-                        vec![attr.name().to_string()],
-                    );
-                }
+            if let Some(ns) = attr.namespace()
+                && !KNOWN_NAMESPACES.contains(&ns)
+            {
+                report.push_full(
+                    RSC_005,
+                    Severity::Error,
+                    format!("attribute \"{}\" not allowed here", attr.name()),
+                    path,
+                    Position::of(node),
+                    "htm.epub2_dom.custom_namespaced_attribute",
+                    vec![attr.name().to_string()],
+                );
             }
         }
         if node.tag_name().namespace() == Some(XHTML_NS) && node.tag_name().name() == "a" {
@@ -442,16 +442,16 @@ pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, rep
                     );
                 }
                 None => {
-                    if let Some(rest) = attr.name().strip_prefix("data-") {
-                        if !is_valid_data_attr_suffix(rest) {
-                            report.push_at_pos(
-                                HTM_061,
-                                Severity::Error,
-                                format!("'data-{rest}' is not a valid data-* attribute name"),
-                                path,
-                                Position::of(node),
-                            );
-                        }
+                    if let Some(rest) = attr.name().strip_prefix("data-")
+                        && !is_valid_data_attr_suffix(rest)
+                    {
+                        report.push_at_pos(
+                            HTM_061,
+                            Severity::Error,
+                            format!("'data-{rest}' is not a valid data-* attribute name"),
+                            path,
+                            Position::of(node),
+                        );
                     }
                 }
                 _ => {}

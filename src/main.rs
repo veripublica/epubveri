@@ -177,17 +177,15 @@ fn parse(args: &[String]) -> Cli {
 
     // Reject an out-of-set value for an enum option (§3.5) — after the scan, so
     // a `-h` anywhere still short-circuits to help rather than this error.
-    if let Some(f) = &format {
-        if !["human", "json", "ids"].contains(&f.as_str()) {
-            fail!("invalid value '{f}' for --format; supported values: human, json, ids");
-        }
+    if let Some(f) = &format
+        && !["human", "json", "ids"].contains(&f.as_str())
+    {
+        fail!("invalid value '{f}' for --format; supported values: human, json, ids");
     }
-    if let Some(p) = &profile {
-        if !["dict", "edupub", "idx", "preview"].contains(&p.as_str()) {
-            fail!(
-                "invalid value '{p}' for --profile; supported values: dict, edupub, idx, preview"
-            );
-        }
+    if let Some(p) = &profile
+        && !["dict", "edupub", "idx", "preview"].contains(&p.as_str())
+    {
+        fail!("invalid value '{p}' for --profile; supported values: dict, edupub, idx, preview");
     }
 
     // Precedence: help short-circuits even a malformed line; a usage error

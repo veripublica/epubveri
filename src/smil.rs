@@ -89,10 +89,10 @@ pub(crate) fn check(
         if is_external(textref) {
             continue;
         }
-        if let Some((path_part, frag)) = textref.split_once('#') {
-            if !frag.is_empty() {
-                textref_targets.push((nfc(&resolve(base_dir, path_part)), frag.to_string()));
-            }
+        if let Some((path_part, frag)) = textref.split_once('#')
+            && !frag.is_empty()
+        {
+            textref_targets.push((nfc(&resolve(base_dir, path_part)), frag.to_string()));
         }
     }
 
@@ -437,31 +437,31 @@ fn check_audio(
             "smil.audio.missing_resource",
             vec![src.to_string()],
         );
-    } else if let Some(media_type) = media_types.get(&resolved_nfc) {
-        if !CORE_AUDIO_TYPES.contains(&media_type.as_str()) {
-            report.push_at_pos(
-                MED_005,
-                Severity::Error,
-                format!("audio resource '{src}' is not a Core Media Type ({media_type})"),
-                smil_path,
-                Position::of(node),
-            );
-        }
+    } else if let Some(media_type) = media_types.get(&resolved_nfc)
+        && !CORE_AUDIO_TYPES.contains(&media_type.as_str())
+    {
+        report.push_at_pos(
+            MED_005,
+            Severity::Error,
+            format!("audio resource '{src}' is not a Core Media Type ({media_type})"),
+            smil_path,
+            Position::of(node),
+        );
     }
 
     for attr_name in ["clipBegin", "clipEnd"] {
-        if let Some(v) = node.attr_no_ns(attr_name) {
-            if parse_clock_value(v).is_none() {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    format!("{attr_name} value '{v}' is not a valid SMIL clock value"),
-                    smil_path,
-                    Position::of(node),
-                    "smil.audio.invalid_clock_value",
-                    vec![attr_name.to_string(), v.to_string()],
-                );
-            }
+        if let Some(v) = node.attr_no_ns(attr_name)
+            && parse_clock_value(v).is_none()
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                format!("{attr_name} value '{v}' is not a valid SMIL clock value"),
+                smil_path,
+                Position::of(node),
+                "smil.audio.invalid_clock_value",
+                vec![attr_name.to_string(), v.to_string()],
+            );
         }
     }
     let begin = node.attr_no_ns("clipBegin").and_then(parse_clock_value);

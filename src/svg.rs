@@ -244,18 +244,18 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
         }
     }
     for n in svg_root.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attr_no_ns("id") {
-            if by_id.get(id).copied().unwrap_or(0) > 1 {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    format!("Duplicate \"id\" value '{id}'"),
-                    path,
-                    Position::of(n),
-                    "svg.ids.duplicate_id",
-                    vec![id.to_string()],
-                );
-            }
+        if let Some(id) = n.attr_no_ns("id")
+            && by_id.get(id).copied().unwrap_or(0) > 1
+        {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                format!("Duplicate \"id\" value '{id}'"),
+                path,
+                Position::of(n),
+                "svg.ids.duplicate_id",
+                vec![id.to_string()],
+            );
         }
     }
 }

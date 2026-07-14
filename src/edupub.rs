@@ -75,12 +75,11 @@ fn is_body_explicit(body: roxmltree::Node) -> bool {
 /// fixture using `<span aria-level="1" role="heading">`).
 fn heading_level(n: roxmltree::Node) -> Option<u32> {
     let name = n.tag_name().name();
-    if let Some(digits) = name.strip_prefix('h') {
-        if let Ok(level) = digits.parse::<u32>() {
-            if (1..=6).contains(&level) {
-                return Some(level);
-            }
-        }
+    if let Some(digits) = name.strip_prefix('h')
+        && let Ok(level) = digits.parse::<u32>()
+        && (1..=6).contains(&level)
+    {
+        return Some(level);
     }
     if n.attr_no_ns("role") == Some("heading") {
         return n.attr_no_ns("aria-level").and_then(|v| v.parse().ok());
@@ -96,14 +95,13 @@ fn find_heading<'a>(container: roxmltree::Node<'a, 'a>) -> Option<roxmltree::Nod
         if heading_level(c).is_some() {
             return Some(c);
         }
-        if c.tag_name().name() == "header" {
-            if let Some(h) = c
+        if c.tag_name().name() == "header"
+            && let Some(h) = c
                 .children()
                 .filter(|gc| gc.is_element())
                 .find(|gc| heading_level(*gc).is_some())
-            {
-                return Some(h);
-            }
+        {
+            return Some(h);
         }
     }
     None
@@ -122,20 +120,20 @@ fn check_heading_img_alt(h: roxmltree::Node, path: &str, report: &mut Report) {
         return;
     }
     let children: Vec<_> = h.children().filter(|c| c.is_element()).collect();
-    if let [img] = children.as_slice() {
-        if img.tag_name().name() == "img" {
-            let alt = img.attr_no_ns("alt").unwrap_or("").trim();
-            if alt.is_empty() {
-                report.push_full(
-                    RSC_005,
-                    Severity::Error,
-                    "Empty ranked heading detected",
-                    path,
-                    Position::of(h),
-                    "edupub.heading.empty_ranked_heading",
-                    Vec::new(),
-                );
-            }
+    if let [img] = children.as_slice()
+        && img.tag_name().name() == "img"
+    {
+        let alt = img.attr_no_ns("alt").unwrap_or("").trim();
+        if alt.is_empty() {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                "Empty ranked heading detected",
+                path,
+                Position::of(h),
+                "edupub.heading.empty_ranked_heading",
+                Vec::new(),
+            );
         }
     }
 }

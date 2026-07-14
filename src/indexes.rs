@@ -64,10 +64,10 @@ pub(crate) fn linked_paths(pkg: &roxmltree::Node, base_dir: &str) -> HashSet<Str
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "link")
         {
-            if let Some(href) = link.attr_no_ns("href") {
-                if !crate::opf::is_external(href) {
-                    paths.insert(crate::opf::nfc(&crate::opf::resolve(base_dir, href)));
-                }
+            if let Some(href) = link.attr_no_ns("href")
+                && !crate::opf::is_external(href)
+            {
+                paths.insert(crate::opf::nfc(&crate::opf::resolve(base_dir, href)));
             }
         }
     }
@@ -92,16 +92,16 @@ fn check_links_are_xhtml(
             continue;
         }
         let resolved = crate::opf::nfc(&crate::opf::resolve(base_dir, href));
-        if let Some((_, mt)) = items.values().find(|(p, _)| crate::opf::nfc(p) == resolved) {
-            if mt != "application/xhtml+xml" {
-                report.push_at_pos(
-                    OPF_071,
-                    Severity::Error,
-                    "Index collections must only contain resources pointing to XHTML Content Documents",
-                    opf_path,
-                    Position::of(link),
-                );
-            }
+        if let Some((_, mt)) = items.values().find(|(p, _)| crate::opf::nfc(p) == resolved)
+            && mt != "application/xhtml+xml"
+        {
+            report.push_at_pos(
+                OPF_071,
+                Severity::Error,
+                "Index collections must only contain resources pointing to XHTML Content Documents",
+                opf_path,
+                Position::of(link),
+            );
         }
     }
 }

@@ -133,14 +133,15 @@ pub fn validate_path_with_profile(path: &Path, profile: Option<&str>) -> std::io
     // PKG-016: the file's own ".epub" extension should be lowercase - a
     // filesystem-level concern `validate_bytes` alone can't see, since it
     // only ever receives raw bytes with no filename attached.
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        if ext != "epub" && ext.eq_ignore_ascii_case("epub") {
-            report.push(
-                ids::PKG_016,
-                report::Severity::Warning,
-                "the file extension should be lowercase \".epub\"",
-            );
-        }
+    if let Some(ext) = path.extension().and_then(|e| e.to_str())
+        && ext != "epub"
+        && ext.eq_ignore_ascii_case("epub")
+    {
+        report.push(
+            ids::PKG_016,
+            report::Severity::Warning,
+            "the file extension should be lowercase \".epub\"",
+        );
     }
     Ok(report)
 }
