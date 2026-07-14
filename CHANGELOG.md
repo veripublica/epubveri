@@ -8,6 +8,57 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.4] - 2026-07-15
+
+A **foundation refresh**: the toolchain baseline and both behaviour-bearing
+dependencies (the ZIP reader and the XML parser) move to current versions, all
+verified behaviour-neutral against the full epubcheck corpus (600/607 exact-ID
+recall and the 1.1% false-positive rate are unchanged, byte for byte) — plus one
+real-world false-positive fix. Shipping these alone, before the next feature
+work, so any field report can be attributed cleanly.
+
+### Fixed
+
+- **`PKG-025` no longer flags ordinary metadata files in `META-INF/`.** Files
+  like Apple's `com.apple.ibooks.display-options.xml` or calibre's bookmark
+  files drew an Error ("publication resource stored inside META-INF") and
+  wrongly invalidated common real-world books. Per the OCF spec — and confirmed
+  against epubcheck's own test fixture — the error is only for a
+  **manifest-declared** resource stored in META-INF (e.g.
+  `<item href="../META-INF/image.jpeg">`); undeclared container-level metadata
+  is permitted and now stays silent. The declared case still errors.
+  ([issue #16](https://github.com/veripublica/epubveri/issues/16), reported by
+  Doitsu on the MobileRead forum.)
+
+### Changed
+
+- **Minimum supported Rust version is now 1.88** (declared via `rust-version`,
+  so older toolchains get a clear error — and a modern Cargo resolver simply
+  keeps them on 0.5.3 rather than breaking). Raised by the `zip` upgrade below;
+  1.88 is also the stabilization floor of let-chains, which the codebase now
+  uses throughout.
+- **`zip` 2.4.2 → 8.6.0** — the ZIP reader an EPUB validator feeds on. This
+  buys six majors of reader robustness accumulated upstream (malformed
+  EOCD/central-directory detection, panic-safety on malformed input) and aligns
+  the whole veripublica family on one `zip` major, so tools embedding the
+  `epubveri` crate don't compile two copies. Verified behaviour-neutral:
+  malformed-archive verdicts (`PKG-003`/`PKG-004`/`PKG-008`), exit codes, and
+  the corpus are unchanged. Two notes: `PKG-008`'s free-text message now embeds
+  the new zip version's error wording (the `id`/`rule`/`params` machine contract
+  is untouched), and the crate remains pure Rust (the deflate backend is now
+  `zlib-rs`; no C dependencies — verified).
+- **`roxmltree` 0.20 → 0.21** — the XML parser under every document epubveri
+  reads. 0.21 changed bare-string attribute lookup to match by local name
+  (ignoring the namespace), which would silently confuse e.g. `lang` with
+  `xml:lang`; epubveri instead pins the intended semantics explicitly — every
+  namespace-less attribute access goes through a new internal accessor that is
+  version-independent **by construction**, verified neutral on 0.20 first and
+  then on 0.21 (the full corpus, including the scenarios that caught the
+  difference, is identical).
+- **The codebase moved to Rust edition 2024**, and ~90 nested `if let` sites
+  were collapsed into let-chains (net −95 lines) — internal only; no
+  user-facing behaviour, CLI, or JSON change.
+
 ## [0.5.3] - 2026-07-13
 
 ### Added
