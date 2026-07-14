@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 fn elem_text(n: roxmltree::Node) -> String {
     n.descendants()
@@ -97,14 +98,14 @@ pub(crate) fn check_embedded_preview(
     for coll in pkg.children().filter(|n| {
         n.is_element()
             && n.tag_name().name() == "collection"
-            && n.attribute("role") == Some("preview")
+            && n.attr_no_ns("role") == Some("preview")
     }) {
         let manifest_count = coll
             .children()
             .filter(|n| {
                 n.is_element()
                     && n.tag_name().name() == "collection"
-                    && n.attribute("role") == Some("manifest")
+                    && n.attr_no_ns("role") == Some("manifest")
             })
             .count();
         if manifest_count != 1 {
@@ -134,7 +135,7 @@ pub(crate) fn check_embedded_preview(
             );
         }
         for link in links {
-            let Some(href) = link.attribute("href") else {
+            let Some(href) = link.attr_no_ns("href") else {
                 continue;
             };
             if href.contains("epubcfi(") {

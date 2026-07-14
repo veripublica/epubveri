@@ -41,6 +41,8 @@ pub mod schematron;
 pub mod smil;
 pub mod svg;
 pub mod url;
+pub mod xmlext;
+use crate::xmlext::NodeExt;
 pub mod xpath;
 
 use std::path::Path;
@@ -55,7 +57,7 @@ fn peek_opf_version(ocf: &mut ocf::Ocf, opf_path: &str) -> Option<String> {
     let bytes = ocf.read(opf_path)?;
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let doc = ocf::parse_xml(&text).ok()?;
-    doc.root_element().attribute("version").map(String::from)
+    doc.root_element().attr_no_ns("version").map(String::from)
 }
 
 /// Validate raw EPUB bytes and return a [`Report`].

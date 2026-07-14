@@ -6,6 +6,7 @@
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &mut Report) {
     let Ok(d) = crate::ocf::parse_xml(ncx_xml) else {
@@ -20,9 +21,9 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
         if let Some(meta) = head.children().find(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("name") == Some("dtb:uid")
+                && n.attr_no_ns("name") == Some("dtb:uid")
         }) {
-            if let Some(content) = meta.attribute("content") {
+            if let Some(content) = meta.attr_no_ns("content") {
                 if content.trim() != package_uid.trim() {
                     report.push_at_pos(
                         NCX_001,
@@ -66,7 +67,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
 fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
     let mut by_id: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attribute("id") {
+        if let Some(id) = n.attr_no_ns("id") {
             if !is_valid_ncname(id) {
                 report.push_full(
                     RSC_005,
@@ -82,7 +83,7 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
         }
     }
     for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(id) = n.attribute("id") {
+        if let Some(id) = n.attr_no_ns("id") {
             if by_id.get(id).copied().unwrap_or(0) > 1 {
                 report.push_full(
                     RSC_005,
@@ -113,7 +114,7 @@ fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &m
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "pageTarget")
     {
-        if let Some(ty) = n.attribute("type") {
+        if let Some(ty) = n.attr_no_ns("type") {
             if !matches!(ty, "front" | "normal" | "special") {
                 report.push_full(
                     RSC_005,

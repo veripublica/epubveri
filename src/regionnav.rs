@@ -5,6 +5,7 @@
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -67,7 +68,7 @@ pub(crate) fn collect_targets(nav_el: roxmltree::Node) -> Vec<String> {
     nav_el
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "a")
-        .filter_map(|n| n.attribute("href"))
+        .filter_map(|n| n.attr_no_ns("href"))
         .map(String::from)
         .collect()
 }

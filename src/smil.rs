@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 const CORE_AUDIO_TYPES: [&str; 2] = ["audio/mpeg", "audio/mp4"];
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
@@ -333,7 +334,7 @@ fn check_text(
     report: &mut Report,
     text_targets: &mut Vec<(String, String)>,
 ) {
-    let Some(src) = node.attribute("src") else {
+    let Some(src) = node.attr_no_ns("src") else {
         return;
     };
     if is_external(src) {
@@ -408,7 +409,7 @@ fn check_audio(
     media_types: &HashMap<String, String>,
     report: &mut Report,
 ) {
-    let Some(src) = node.attribute("src") else {
+    let Some(src) = node.attr_no_ns("src") else {
         return;
     };
     if is_external(src) {
@@ -449,7 +450,7 @@ fn check_audio(
     }
 
     for attr_name in ["clipBegin", "clipEnd"] {
-        if let Some(v) = node.attribute(attr_name) {
+        if let Some(v) = node.attr_no_ns(attr_name) {
             if parse_clock_value(v).is_none() {
                 report.push_full(
                     RSC_005,
@@ -463,8 +464,8 @@ fn check_audio(
             }
         }
     }
-    let begin = node.attribute("clipBegin").and_then(parse_clock_value);
-    let end = node.attribute("clipEnd").and_then(parse_clock_value);
+    let begin = node.attr_no_ns("clipBegin").and_then(parse_clock_value);
+    let end = node.attr_no_ns("clipEnd").and_then(parse_clock_value);
     if let (Some(b), Some(e)) = (begin, end) {
         if b > e {
             report.push_at_pos(

@@ -12,6 +12,7 @@
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 /// Checks a fixed-layout XHTML content document's viewport declaration.
 pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: &mut Report) {
@@ -20,7 +21,7 @@ pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: 
         .filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "meta"
-                && n.attribute("name") == Some("viewport")
+                && n.attr_no_ns("name") == Some("viewport")
         })
         .collect();
 
@@ -48,7 +49,7 @@ pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: 
     }
 
     check_viewport_content(
-        metas[0].attribute("content").unwrap_or(""),
+        metas[0].attr_no_ns("content").unwrap_or(""),
         path,
         metas[0],
         report,
@@ -60,7 +61,7 @@ pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: 
 /// errors or warnings are reported" alongside the usage finding).
 pub(crate) fn check_reflowable_viewport(d: &roxmltree::Document, path: &str, report: &mut Report) {
     let viewport = d.descendants().find(|n| {
-        n.is_element() && n.tag_name().name() == "meta" && n.attribute("name") == Some("viewport")
+        n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("name") == Some("viewport")
     });
     if let Some(n) = viewport {
         report.push_full(
@@ -78,7 +79,7 @@ pub(crate) fn check_reflowable_viewport(d: &roxmltree::Document, path: &str, rep
 /// Checks a fixed-layout SVG content document's `viewBox` declaration.
 pub(crate) fn check_svg_viewbox(d: &roxmltree::Document, path: &str, report: &mut Report) {
     let root = d.root_element();
-    if root.tag_name().name() == "svg" && root.attribute("viewBox").is_none() {
+    if root.tag_name().name() == "svg" && root.attr_no_ns("viewBox").is_none() {
         report.push_at_pos(
             HTM_048,
             Severity::Error,
