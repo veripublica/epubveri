@@ -10,5 +10,5 @@ path = "src/corpus.rs"
 
 [dependencies]
 epubveri = { path = ".." }
-zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zip = { version = "8.6", default-features = false, features = ["deflate"] }
 regex = "1"
