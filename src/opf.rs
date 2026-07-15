@@ -9,7 +9,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::ids::*;
 use crate::ocf::{Ocf, parse_xml};
 use crate::report::{Position, Report, Severity};
-use crate::xmlext::NodeExt;
+use crate::xmlext::{NodeExt, attr_no_ns_node, attr_ns_node};
 
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
 fn parent_dir(path: &str) -> String {
@@ -612,29 +612,31 @@ fn check_meta_property_scheme_shape(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "meta")
     {
-        if let Some(refines) = n.attr_no_ns("refines") {
-            let refines = refines.trim();
+        if let Some(refines_attr) = attr_no_ns_node(n, "refines") {
+            let refines = refines_attr.value().trim();
             if !refines.is_empty() && !refines.starts_with('#') && !refines.contains("://") {
-                report.push_node(
+                report.push_node_attr(
                     RSC_017,
                     Severity::Warning,
                     "@refines should use a fragment identifier pointing to its manifest item",
                     opf_path,
                     n,
+                    refines_attr,
                     "opf.meta.refines_should_use_fragment",
                     Vec::new(),
                 );
             }
         }
-        if let Some(scheme) = n.attr_no_ns("scheme") {
-            let scheme = scheme.trim();
+        if let Some(scheme_attr) = attr_no_ns_node(n, "scheme") {
+            let scheme = scheme_attr.value().trim();
             if !scheme.is_empty() && !scheme.contains(':') {
-                report.push_node(
+                report.push_node_attr(
                     OPF_027,
                     Severity::Error,
                     format!("unknown scheme value '{scheme}' (must be prefixed)"),
                     opf_path,
                     n,
+                    scheme_attr,
                     "opf.meta.unprefixed_scheme",
                     vec![scheme.to_string()],
                 );
@@ -727,12 +729,12 @@ fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize) {
 /// file uses to label them). Returns the declared name->URI map for the
 /// caller's own OPF-028 (undeclared-prefix-usage) checking.
 fn check_prefix_declaration(
-    prefix_attr: &str,
+    prefix_attr: roxmltree::Attribute,
     path: &str,
     node: roxmltree::Node,
     report: &mut Report,
 ) -> HashMap<String, String> {
-    let (pairs, syntax_errors) = parse_prefix_value(prefix_attr);
+    let (pairs, syntax_errors) = parse_prefix_value(prefix_attr.value());
     for _ in 0..syntax_errors {
         report.push_at_pos(
             OPF_004,
@@ -744,34 +746,37 @@ fn check_prefix_declaration(
     }
     for (name, uri) in &pairs {
         if name == "_" {
-            report.push_node(
+            report.push_node_attr(
                 OPF_007,
                 Severity::Error,
                 "the prefix \"_\" must not be declared",
                 path,
                 node,
+                prefix_attr,
                 "opf.prefix.reserved_underscore",
                 Vec::new(),
             );
         }
         if DEFAULT_VOCAB_URIS.contains(&uri.as_str()) {
-            report.push_node(
+            report.push_node_attr(
                 OPF_007,
                 Severity::Error,
                 format!("prefix '{name}' must not be assigned to a default-vocabulary URI"),
                 path,
                 node,
+                prefix_attr,
                 "opf.prefix.assigned_to_default_vocab_uri",
                 vec![name.clone()],
             );
         }
         if uri == DC_ELEMENTS_NS {
-            report.push_node(
+            report.push_node_attr(
                 OPF_007,
                 Severity::Error,
                 format!("prefix '{name}' must not be mapped to the Dublin Core elements namespace"),
                 path,
                 node,
+                prefix_attr,
                 "opf.prefix.assigned_to_dc_namespace",
                 vec![name.clone()],
             );
@@ -779,12 +784,13 @@ fn check_prefix_declaration(
         if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| n == name)
             && uri != default_uri
         {
-            report.push_node(
+            report.push_node_attr(
                 OPF_007,
                 Severity::Warning,
                 format!("the '{name}' prefix is reserved and must not be redeclared"),
                 path,
                 node,
+                prefix_attr,
                 "opf.prefix.reserved_redeclared",
                 vec![name.clone()],
             );
@@ -830,15 +836,17 @@ fn check_prefix_usage(
 fn check_prefix_placement(doc: &roxmltree::Document, path: &str, report: &mut Report) {
     let root = doc.root_element();
     for n in doc.descendants().filter(|n| n.is_element() && *n != root) {
-        if n.attribute(("http://www.idpf.org/2007/ops", "prefix"))
-            .is_some()
+        if let Some(prefix_attr) = n
+            .attributes()
+            .find(|a| a.namespace() == Some("http://www.idpf.org/2007/ops") && a.name() == "prefix")
         {
-            report.push_node(
+            report.push_node_attr(
                 RSC_005,
                 Severity::Error,
                 "attribute \"epub:prefix\" not allowed here",
                 path,
                 n,
+                prefix_attr,
                 "opf.prefix.misplaced_epub_prefix_attribute",
                 Vec::new(),
             );
@@ -1370,8 +1378,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         );
         return;
     }
-    let declared_prefixes = pkg
-        .attr_no_ns("prefix")
+    let declared_prefixes = attr_no_ns_node(pkg, "prefix")
         .map(|p| check_prefix_declaration(p, opf_path, pkg, report))
         .unwrap_or_default();
     for n in doc.descendants().filter(|n| n.is_element()) {
@@ -2048,6 +2055,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     continue;
                 }
             };
+            // The href attribute node, for @href-targeted findings (issue #18).
+            // Present here — the match above `continue`d when href was absent.
+            let Some(href_attr) = attr_no_ns_node(item, "href") else {
+                continue;
+            };
             if !seen.insert(id.to_string()) {
                 report.push_node(
                     RSC_005,
@@ -2060,12 +2072,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 );
             }
             if href.contains(' ') {
-                report.push_node(
+                report.push_node_attr(
                     RSC_020,
                     Severity::Error,
                     format!("manifest item href '{href}' contains unencoded spaces"),
                     opf_path,
                     item,
+                    href_attr,
                     "opf.manifest_item.unencoded_space_in_href",
                     vec![href.to_string()],
                 );
@@ -2080,23 +2093,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 );
             }
             if href.trim_start().starts_with("data:") {
-                report.push_node(
+                report.push_node_attr(
                     RSC_029,
                     Severity::Error,
                     format!("manifest item '{id}' href must not be a data URL"),
                     opf_path,
                     item,
+                    href_attr,
                     "opf.manifest_item.data_url_href",
                     vec![id.to_string()],
                 );
             }
             if href.trim_start().starts_with("file:") {
-                report.push_node(
+                report.push_node_attr(
                     RSC_030,
                     Severity::Error,
                     format!("manifest item '{id}' href is a file URL, which is not allowed"),
                     opf_path,
                     item,
+                    href_attr,
                     "opf.manifest_item.file_url_href",
                     vec![id.to_string()],
                 );
@@ -2151,12 +2166,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     );
                 }
                 if href.contains('?') {
-                    report.push_node(
+                    report.push_node_attr(
                         RSC_033,
                         Severity::Error,
                         format!("manifest item '{id}' href '{href}' must not have a query string"),
                         opf_path,
                         item,
+                        href_attr,
                         "opf.manifest_item.href_has_query_string",
                         vec![id.to_string(), href.to_string()],
                     );
@@ -2334,23 +2350,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 for segment in href_path.split('/').filter(|s| !s.is_empty()) {
                     let decoded = percent_decode(segment);
                     if crate::filename::has_forbidden_char(&decoded) {
-                        report.push_node(
+                        report.push_node_attr(
                             PKG_009,
                             Severity::Error,
                             format!("manifest item '{id}' href segment '{decoded}' contains a forbidden character"),
                             opf_path,
                             item,
+                            href_attr,
                             "opf.manifest_item.href_segment_forbidden_char",
                             vec![decoded.clone()],
                         );
                     }
                     if crate::filename::has_non_ascii(&decoded) {
-                        report.push_node(
+                        report.push_node_attr(
                             PKG_012,
                             Severity::Usage,
                             format!("manifest item '{id}' href segment '{decoded}' contains non-ASCII characters"),
                             opf_path,
                             item,
+                            href_attr,
                             "opf.manifest_item.href_segment_non_ascii",
                             vec![decoded.clone()],
                         );
@@ -2686,10 +2704,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 Position::of(link),
             );
         }
-        let Some(href) = link.attr_no_ns("href") else {
+        let Some(href_attr) = attr_no_ns_node(link, "href") else {
             continue;
         };
-        let href = href.trim();
+        let href = href_attr.value().trim();
         if let Some(frag) = href.strip_prefix('#') {
             if items.contains_key(frag) {
                 report.push_at_pos(
@@ -2703,24 +2721,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             continue;
         }
         if href.starts_with("data:") {
-            report.push_node(
+            report.push_node_attr(
                 RSC_029,
                 Severity::Error,
                 "a package link href must not be a data URL",
                 opf_path,
                 link,
+                href_attr,
                 "opf.link.data_url_href",
                 Vec::new(),
             );
             continue;
         }
         if href.starts_with("file:") {
-            report.push_node(
+            report.push_node_attr(
                 RSC_030,
                 Severity::Error,
                 "a package link href must not be a file URL",
                 opf_path,
                 link,
+                href_attr,
                 "opf.link.file_url_href",
                 Vec::new(),
             );
@@ -2739,24 +2759,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             continue;
         }
         if href.contains('?') {
-            report.push_node(
+            report.push_node_attr(
                 RSC_033,
                 Severity::Error,
                 format!("package link href '{href}' must not have a query string"),
                 opf_path,
                 link,
+                href_attr,
                 "opf.link.href_has_query_string",
                 vec![href.to_string()],
             );
         }
         let resolved = resolve(&base_dir, href);
         if !name_index.contains_key(&nfc(&resolved)) {
-            report.push_node(
+            report.push_node_attr(
                 RSC_007,
                 Severity::Warning,
                 format!("link references a missing resource '{href}'"),
                 opf_path,
                 link,
+                href_attr,
                 "opf.link.missing_resource",
                 vec![href.to_string()],
             );
@@ -3260,11 +3282,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             crate::indexes::check_content_model(&d, &path, report);
         }
 
-        let declared_prefixes = d
-            .root_element()
-            .attribute(("http://www.idpf.org/2007/ops", "prefix"))
-            .map(|p| check_prefix_declaration(p, &path, d.root_element(), report))
-            .unwrap_or_default();
+        let declared_prefixes =
+            attr_ns_node(d.root_element(), "http://www.idpf.org/2007/ops", "prefix")
+                .map(|p| check_prefix_declaration(p, &path, d.root_element(), report))
+                .unwrap_or_default();
         check_prefix_placement(&d, &path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
@@ -5050,11 +5071,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let Some(b) = ocf.read(&orig) else { continue };
         let text = String::from_utf8_lossy(&b).into_owned();
         let Ok(d) = parse_xml(&text) else { continue };
-        let declared_prefixes = d
-            .root_element()
-            .attribute(("http://www.idpf.org/2007/ops", "prefix"))
-            .map(|p| check_prefix_declaration(p, doc_path, d.root_element(), report))
-            .unwrap_or_default();
+        let declared_prefixes =
+            attr_ns_node(d.root_element(), "http://www.idpf.org/2007/ops", "prefix")
+                .map(|p| check_prefix_declaration(p, doc_path, d.root_element(), report))
+                .unwrap_or_default();
         check_prefix_placement(&d, doc_path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
@@ -5370,10 +5390,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     Vec::new(),
                 );
             }
-            let declared_prefixes = smil_root
-                .attribute(("http://www.idpf.org/2007/ops", "prefix"))
-                .map(|p| check_prefix_declaration(p, &path, smil_root, report))
-                .unwrap_or_default();
+            let declared_prefixes =
+                attr_ns_node(smil_root, "http://www.idpf.org/2007/ops", "prefix")
+                    .map(|p| check_prefix_declaration(p, &path, smil_root, report))
+                    .unwrap_or_default();
             check_prefix_placement(&smil_doc, &path, report);
             for n in smil_doc.descendants().filter(|n| n.is_element()) {
                 if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
