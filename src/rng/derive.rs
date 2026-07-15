@@ -307,7 +307,7 @@ impl<'a> Env<'a> {
                     // Name not allowed here: report and skip it, keeping `cur`
                     // (an element that never fit can't have consumed anything),
                     // so the remaining siblings are still validated.
-                    blames.push(Blame::Element(n));
+                    blames.push(Blame::Element(n, ElementFault::NotAllowed));
                     continue;
                 }
                 cur = self.child_deriv(&cur, n, blames);
@@ -325,7 +325,7 @@ impl<'a> Env<'a> {
                     if is_not_allowed(&d) {
                         // Loose text not allowed: report (at the containing
                         // element) and skip, keeping `cur`.
-                        blames.push(Blame::Element(parent));
+                        blames.push(Blame::Element(parent, ElementFault::TextNotAllowed));
                     } else {
                         cur = d;
                     }
@@ -347,7 +347,7 @@ impl<'a> Env<'a> {
         if is_not_allowed(&cur) {
             // Only reached for the root element; sibling name-mismatches are
             // handled (and skipped) in `children_deriv`.
-            blames.push(Blame::Element(node));
+            blames.push(Blame::Element(node, ElementFault::NotAllowed));
             return cur;
         }
         for att in node.attributes() {
@@ -362,7 +362,7 @@ impl<'a> Env<'a> {
         }
         cur = self.start_tag_close_deriv(&cur);
         if is_not_allowed(&cur) {
-            blames.push(Blame::Element(node)); // a required attribute is missing
+            blames.push(Blame::Element(node, ElementFault::MissingAttribute));
             return cur;
         }
         cur = self.children_deriv(&cur, node, blames);
@@ -371,7 +371,7 @@ impl<'a> Env<'a> {
         }
         cur = self.end_tag_deriv(&cur);
         if is_not_allowed(&cur) {
-            blames.push(Blame::Element(node)); // this element's content is incomplete
+            blames.push(Blame::Element(node, ElementFault::IncompleteContent));
         }
         cur
     }
@@ -381,14 +381,83 @@ fn is_not_allowed(p: &Pat) -> bool {
     matches!(**p, Pattern::NotAllowed)
 }
 
-/// Where content-model validation failed (issues #17/#18): an element, or a
-/// specific present attribute of one. The [`Attribute`](Blame::Attribute) case
-/// lets the diagnostic pin `@name` (with a real position + element path) when
-/// the violation is attribute-level (e.g. `attribute "opf:role" not allowed
-/// here`), rather than only naming the containing element.
+/// Which way an element broke the content model - the four distinct faults an
+/// [`Blame::Element`] can stand for. Kept separate because they need different
+/// wording: an element that is simply misplaced is *not* the same as one whose
+/// content or attributes are the problem, and reporting all of them as "not
+/// allowed here" would be plainly wrong for three of the four cases.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ElementFault {
+    /// The element itself is not permitted at this position.
+    NotAllowed,
+    /// Non-whitespace character data is not permitted directly in this element.
+    TextNotAllowed,
+    /// The element is missing a required attribute.
+    MissingAttribute,
+    /// The element's content is incomplete - a required child is absent.
+    IncompleteContent,
+}
+
+/// Where content-model validation failed (issues #17/#18): an element (tagged
+/// with *how* it failed, see [`ElementFault`]), or a specific present attribute
+/// of one. The [`Attribute`](Blame::Attribute) case lets the diagnostic pin
+/// `@name` (with a real position + element path) when the violation is
+/// attribute-level (e.g. `attribute "role" is not allowed here`), rather than
+/// only naming the containing element.
 pub enum Blame<'d, 'i> {
-    Element(roxmltree::Node<'d, 'i>),
+    Element(roxmltree::Node<'d, 'i>, ElementFault),
     Attribute(roxmltree::Node<'d, 'i>, roxmltree::Attribute<'d, 'i>),
+}
+
+impl<'d, 'i> Blame<'d, 'i> {
+    /// The element whose source position anchors this finding (the containing
+    /// element for an attribute-level blame).
+    pub fn node(&self) -> roxmltree::Node<'d, 'i> {
+        match self {
+            Blame::Element(n, _) | Blame::Attribute(n, _) => *n,
+        }
+    }
+
+    /// The specific attribute this finding pins, when attribute-level.
+    pub fn attribute(&self) -> Option<roxmltree::Attribute<'d, 'i>> {
+        match self {
+            Blame::Attribute(_, a) => Some(*a),
+            Blame::Element(..) => None,
+        }
+    }
+
+    /// A human-readable description of the fault, naming the offending element
+    /// or attribute, plus the same name as a structured `params` entry (for
+    /// i18n / machine consumers). Replaces the old blanket "does not conform to
+    /// the … schema" wording with something that says *what* is wrong, in the
+    /// style of epubcheck's own RSC-005 messages.
+    pub fn describe(&self) -> (String, Vec<String>) {
+        match self {
+            Blame::Element(n, fault) => {
+                let name = n.tag_name().name();
+                let text = match fault {
+                    ElementFault::NotAllowed => format!("element \"{name}\" is not allowed here"),
+                    ElementFault::TextNotAllowed => {
+                        format!("character data is not allowed in element \"{name}\"")
+                    }
+                    ElementFault::MissingAttribute => {
+                        format!("element \"{name}\" is missing a required attribute")
+                    }
+                    ElementFault::IncompleteContent => {
+                        format!("element \"{name}\" has incomplete content")
+                    }
+                };
+                (text, vec![name.to_string()])
+            }
+            Blame::Attribute(_, a) => {
+                let name = a.name();
+                (
+                    format!("attribute \"{name}\" is not allowed here"),
+                    vec![name.to_string()],
+                )
+            }
+        }
+    }
 }
 
 /// Validate a root element node against `grammar`, returning every node that
@@ -408,7 +477,7 @@ pub fn validate_node_report<'d, 'i>(
     // pattern somehow ends non-nullable with nothing recorded, still surface the
     // document as invalid rather than silently pass it.
     if !env.nullable(&p) && blames.is_empty() {
-        blames.push(Blame::Element(root));
+        blames.push(Blame::Element(root, ElementFault::IncompleteContent));
     }
     blames
 }

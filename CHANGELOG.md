@@ -10,6 +10,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`RSC-005` content-model messages now name the offending element or attribute.**
+  A schema violation used to read as a blanket "content document does not conform
+  to the EPUB XHTML content-model schema"; it now says *what* is wrong — e.g.
+  `element "p" is not allowed here`, `character data is not allowed in element
+  "ol"`, `element "x" is missing a required attribute`, `element "x" has
+  incomplete content`, or `attribute "y" is not allowed here` — in the style of
+  epubcheck's own RSC-005 wording. The offending name is also surfaced as a
+  structured `data.params` entry alongside the existing `data.element_path`, so
+  the detail is visible in the plain CLI output, not only in the JSON envelope.
+  (Reported by Doitsu on the MobileRead forum. Naming the *expected* element as
+  well — epubcheck's "…; expected element "li"" — remains future work.)
+
 ### Fixed
 
 - **EPUB 2 named character entities (`&nbsp;`, `&eacute;`, `&copy;`, …) no longer

@@ -12,7 +12,7 @@ pub mod derive;
 pub mod load;
 pub mod pattern;
 
-pub use derive::{Blame, Grammar, validate_node, validate_node_report, validate_xml};
+pub use derive::{Blame, ElementFault, Grammar, validate_node, validate_node_report, validate_xml};
 pub use load::load;
 pub use pattern::*;
 
@@ -116,7 +116,7 @@ mod tests {
         validate_node_report(g, doc.root_element())
             .into_iter()
             .map(|b| match b {
-                Blame::Element(n) => n.tag_name().name().to_string(),
+                Blame::Element(n, _) => n.tag_name().name().to_string(),
                 Blame::Attribute(_, a) => format!("@{}", a.name()),
             })
             .collect()
@@ -141,6 +141,60 @@ mod tests {
             &g,
             "<note><to>x</to><from>y</from><from>z</from></note>"
         )); // two <from>
+    }
+
+    #[test]
+    fn blame_describe_names_the_offending_node() {
+        let doc = roxmltree::Document::parse("<ol a=\"1\"><p>x</p></ol>").unwrap();
+        let ol = doc.root_element();
+        let p = ol.children().find(|n| n.is_element()).unwrap();
+        let a = ol.attributes().next().unwrap();
+
+        let cases: [(Blame, &str); 5] = [
+            (
+                Blame::Element(p, ElementFault::NotAllowed),
+                "element \"p\" is not allowed here",
+            ),
+            (
+                Blame::Element(ol, ElementFault::TextNotAllowed),
+                "character data is not allowed in element \"ol\"",
+            ),
+            (
+                Blame::Element(ol, ElementFault::MissingAttribute),
+                "element \"ol\" is missing a required attribute",
+            ),
+            (
+                Blame::Element(ol, ElementFault::IncompleteContent),
+                "element \"ol\" has incomplete content",
+            ),
+            (
+                Blame::Attribute(ol, a),
+                "attribute \"a\" is not allowed here",
+            ),
+        ];
+        for (blame, want) in &cases {
+            let (text, params) = blame.describe();
+            assert_eq!(text, *want);
+            // the offending name is also surfaced as a structured param
+            assert_eq!(params.len(), 1);
+        }
+        // accessor sanity: attribute-level blame exposes both node and attr
+        assert!(cases[4].0.attribute().is_some());
+        assert_eq!(cases[4].0.node(), ol);
+        assert!(cases[0].0.attribute().is_none());
+        assert_eq!(cases[0].0.node(), p);
+    }
+
+    /// The message text actually reaches the RSC-005 finding: a stray `<p>`
+    /// directly in `<ol>` names the element, not a blanket "does not conform"
+    /// (forum #78).
+    #[test]
+    fn toy_grammar_blame_message_names_element() {
+        let g = note_grammar();
+        let doc = roxmltree::Document::parse("<note><to>x</to><extra/></note>").unwrap();
+        let blames = validate_node_report(&g, doc.root_element());
+        let (text, _) = blames[0].describe();
+        assert_eq!(text, "element \"extra\" is not allowed here");
     }
 
     const CVALID: &str = concat!(
