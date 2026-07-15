@@ -8,7 +8,11 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.5.8] - 2026-07-15
+
+Two fixes from MobileRead forum reports: a fatal false positive on EPUB 2 named
+character entities, and clearer `RSC-005` content-model messages. Corpus recall
+is unchanged (600/607) — neither changes a valid/invalid verdict.
 
 ### Changed
 
