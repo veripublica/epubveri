@@ -8,6 +8,30 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.7] - 2026-07-15
+
+Two content-model reporting improvements, both grounded in forum feedback.
+Corpus recall is unchanged (600/607, 1.1% false positives) — these change
+*what* and *how much* is reported, not the valid/invalid verdict.
+
+### Added
+
+- **Bare text directly in `<body>` is now flagged in EPUB 2.** XHTML 1.1's `body`
+  content model is block-level only, so loose text there is a content-model error
+  (`RSC-005`) — one per text run, with a real `line:column`. epubcheck reports
+  this; epubveri was silently missing it. (EPUB 3, whose HTML5 body allows flow
+  content including text, is unaffected.) The unambiguous EPUB 2 half of the
+  bare-text discussion on the MobileRead forum.
+
+### Changed
+
+- **Content-model (`RSC-005`) failures now report every offending node, not just
+  the first.** A list like `<ol><p>…</p><p>…</p></ol>` used to draw one finding;
+  it now reports each misplaced child, each with its own `line:column` and element
+  path — matching epubcheck's per-node output. (Reported by Doitsu on the
+  MobileRead forum. A valid-but-empty list is still fine, so only the misplaced
+  children are flagged, not the list element itself.)
+
 ## [0.5.6] - 2026-07-15
 
 Sharpens the machine-readable locations added in 0.5.5: schema (`RSC-005`)
