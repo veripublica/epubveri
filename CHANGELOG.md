@@ -8,6 +8,36 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.6] - 2026-07-15
+
+Sharpens the machine-readable locations added in 0.5.5: schema (`RSC-005`)
+content-model findings now point at the exact offending node, and the
+`element_path` form is corrected so it actually resolves in the XPath engine most
+consumers use. Both build on 0.5.5's `data.element_path`; corpus recall is
+unchanged (600/607, 1.1% false positives).
+
+### Added
+
+- **`RSC-005` content-model findings now carry a real `line:column` and
+  `element_path`.** The RELAX NG engine reports *which* node collapsed the
+  content model, so an OPF or XHTML schema violation points at the offending
+  element — or the offending **attribute** (`…/@name`) when the violation is
+  attribute-level — instead of anchoring the whole document at its root.
+  ([issue #17](https://github.com/veripublica/epubveri/issues/17), reported by
+  Doitsu on the MobileRead forum.)
+
+### Changed
+
+- **`data.element_path` now binds every namespaced name to a non-empty prefix.**
+  The 0.5.5 form left default-namespaced names bare and recorded the URI under an
+  empty-string key, which is not resolvable in libxml2 / `lxml` (XPath 1.0 has no
+  default namespace). Each namespace URI now gets a bound prefix — a readable
+  well-known one for the common EPUB namespaces (`opf`, `dc`, `h` for XHTML,
+  `svg`, …) or a generated `ns…` — so a path resolves directly with
+  `root.xpath(path, namespaces=data["namespaces"])`.
+  ([issue #18](https://github.com/veripublica/epubveri/issues/18), reported by
+  Jens Tröger.)
+
 ## [0.5.5] - 2026-07-15
 
 Adds a **machine-resolvable node path** to JSON findings, so an automated
