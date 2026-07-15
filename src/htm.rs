@@ -397,6 +397,30 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
             }
         }
     }
+    // XHTML 1.1's `body` content model is block-level only (`(%Block.mix;)*`, no
+    // `#PCDATA`), so text directly inside `<body>` is a content-model error in
+    // EPUB 2 - unlike EPUB 3, whose HTML5 body allows flow content including bare
+    // text (#13; the EPUB 2 half, unambiguous and matching epubcheck). Reported
+    // per occurrence, anchored at the text run for a precise line:column.
+    for body in d.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().namespace() == Some(XHTML_NS)
+            && n.tag_name().name() == "body"
+    }) {
+        for child in body.children() {
+            if child.is_text() && child.text().is_some_and(|t| !t.trim().is_empty()) {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    "text is not allowed directly in \"body\"; EPUB 2 requires block-level content",
+                    path,
+                    child,
+                    "htm.epub2_dom.bare_text_in_body",
+                    Vec::new(),
+                );
+            }
+        }
+    }
 }
 
 /// DOM/attribute-level checks on an already-parsed content document.
@@ -719,6 +743,39 @@ mod tests {
         let mut report = Report::new();
         check_dom(&d, "content.xhtml", true, &mut report);
         report.messages.iter().map(|m| m.id).collect()
+    }
+
+    /// EPUB 2 DOM checks all share the `RSC-005` id, so tests key off the
+    /// finer `rule` sub-code.
+    fn run_dom_epub2(xhtml: &str) -> Vec<&'static str> {
+        let d = crate::ocf::parse_xml(xhtml).unwrap();
+        let mut report = Report::new();
+        check_dom_epub2(&d, "content.xhtml", &mut report);
+        report.messages.iter().filter_map(|m| m.rule).collect()
+    }
+
+    #[test]
+    fn epub2_bare_text_in_body_is_a_content_model_error() {
+        // XHTML 1.1 `body` is block-level only, so loose text there is an error
+        // in EPUB 2 (#13). Reported once per text run; whitespace is ignored;
+        // text wrapped in a block element is fine.
+        let bare =
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>Call me Ishmael.</body></html>"#;
+        assert_eq!(run_dom_epub2(bare), vec!["htm.epub2_dom.bare_text_in_body"]);
+
+        let two =
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>one<p>ok</p>two</body></html>"#;
+        assert_eq!(
+            run_dom_epub2(two),
+            vec![
+                "htm.epub2_dom.bare_text_in_body",
+                "htm.epub2_dom.bare_text_in_body"
+            ]
+        );
+
+        let wrapped =
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>  <p>ok</p>  </body></html>"#;
+        assert!(run_dom_epub2(wrapped).is_empty());
     }
 
     #[test]
