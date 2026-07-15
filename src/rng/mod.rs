@@ -12,7 +12,7 @@ pub mod derive;
 pub mod load;
 pub mod pattern;
 
-pub use derive::{Grammar, validate_node, validate_node_report, validate_xml};
+pub use derive::{Blame, Grammar, validate_node, validate_node_report, validate_xml};
 pub use load::load;
 pub use pattern::*;
 
@@ -107,11 +107,16 @@ mod tests {
         validate_xml(g, xml).unwrap()
     }
 
-    /// The local name of the node `validate_node_report` blames, or `None` if
-    /// the document is valid (issue #17: a failure names *which* node).
+    /// What `validate_node_report` blames — an element's local name, or
+    /// `@name` for an attribute — or `None` if the document is valid (issues
+    /// #17/#18: a failure names *which* node, and pins an attribute when that's
+    /// the culprit).
     fn fail_local(g: &Grammar, xml: &str) -> Option<String> {
         let doc = roxmltree::Document::parse(xml).unwrap();
-        validate_node_report(g, doc.root_element()).map(|n| n.tag_name().name().to_string())
+        validate_node_report(g, doc.root_element()).map(|b| match b {
+            Blame::Element(n) => n.tag_name().name().to_string(),
+            Blame::Attribute(_, a) => format!("@{}", a.name()),
+        })
     }
 
     #[test]
@@ -217,6 +222,12 @@ mod tests {
         assert_eq!(
             fail_local(&xhtml_grammar(), &xhtml_doc("<keygen/>")).as_deref(),
             Some("keygen")
+        );
+        // An attribute-level violation pins the attribute itself (#18), so the
+        // finding can target `@name` rather than only the containing element.
+        assert_eq!(
+            fail_local(&xhtml_grammar(), &xhtml_doc("<p contextmenu=\"x\">hi</p>")).as_deref(),
+            Some("@contextmenu")
         );
     }
 

@@ -1446,20 +1446,38 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
     // Schema validation against our own (permissive) package-document RNG.
     // Additive: a structurally non-conformant package is reported as RSC-005.
-    if let Some(fail) = crate::rng::validate_node_report(&crate::rng::package_grammar(), pkg) {
-        // The grammar reports *which* node collapsed the content model (issue
-        // #17), so the finding carries a real line:column and element path.
-        // It still doesn't name the specific rule that failed - unlike the
-        // other RSC-005 sites in this file, that stays a catch-all here.
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "OPF does not conform to the EPUB package-document schema",
-            opf_path,
-            fail,
-            "opf.package.schema_violation",
-            Vec::new(),
-        );
+    if let Some(blame) = crate::rng::validate_node_report(&crate::rng::package_grammar(), pkg) {
+        // The grammar reports *where* the content model collapsed (issue #17):
+        // a real line:column and element path, pinning the offending attribute
+        // (issue #18) when the violation is attribute-level. It still doesn't
+        // name the specific rule that failed; that stays a catch-all here.
+        let text = "OPF does not conform to the EPUB package-document schema";
+        let rule = "opf.package.schema_violation";
+        match blame {
+            crate::rng::Blame::Element(n) => {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    text,
+                    opf_path,
+                    n,
+                    rule,
+                    Vec::new(),
+                );
+            }
+            crate::rng::Blame::Attribute(n, a) => {
+                report.push_node_attr(
+                    RSC_005,
+                    Severity::Error,
+                    text,
+                    opf_path,
+                    n,
+                    a,
+                    rule,
+                    Vec::new(),
+                );
+            }
+        }
     }
 
     // Schematron rules our own RNG can't express (id uniqueness,
@@ -3366,21 +3384,40 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
         // Schema validation against our own XHTML content-document RNG.
         // Additive: a non-conformant content document is reported as RSC-005.
-        if let Some(fail) = crate::rng::validate_node_report(&xhtml_grammar, d.root_element()) {
-            // The grammar reports *which* node collapsed the content model
-            // (issue #17), so the finding carries a real line:column and element
-            // path instead of anchoring the whole document at its root. It still
-            // doesn't name the specific rule that failed - that stays a
-            // genuine catch-all - only where.
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "content document does not conform to the EPUB XHTML content-model schema",
-                path.clone(),
-                fail,
-                "opf.content_document.schema_violation",
-                Vec::new(),
-            );
+        if let Some(blame) = crate::rng::validate_node_report(&xhtml_grammar, d.root_element()) {
+            // The grammar reports *where* the content model collapsed (issue
+            // #17), so the finding carries a real line:column and element path
+            // instead of anchoring the whole document at its root - pinning the
+            // offending attribute (issue #18) when the violation is attribute-
+            // level. It still doesn't name the specific rule that failed; that
+            // stays a genuine catch-all.
+            let text = "content document does not conform to the EPUB XHTML content-model schema";
+            let rule = "opf.content_document.schema_violation";
+            match blame {
+                crate::rng::Blame::Element(n) => {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        text,
+                        path.clone(),
+                        n,
+                        rule,
+                        Vec::new(),
+                    );
+                }
+                crate::rng::Blame::Attribute(n, a) => {
+                    report.push_node_attr(
+                        RSC_005,
+                        Severity::Error,
+                        text,
+                        path.clone(),
+                        n,
+                        a,
+                        rule,
+                        Vec::new(),
+                    );
+                }
+            }
         }
 
         // --- SVG content models: foreignObject (flow content, reused via
