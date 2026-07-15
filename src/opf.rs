@@ -3279,7 +3279,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     Vec::new(),
                 );
             }
-            crate::indexes::check_content_model(&d, &path, report);
+            // epubcheck applies the index content-model schematron
+            // (idx-xhtml.sch) only to documents *declared* as an index - a
+            // manifest `properties="index"` item, a document linked from an
+            // index `<collection>`, or (whole publication) `dc:type="index"`
+            // - never to a document that merely *contains* an
+            // `epub:type="index"` element. A nav landmark like `<a epub:type=
+            // "index" href="index.xhtml">` is such an element but sits in an
+            // ordinary nav document, which OPSChecker/NavChecker leave
+            // unvalidated by this schema. Gating on the same signal avoids a
+            // false RSC-005 on those landmarks (Doitsu, MobileRead #72).
+            if manifest_index_paths.contains(&doc_key)
+                || collection_index_paths.contains(&doc_key)
+                || is_index_pub
+            {
+                crate::indexes::check_content_model(&d, &path, report);
+            }
         }
 
         let declared_prefixes =
@@ -6743,5 +6758,112 @@ mod tests {
             <body><p>a&nbsp;b</p></body></html>";
         let rules = rsc_016_rules(ch1);
         assert_eq!(rules, vec!["htm.entity.undeclared"], "got: {rules:?}");
+    }
+
+    /// Build an EPUB 3 whose `ch1` manifest item carries `ch1_props` (e.g.
+    /// `"index"` to declare it an index document, or `""` for none), with the
+    /// given nav-document and ch1 `<body>` inner markup — for the index
+    /// content-model gating checks.
+    fn epub_index_case(ch1_props: &str, nav_body: &str, ch1_body: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let props_attr = if ch1_props.is_empty() {
+            String::new()
+        } else {
+            format!(r#" properties="{ch1_props}""#)
+        };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"{props_attr}/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        let nav = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body>{nav_body}</body></html>"#
+        );
+        let ch1 = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>C</title></head>
+<body>{ch1_body}</body></html>"#
+        );
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ("OEBPS/nav.xhtml", nav.as_str()),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    fn has_index_content_model_error(book: Vec<u8>) -> bool {
+        crate::validate_bytes(book)
+            .messages
+            .iter()
+            .any(|m| m.rule == Some("indexes.content_model.wrong_entry_list_count"))
+    }
+
+    #[test]
+    fn index_content_model_skips_a_nav_landmark_that_is_not_a_declared_index() {
+        // Doitsu, MobileRead #72: a nav landmark `<a epub:type="index">` is not
+        // an index structure, and its document is not declared an index in the
+        // OPF, so epubcheck never applies the index content-model schema to it.
+        // We must not either — no false RSC-005 "must contain ... index-entry-list".
+        let nav = r#"<nav epub:type="toc"><ol>
+            <li><a href="ch1.xhtml">Ch1</a></li>
+            <li><a epub:type="index" href="ch1.xhtml">Index</a></li>
+          </ol></nav>"#;
+        assert!(
+            !has_index_content_model_error(epub_index_case("", nav, "<p>Hi</p>")),
+            "a nav index landmark must not trigger the index content-model check"
+        );
+    }
+
+    #[test]
+    fn index_content_model_still_fires_on_a_declared_index_document() {
+        // The positive control for the gate above: a document actually declared
+        // an index (`properties="index"`) with a malformed index (no
+        // index-entry-list) must still be flagged.
+        let nav = r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>"#;
+        assert!(
+            has_index_content_model_error(epub_index_case(
+                "index",
+                nav,
+                r#"<section epub:type="index"><h1>Idx</h1></section>"#
+            )),
+            "a declared index with no index-entry-list must still be flagged"
+        );
     }
 }
