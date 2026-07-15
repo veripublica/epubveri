@@ -1,17 +1,18 @@
-//! A pure-Rust, derivative-based RELAX NG validation engine (phase 1 of the
-//! schema engine). This module is the reusable core; it is **not yet wired into
-//! the validator** — the next increment loads real RNG schema files and maps
-//! failures to `RSC-005`. For now it is exercised by unit tests with a tiny
-//! hand-built grammar and the real (simplified) `container.xml` grammar,
-//! constructed via the builder API (so there is no schema-file provenance
-//! question yet).
+//! A pure-Rust, derivative-based RELAX NG validation engine. It is the reusable
+//! core behind the `RSC-005` schema checks: [`package_grammar`] and
+//! [`xhtml_grammar`] (loaded from the committed, from-scratch `schemas/*.rng`)
+//! back the OPF and XHTML content-model validation in `opf.rs`, and
+//! [`validate_node_report`] names *which* node collapsed the model so the
+//! finding carries a real `line:column` and element path (issue #17), not just
+//! a whole-document verdict. The `container.xml` grammar ([`container_grammar`])
+//! is built via the pattern API instead of a schema file.
 
 pub mod datatype;
 pub mod derive;
 pub mod load;
 pub mod pattern;
 
-pub use derive::{Grammar, validate_node, validate_xml};
+pub use derive::{Grammar, validate_node, validate_node_report, validate_xml};
 pub use load::load;
 pub use pattern::*;
 
@@ -106,6 +107,13 @@ mod tests {
         validate_xml(g, xml).unwrap()
     }
 
+    /// The local name of the node `validate_node_report` blames, or `None` if
+    /// the document is valid (issue #17: a failure names *which* node).
+    fn fail_local(g: &Grammar, xml: &str) -> Option<String> {
+        let doc = roxmltree::Document::parse(xml).unwrap();
+        validate_node_report(g, doc.root_element()).map(|n| n.tag_name().name().to_string())
+    }
+
     #[test]
     fn toy_grammar_accepts_valid() {
         let g = note_grammar();
@@ -191,6 +199,25 @@ mod tests {
     fn xhtml_grammar_rejects_obsolete_element() {
         let xml = xhtml_doc("<keygen/>");
         assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn report_names_the_offending_node_not_the_root() {
+        // issue #17: a content-model failure must point at *which* node
+        // collapsed the model, so the RSC-005 gets a real line:column.
+        // Valid → no blame.
+        assert_eq!(fail_local(&xhtml_grammar(), &xhtml_doc("<p>ok</p>")), None);
+        // A `<span>` where the content model does not allow it (inside `<ol>`,
+        // which takes list items) is blamed at the span itself, not `<html>`.
+        assert_eq!(
+            fail_local(&xhtml_grammar(), &xhtml_doc("<ol><span>x</span></ol>")).as_deref(),
+            Some("span")
+        );
+        // An obsolete element is blamed at itself.
+        assert_eq!(
+            fail_local(&xhtml_grammar(), &xhtml_doc("<keygen/>")).as_deref(),
+            Some("keygen")
+        );
     }
 
     #[test]

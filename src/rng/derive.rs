@@ -282,39 +282,108 @@ impl<'a> Env<'a> {
         }
     }
 
-    fn children_deriv(&self, p: &Pat, parent: roxmltree::Node) -> Pat {
+    // The two tree-walking derivatives thread a `fail` slot so a failed
+    // validation can name *which* node collapsed the content model (issue #17),
+    // instead of only reporting the whole document invalid. Because the smart
+    // constructors absorb `notAllowed` (`choice(NA,b)=b`, `group(NA,_)=NA`, …),
+    // the accumulated `cur` here becomes `NotAllowed` only when *every*
+    // speculative branch has died — so the step that first turns `cur` into
+    // `NotAllowed` is the true, unambiguous failure point. `get_or_insert` keeps
+    // the earliest (deepest/most-specific, since we recurse before checking a
+    // parent's own end-tag) node.
+    fn children_deriv<'d, 'i>(
+        &self,
+        p: &Pat,
+        parent: roxmltree::Node<'d, 'i>,
+        fail: &mut Option<roxmltree::Node<'d, 'i>>,
+    ) -> Pat {
         let mut cur = p.clone();
         for n in parent.children() {
             if n.is_element() {
-                cur = self.child_deriv(&cur, n);
+                cur = self.child_deriv(&cur, n, fail);
             } else if n.is_text() {
                 let s = n.text().unwrap_or("");
                 let d = self.text_deriv(&cur, s);
-                cur = if is_ws(s) { choice(cur.clone(), d) } else { d };
+                let next = if is_ws(s) { choice(cur.clone(), d) } else { d };
+                if is_not_allowed(&next) && !is_not_allowed(&cur) {
+                    // Disallowed loose text: anchor at the containing element.
+                    fail.get_or_insert(parent);
+                }
+                cur = next;
+            }
+            if is_not_allowed(&cur) {
+                break; // `notAllowed` is absorbing — the rest can't revive it
             }
         }
         cur
     }
 
-    fn child_deriv(&self, p: &Pat, node: roxmltree::Node) -> Pat {
+    fn child_deriv<'d, 'i>(
+        &self,
+        p: &Pat,
+        node: roxmltree::Node<'d, 'i>,
+        fail: &mut Option<roxmltree::Node<'d, 'i>>,
+    ) -> Pat {
         let ns = node.tag_name().namespace().unwrap_or("");
         let local = node.tag_name().name();
         let mut cur = self.start_tag_open_deriv(p, ns, local);
+        if is_not_allowed(&cur) {
+            fail.get_or_insert(node); // this element is not allowed here
+            return cur;
+        }
         for att in node.attributes() {
             let ans = att.namespace().unwrap_or("");
             cur = self.att_deriv(&cur, ans, att.name(), att.value());
         }
+        if is_not_allowed(&cur) {
+            fail.get_or_insert(node); // a present attribute is not allowed / invalid
+            return cur;
+        }
         cur = self.start_tag_close_deriv(&cur);
-        cur = self.children_deriv(&cur, node);
-        self.end_tag_deriv(&cur)
+        if is_not_allowed(&cur) {
+            fail.get_or_insert(node); // a required attribute is missing
+            return cur;
+        }
+        cur = self.children_deriv(&cur, node, fail);
+        if is_not_allowed(&cur) {
+            return cur; // a descendant failed; `children_deriv` recorded it
+        }
+        cur = self.end_tag_deriv(&cur);
+        if is_not_allowed(&cur) {
+            fail.get_or_insert(node); // this element's content is incomplete
+        }
+        cur
     }
 }
 
-/// Validate a root element node against `grammar`.
-pub fn validate_node(grammar: &Grammar, root: roxmltree::Node) -> bool {
+fn is_not_allowed(p: &Pat) -> bool {
+    matches!(**p, Pattern::NotAllowed)
+}
+
+/// Validate a root element node against `grammar`, returning the node where the
+/// content model was first violated, or `None` if the document is valid. The
+/// node gives a real `line:column` (and element path) for the resulting
+/// diagnostic, instead of anchoring the whole document at its root (issue #17).
+pub fn validate_node_report<'d, 'i>(
+    grammar: &Grammar,
+    root: roxmltree::Node<'d, 'i>,
+) -> Option<roxmltree::Node<'d, 'i>> {
     let env = Env::new(&grammar.defs);
-    let p = env.child_deriv(&grammar.start, root);
-    env.nullable(&p)
+    let mut fail = None;
+    let p = env.child_deriv(&grammar.start, root, &mut fail);
+    if env.nullable(&p) {
+        None
+    } else {
+        // A non-nullable final pattern always went through a `notAllowed` step
+        // (every element's completeness is checked at its end-tag), so `fail` is
+        // set; fall back to the root only defensively.
+        Some(fail.unwrap_or(root))
+    }
+}
+
+/// Validate a root element node against `grammar` (valid iff no failure node).
+pub fn validate_node(grammar: &Grammar, root: roxmltree::Node) -> bool {
+    validate_node_report(grammar, root).is_none()
 }
 
 /// Parse `xml` and validate its root element against `grammar`.
