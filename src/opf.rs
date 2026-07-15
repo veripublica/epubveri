@@ -1451,33 +1451,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // path, pinning the offending attribute when attribute-level. It still
     // doesn't name the specific rule that failed; a catch-all here.
     {
-        let text = "OPF does not conform to the EPUB package-document schema";
         let rule = "opf.package.schema_violation";
         for blame in crate::rng::validate_node_report(&crate::rng::package_grammar(), pkg) {
-            match blame {
-                crate::rng::Blame::Element(n) => {
-                    report.push_node(
-                        RSC_005,
-                        Severity::Error,
-                        text,
-                        opf_path,
-                        n,
-                        rule,
-                        Vec::new(),
-                    );
-                }
-                crate::rng::Blame::Attribute(n, a) => {
-                    report.push_node_attr(
-                        RSC_005,
-                        Severity::Error,
-                        text,
-                        opf_path,
-                        n,
-                        a,
-                        rule,
-                        Vec::new(),
-                    );
-                }
+            let (text, params) = blame.describe();
+            match blame.attribute() {
+                Some(a) => report.push_node_attr(
+                    RSC_005,
+                    Severity::Error,
+                    text,
+                    opf_path,
+                    blame.node(),
+                    a,
+                    rule,
+                    params,
+                ),
+                None => report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    text,
+                    opf_path,
+                    blame.node(),
+                    rule,
+                    params,
+                ),
             }
         }
     }
@@ -3389,36 +3385,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // The grammar reports *where* the content model collapsed - every
         // offending node in document order (issues #17/#18), each with a real
         // line:column and element path instead of anchoring the whole document
-        // at its root, pinning the offending attribute when attribute-level. It
-        // still doesn't name the specific rule that failed; a genuine catch-all.
+        // at its root, pinning the offending attribute when attribute-level, and
+        // naming *what* is wrong (the offending element/attribute) in the message
+        // text, in the style of epubcheck's own RSC-005 wording (forum #78).
         {
-            let text = "content document does not conform to the EPUB XHTML content-model schema";
             let rule = "opf.content_document.schema_violation";
             for blame in crate::rng::validate_node_report(&xhtml_grammar, d.root_element()) {
-                match blame {
-                    crate::rng::Blame::Element(n) => {
-                        report.push_node(
-                            RSC_005,
-                            Severity::Error,
-                            text,
-                            path.clone(),
-                            n,
-                            rule,
-                            Vec::new(),
-                        );
-                    }
-                    crate::rng::Blame::Attribute(n, a) => {
-                        report.push_node_attr(
-                            RSC_005,
-                            Severity::Error,
-                            text,
-                            path.clone(),
-                            n,
-                            a,
-                            rule,
-                            Vec::new(),
-                        );
-                    }
+                let (text, params) = blame.describe();
+                match blame.attribute() {
+                    Some(a) => report.push_node_attr(
+                        RSC_005,
+                        Severity::Error,
+                        text,
+                        path.clone(),
+                        blame.node(),
+                        a,
+                        rule,
+                        params,
+                    ),
+                    None => report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        text,
+                        path.clone(),
+                        blame.node(),
+                        rule,
+                        params,
+                    ),
                 }
             }
         }

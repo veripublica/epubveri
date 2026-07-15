@@ -8,6 +8,40 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.8] - 2026-07-15
+
+Two fixes from MobileRead forum reports: a fatal false positive on EPUB 2 named
+character entities, and clearer `RSC-005` content-model messages. Corpus recall
+is unchanged (600/607) — neither changes a valid/invalid verdict.
+
+### Changed
+
+- **`RSC-005` content-model messages now name the offending element or attribute.**
+  A schema violation used to read as a blanket "content document does not conform
+  to the EPUB XHTML content-model schema"; it now says *what* is wrong — e.g.
+  `element "p" is not allowed here`, `character data is not allowed in element
+  "ol"`, `element "x" is missing a required attribute`, `element "x" has
+  incomplete content`, or `attribute "y" is not allowed here` — in the style of
+  epubcheck's own RSC-005 wording. The offending name is also surfaced as a
+  structured `data.params` entry alongside the existing `data.element_path`, so
+  the detail is visible in the plain CLI output, not only in the JSON envelope.
+  (Reported by Doitsu on the MobileRead forum. Naming the *expected* element as
+  well — epubcheck's "…; expected element "li"" — remains future work.)
+
+### Fixed
+
+- **EPUB 2 named character entities (`&nbsp;`, `&eacute;`, `&copy;`, …) no longer
+  raise a spurious `FATAL RSC-016`.** An EPUB 2 XHTML content document pulls the
+  full set of standard HTML named entities in through its external DTD (XHTML 1.1
+  or OEB 1.2), referenced by the DOCTYPE; because the underlying XML parser does
+  not resolve external DTDs, every such reference was being reported as an
+  undeclared entity — a fatal false positive epubcheck never emits, and a painful
+  one since `&nbsp;` is ubiquitous (especially in French ebooks and `<p>&nbsp;</p>`
+  spacing). These references are now accepted when the document carries a
+  recognized EPUB 2 XHTML/OEB DOCTYPE. Genuinely undeclared entities still fail,
+  and EPUB 3 is unchanged (it requires numeric references). (Reported by Doitsu,
+  confirmed by KevinH, on the MobileRead forum.)
+
 ## [0.5.7] - 2026-07-15
 
 Two content-model reporting improvements, both grounded in forum feedback.
