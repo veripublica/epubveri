@@ -37,6 +37,30 @@ impl<'a, 'input: 'a> NodeExt<'a> for roxmltree::Node<'a, 'input> {
     }
 }
 
+/// The attribute with local name `name` and **no namespace** as a whole
+/// [`roxmltree::Attribute`] (not just its value, like [`NodeExt::attr_no_ns`]) —
+/// for passing to [`Report::push_node_attr`](crate::report::Report::push_node_attr)
+/// so a finding's `element_path` can pin `@name` (issue #18).
+pub(crate) fn attr_no_ns_node<'a, 'input>(
+    node: roxmltree::Node<'a, 'input>,
+    name: &str,
+) -> Option<roxmltree::Attribute<'a, 'input>> {
+    node.attributes()
+        .find(|a| a.namespace().is_none() && a.name() == name)
+}
+
+/// Like [`attr_no_ns_node`], but for the attribute with local name `name` in
+/// namespace `uri` (e.g. `epub:prefix` in the OPS namespace) — the whole
+/// [`roxmltree::Attribute`], for `@prefix:name`-targeted findings (issue #18).
+pub(crate) fn attr_ns_node<'a, 'input>(
+    node: roxmltree::Node<'a, 'input>,
+    uri: &str,
+    name: &str,
+) -> Option<roxmltree::Attribute<'a, 'input>> {
+    node.attributes()
+        .find(|a| a.namespace() == Some(uri) && a.name() == name)
+}
+
 /// A machine-resolvable, XPath/lxml-ElementPath-style location for a
 /// node-anchored finding (issue #18), plus the namespace bindings needed to
 /// resolve it against a parsed tree.
@@ -276,6 +300,25 @@ mod tests {
             .nth(2)
             .unwrap();
         assert_eq!(node_path(third_col).path, "/t[1]/col[3]");
+    }
+
+    #[test]
+    fn attr_node_helpers_select_by_namespace() {
+        let doc = roxmltree::Document::parse(
+            r#"<r xmlns:epub="http://www.idpf.org/2007/ops" prefix="a" epub:prefix="b"/>"#,
+        )
+        .unwrap();
+        let r = doc.root_element();
+        // no-ns helper sees the plain attribute, not its namespaced sibling
+        assert_eq!(super::attr_no_ns_node(r, "prefix").unwrap().value(), "a");
+        // ns helper sees only the one in the given namespace
+        assert_eq!(
+            super::attr_ns_node(r, "http://www.idpf.org/2007/ops", "prefix")
+                .unwrap()
+                .value(),
+            "b"
+        );
+        assert!(super::attr_ns_node(r, "http://example.org/other", "prefix").is_none());
     }
 
     #[test]
