@@ -4,7 +4,7 @@
 //! needs the OPF's own manifest/container context and lives in `opf.rs`.
 
 use crate::ids::*;
-use crate::report::{Position, Report, Severity};
+use crate::report::{Report, Severity};
 use crate::xmlext::NodeExt;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
@@ -39,12 +39,12 @@ pub(crate) fn check_content_doc(doc: &roxmltree::Document, path: &str, report: &
             .filter(|c| c.is_element() && c.tag_name().name() == "article")
             .collect();
         if articles.is_empty() {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 "A \"dictionary\" must have at least one article child",
                 path,
-                Position::of(n),
+                n,
                 "dict.content_document.no_articles",
                 Vec::new(),
             );
@@ -55,12 +55,12 @@ pub(crate) fn check_content_doc(doc: &roxmltree::Document, path: &str, report: &
                 .descendants()
                 .any(|d| d.is_element() && d.tag_name().name() == "dfn");
             if !has_dfn {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "A dictionary entry must have at least one \"dfn\" descendant",
                     path,
-                    Position::of(article),
+                    article,
                     "dict.content_document.article_missing_dfn",
                     Vec::new(),
                 );
@@ -81,12 +81,12 @@ pub(crate) fn check_skm(doc: &roxmltree::Document, path: &str, report: &mut Repo
         .filter(|c| c.is_element() && c.tag_name().name() == "search-key-group")
         .collect();
     if groups.is_empty() {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "element \"search-key-map\" incomplete; missing required element \"search-key-group\"",
             path,
-            Position::of(root),
+            root,
             "dict.search_key_map.no_groups",
             Vec::new(),
         );

@@ -37,12 +37,12 @@ pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: 
     }
 
     for m in metas.iter().skip(1) {
-        report.push_full(
+        report.push_node(
             HTM_060,
             Severity::Info,
             "additional viewport meta elements are not checked",
             path,
-            Position::of(*m),
+            *m,
             "layout.viewport.additional_meta_ignored",
             Vec::new(),
         );
@@ -64,12 +64,12 @@ pub(crate) fn check_reflowable_viewport(d: &roxmltree::Document, path: &str, rep
         n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("name") == Some("viewport")
     });
     if let Some(n) = viewport {
-        report.push_full(
+        report.push_node(
             HTM_060,
             Severity::Info,
             "viewport metadata is not checked in reflowable content documents",
             path,
-            Position::of(n),
+            n,
             "layout.viewport.reflowable_not_checked",
             Vec::new(),
         );
@@ -110,12 +110,12 @@ fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, repo
                 if value.is_empty() {
                     has_blank_value = true;
                 } else if !is_valid_viewport_value(key, value) {
-                    report.push_full(
+                    report.push_node(
                         HTM_057,
                         Severity::Error,
                         format!("viewport '{key}' value '{value}' is not valid"),
                         path,
-                        Position::of(node),
+                        node,
                         "layout.viewport.invalid_value",
                         vec![key.to_string(), value.to_string()],
                     );
@@ -124,12 +124,12 @@ fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, repo
             None => {
                 if matches!(piece, "width" | "height") {
                     *seen.entry(piece).or_insert(0) += 1;
-                    report.push_full(
+                    report.push_node(
                         HTM_057,
                         Severity::Error,
                         format!("viewport '{piece}' has no value"),
                         path,
-                        Position::of(node),
+                        node,
                         "layout.viewport.missing_value",
                         vec![piece.to_string()],
                     );

@@ -118,6 +118,12 @@ pub struct Message {
     /// keyed by `rule`, instead of parsing the English sentence. Empty
     /// when `rule` is `None` or the message has no interpolated values.
     pub params: Vec<String>,
+    /// A machine-resolvable, XPath-style path to the offending node, with the
+    /// namespace bindings needed to resolve it (issue #18). `Some` only at
+    /// sites emitted through [`push_node`](Report::push_node) /
+    /// [`push_node_attr`](Report::push_node_attr) — i.e. that had a
+    /// `roxmltree` node in hand. Rollout is incremental, like `rule`/`params`.
+    pub element_path: Option<crate::xmlext::NodePath>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -139,6 +145,7 @@ impl Report {
             position: None,
             rule: None,
             params: Vec::new(),
+            element_path: None,
         });
     }
 
@@ -157,6 +164,7 @@ impl Report {
             position: None,
             rule: None,
             params: Vec::new(),
+            element_path: None,
         });
     }
 
@@ -178,6 +186,7 @@ impl Report {
             position: Some(position),
             rule: None,
             params: Vec::new(),
+            element_path: None,
         });
     }
 
@@ -202,6 +211,7 @@ impl Report {
             position: None,
             rule: Some(rule),
             params,
+            element_path: None,
         });
     }
 
@@ -227,6 +237,7 @@ impl Report {
             position: None,
             rule: Some(rule),
             params,
+            element_path: None,
         });
     }
 
@@ -254,6 +265,61 @@ impl Report {
             position: Some(position),
             rule: Some(rule),
             params,
+            element_path: None,
+        });
+    }
+
+    /// Like `push_full`, but derives both the source `position` and a
+    /// machine-resolvable `element_path` (issue #18) from the `roxmltree`
+    /// node the finding is anchored at, instead of a pre-computed `Position`.
+    /// For node-anchored sites whose finding is about a whole element.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_node(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        location: impl Into<String>,
+        node: roxmltree::Node,
+        rule: &'static str,
+        params: Vec<String>,
+    ) {
+        self.messages.push(Message {
+            id,
+            severity,
+            text: text.into(),
+            location: Some(location.into()),
+            position: Some(Position::of(node)),
+            rule: Some(rule),
+            params,
+            element_path: Some(crate::xmlext::node_path(node)),
+        });
+    }
+
+    /// Like `push_node`, but the finding is about a specific `attr` of `node`:
+    /// the `element_path` ends in an `/@name` step pinning that attribute
+    /// (issue #18). The `position` still points at the element.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_node_attr(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        location: impl Into<String>,
+        node: roxmltree::Node,
+        attr: roxmltree::Attribute,
+        rule: &'static str,
+        params: Vec<String>,
+    ) {
+        self.messages.push(Message {
+            id,
+            severity,
+            text: text.into(),
+            location: Some(location.into()),
+            position: Some(Position::of(node)),
+            rule: Some(rule),
+            params,
+            element_path: Some(crate::xmlext::node_path_attr(node, attr)),
         });
     }
 

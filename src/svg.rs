@@ -182,12 +182,12 @@ fn check_one_epub_attribute(
     if attr.name() == "type" {
         let name = n.tag_name().name();
         if EPUB_TYPE_FORBIDDEN_ELEMENTS.contains(&name) || !is_recognized_element(name) {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 "attribute \"epub:type\" not allowed here",
                 path,
-                Position::of(n),
+                n,
                 "svg.epub_attributes.type_not_allowed",
                 Vec::new(),
             );
@@ -198,12 +198,12 @@ fn check_one_epub_attribute(
         // (confirmed via a real fixture declaring `epub:prefix` on an
         // SVG root and expecting zero findings).
     } else {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             format!("attribute \"epub:{}\" not allowed here", attr.name()),
             path,
-            Position::of(n),
+            n,
             "svg.epub_attributes.attribute_not_allowed",
             vec![attr.name().to_string()],
         );
@@ -230,12 +230,12 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
     for n in svg_root.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attr_no_ns("id") {
             if !is_valid_ncname(id) {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     format!("value of attribute \"id\" is invalid: '{id}'"),
                     path,
-                    Position::of(n),
+                    n,
                     "svg.ids.invalid_ncname",
                     vec![id.to_string()],
                 );
@@ -247,12 +247,12 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
         if let Some(id) = n.attr_no_ns("id")
             && by_id.get(id).copied().unwrap_or(0) > 1
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("Duplicate \"id\" value '{id}'"),
                 path,
-                Position::of(n),
+                n,
                 "svg.ids.duplicate_id",
                 vec![id.to_string()],
             );
@@ -297,12 +297,12 @@ pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &
 fn check_href_attribute(n: roxmltree::Node, path: &str, report: &mut Report) {
     let name = n.tag_name().name();
     if !matches!(name, "a" | "area" | "link" | "base") && n.has_attr_no_ns("href") {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "attribute \"href\" not allowed here",
             path,
-            Position::of(n),
+            n,
             "svg.content_model.href_not_allowed",
             Vec::new(),
         );
@@ -320,7 +320,7 @@ pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &m
     for n in title.descendants().skip(1).filter(|n| n.is_element()) {
         let ns = n.tag_name().namespace();
         if ns != Some(XHTML_NS) {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!(
@@ -328,7 +328,7 @@ pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &m
                     ns.unwrap_or("")
                 ),
                 path,
-                Position::of(n),
+                n,
                 "svg.title.foreign_namespace",
                 vec![ns.unwrap_or("").to_string()],
             );
@@ -423,12 +423,12 @@ pub(crate) fn check_foreign_object(
     if !crate::rng::validate_node(&crate::rng::xhtml_grammar(), doc.root_element()) {
         // Genuine catch-all, same caveat as opf.rs's RNG-backed checks:
         // the grammar doesn't expose which rule failed.
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "foreignObject content does not conform to the EPUB XHTML content-model schema",
             path,
-            Position::of(fo),
+            fo,
             "svg.foreign_object.schema_violation",
             Vec::new(),
         );

@@ -54,24 +54,24 @@ pub(crate) fn check_preview_publication(
         .map(elem_text);
     match source {
         None => {
-            report.push_full(
+            report.push_node(
                 RSC_017,
                 Severity::Warning,
                 "An EPUB Preview publication should link back to its source Publication",
                 opf_path,
-                Position::of(md),
+                md,
                 "previews.metadata.missing_source_link",
                 Vec::new(),
             );
         }
         Some(text) => {
             if package_identifier_text.is_some_and(|id| id == text) {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "A Preview Publication must not use the same package identifier as its source Publication",
                     opf_path,
-                    Position::of(md),
+                    md,
                     "previews.metadata.identifier_matches_source",
                     Vec::new(),
                 );
@@ -109,12 +109,12 @@ pub(crate) fn check_embedded_preview(
             })
             .count();
         if manifest_count != 1 {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 "A preview collection must include exactly one child \"manifest\" collection",
                 opf_path,
-                Position::of(coll),
+                coll,
                 "previews.collection.wrong_manifest_count",
                 vec![manifest_count.to_string()],
             );
@@ -124,12 +124,12 @@ pub(crate) fn check_embedded_preview(
             .filter(|n| n.is_element() && n.tag_name().name() == "link")
             .collect();
         if links.is_empty() {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 "A preview collection must include at least one child \"link\" element",
                 opf_path,
-                Position::of(coll),
+                coll,
                 "previews.collection.no_links",
                 Vec::new(),
             );

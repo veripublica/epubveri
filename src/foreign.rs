@@ -160,12 +160,12 @@ fn check_single(
         return;
     };
     if category == Category::Foreign && !reaches_core {
-        report.push_full(
+        report.push_node(
             RSC_032,
             Severity::Error,
             format!("{elname} references a foreign resource '{href}' with no fallback"),
             path,
-            Position::of(node),
+            node,
             "foreign.single.no_fallback",
             vec![elname.to_string(), href.to_string()],
         );
@@ -203,12 +203,12 @@ fn check_candidate_group(
         }
     }
     if any_known && !any_ok {
-        report.push_full(
+        report.push_node(
             RSC_032,
             Severity::Error,
             format!("{elname} references only foreign resources with no fallback"),
             path,
-            Position::of(node),
+            node,
             "foreign.candidate_group.no_fallback",
             vec![elname.to_string()],
         );

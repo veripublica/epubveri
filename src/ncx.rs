@@ -66,12 +66,12 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attr_no_ns("id") {
             if !is_valid_ncname(id) {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     format!("value of attribute \"id\" is invalid: '{id}'"),
                     ncx_path,
-                    Position::of(n),
+                    n,
                     "ncx.ids.invalid_ncname",
                     vec![id.to_string()],
                 );
@@ -83,12 +83,12 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
         if let Some(id) = n.attr_no_ns("id")
             && by_id.get(id).copied().unwrap_or(0) > 1
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("The \"id\" attribute does not have a unique value: '{id}'"),
                 ncx_path,
-                Position::of(n),
+                n,
                 "ncx.ids.duplicate_id",
                 vec![id.to_string()],
             );
@@ -114,12 +114,12 @@ fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &m
         if let Some(ty) = n.attr_no_ns("type")
             && !matches!(ty, "front" | "normal" | "special")
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("value of attribute \"type\" is invalid: '{ty}'"),
                 ncx_path,
-                Position::of(n),
+                n,
                 "ncx.page_target.invalid_type",
                 vec![ty.to_string()],
             );

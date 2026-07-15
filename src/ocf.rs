@@ -396,12 +396,12 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     // violation.
     for child in doc.root_element().children().filter(|n| n.is_element()) {
         if !matches!(child.tag_name().name(), "rootfiles" | "links") {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("element \"{}\" not allowed here", child.tag_name().name()),
                 CONTAINER,
-                Position::of(child),
+                child,
                 "ocf.container.unexpected_child",
                 vec![child.tag_name().name().to_string()],
             );
@@ -437,12 +437,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     };
 
     if doc.root_element().tag_name().name() != "encryption" {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "expected element \"encryption\" as the root of META-INF/encryption.xml",
             ENC,
-            Position::of(doc.root_element()),
+            doc.root_element(),
             "ocf.encryption.wrong_root_element",
             Vec::new(),
         );
@@ -464,12 +464,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         if let Some(id) = n.attr_no_ns("Id")
             && by_id.get(id).copied().unwrap_or(0) > 1
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("Duplicate \"Id\" value '{id}'"),
                 ENC,
-                Position::of(n),
+                n,
                 "ocf.encryption.duplicate_id",
                 vec![id.to_string()],
             );
@@ -485,12 +485,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         if let Some(method) = n.attr_no_ns("Method")
             && !matches!(method, "0" | "8")
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 "value of attribute \"Method\" is invalid",
                 ENC,
-                Position::of(n),
+                n,
                 "ocf.encryption.invalid_compression_method",
                 vec![method.to_string()],
             );
@@ -498,12 +498,12 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         if let Some(len) = n.attr_no_ns("OriginalLength")
             && (len.is_empty() || !len.bytes().all(|b| b.is_ascii_digit()))
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 "value of attribute \"OriginalLength\" is invalid",
                 ENC,
-                Position::of(n),
+                n,
                 "ocf.encryption.invalid_original_length",
                 vec![len.to_string()],
             );
@@ -550,12 +550,12 @@ pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
         }
     };
     if doc.root_element().tag_name().name() != "signatures" {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "expected element \"signatures\" as the root of META-INF/signatures.xml",
             SIG,
-            Position::of(doc.root_element()),
+            doc.root_element(),
             "ocf.signatures.wrong_root_element",
             Vec::new(),
         );
