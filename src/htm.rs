@@ -353,12 +353,12 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
         if node.tag_name().namespace() == Some(XHTML_NS)
             && HTML5_ONLY_ELEMENTS.contains(&node.tag_name().name())
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("element \"{}\" not allowed here", node.tag_name().name()),
                 path,
-                Position::of(node),
+                node,
                 "htm.epub2_dom.html5_only_element",
                 vec![node.tag_name().name().to_string()],
             );
@@ -367,12 +367,12 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
             if let Some(ns) = attr.namespace()
                 && !KNOWN_NAMESPACES.contains(&ns)
             {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     format!("attribute \"{}\" not allowed here", attr.name()),
                     path,
-                    Position::of(node),
+                    node,
                     "htm.epub2_dom.custom_namespaced_attribute",
                     vec![attr.name().to_string()],
                 );
@@ -385,12 +385,12 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
                     && d.tag_name().name() == "a"
             });
             if nested {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "The \"a\" element cannot contain any nested \"a\" elements",
                     path,
-                    Position::of(node),
+                    node,
                     "htm.epub2_dom.nested_anchor",
                     Vec::new(),
                 );

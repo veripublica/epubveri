@@ -50,12 +50,12 @@ pub(crate) fn check(
     {
         for child in head.children().filter(|n| n.is_element()) {
             if child.tag_name().name() == "meta" {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "element \"meta\" not allowed here (must be inside a \"metadata\" element)",
                     smil_path,
-                    Position::of(child),
+                    child,
                     "smil.head.bare_meta_not_allowed",
                     Vec::new(),
                 );
@@ -108,12 +108,12 @@ pub(crate) fn check(
         let value = n.attribute((EPUB_NS, "type")).unwrap();
         for token in value.split_whitespace() {
             if !token.contains(':') && !is_default_vocab_type(token) {
-                report.push_full(
+                report.push_node(
                     OPF_088,
                     Severity::Usage,
                     format!("epub:type value '{token}' is not in the default vocabulary"),
                     smil_path,
-                    Position::of(n),
+                    n,
                     "opf.content_document.epub_type_not_default_vocab",
                     vec![token.to_string()],
                 );
@@ -276,12 +276,12 @@ fn check_container(
             (true, "text") => {
                 text_seen += 1;
                 if text_seen > 1 {
-                    report.push_full(
+                    report.push_node(
                         RSC_005,
                         Severity::Error,
                         "element \"text\" not allowed here (a <par> may only contain one)",
                         smil_path,
-                        Position::of(child),
+                        child,
                         "smil.container.multiple_text_in_par",
                         Vec::new(),
                     );
@@ -293,23 +293,23 @@ fn check_container(
                 check_audio(child, smil_path, base_dir, name_index, media_types, report);
             }
             (true, "seq") | (true, "par") => {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "a <par> element must not contain a nested <seq>/<par>",
                     smil_path,
-                    Position::of(child),
+                    child,
                     "smil.container.nested_seq_or_par_in_par",
                     Vec::new(),
                 );
             }
             (false, "text") | (false, "audio") => {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "media clips must be inside a <par> element",
                     smil_path,
-                    Position::of(child),
+                    child,
                     "smil.container.media_clip_outside_par",
                     Vec::new(),
                 );
@@ -344,12 +344,12 @@ fn check_text(
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
-        report.push_full(
+        report.push_node(
             RSC_001,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
-            Position::of(node),
+            node,
             "smil.text.missing_resource",
             vec![src.to_string()],
         );
@@ -428,12 +428,12 @@ fn check_audio(
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
-        report.push_full(
+        report.push_node(
             RSC_001,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
-            Position::of(node),
+            node,
             "smil.audio.missing_resource",
             vec![src.to_string()],
         );
@@ -453,12 +453,12 @@ fn check_audio(
         if let Some(v) = node.attr_no_ns(attr_name)
             && parse_clock_value(v).is_none()
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("{attr_name} value '{v}' is not a valid SMIL clock value"),
                 smil_path,
-                Position::of(node),
+                node,
                 "smil.audio.invalid_clock_value",
                 vec![attr_name.to_string(), v.to_string()],
             );

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 
 use crate::ids::*;
-use crate::report::{Position, Report, Severity};
+use crate::report::{Report, Severity};
 use crate::xmlext::NodeExt;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
@@ -39,12 +39,12 @@ fn check_hidden_attrs(doc: &roxmltree::Document, path: &str, report: &mut Report
         if let Some(v) = n.attr_no_ns("hidden")
             && !matches!(v, "" | "hidden")
         {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 "value of attribute \"hidden\" is invalid",
                 path,
-                Position::of(n),
+                n,
                 "navdoc.hidden_attribute.invalid_value",
                 vec![v.to_string()],
             );
@@ -67,12 +67,12 @@ fn check_li(li: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
     };
     let label_name = label.tag_name().name();
     if !matches!(label_name, "a" | "span") {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             format!("element \"{label_name}\" not allowed yet; expected element \"a\" or \"span\""),
             path,
-            Position::of(*label),
+            *label,
             "navdoc.li.invalid_label",
             vec![label_name.to_string()],
         );
@@ -80,24 +80,24 @@ fn check_li(li: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
     }
     let nested_ol = children.get(1).filter(|c| c.tag_name().name() == "ol");
     if label_name == "span" && nested_ol.is_none() {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "element \"li\" incomplete; missing required element \"ol\"",
             path,
-            Position::of(li),
+            li,
             "navdoc.li.span_missing_ol",
             Vec::new(),
         );
     }
     if let Some(ol) = nested_ol {
         if matches!(ty, "page-list" | "landmarks") {
-            report.push_full(
+            report.push_node(
                 RSC_017,
                 Severity::Warning,
                 format!("the \"{ty}\" nav must have no nested sublists"),
                 path,
-                Position::of(*ol),
+                *ol,
                 "navdoc.nav.nested_sublist_not_allowed",
                 vec![ty.to_string()],
             );
@@ -113,12 +113,12 @@ fn check_ol(ol: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
         .filter(|c| c.is_element() && c.tag_name().name() == "li")
         .collect();
     if lis.is_empty() {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "element \"ol\" incomplete",
             path,
-            Position::of(ol),
+            ol,
             "navdoc.ol.empty",
             Vec::new(),
         );
@@ -154,24 +154,24 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
                 .filter_map(|d| d.text())
                 .collect();
             if text.trim().is_empty() {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "Heading elements must contain text",
                     path,
-                    Position::of(h),
+                    h,
                     "navdoc.heading.empty_text",
                     Vec::new(),
                 );
             }
         }
         None if !matches!(ty, "toc" | "page-list" | "landmarks") => {
-            report.push_full(
+            report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!("the \"{ty}\" nav must have a heading"),
                 path,
-                Position::of(nav),
+                nav,
                 "navdoc.nav.missing_heading",
                 vec![ty.to_string()],
             );
@@ -180,12 +180,12 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
     }
     let Some(ol) = children.get(idx) else { return };
     if ol.tag_name().name() != "ol" {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             format!("element \"{}\" not allowed here", ol.tag_name().name()),
             path,
-            Position::of(*ol),
+            *ol,
             "navdoc.nav.expected_ol",
             vec![ol.tag_name().name().to_string()],
         );
@@ -219,12 +219,12 @@ fn check_toc_links(
             && mt != "application/xhtml+xml"
             && mt != "image/svg+xml"
         {
-            report.push_full(
+            report.push_node(
                 RSC_010,
                 Severity::Error,
                 format!("toc nav link '{href}' does not target a Content Document"),
                 path,
-                Position::of(a),
+                a,
                 "navdoc.toc.link_not_content_document",
                 vec![href.to_string()],
             );
@@ -246,12 +246,12 @@ fn check_landmarks(nav: roxmltree::Node, dir: &str, path: &str, report: &mut Rep
     {
         match a.attribute((EPUB_NS, "type")) {
             None => {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "Missing epub:type attribute on anchor inside \"landmarks\" nav",
                     path,
-                    Position::of(a),
+                    a,
                     "navdoc.landmarks.missing_epub_type",
                     Vec::new(),
                 );
@@ -286,12 +286,12 @@ fn check_landmarks(nav: roxmltree::Node, dir: &str, path: &str, report: &mut Rep
             let (types_j, key_j, _) = &entries[j];
             if key_i == key_j && types_i.iter().any(|t| types_j.contains(t)) {
                 reported[i] = true;
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "Another landmark was found with the same epub:type and same reference",
                     path,
-                    Position::of(*node_i),
+                    *node_i,
                     "navdoc.landmarks.duplicate_entry",
                     Vec::new(),
                 );
@@ -317,12 +317,12 @@ pub(crate) fn check(
         .collect();
 
     if !navs.iter().any(|n| nav_type(*n) == Some("toc")) {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "the nav document has no \"toc\" nav",
             path,
-            Position::of(doc.root_element()),
+            doc.root_element(),
             "navdoc.document.missing_toc",
             Vec::new(),
         );
@@ -332,12 +332,12 @@ pub(crate) fn check(
         .filter(|n| nav_type(**n) == Some("page-list"))
         .collect();
     if let Some(second) = page_lists.get(1) {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "Multiple occurrences of the \"page-list\" nav element",
             path,
-            Position::of(**second),
+            **second,
             "navdoc.document.multiple_page_list",
             Vec::new(),
         );
@@ -347,12 +347,12 @@ pub(crate) fn check(
         .filter(|n| nav_type(**n) == Some("landmarks"))
         .collect();
     if let Some(second) = landmarks.get(1) {
-        report.push_full(
+        report.push_node(
             RSC_005,
             Severity::Error,
             "Multiple occurrences of the \"landmarks\" nav element",
             path,
-            Position::of(**second),
+            **second,
             "navdoc.document.multiple_landmarks",
             Vec::new(),
         );
@@ -368,12 +368,12 @@ pub(crate) fn check(
             .filter(|n| n.is_element() && n.tag_name().name() == "a")
         {
             if !has_text_or_image(a) {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "Anchors within nav elements must contain text",
                     path,
-                    Position::of(a),
+                    a,
                     "navdoc.label.empty_anchor",
                     Vec::new(),
                 );
@@ -384,12 +384,12 @@ pub(crate) fn check(
             .filter(|n| n.is_element() && n.tag_name().name() == "span")
         {
             if !has_text_or_image(span) {
-                report.push_full(
+                report.push_node(
                     RSC_005,
                     Severity::Error,
                     "Spans within nav elements must contain text",
                     path,
-                    Position::of(span),
+                    span,
                     "navdoc.label.empty_span",
                     Vec::new(),
                 );

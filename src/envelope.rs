@@ -25,6 +25,8 @@
 //! skeleton into a standalone `veripublica-envelope` crate. Until then every
 //! family tool already depends on epubveri, so the reference types live here.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
 use crate::report::{Message, Report};
@@ -299,8 +301,14 @@ impl Item<Data> {
                 column: p.column,
             }),
             m.text.clone(),
-            (!m.params.is_empty()).then(|| Data {
+            (!m.params.is_empty() || m.element_path.is_some()).then(|| Data {
                 params: m.params.clone(),
+                element_path: m.element_path.as_ref().map(|p| p.path.clone()),
+                namespaces: m
+                    .element_path
+                    .as_ref()
+                    .map(|p| p.namespaces.clone())
+                    .unwrap_or_default(),
             }),
         )
     }
@@ -315,7 +323,19 @@ pub struct Position {
 /// epubveri's `data` vocabulary; a transformer supplies its own `D`.
 #[derive(Serialize)]
 pub struct Data {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<String>,
+    /// A machine-resolvable, XPath-style path to the offending node (issue #18),
+    /// e.g. `/package[1]/metadata[1]/dc:contributor[1]/@opf:role`. Present only
+    /// on node-anchored findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_path: Option<String>,
+    /// Prefix -> namespace-URI bindings needed to resolve `element_path`
+    /// (default namespace under the `""` key). EPUB documents are always
+    /// namespaced and XPath 1.0 has no default-namespace concept, so the path
+    /// is not resolvable without these. Empty when there's no `element_path`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub namespaces: BTreeMap<String, String>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -401,5 +421,56 @@ mod tests {
         let v = serde_json::to_value(&item).unwrap();
         assert_eq!(v["type"], "fix");
         assert_eq!(v["outcome"], "applied");
+    }
+
+    fn msg_with(element_path: Option<crate::xmlext::NodePath>, params: Vec<String>) -> Message {
+        Message {
+            id: "RSC-005",
+            severity: crate::report::Severity::Error,
+            text: "x".into(),
+            location: Some("EPUB/package.opf".into()),
+            position: None,
+            rule: Some("opf.spine.duplicate_itemref"),
+            params,
+            element_path,
+        }
+    }
+
+    #[test]
+    fn element_path_and_namespaces_reach_the_finding_data() {
+        // A node-anchored finding (issue #18) carries a resolvable path plus the
+        // bindings needed to resolve it — default namespace under the "" key.
+        let np = crate::xmlext::NodePath {
+            path: "/package[1]/spine[1]/itemref[2]".into(),
+            namespaces: BTreeMap::from([(
+                String::new(),
+                "http://www.idpf.org/2007/opf".to_string(),
+            )]),
+        };
+        let item = Item::finding_of(&msg_with(Some(np), vec!["content_001".into()]));
+        let v = serde_json::to_value(&item).unwrap();
+        assert_eq!(v["data"]["element_path"], "/package[1]/spine[1]/itemref[2]");
+        assert_eq!(v["data"]["namespaces"][""], "http://www.idpf.org/2007/opf");
+        assert_eq!(v["data"]["params"][0], "content_001");
+    }
+
+    #[test]
+    fn element_path_only_finding_omits_the_empty_params_key() {
+        // params is skipped when empty, so an element_path-only finding's data is
+        // exactly {element_path, namespaces} — never a stray "params": [].
+        let np = crate::xmlext::NodePath {
+            path: "/html[1]/body[1]".into(),
+            namespaces: BTreeMap::new(),
+        };
+        let item = Item::finding_of(&msg_with(Some(np), Vec::new()));
+        let v = serde_json::to_value(&item).unwrap();
+        assert_eq!(key_set(&v["data"]), ["element_path"]);
+    }
+
+    #[test]
+    fn a_finding_without_path_or_params_has_no_data_key() {
+        let item = Item::finding_of(&msg_with(None, Vec::new()));
+        let v = serde_json::to_value(&item).unwrap();
+        assert!(v.get("data").is_none());
     }
 }
