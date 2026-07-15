@@ -326,14 +326,15 @@ pub struct Data {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<String>,
     /// A machine-resolvable, XPath-style path to the offending node (issue #18),
-    /// e.g. `/package[1]/metadata[1]/dc:contributor[1]/@opf:role`. Present only
-    /// on node-anchored findings.
+    /// e.g. `/opf:package[1]/opf:metadata[1]/dc:contributor[1]/@opf:role`.
+    /// Present only on node-anchored findings.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub element_path: Option<String>,
-    /// Prefix -> namespace-URI bindings needed to resolve `element_path`
-    /// (default namespace under the `""` key). EPUB documents are always
-    /// namespaced and XPath 1.0 has no default-namespace concept, so the path
-    /// is not resolvable without these. Empty when there's no `element_path`.
+    /// Prefix -> namespace-URI bindings needed to resolve `element_path`. Every
+    /// namespaced name in the path carries a bound, non-empty prefix (there is
+    /// no default-namespace / empty-string key), because XPath 1.0 — the engine
+    /// behind libxml2/lxml — cannot bind a default namespace. Empty when there's
+    /// no `element_path`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub namespaces: BTreeMap<String, String>,
 }
@@ -439,18 +440,24 @@ mod tests {
     #[test]
     fn element_path_and_namespaces_reach_the_finding_data() {
         // A node-anchored finding (issue #18) carries a resolvable path plus the
-        // bindings needed to resolve it — default namespace under the "" key.
+        // prefix->URI bindings needed to resolve it (every prefix non-empty).
         let np = crate::xmlext::NodePath {
-            path: "/package[1]/spine[1]/itemref[2]".into(),
+            path: "/opf:package[1]/opf:spine[1]/opf:itemref[2]".into(),
             namespaces: BTreeMap::from([(
-                String::new(),
+                "opf".to_string(),
                 "http://www.idpf.org/2007/opf".to_string(),
             )]),
         };
         let item = Item::finding_of(&msg_with(Some(np), vec!["content_001".into()]));
         let v = serde_json::to_value(&item).unwrap();
-        assert_eq!(v["data"]["element_path"], "/package[1]/spine[1]/itemref[2]");
-        assert_eq!(v["data"]["namespaces"][""], "http://www.idpf.org/2007/opf");
+        assert_eq!(
+            v["data"]["element_path"],
+            "/opf:package[1]/opf:spine[1]/opf:itemref[2]"
+        );
+        assert_eq!(
+            v["data"]["namespaces"]["opf"],
+            "http://www.idpf.org/2007/opf"
+        );
         assert_eq!(v["data"]["params"][0], "content_001");
     }
 
