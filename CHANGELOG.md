@@ -8,6 +8,44 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.5] - 2026-07-15
+
+Adds a **machine-resolvable node path** to JSON findings, so an automated
+consumer (an editor plugin, or a pipeline like Bookalope's) can jump straight to
+the offending node instead of re-deriving it from a line/column — plus a
+real-world false-positive fix. Both are additive: exact-ID recall against the
+epubcheck corpus is unchanged (600/607, 1.1% false positives).
+
+### Added
+
+- **`data.element_path` (with `data.namespaces`) on node-anchored findings.** A
+  rooted, XPath-style path with 1-based sibling indices — e.g.
+  `/package[1]/spine[1]/itemref[2]`, or, when the finding is about a specific
+  attribute, `…/dc:contributor[1]/@opf:role`. Names carry the source prefix as
+  authored (a default-namespaced element stays bare); because EPUB documents are
+  always namespaced and XPath 1.0 has no default-namespace concept, a
+  `namespaces` prefix→URI map (the default namespace under the `""` key) travels
+  alongside so a strict engine can resolve the path. Emitted across the
+  node-anchored OPF and content-document checks, and — where a finding is about
+  an attribute — pinning it directly (`@href`, `@prefix`, `@epub:prefix`, …).
+  This lives in the tool-owned `data` slot, so it is purely additive: a consumer
+  that ignores the field sees unchanged output.
+  ([issue #18](https://github.com/veripublica/epubveri/issues/18), requested by
+  Jens Tröger, mirroring the upstream ask on epubcheck.)
+
+### Fixed
+
+- **No more false `RSC-005` on a navigation-document index landmark.** A nav link
+  like `<a epub:type="index" href="index.xhtml">Index</a>` was wrongly treated as
+  an index *structure* and required to contain an `index-entry-list`. Matching
+  epubcheck, the index content-model check now runs only on documents *declared*
+  as an index (a manifest `properties="index"` item, a document linked from an
+  index `<collection>`, or `dc:type="index"`), never on a document that merely
+  *contains* an `epub:type="index"` element. A document actually declared an
+  index is still validated.
+  ([issue #19](https://github.com/veripublica/epubveri/issues/19), reported by
+  Doitsu on the MobileRead forum.)
+
 ## [0.5.4] - 2026-07-15
 
 A **foundation refresh**: the toolchain baseline and both behaviour-bearing
