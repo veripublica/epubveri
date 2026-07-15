@@ -282,37 +282,54 @@ impl<'a> Env<'a> {
         }
     }
 
-    // The two tree-walking derivatives thread a `fail` slot so a failed
-    // validation can name *which* node collapsed the content model (issue #17),
-    // instead of only reporting the whole document invalid. Because the smart
-    // constructors absorb `notAllowed` (`choice(NA,b)=b`, `group(NA,_)=NA`, …),
-    // the accumulated `cur` here becomes `NotAllowed` only when *every*
-    // speculative branch has died — so the step that first turns `cur` into
-    // `NotAllowed` is the true, unambiguous failure point. `get_or_insert` keeps
-    // the earliest (deepest/most-specific, since we recurse before checking a
-    // parent's own end-tag) node.
+    // The two tree-walking derivatives collect a `blames` list so a failed
+    // validation can name *which* nodes broke the content model (issues
+    // #17/#18), and — with lightweight error recovery — *all* of them, not just
+    // the first (matching epubcheck, which lists every offending node). The
+    // recovery is deliberately bounded: when a child element's *name* isn't
+    // allowed at its position, it's reported and skipped (the rest of the
+    // siblings are still checked); a child whose own attributes or content can't
+    // be validated is reported and then halts that branch. A document is valid
+    // iff `blames` stays empty — recovery may leave the final pattern nullable
+    // even when errors were found, so nullability is no longer the oracle.
     fn children_deriv<'d, 'i>(
         &self,
         p: &Pat,
         parent: roxmltree::Node<'d, 'i>,
-        fail: &mut Option<Blame<'d, 'i>>,
+        blames: &mut Vec<Blame<'d, 'i>>,
     ) -> Pat {
         let mut cur = p.clone();
         for n in parent.children() {
             if n.is_element() {
-                cur = self.child_deriv(&cur, n, fail);
+                let ns = n.tag_name().namespace().unwrap_or("");
+                let local = n.tag_name().name();
+                if is_not_allowed(&self.start_tag_open_deriv(&cur, ns, local)) {
+                    // Name not allowed here: report and skip it, keeping `cur`
+                    // (an element that never fit can't have consumed anything),
+                    // so the remaining siblings are still validated.
+                    blames.push(Blame::Element(n));
+                    continue;
+                }
+                cur = self.child_deriv(&cur, n, blames);
+                if is_not_allowed(&cur) {
+                    break; // the child's own attributes/content couldn't recover
+                }
             } else if n.is_text() {
                 let s = n.text().unwrap_or("");
-                let d = self.text_deriv(&cur, s);
-                let next = if is_ws(s) { choice(cur.clone(), d) } else { d };
-                if is_not_allowed(&next) && !is_not_allowed(&cur) {
-                    // Disallowed loose text: anchor at the containing element.
-                    fail.get_or_insert(Blame::Element(parent));
+                if is_ws(s) {
+                    // Whitespace is harmless: `choice(cur, NA) = cur`, so an
+                    // ignorable run never disturbs the pattern.
+                    cur = choice(cur.clone(), self.text_deriv(&cur, s));
+                } else {
+                    let d = self.text_deriv(&cur, s);
+                    if is_not_allowed(&d) {
+                        // Loose text not allowed: report (at the containing
+                        // element) and skip, keeping `cur`.
+                        blames.push(Blame::Element(parent));
+                    } else {
+                        cur = d;
+                    }
                 }
-                cur = next;
-            }
-            if is_not_allowed(&cur) {
-                break; // `notAllowed` is absorbing — the rest can't revive it
             }
         }
         cur
@@ -322,13 +339,15 @@ impl<'a> Env<'a> {
         &self,
         p: &Pat,
         node: roxmltree::Node<'d, 'i>,
-        fail: &mut Option<Blame<'d, 'i>>,
+        blames: &mut Vec<Blame<'d, 'i>>,
     ) -> Pat {
         let ns = node.tag_name().namespace().unwrap_or("");
         let local = node.tag_name().name();
         let mut cur = self.start_tag_open_deriv(p, ns, local);
         if is_not_allowed(&cur) {
-            fail.get_or_insert(Blame::Element(node)); // this element is not allowed here
+            // Only reached for the root element; sibling name-mismatches are
+            // handled (and skipped) in `children_deriv`.
+            blames.push(Blame::Element(node));
             return cur;
         }
         for att in node.attributes() {
@@ -337,22 +356,22 @@ impl<'a> Env<'a> {
             if is_not_allowed(&cur) {
                 // *This* attribute (present, but not allowed / invalid value) is
                 // the culprit — pin it, so the finding can target `@name`.
-                fail.get_or_insert(Blame::Attribute(node, att));
+                blames.push(Blame::Attribute(node, att));
                 return cur;
             }
         }
         cur = self.start_tag_close_deriv(&cur);
         if is_not_allowed(&cur) {
-            fail.get_or_insert(Blame::Element(node)); // a required attribute is missing
+            blames.push(Blame::Element(node)); // a required attribute is missing
             return cur;
         }
-        cur = self.children_deriv(&cur, node, fail);
+        cur = self.children_deriv(&cur, node, blames);
         if is_not_allowed(&cur) {
             return cur; // a descendant failed; `children_deriv` recorded it
         }
         cur = self.end_tag_deriv(&cur);
         if is_not_allowed(&cur) {
-            fail.get_or_insert(Blame::Element(node)); // this element's content is incomplete
+            blames.push(Blame::Element(node)); // this element's content is incomplete
         }
         cur
     }
@@ -372,30 +391,31 @@ pub enum Blame<'d, 'i> {
     Attribute(roxmltree::Node<'d, 'i>, roxmltree::Attribute<'d, 'i>),
 }
 
-/// Validate a root element node against `grammar`, returning where the content
-/// model was first violated ([`Blame`]), or `None` if the document is valid —
-/// giving a real `line:column` and element path for the resulting diagnostic
-/// instead of anchoring the whole document at its root (issue #17).
+/// Validate a root element node against `grammar`, returning every node that
+/// broke the content model ([`Blame`]) in document order — empty if the document
+/// is valid. Each blame gives a real `line:column` and element path for its
+/// diagnostic, instead of anchoring the whole document at its root and reporting
+/// only the first problem (issues #17/#18).
 pub fn validate_node_report<'d, 'i>(
     grammar: &Grammar,
     root: roxmltree::Node<'d, 'i>,
-) -> Option<Blame<'d, 'i>> {
+) -> Vec<Blame<'d, 'i>> {
     let env = Env::new(&grammar.defs);
-    let mut fail = None;
-    let p = env.child_deriv(&grammar.start, root, &mut fail);
-    if env.nullable(&p) {
-        None
-    } else {
-        // A non-nullable final pattern always went through a `notAllowed` step
-        // (every element's completeness is checked at its end-tag), so `fail` is
-        // set; fall back to the root only defensively.
-        Some(fail.unwrap_or(Blame::Element(root)))
+    let mut blames = Vec::new();
+    let p = env.child_deriv(&grammar.start, root, &mut blames);
+    // Validity is "no blames": recovery may leave `p` nullable even after
+    // finding errors. The nullability check here is only a defensive net — if a
+    // pattern somehow ends non-nullable with nothing recorded, still surface the
+    // document as invalid rather than silently pass it.
+    if !env.nullable(&p) && blames.is_empty() {
+        blames.push(Blame::Element(root));
     }
+    blames
 }
 
 /// Validate a root element node against `grammar` (valid iff nothing to blame).
 pub fn validate_node(grammar: &Grammar, root: roxmltree::Node) -> bool {
-    validate_node_report(grammar, root).is_none()
+    validate_node_report(grammar, root).is_empty()
 }
 
 /// Parse `xml` and validate its root element against `grammar`.

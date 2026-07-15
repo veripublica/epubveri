@@ -107,16 +107,19 @@ mod tests {
         validate_xml(g, xml).unwrap()
     }
 
-    /// What `validate_node_report` blames — an element's local name, or
-    /// `@name` for an attribute — or `None` if the document is valid (issues
-    /// #17/#18: a failure names *which* node, and pins an attribute when that's
-    /// the culprit).
-    fn fail_local(g: &Grammar, xml: &str) -> Option<String> {
+    /// Every node `validate_node_report` blames, as an element's local name or
+    /// `@name` for an attribute, in document order — empty if the document is
+    /// valid (issues #17/#18: name *which* nodes, pin attributes, and report
+    /// *all* of them, not just the first).
+    fn fail_locals(g: &Grammar, xml: &str) -> Vec<String> {
         let doc = roxmltree::Document::parse(xml).unwrap();
-        validate_node_report(g, doc.root_element()).map(|b| match b {
-            Blame::Element(n) => n.tag_name().name().to_string(),
-            Blame::Attribute(_, a) => format!("@{}", a.name()),
-        })
+        validate_node_report(g, doc.root_element())
+            .into_iter()
+            .map(|b| match b {
+                Blame::Element(n) => n.tag_name().name().to_string(),
+                Blame::Attribute(_, a) => format!("@{}", a.name()),
+            })
+            .collect()
     }
 
     #[test]
@@ -211,23 +214,47 @@ mod tests {
         // issue #17: a content-model failure must point at *which* node
         // collapsed the model, so the RSC-005 gets a real line:column.
         // Valid → no blame.
-        assert_eq!(fail_local(&xhtml_grammar(), &xhtml_doc("<p>ok</p>")), None);
+        assert!(fail_locals(&xhtml_grammar(), &xhtml_doc("<p>ok</p>")).is_empty());
         // A `<span>` where the content model does not allow it (inside `<ol>`,
         // which takes list items) is blamed at the span itself, not `<html>`.
         assert_eq!(
-            fail_local(&xhtml_grammar(), &xhtml_doc("<ol><span>x</span></ol>")).as_deref(),
-            Some("span")
+            fail_locals(&xhtml_grammar(), &xhtml_doc("<ol><span>x</span></ol>")),
+            ["span"]
         );
         // An obsolete element is blamed at itself.
         assert_eq!(
-            fail_local(&xhtml_grammar(), &xhtml_doc("<keygen/>")).as_deref(),
-            Some("keygen")
+            fail_locals(&xhtml_grammar(), &xhtml_doc("<keygen/>")),
+            ["keygen"]
         );
         // An attribute-level violation pins the attribute itself (#18), so the
         // finding can target `@name` rather than only the containing element.
         assert_eq!(
-            fail_local(&xhtml_grammar(), &xhtml_doc("<p contextmenu=\"x\">hi</p>")).as_deref(),
-            Some("@contextmenu")
+            fail_locals(&xhtml_grammar(), &xhtml_doc("<p contextmenu=\"x\">hi</p>")),
+            ["@contextmenu"]
+        );
+    }
+
+    #[test]
+    fn report_lists_every_offending_node_not_just_the_first() {
+        // Doitsu's MobileRead case: two <p> where <li> belongs. Recovery must
+        // report *both*, not stop at the first (issues #17/#18). The `<ol>`
+        // itself isn't flagged — an empty list is valid, so the errors are the
+        // two misplaced children, exactly what epubcheck points at.
+        assert_eq!(
+            fail_locals(
+                &xhtml_grammar(),
+                &xhtml_doc("<ol><p>one</p><p>two</p></ol>")
+            ),
+            ["p", "p"]
+        );
+        // A stray element amid otherwise-valid siblings is reported without
+        // dragging the valid ones (or the container) down with it.
+        assert_eq!(
+            fail_locals(
+                &xhtml_grammar(),
+                &xhtml_doc("<ol><li>a</li><p>bad</p><li>c</li></ol>")
+            ),
+            ["p"]
         );
     }
 
