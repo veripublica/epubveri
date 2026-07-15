@@ -38,8 +38,10 @@ fn offset_in(haystack: &str, needle: &str) -> usize {
 pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, report: &mut Report) {
     // Entity well-formedness (RSC-016) is a basic XML concern, not an
     // EPUB-3-specific one - a real EPUB 2 fixture (an unknown named
-    // entity reference) expects it too.
-    check_entities(text, path, report);
+    // entity reference) expects it too. EPUB 2 is passed the version flag
+    // so its externally-declared XHTML named entities (`&nbsp;` etc.) are
+    // not misflagged as undeclared.
+    check_entities(text, path, is_epub3, report);
 
     if !is_epub3 {
         check_doctype_epub2(text, path, report);
@@ -75,6 +77,43 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
     check_doctype(text, path, report);
 }
 
+/// The standard HTML named character entities declared by the XHTML 1.0/1.1
+/// (and OEB 1.2) DTDs - the union of the `HTMLlat1`, `HTMLsymbol` and
+/// `HTMLspecial` entity sets. An EPUB 2 content document referencing one of
+/// those DTDs (see `EPUB2_XHTML_PUBLIC_IDS`) may use any of these without an
+/// internal declaration. The five XML predefined entities are intentionally
+/// omitted (handled separately). Order is irrelevant; membership is by
+/// linear scan over ~250 short strings, once per named reference.
+const XHTML_NAMED_ENTITIES: &[&str] = &[
+    // HTMLlat1 (Latin-1 supplement)
+    "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf",
+    "laquo", "not", "shy", "reg", "macr", "deg", "plusmn", "sup2", "sup3", "acute", "micro",
+    "para", "middot", "cedil", "sup1", "ordm", "raquo", "frac14", "frac12", "frac34", "iquest",
+    "Agrave", "Aacute", "Acirc", "Atilde", "Auml", "Aring", "AElig", "Ccedil", "Egrave", "Eacute",
+    "Ecirc", "Euml", "Igrave", "Iacute", "Icirc", "Iuml", "ETH", "Ntilde", "Ograve", "Oacute",
+    "Ocirc", "Otilde", "Ouml", "times", "Oslash", "Ugrave", "Uacute", "Ucirc", "Uuml", "Yacute",
+    "THORN", "szlig", "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig", "ccedil",
+    "egrave", "eacute", "ecirc", "euml", "igrave", "iacute", "icirc", "iuml", "eth", "ntilde",
+    "ograve", "oacute", "ocirc", "otilde", "ouml", "divide", "oslash", "ugrave", "uacute", "ucirc",
+    "uuml", "yacute", "thorn", "yuml",
+    // HTMLsymbol (Greek letters + mathematical/technical symbols)
+    "fnof", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta", "Iota", "Kappa",
+    "Lambda", "Mu", "Nu", "Xi", "Omicron", "Pi", "Rho", "Sigma", "Tau", "Upsilon", "Phi", "Chi",
+    "Psi", "Omega", "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota",
+    "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigmaf", "sigma", "tau",
+    "upsilon", "phi", "chi", "psi", "omega", "thetasym", "upsih", "piv", "bull", "hellip", "prime",
+    "Prime", "oline", "frasl", "weierp", "image", "real", "trade", "alefsym", "larr", "uarr",
+    "rarr", "darr", "harr", "crarr", "lArr", "uArr", "rArr", "dArr", "hArr", "forall", "part",
+    "exist", "empty", "nabla", "isin", "notin", "ni", "prod", "sum", "minus", "lowast", "radic",
+    "prop", "infin", "ang", "and", "or", "cap", "cup", "int", "there4", "sim", "cong", "asymp",
+    "ne", "equiv", "le", "ge", "sub", "sup", "nsub", "sube", "supe", "oplus", "otimes", "perp",
+    "sdot", "lceil", "rceil", "lfloor", "rfloor", "lang", "rang", "loz", "spades", "clubs",
+    "hearts", "diams", // HTMLspecial (excluding the five XML predefined entities)
+    "OElig", "oelig", "Scaron", "scaron", "Yuml", "circ", "tilde", "ensp", "emsp", "thinsp",
+    "zwnj", "zwj", "lrm", "rlm", "ndash", "mdash", "lsquo", "rsquo", "sbquo", "ldquo", "rdquo",
+    "bdquo", "dagger", "Dagger", "permil", "lsaquo", "rsaquo", "euro",
+];
+
 /// A minimal, well-formedness-only entity-reference scanner. Runs on the
 /// raw text regardless of whether the document parses as XML at all —
 /// `roxmltree` simply fails to parse a document with a malformed or
@@ -83,9 +122,21 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
 /// these two conditions can be caught. Numeric character references
 /// (`&#39;`/`&#x27;`) are always well-formed and out of scope here — only
 /// named references (`&foo;`) are checked.
-fn check_entities(orig_text: &str, path: &str, report: &mut Report) {
+fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Report) {
     let declared = declared_entity_names(orig_text);
     const PREDEFINED: &[&str] = &["amp", "lt", "gt", "apos", "quot"];
+    // An EPUB 2 XHTML content document references an external DTD (XHTML 1.1
+    // or OEB 1.2) through its DOCTYPE, and that DTD declares the full set of
+    // HTML named character entities (`&nbsp;`, `&eacute;`, `&copy;`, ...).
+    // `roxmltree` does not resolve external DTDs, so without this every one
+    // of those legitimate references would be reported as an undeclared
+    // RSC-016 - a false positive epubcheck (which bundles the DTDs) never
+    // emits, and painful in practice since `&nbsp;` is ubiquitous. Accept
+    // the standard set only when the document actually pulls in one of those
+    // DTDs via a recognized DOCTYPE. EPUB 3 keeps the strict rule: only the
+    // five predefined entities plus any declared in the internal subset are
+    // legal there (named references must be written as numeric ones).
+    let allow_xhtml_named = !is_epub3 && has_epub2_xhtml_doctype(orig_text);
     // `&foo;` inside a comment or CDATA section is literal text, not a
     // real entity reference (confirmed via a real corpus fixture titled
     // exactly this) - mask any '&' found there so the scan below skips it,
@@ -120,7 +171,10 @@ fn check_entities(orig_text: &str, path: &str, report: &mut Report) {
                 "htm.entity.missing_semicolon",
                 vec![name.to_string()],
             );
-        } else if !PREDEFINED.contains(&name) && !declared.iter().any(|d| d == name) {
+        } else if !PREDEFINED.contains(&name)
+            && !declared.iter().any(|d| d == name)
+            && !(allow_xhtml_named && XHTML_NAMED_ENTITIES.contains(&name))
+        {
             report.push_full(
                 RSC_016,
                 Severity::Fatal,
@@ -209,15 +263,28 @@ fn extract_doctype(text: &str) -> Option<&str> {
 /// PUBLIC identifier - a missing one (a bare HTML5-style `<!DOCTYPE
 /// html>`) or an unrecognized/malformed one (a typo'd "1.1/EN" missing a
 /// slash, or a nonsense "FOO") is HTM-004.
+/// The PUBLIC identifiers whose external DTDs (XHTML 1.1, OEB 1.2 Document)
+/// an EPUB 2 XHTML content document legitimately references. Both DTDs
+/// declare the full set of standard HTML named character entities, so a
+/// document carrying one of these DOCTYPEs may use `&nbsp;` and friends
+/// without an internal `<!ENTITY>` declaration (see `check_entities`).
+const EPUB2_XHTML_PUBLIC_IDS: [&str; 2] = [
+    "-//W3C//DTD XHTML 1.1//EN",
+    "+//ISBN 0-9673008-1-9//DTD OEB 1.2 Document//EN",
+];
+
+/// True when the document's DOCTYPE carries a recognized EPUB 2 XHTML/OEB
+/// PUBLIC identifier - i.e. it pulls in an external DTD that declares the
+/// standard HTML named entities.
+fn has_epub2_xhtml_doctype(text: &str) -> bool {
+    extract_doctype(text).is_some_and(|dt| EPUB2_XHTML_PUBLIC_IDS.iter().any(|id| dt.contains(id)))
+}
+
 fn check_doctype_epub2(text: &str, path: &str, report: &mut Report) {
-    const KNOWN_PUBLIC_IDS: [&str; 2] = [
-        "-//W3C//DTD XHTML 1.1//EN",
-        "+//ISBN 0-9673008-1-9//DTD OEB 1.2 Document//EN",
-    ];
     let Some(doctype) = extract_doctype(text) else {
         return;
     };
-    if !KNOWN_PUBLIC_IDS.iter().any(|id| doctype.contains(id)) {
+    if !EPUB2_XHTML_PUBLIC_IDS.iter().any(|id| doctype.contains(id)) {
         report.push_full(
             HTM_004,
             Severity::Error,
@@ -999,14 +1066,14 @@ mod tests {
     #[test]
     fn entity_missing_semicolon_and_unknown_name() {
         let mut report = Report::new();
-        check_entities("&amp ", "content.xhtml", &mut report);
+        check_entities("&amp ", "content.xhtml", true, &mut report);
         assert_eq!(
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
             vec![RSC_016]
         );
 
         let mut report = Report::new();
-        check_entities("&foo;", "content.xhtml", &mut report);
+        check_entities("&foo;", "content.xhtml", true, &mut report);
         assert_eq!(
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
             vec![RSC_016]
@@ -1016,15 +1083,66 @@ mod tests {
     #[test]
     fn entity_predefined_and_declared_are_valid() {
         let mut report = Report::new();
-        check_entities("&amp; &lt; &gt;", "content.xhtml", &mut report);
+        check_entities("&amp; &lt; &gt;", "content.xhtml", true, &mut report);
         assert!(report.messages.is_empty());
 
         let mut report = Report::new();
         check_entities(
             "<!DOCTYPE html [<!ENTITY foo \"bar\">]><p>&foo;</p>",
             "content.xhtml",
+            true,
             &mut report,
         );
         assert!(report.messages.is_empty());
+    }
+
+    #[test]
+    fn epub2_xhtml_named_entities_are_valid() {
+        // A recognized EPUB 2 XHTML DOCTYPE pulls in the external DTD that
+        // declares `&nbsp;` & friends - they must not be flagged (forum
+        // report: French ebooks, `<p>&nbsp;</p>` spacing).
+        let doc = concat!(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" ",
+            "\"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">",
+            "<html><body><p>&nbsp;&eacute;&copy;&mdash;</p></body></html>"
+        );
+        let mut report = Report::new();
+        check_entities(doc, "content.xhtml", false, &mut report);
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+    }
+
+    #[test]
+    fn epub3_named_entities_still_undeclared() {
+        // EPUB 3 keeps the strict rule: `&nbsp;` without an internal
+        // declaration is an undeclared-entity RSC-016 (must be numeric).
+        let mut report = Report::new();
+        check_entities(
+            "<html><body><p>&nbsp;</p></body></html>",
+            "c.xhtml",
+            true,
+            &mut report,
+        );
+        assert_eq!(
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![RSC_016]
+        );
+    }
+
+    #[test]
+    fn epub2_named_entity_without_known_doctype_still_flagged() {
+        // EPUB 2 but no recognized XHTML DOCTYPE => the external DTD isn't
+        // pulled in, so the entity is genuinely undeclared (matches the
+        // HTM-004 the DOCTYPE check separately raises).
+        let mut report = Report::new();
+        check_entities(
+            "<html><body><p>&nbsp;</p></body></html>",
+            "c.xhtml",
+            false,
+            &mut report,
+        );
+        assert_eq!(
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![RSC_016]
+        );
     }
 }

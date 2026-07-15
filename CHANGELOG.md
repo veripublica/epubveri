@@ -8,6 +8,22 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **EPUB 2 named character entities (`&nbsp;`, `&eacute;`, `&copy;`, …) no longer
+  raise a spurious `FATAL RSC-016`.** An EPUB 2 XHTML content document pulls the
+  full set of standard HTML named entities in through its external DTD (XHTML 1.1
+  or OEB 1.2), referenced by the DOCTYPE; because the underlying XML parser does
+  not resolve external DTDs, every such reference was being reported as an
+  undeclared entity — a fatal false positive epubcheck never emits, and a painful
+  one since `&nbsp;` is ubiquitous (especially in French ebooks and `<p>&nbsp;</p>`
+  spacing). These references are now accepted when the document carries a
+  recognized EPUB 2 XHTML/OEB DOCTYPE. Genuinely undeclared entities still fail,
+  and EPUB 3 is unchanged (it requires numeric references). (Reported by Doitsu,
+  confirmed by KevinH, on the MobileRead forum.)
+
 ## [0.5.7] - 2026-07-15
 
 Two content-model reporting improvements, both grounded in forum feedback.
