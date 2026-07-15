@@ -1446,17 +1446,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
     // Schema validation against our own (permissive) package-document RNG.
     // Additive: a structurally non-conformant package is reported as RSC-005.
-    if !crate::rng::validate_node(&crate::rng::package_grammar(), pkg) {
-        // Genuinely a catch-all: the RNG grammar doesn't expose *which*
-        // rule failed, only that the document as a whole doesn't
-        // conform - unlike the other RSC-005 sites in this file, there's
-        // no more specific sub-code available here yet.
+    if let Some(fail) = crate::rng::validate_node_report(&crate::rng::package_grammar(), pkg) {
+        // The grammar reports *which* node collapsed the content model (issue
+        // #17), so the finding carries a real line:column and element path.
+        // It still doesn't name the specific rule that failed - unlike the
+        // other RSC-005 sites in this file, that stays a catch-all here.
         report.push_node(
             RSC_005,
             Severity::Error,
             "OPF does not conform to the EPUB package-document schema",
             opf_path,
-            pkg,
+            fail,
             "opf.package.schema_violation",
             Vec::new(),
         );
@@ -3366,15 +3366,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
         // Schema validation against our own XHTML content-document RNG.
         // Additive: a non-conformant content document is reported as RSC-005.
-        if !crate::rng::validate_node(&xhtml_grammar, d.root_element()) {
-            // Same "genuine catch-all" caveat as the package-document RNG
-            // check above - the grammar doesn't expose which rule failed.
+        if let Some(fail) = crate::rng::validate_node_report(&xhtml_grammar, d.root_element()) {
+            // The grammar reports *which* node collapsed the content model
+            // (issue #17), so the finding carries a real line:column and element
+            // path instead of anchoring the whole document at its root. It still
+            // doesn't name the specific rule that failed - that stays a
+            // genuine catch-all - only where.
             report.push_node(
                 RSC_005,
                 Severity::Error,
                 "content document does not conform to the EPUB XHTML content-model schema",
                 path.clone(),
-                d.root_element(),
+                fail,
                 "opf.content_document.schema_violation",
                 Vec::new(),
             );
