@@ -3667,48 +3667,57 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             }
         }
 
-        // Both an http-equiv Content-Type meta and a charset meta declared;
-        // and, independently, an http-equiv Content-Type meta whose value
-        // isn't exactly the expected UTF-8 declaration.
-        let has_http_equiv_content_type = d.descendants().any(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("http-equiv")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
-        });
-        let has_charset_meta = d.descendants().any(|n| {
-            n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
-        });
-        if has_http_equiv_content_type && has_charset_meta {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
-                path.clone(),
-                d.root_element(),
-                "opf.content_document.conflicting_encoding_declarations",
-                Vec::new(),
-            );
-        }
-        for n in d.descendants().filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("http-equiv")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
-        }) {
-            if !n
-                .attr_no_ns("content")
-                .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
-            {
+        // Encoding-declaration checks on `<meta>`: (1) an http-equiv
+        // Content-Type meta together with a charset meta, and (2) an http-equiv
+        // Content-Type meta whose value isn't exactly the expected UTF-8
+        // declaration. Both are HTML5 rules (the `<meta>` "encoding declaration
+        // state"), so they apply to XHTML5 content documents — i.e. EPUB 3 only.
+        // EPUB 2 content is XHTML 1.1, served as application/xhtml+xml, where
+        // `content="application/xhtml+xml; charset=utf-8"` is the traditional,
+        // valid form; epubcheck validates EPUB 2 against the XHTML 1.1 DTD, which
+        // has no such constraint, so it never flags these there (#21, same class
+        // as #9: an EPUB-3 rule must not leak into EPUB 2).
+        if is_epub3 {
+            let has_http_equiv_content_type = d.descendants().any(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attr_no_ns("http-equiv")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+            });
+            let has_charset_meta = d.descendants().any(|n| {
+                n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
+            });
+            if has_http_equiv_content_type && has_charset_meta {
                 report.push_node(
                     RSC_005,
                     Severity::Error,
-                    "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                    "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
                     path.clone(),
-                    n,
-                    "opf.content_document.invalid_content_type_meta",
+                    d.root_element(),
+                    "opf.content_document.conflicting_encoding_declarations",
                     Vec::new(),
                 );
+            }
+            for n in d.descendants().filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attr_no_ns("http-equiv")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+            }) {
+                if !n
+                    .attr_no_ns("content")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
+                {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                        path.clone(),
+                        n,
+                        "opf.content_document.invalid_content_type_meta",
+                        Vec::new(),
+                    );
+                }
             }
         }
 
@@ -4000,28 +4009,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     vec![v.to_string()],
                 );
             }
-        }
-
-        // Both an http-equiv Content-Type meta and a charset meta declared.
-        let has_http_equiv_content_type = d.descendants().any(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("http-equiv")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
-        });
-        let has_charset_meta = d.descendants().any(|n| {
-            n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
-        });
-        if has_http_equiv_content_type && has_charset_meta {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
-                path.clone(),
-                d.root_element(),
-                "opf.content_document.conflicting_encoding_declarations",
-                Vec::new(),
-            );
         }
 
         // epub:switch is deprecated - a separate, additive signal alongside
@@ -6568,6 +6555,108 @@ mod tests {
             .filter(|m| m.id == crate::ids::RSC_016)
             .map(|m| m.rule.unwrap_or(""))
             .collect()
+    }
+
+    /// A minimal, otherwise-valid EPUB **2** carrying the caller's full ch1
+    /// XHTML 1.1 content document — used to check that EPUB-3-only content-model
+    /// rules don't leak into EPUB 2 (#21).
+    fn epub2_with_ch1(ch1: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+</package>"#;
+        const NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:12345678-1234-1234-1234-123456789abc"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap><navPoint id="n1" playOrder="1"><navLabel><text>Ch1</text></navLabel><content src="ch1.xhtml"/></navPoint></navMap>
+</ncx>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.xhtml", ch1),
+                ("OEBPS/toc.ncx", NCX),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Every RSC-005 `rule` slug a validation of `bytes` produces.
+    fn rsc_005_rules(bytes: Vec<u8>) -> Vec<String> {
+        crate::validate_bytes(bytes)
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_005)
+            .map(|m| m.rule.unwrap_or("").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn epub2_content_type_meta_is_not_an_html5_rule() {
+        // #21 (Doitsu, MobileRead #82): `application/xhtml+xml; charset=utf-8`
+        // is the correct XHTML 1.1 encoding declaration for an EPUB 2 content
+        // document, and epubcheck never flags it. The "must be text/html;
+        // charset=utf-8" rule is HTML5-only (EPUB 3).
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title>\
+            <meta http-equiv=\"Content-Type\" content=\"application/xhtml+xml; charset=utf-8\"/>\
+            </head><body><p>hi</p></body></html>";
+        assert!(
+            !rsc_005_rules(epub2_with_ch1(ch1))
+                .iter()
+                .any(|r| r == "opf.content_document.invalid_content_type_meta"),
+            "EPUB 2 content-type meta must not be flagged: {:?}",
+            rsc_005_rules(epub2_with_ch1(ch1))
+        );
+    }
+
+    #[test]
+    fn epub3_content_type_meta_still_strict() {
+        // EPUB 3 is XHTML5, where the encoding-declaration meta must be exactly
+        // `text/html; charset=utf-8` (matches epubcheck) — unchanged.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title>\
+            <meta http-equiv=\"Content-Type\" content=\"application/xhtml+xml; charset=utf-8\"/>\
+            </head><body><p>hi</p></body></html>";
+        assert!(
+            rsc_005_rules(epub_with_ch1(ch1))
+                .iter()
+                .any(|r| r == "opf.content_document.invalid_content_type_meta"),
+            "EPUB 3 content-type meta must still be flagged: {:?}",
+            rsc_005_rules(epub_with_ch1(ch1))
+        );
     }
 
     #[test]
