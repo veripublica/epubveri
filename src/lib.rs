@@ -39,6 +39,7 @@ pub mod report;
 pub mod rng;
 pub mod schematron;
 pub mod smil;
+pub mod ssv;
 pub mod svg;
 pub mod url;
 pub mod xmlext;

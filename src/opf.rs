@@ -3910,36 +3910,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             }
         }
 
-        // epub:type default-vocabulary / deprecated / misuse taxonomies -
-        // reuses smil::is_default_vocab_type (built for SMIL's own
-        // epub:type check in an earlier increment); custom-prefixed
-        // tokens (containing ':') are always exempt.
-        const DEPRECATED_SSV: &[&str] = &[
-            "annoref",
-            "annotation",
-            "biblioentry",
-            "bridgehead",
-            "endnote",
-            "help",
-            "marginalia",
-            "note",
-            "rearnote",
-            "rearnotes",
-            "sidebar",
-            "subchapter",
-            "warning",
-        ];
+        // epub:type default-vocabulary / deprecated / HTML-usage taxonomies.
+        // The vocabulary itself lives in `ssv`; custom-prefixed tokens
+        // (containing ':') are always exempt.
         for n in d
             .descendants()
             .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
         {
             let value = n.attribute((EPUB_NS, "type")).unwrap();
-            let tag = n.tag_name().name();
             for token in value.split_whitespace() {
                 if token.contains(':') {
                     continue;
                 }
-                if !crate::smil::is_default_vocab_type(token) {
+                if !crate::ssv::is_default_vocab_type(token) {
                     report.push_node(
                         OPF_088,
                         Severity::Usage,
@@ -3962,7 +3945,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         a.attribute((EPUB_NS, "type"))
                             .is_some_and(|t| t.split_whitespace().any(|tok| tok == "endnotes"))
                     });
-                if DEPRECATED_SSV.contains(&token) && !endnote_exempt {
+                if crate::ssv::DEPRECATED.iter().any(|(t, _)| *t == token) && !endnote_exempt {
                     // epubcheck reports a deprecated epub:type semantic as
                     // usage-level OPF-086b (the corpus'
                     // `epubtype-deprecated-usage.xhtml`: "usage OPF-086b"),
@@ -3981,24 +3964,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         vec![token.to_string()],
                     );
                 }
-                let redundant = matches!(
-                    (tag, token),
-                    ("table", "table")
-                        | ("tr", "table-row")
-                        | ("td", "table-cell")
-                        | ("ul", "list")
-                        | ("ol", "list")
-                        | ("li", "list-item")
-                        | ("figure", "figure")
-                        | ("aside", "aside")
-                );
-                if redundant {
-                    report.push_at_pos(
+                // OPF-087 (usage): the vocabulary gives these terms an HTML
+                // usage context of "Not Allowed" - they mean something only
+                // on a media overlay's `seq`/`par` (escapable/skippable
+                // structure), and nothing on an HTML element.
+                //
+                // This was previously read as "the value restates the
+                // semantic of its host element" (`ol` + `list`, `table` +
+                // `table`, ...). That agreed with the corpus fixture on
+                // every count - `epubtype-misuse-usage.xhtml` only ever
+                // pairs each term with its matching element, so both rules
+                // report its 7 - but it is not the rule: the term is not
+                // allowed on *any* HTML element, so `<div epub:type="list">`
+                // was missed entirely. A fixture agreeing is not the rule
+                // agreeing (reported by Doitsu on the MobileRead forum).
+                if crate::ssv::is_media_overlay_only(token) {
+                    report.push_node(
                         OPF_087,
                         Severity::Usage,
-                        format!("epub:type value '{token}' only restates the semantic of its host element \"{tag}\""),
+                        format!(
+                            "epub:type value '{token}' is not allowed in an XHTML content document; \
+                             it applies only to media overlays"
+                        ),
                         path.clone(),
-                        Position::of(n),
+                        n,
+                        "opf.content_document.epub_type_not_allowed_in_html",
+                        vec![token.to_string()],
                     );
                 }
             }
@@ -6965,6 +6956,98 @@ mod tests {
         assert_eq!(hit.id, crate::ids::OPF_086B);
         assert_eq!(hit.severity, crate::report::Severity::Usage);
         assert!(report.is_valid());
+    }
+
+    /// Builds an EPUB 3 whose one content document carries `body` markup,
+    /// and returns the (rule, id) of every epub:type finding on it.
+    fn epub_type_findings(body: &str) -> Vec<(&'static str, &'static str)> {
+        let ch1 = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+            <head><title>t</title></head><body>{body}</body></html>"
+        );
+        crate::validate_bytes(epub_with_ch1(&ch1))
+            .messages
+            .iter()
+            .filter_map(|m| match m.rule {
+                Some(r @ "opf.content_document.epub_type_not_default_vocab")
+                | Some(r @ "opf.content_document.deprecated_epub_type")
+                | Some(r @ "opf.content_document.epub_type_not_allowed_in_html") => Some((r, m.id)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A deprecated term must draw OPF-086b *only*. Reporting OPF-088 "not
+    /// in the default vocabulary" alongside it contradicts itself - knowing
+    /// a term is deprecated means knowing the term. Seven deprecated terms
+    /// were missing from the vocabulary list and double-reported this way
+    /// (reported by Doitsu on the MobileRead forum); `ssv` now derives the
+    /// two answers from one table so they cannot disagree.
+    #[test]
+    fn deprecated_epub_type_is_not_also_reported_as_unknown() {
+        for term in crate::ssv::DEPRECATED.iter().map(|(t, _)| *t) {
+            // `endnote` inside an `endnotes` container is the recommended,
+            // non-deprecated usage - it has its own exemption.
+            let body = format!("<p epub:type=\"{term}\">x</p>");
+            let got = epub_type_findings(&body);
+            assert!(
+                !got.iter()
+                    .any(|(r, _)| *r == "opf.content_document.epub_type_not_default_vocab"),
+                "'{term}' is deprecated, so it is a known term; got {got:?}"
+            );
+            assert!(
+                got.iter()
+                    .any(|(r, _)| *r == "opf.content_document.deprecated_epub_type"),
+                "'{term}' must still be reported as deprecated; got {got:?}"
+            );
+        }
+    }
+
+    /// The vocabulary gives these terms an HTML usage context of "Not
+    /// Allowed" - they mean something only on a media overlay. They are
+    /// real terms, so they must draw OPF-087 and *not* OPF-088.
+    #[test]
+    fn media_overlay_only_epub_type_is_not_allowed_in_html() {
+        for term in crate::ssv::MEDIA_OVERLAY_ONLY {
+            let got = epub_type_findings(&format!("<p epub:type=\"{term}\">x</p>"));
+            assert!(
+                got.contains(&(
+                    "opf.content_document.epub_type_not_allowed_in_html",
+                    crate::ids::OPF_087
+                )),
+                "'{term}' has no HTML usage context; got {got:?}"
+            );
+            assert!(
+                !got.iter()
+                    .any(|(r, _)| *r == "opf.content_document.epub_type_not_default_vocab"),
+                "'{term}' is a real vocabulary term; got {got:?}"
+            );
+        }
+    }
+
+    /// The rule is "not allowed on an HTML element", not "restates the
+    /// semantic of its host element". The old reading only fired when the
+    /// term sat on its matching element (`ol` + `list`), so this - the same
+    /// term with nothing to restate - went unreported. epubcheck's own
+    /// fixture never covers it: it only ever pairs each term with its
+    /// matching element, which is how the wrong rule scored full marks.
+    #[test]
+    fn media_overlay_only_epub_type_is_reported_on_any_host_element() {
+        let got = epub_type_findings("<div epub:type=\"list\">x</div>");
+        assert!(
+            got.contains(&(
+                "opf.content_document.epub_type_not_allowed_in_html",
+                crate::ids::OPF_087
+            )),
+            "'list' is not allowed on any HTML element, not just <ol>/<ul>; got {got:?}"
+        );
+    }
+
+    /// An ordinary, current term draws nothing at all.
+    #[test]
+    fn current_epub_type_draws_no_findings() {
+        assert_eq!(epub_type_findings("<p epub:type=\"chapter\">x</p>"), vec![]);
     }
 
     #[test]
