@@ -84,35 +84,326 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
 /// internal declaration. The five XML predefined entities are intentionally
 /// omitted (handled separately). Order is irrelevant; membership is by
 /// linear scan over ~250 short strings, once per named reference.
-const XHTML_NAMED_ENTITIES: &[&str] = &[
+///
+/// Each entry carries its Unicode code point as well as its name, because
+/// the table has two jobs: deciding whether a reference is legal
+/// (`check_entities`) and re-declaring it so the document actually parses
+/// (`declare_dtd_entities`).
+const XHTML_NAMED_ENTITIES: &[(&str, u32)] = &[
     // HTMLlat1 (Latin-1 supplement)
-    "nbsp", "iexcl", "cent", "pound", "curren", "yen", "brvbar", "sect", "uml", "copy", "ordf",
-    "laquo", "not", "shy", "reg", "macr", "deg", "plusmn", "sup2", "sup3", "acute", "micro",
-    "para", "middot", "cedil", "sup1", "ordm", "raquo", "frac14", "frac12", "frac34", "iquest",
-    "Agrave", "Aacute", "Acirc", "Atilde", "Auml", "Aring", "AElig", "Ccedil", "Egrave", "Eacute",
-    "Ecirc", "Euml", "Igrave", "Iacute", "Icirc", "Iuml", "ETH", "Ntilde", "Ograve", "Oacute",
-    "Ocirc", "Otilde", "Ouml", "times", "Oslash", "Ugrave", "Uacute", "Ucirc", "Uuml", "Yacute",
-    "THORN", "szlig", "agrave", "aacute", "acirc", "atilde", "auml", "aring", "aelig", "ccedil",
-    "egrave", "eacute", "ecirc", "euml", "igrave", "iacute", "icirc", "iuml", "eth", "ntilde",
-    "ograve", "oacute", "ocirc", "otilde", "ouml", "divide", "oslash", "ugrave", "uacute", "ucirc",
-    "uuml", "yacute", "thorn", "yuml",
+    ("nbsp", 0x00A0),
+    ("iexcl", 0x00A1),
+    ("cent", 0x00A2),
+    ("pound", 0x00A3),
+    ("curren", 0x00A4),
+    ("yen", 0x00A5),
+    ("brvbar", 0x00A6),
+    ("sect", 0x00A7),
+    ("uml", 0x00A8),
+    ("copy", 0x00A9),
+    ("ordf", 0x00AA),
+    ("laquo", 0x00AB),
+    ("not", 0x00AC),
+    ("shy", 0x00AD),
+    ("reg", 0x00AE),
+    ("macr", 0x00AF),
+    ("deg", 0x00B0),
+    ("plusmn", 0x00B1),
+    ("sup2", 0x00B2),
+    ("sup3", 0x00B3),
+    ("acute", 0x00B4),
+    ("micro", 0x00B5),
+    ("para", 0x00B6),
+    ("middot", 0x00B7),
+    ("cedil", 0x00B8),
+    ("sup1", 0x00B9),
+    ("ordm", 0x00BA),
+    ("raquo", 0x00BB),
+    ("frac14", 0x00BC),
+    ("frac12", 0x00BD),
+    ("frac34", 0x00BE),
+    ("iquest", 0x00BF),
+    ("Agrave", 0x00C0),
+    ("Aacute", 0x00C1),
+    ("Acirc", 0x00C2),
+    ("Atilde", 0x00C3),
+    ("Auml", 0x00C4),
+    ("Aring", 0x00C5),
+    ("AElig", 0x00C6),
+    ("Ccedil", 0x00C7),
+    ("Egrave", 0x00C8),
+    ("Eacute", 0x00C9),
+    ("Ecirc", 0x00CA),
+    ("Euml", 0x00CB),
+    ("Igrave", 0x00CC),
+    ("Iacute", 0x00CD),
+    ("Icirc", 0x00CE),
+    ("Iuml", 0x00CF),
+    ("ETH", 0x00D0),
+    ("Ntilde", 0x00D1),
+    ("Ograve", 0x00D2),
+    ("Oacute", 0x00D3),
+    ("Ocirc", 0x00D4),
+    ("Otilde", 0x00D5),
+    ("Ouml", 0x00D6),
+    ("times", 0x00D7),
+    ("Oslash", 0x00D8),
+    ("Ugrave", 0x00D9),
+    ("Uacute", 0x00DA),
+    ("Ucirc", 0x00DB),
+    ("Uuml", 0x00DC),
+    ("Yacute", 0x00DD),
+    ("THORN", 0x00DE),
+    ("szlig", 0x00DF),
+    ("agrave", 0x00E0),
+    ("aacute", 0x00E1),
+    ("acirc", 0x00E2),
+    ("atilde", 0x00E3),
+    ("auml", 0x00E4),
+    ("aring", 0x00E5),
+    ("aelig", 0x00E6),
+    ("ccedil", 0x00E7),
+    ("egrave", 0x00E8),
+    ("eacute", 0x00E9),
+    ("ecirc", 0x00EA),
+    ("euml", 0x00EB),
+    ("igrave", 0x00EC),
+    ("iacute", 0x00ED),
+    ("icirc", 0x00EE),
+    ("iuml", 0x00EF),
+    ("eth", 0x00F0),
+    ("ntilde", 0x00F1),
+    ("ograve", 0x00F2),
+    ("oacute", 0x00F3),
+    ("ocirc", 0x00F4),
+    ("otilde", 0x00F5),
+    ("ouml", 0x00F6),
+    ("divide", 0x00F7),
+    ("oslash", 0x00F8),
+    ("ugrave", 0x00F9),
+    ("uacute", 0x00FA),
+    ("ucirc", 0x00FB),
+    ("uuml", 0x00FC),
+    ("yacute", 0x00FD),
+    ("thorn", 0x00FE),
+    ("yuml", 0x00FF),
     // HTMLsymbol (Greek letters + mathematical/technical symbols)
-    "fnof", "Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta", "Eta", "Theta", "Iota", "Kappa",
-    "Lambda", "Mu", "Nu", "Xi", "Omicron", "Pi", "Rho", "Sigma", "Tau", "Upsilon", "Phi", "Chi",
-    "Psi", "Omega", "alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota",
-    "kappa", "lambda", "mu", "nu", "xi", "omicron", "pi", "rho", "sigmaf", "sigma", "tau",
-    "upsilon", "phi", "chi", "psi", "omega", "thetasym", "upsih", "piv", "bull", "hellip", "prime",
-    "Prime", "oline", "frasl", "weierp", "image", "real", "trade", "alefsym", "larr", "uarr",
-    "rarr", "darr", "harr", "crarr", "lArr", "uArr", "rArr", "dArr", "hArr", "forall", "part",
-    "exist", "empty", "nabla", "isin", "notin", "ni", "prod", "sum", "minus", "lowast", "radic",
-    "prop", "infin", "ang", "and", "or", "cap", "cup", "int", "there4", "sim", "cong", "asymp",
-    "ne", "equiv", "le", "ge", "sub", "sup", "nsub", "sube", "supe", "oplus", "otimes", "perp",
-    "sdot", "lceil", "rceil", "lfloor", "rfloor", "lang", "rang", "loz", "spades", "clubs",
-    "hearts", "diams", // HTMLspecial (excluding the five XML predefined entities)
-    "OElig", "oelig", "Scaron", "scaron", "Yuml", "circ", "tilde", "ensp", "emsp", "thinsp",
-    "zwnj", "zwj", "lrm", "rlm", "ndash", "mdash", "lsquo", "rsquo", "sbquo", "ldquo", "rdquo",
-    "bdquo", "dagger", "Dagger", "permil", "lsaquo", "rsaquo", "euro",
+    ("fnof", 0x0192),
+    ("Alpha", 0x0391),
+    ("Beta", 0x0392),
+    ("Gamma", 0x0393),
+    ("Delta", 0x0394),
+    ("Epsilon", 0x0395),
+    ("Zeta", 0x0396),
+    ("Eta", 0x0397),
+    ("Theta", 0x0398),
+    ("Iota", 0x0399),
+    ("Kappa", 0x039A),
+    ("Lambda", 0x039B),
+    ("Mu", 0x039C),
+    ("Nu", 0x039D),
+    ("Xi", 0x039E),
+    ("Omicron", 0x039F),
+    ("Pi", 0x03A0),
+    ("Rho", 0x03A1),
+    ("Sigma", 0x03A3),
+    ("Tau", 0x03A4),
+    ("Upsilon", 0x03A5),
+    ("Phi", 0x03A6),
+    ("Chi", 0x03A7),
+    ("Psi", 0x03A8),
+    ("Omega", 0x03A9),
+    ("alpha", 0x03B1),
+    ("beta", 0x03B2),
+    ("gamma", 0x03B3),
+    ("delta", 0x03B4),
+    ("epsilon", 0x03B5),
+    ("zeta", 0x03B6),
+    ("eta", 0x03B7),
+    ("theta", 0x03B8),
+    ("iota", 0x03B9),
+    ("kappa", 0x03BA),
+    ("lambda", 0x03BB),
+    ("mu", 0x03BC),
+    ("nu", 0x03BD),
+    ("xi", 0x03BE),
+    ("omicron", 0x03BF),
+    ("pi", 0x03C0),
+    ("rho", 0x03C1),
+    ("sigmaf", 0x03C2),
+    ("sigma", 0x03C3),
+    ("tau", 0x03C4),
+    ("upsilon", 0x03C5),
+    ("phi", 0x03C6),
+    ("chi", 0x03C7),
+    ("psi", 0x03C8),
+    ("omega", 0x03C9),
+    ("thetasym", 0x03D1),
+    ("upsih", 0x03D2),
+    ("piv", 0x03D6),
+    ("bull", 0x2022),
+    ("hellip", 0x2026),
+    ("prime", 0x2032),
+    ("Prime", 0x2033),
+    ("oline", 0x203E),
+    ("frasl", 0x2044),
+    ("weierp", 0x2118),
+    ("image", 0x2111),
+    ("real", 0x211C),
+    ("trade", 0x2122),
+    ("alefsym", 0x2135),
+    ("larr", 0x2190),
+    ("uarr", 0x2191),
+    ("rarr", 0x2192),
+    ("darr", 0x2193),
+    ("harr", 0x2194),
+    ("crarr", 0x21B5),
+    ("lArr", 0x21D0),
+    ("uArr", 0x21D1),
+    ("rArr", 0x21D2),
+    ("dArr", 0x21D3),
+    ("hArr", 0x21D4),
+    ("forall", 0x2200),
+    ("part", 0x2202),
+    ("exist", 0x2203),
+    ("empty", 0x2205),
+    ("nabla", 0x2207),
+    ("isin", 0x2208),
+    ("notin", 0x2209),
+    ("ni", 0x220B),
+    ("prod", 0x220F),
+    ("sum", 0x2211),
+    ("minus", 0x2212),
+    ("lowast", 0x2217),
+    ("radic", 0x221A),
+    ("prop", 0x221D),
+    ("infin", 0x221E),
+    ("ang", 0x2220),
+    ("and", 0x2227),
+    ("or", 0x2228),
+    ("cap", 0x2229),
+    ("cup", 0x222A),
+    ("int", 0x222B),
+    ("there4", 0x2234),
+    ("sim", 0x223C),
+    ("cong", 0x2245),
+    ("asymp", 0x2248),
+    ("ne", 0x2260),
+    ("equiv", 0x2261),
+    ("le", 0x2264),
+    ("ge", 0x2265),
+    ("sub", 0x2282),
+    ("sup", 0x2283),
+    ("nsub", 0x2284),
+    ("sube", 0x2286),
+    ("supe", 0x2287),
+    ("oplus", 0x2295),
+    ("otimes", 0x2297),
+    ("perp", 0x22A5),
+    ("sdot", 0x22C5),
+    ("lceil", 0x2308),
+    ("rceil", 0x2309),
+    ("lfloor", 0x230A),
+    ("rfloor", 0x230B),
+    ("lang", 0x2329),
+    ("rang", 0x232A),
+    ("loz", 0x25CA),
+    ("spades", 0x2660),
+    ("clubs", 0x2663),
+    ("hearts", 0x2665),
+    ("diams", 0x2666),
+    // HTMLspecial (excluding the five XML predefined entities)
+    ("OElig", 0x0152),
+    ("oelig", 0x0153),
+    ("Scaron", 0x0160),
+    ("scaron", 0x0161),
+    ("Yuml", 0x0178),
+    ("circ", 0x02C6),
+    ("tilde", 0x02DC),
+    ("ensp", 0x2002),
+    ("emsp", 0x2003),
+    ("thinsp", 0x2009),
+    ("zwnj", 0x200C),
+    ("zwj", 0x200D),
+    ("lrm", 0x200E),
+    ("rlm", 0x200F),
+    ("ndash", 0x2013),
+    ("mdash", 0x2014),
+    ("lsquo", 0x2018),
+    ("rsquo", 0x2019),
+    ("sbquo", 0x201A),
+    ("ldquo", 0x201C),
+    ("rdquo", 0x201D),
+    ("bdquo", 0x201E),
+    ("dagger", 0x2020),
+    ("Dagger", 0x2021),
+    ("permil", 0x2030),
+    ("lsaquo", 0x2039),
+    ("rsaquo", 0x203A),
+    ("euro", 0x20AC),
 ];
+
+/// The five entities XML predefines, legal everywhere without a
+/// declaration.
+const PREDEFINED_ENTITIES: &[&str] = &["amp", "lt", "gt", "apos", "quot"];
+
+/// The Unicode code point of a standard HTML named entity, or `None` if the
+/// name isn't one.
+fn xhtml_entity_codepoint(name: &str) -> Option<u32> {
+    XHTML_NAMED_ENTITIES
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, cp)| *cp)
+}
+
+/// One named entity reference found in a document's raw text: its byte
+/// `offset` (at the `&`), its `name`, and whether it was `terminated` by
+/// the required `;`.
+struct EntityRef<'a> {
+    offset: usize,
+    name: &'a str,
+    terminated: bool,
+}
+
+/// Every named entity reference in `text`, in order.
+///
+/// `text` must already be masked (see `mask_comments_and_cdata`). Numeric
+/// character references (`&#39;`/`&#x27;`) are always well-formed and out
+/// of scope — only named references (`&foo;`) are yielded.
+///
+/// Both the entity *check* and the entity *declaration* injection walk this
+/// one scanner, so they cannot drift apart on what counts as a reference —
+/// injecting a declaration for something the check would still reject (or
+/// vice versa) is exactly how the two would contradict each other.
+fn named_entity_refs(text: &str) -> impl Iterator<Item = EntityRef<'_>> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    core::iter::from_fn(move || {
+        loop {
+            let amp = i + text[i..].find('&')?;
+            let after = &text[amp + 1..];
+            if after.starts_with('#') {
+                i = amp + 1;
+                continue;
+            }
+            let name_len = after
+                .find(|c: char| !c.is_ascii_alphanumeric())
+                .unwrap_or(after.len());
+            if name_len == 0 {
+                i = amp + 1;
+                continue;
+            }
+            let name = &after[..name_len];
+            let terminated = bytes.get(amp + 1 + name_len) == Some(&b';');
+            i = amp + 1 + name_len;
+            return Some(EntityRef {
+                offset: amp,
+                name,
+                terminated,
+            });
+        }
+    })
+}
 
 /// A minimal, well-formedness-only entity-reference scanner. Runs on the
 /// raw text regardless of whether the document parses as XML at all —
@@ -124,7 +415,6 @@ const XHTML_NAMED_ENTITIES: &[&str] = &[
 /// named references (`&foo;`) are checked.
 fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Report) {
     let declared = declared_entity_names(orig_text);
-    const PREDEFINED: &[&str] = &["amp", "lt", "gt", "apos", "quot"];
     // An EPUB 2 XHTML content document references an external DTD (XHTML 1.1
     // or OEB 1.2) through its DOCTYPE, and that DTD declares the full set of
     // HTML named character entities (`&nbsp;`, `&eacute;`, `&copy;`, ...).
@@ -142,25 +432,12 @@ fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Repo
     // exactly this) - mask any '&' found there so the scan below skips it,
     // without disturbing any other byte offset in the text.
     let masked = mask_comments_and_cdata(orig_text);
-    let text = masked.as_str();
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while let Some(rel) = text[i..].find('&') {
-        let amp = i + rel;
-        let after = &text[amp + 1..];
-        if after.starts_with('#') {
-            i = amp + 1;
-            continue;
-        }
-        let name_len = after
-            .find(|c: char| !c.is_ascii_alphanumeric())
-            .unwrap_or(after.len());
-        if name_len == 0 {
-            i = amp + 1;
-            continue;
-        }
-        let name = &after[..name_len];
-        let terminated = bytes.get(amp + 1 + name_len) == Some(&b';');
+    for EntityRef {
+        offset: amp,
+        name,
+        terminated,
+    } in named_entity_refs(&masked)
+    {
         if !terminated {
             report.push_full(
                 RSC_016,
@@ -171,9 +448,9 @@ fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Repo
                 "htm.entity.missing_semicolon",
                 vec![name.to_string()],
             );
-        } else if !PREDEFINED.contains(&name)
+        } else if !PREDEFINED_ENTITIES.contains(&name)
             && !declared.iter().any(|d| d == name)
-            && !(allow_xhtml_named && XHTML_NAMED_ENTITIES.contains(&name))
+            && !(allow_xhtml_named && xhtml_entity_codepoint(name).is_some())
         {
             report.push_full(
                 RSC_016,
@@ -185,8 +462,80 @@ fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Repo
                 vec![name.to_string()],
             );
         }
-        i = amp + 1 + name_len;
     }
+}
+
+/// Give the parser the entity declarations the document's DOCTYPE promises,
+/// by declaring them inline.
+///
+/// An EPUB 2 XHTML content document pulls in an external DTD that declares
+/// the standard HTML named entities, and `roxmltree` never fetches an
+/// external DTD. So `&nbsp;` — the single most ordinary thing in a
+/// real-world EPUB 2 — fails the parse as an unknown entity, and *every*
+/// DOM-based check on that document is silently skipped (issue #23: 690 of
+/// 7207 content documents across a real 171-book shelf, every one of them
+/// valid). Worse, the checks that did run treated the unreadable document
+/// as *empty*, inventing broken-fragment errors against ids that are
+/// plainly there.
+///
+/// Nothing needs to be fetched to fix this: the entity set is fixed and
+/// known (`XHTML_NAMED_ENTITIES`), so the referenced ones are re-declared
+/// in an internal subset. XML gives the internal subset precedence over the
+/// external one, so a document that declares its own `&nbsp;` keeps its own
+/// definition — `declared_entity_names` skips those here anyway.
+///
+/// **Positions are preserved.** The declarations go in immediately before
+/// the DOCTYPE's own closing `>`, all on one line, adding no newline — so
+/// every line number in the returned text still matches the original, and
+/// only columns on the DOCTYPE's closing line shift (nothing is ever
+/// anchored there; content starts at the root element below it).
+///
+/// Returns `text` untouched unless it is an EPUB 2 document with a
+/// recognized XHTML/OEB DOCTYPE (see `EPUB2_XHTML_PUBLIC_IDS`) that really
+/// does reference a standard named entity it hasn't declared itself. In
+/// particular EPUB 3 is left strictly alone: named references other than
+/// the predefined five are a genuine error there, and making them parse
+/// would be papering over one.
+pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> String {
+    if is_epub3 || !has_epub2_xhtml_doctype(&text) {
+        return text;
+    }
+    let declared = declared_entity_names(&text);
+    let masked = mask_comments_and_cdata(&text);
+    let mut needed: Vec<&str> = Vec::new();
+    for r in named_entity_refs(&masked) {
+        if r.terminated
+            && !PREDEFINED_ENTITIES.contains(&r.name)
+            && !declared.iter().any(|d| d == r.name)
+            && !needed.contains(&r.name)
+            && xhtml_entity_codepoint(r.name).is_some()
+        {
+            needed.push(r.name);
+        }
+    }
+    if needed.is_empty() {
+        return text;
+    }
+    let mut decls = String::new();
+    for name in &needed {
+        let cp = xhtml_entity_codepoint(name).expect("filtered to known entities above");
+        decls.push_str(&format!("<!ENTITY {name} \"&#{cp};\">"));
+    }
+    let Some(doctype) = extract_doctype(&text) else {
+        return text;
+    };
+    let dt_start = offset_in(&text, doctype);
+    let (at, decls) = match doctype.rfind(']') {
+        // An internal subset is already there - add ours to it, rather
+        // than opening a second (illegal) one.
+        Some(close) => (dt_start + close, decls),
+        None => (dt_start + doctype.len() - 1, format!("[{decls}]")),
+    };
+    let mut out = String::with_capacity(text.len() + decls.len());
+    out.push_str(&text[..at]);
+    out.push_str(&decls);
+    out.push_str(&text[at..]);
+    out
 }
 
 /// Blanks out (with spaces, preserving every other byte offset) any '&'
@@ -1144,5 +1493,151 @@ mod tests {
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
             vec![RSC_016]
         );
+    }
+
+    /// The exact shape from issue #23: an XHTML 1.1 DOCTYPE plus `&nbsp;`,
+    /// which is what Sigil writes by default. It must parse, and the id
+    /// must be visible to the id-based checks.
+    #[test]
+    fn declare_dtd_entities_makes_the_epub2_nbsp_shape_parse() {
+        let text = concat!(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n",
+            "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
+            "<h1 id=\"sigil_toc_id_3\">a&nbsp;b</h1>\n",
+            "</body></html>",
+        );
+        assert!(
+            crate::ocf::parse_xml(text).is_err(),
+            "precondition: the raw document is what roxmltree cannot parse"
+        );
+        let out = declare_dtd_entities(text.to_string(), false);
+        let doc = crate::ocf::parse_xml(&out).expect("declared entities should let it parse");
+        let h1 = doc.descendants().find(|n| n.has_tag_name("h1")).unwrap();
+        assert_eq!(h1.attribute("id"), Some("sigil_toc_id_3"));
+        assert_eq!(h1.text(), Some("a\u{a0}b"));
+    }
+
+    /// The property the whole approach rests on: declarations are injected
+    /// without adding a newline, so every position epubveri reports still
+    /// points at the same place in the file the user actually has.
+    #[test]
+    fn declare_dtd_entities_preserves_line_numbers() {
+        let text = concat!(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n",
+            "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
+            "<p>&nbsp;</p>\n",
+            "<h1 id=\"x\">t</h1>\n",
+            "</body></html>",
+        );
+        let out = declare_dtd_entities(text.to_string(), false);
+        assert_eq!(
+            out.lines().count(),
+            text.lines().count(),
+            "no newline may be added"
+        );
+        let doc = crate::ocf::parse_xml(&out).unwrap();
+        let h1 = doc.descendants().find(|n| n.has_tag_name("h1")).unwrap();
+        let pos = doc.text_pos_at(h1.range().start);
+        assert_eq!((pos.row, pos.col), (5, 1), "h1 is on line 5, column 1");
+    }
+
+    /// EPUB 3 is deliberately untouched: a named reference other than the
+    /// predefined five is a real error there, and making it parse would
+    /// paper over the RSC-016 that should fire.
+    #[test]
+    fn declare_dtd_entities_leaves_epub3_alone() {
+        let text = "<!DOCTYPE html>\n<html><body><p>a&nbsp;b</p></body></html>";
+        assert_eq!(declare_dtd_entities(text.to_string(), true), text);
+        // ... and so is an EPUB 2 document with no XHTML DTD to promise them.
+        assert_eq!(declare_dtd_entities(text.to_string(), false), text);
+    }
+
+    /// Only entities the DTD actually declares are covered; an invented one
+    /// stays undeclared, so the parse still fails and `check_entities`
+    /// still reports it (the #12 invariant).
+    #[test]
+    fn declare_dtd_entities_ignores_nonstandard_names() {
+        let text = concat!(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n",
+            "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
+            "<html><body><p>a&madeupname;b</p></body></html>",
+        );
+        let out = declare_dtd_entities(text.to_string(), false);
+        assert_eq!(out, text, "nothing to declare");
+        assert!(crate::ocf::parse_xml(&out).is_err());
+        let mut report = Report::default();
+        check_entities(text, "c.xhtml", false, &mut report);
+        assert_eq!(
+            report.messages.iter().map(|m| m.rule).collect::<Vec<_>>(),
+            vec![Some("htm.entity.undeclared")],
+            "the scan must still own this one"
+        );
+    }
+
+    /// A document that already has an internal subset must get our
+    /// declarations *inside* it - a second `[...]` would be malformed - and
+    /// its own declaration of a name must win over ours.
+    #[test]
+    fn declare_dtd_entities_merges_into_an_existing_internal_subset() {
+        let text = concat!(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n",
+            "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\" [\n",
+            "  <!ENTITY nbsp \"X\">\n",
+            "]>\n",
+            "<html><body><p>a&nbsp;b&mdash;c</p></body></html>",
+        );
+        let out = declare_dtd_entities(text.to_string(), false);
+        assert_eq!(out.matches('[').count(), 1, "no second internal subset");
+        let doc = crate::ocf::parse_xml(&out).unwrap();
+        let p = doc.descendants().find(|n| n.has_tag_name("p")).unwrap();
+        assert_eq!(
+            p.text(),
+            Some("aXb\u{2014}c"),
+            "the document's own &nbsp; wins; &mdash; comes from ours"
+        );
+    }
+
+    /// An entity mentioned only inside a comment isn't a reference, so
+    /// there is nothing to declare and the text is left alone.
+    #[test]
+    fn declare_dtd_entities_ignores_entities_in_comments() {
+        let text = concat!(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n",
+            "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
+            "<html><body><!-- &nbsp; --><p>x</p></body></html>",
+        );
+        assert_eq!(declare_dtd_entities(text.to_string(), false), text);
+    }
+
+    /// Every name the table offers must actually be declarable: a bad code
+    /// point would produce a declaration that fails to parse.
+    #[test]
+    fn every_table_entry_declares_and_parses() {
+        let refs: String = XHTML_NAMED_ENTITIES
+            .iter()
+            .map(|(n, _)| format!("&{n};"))
+            .collect();
+        let text = format!(
+            concat!(
+                "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n",
+                "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
+                "<html><body><p>{}</p></body></html>",
+            ),
+            refs
+        );
+        let out = declare_dtd_entities(text, false);
+        let doc = crate::ocf::parse_xml(&out).expect("all 248 must parse");
+        let p = doc.descendants().find(|n| n.has_tag_name("p")).unwrap();
+        let got: Vec<char> = p.text().unwrap().chars().collect();
+        assert_eq!(got.len(), XHTML_NAMED_ENTITIES.len());
+        for (i, (name, cp)) in XHTML_NAMED_ENTITIES.iter().enumerate() {
+            assert_eq!(
+                got[i],
+                char::from_u32(*cp).unwrap(),
+                "&{name}; expanded to the wrong character"
+            );
+        }
     }
 }

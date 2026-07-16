@@ -8,6 +8,42 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **EPUB 2 content documents whose DOCTYPE declares the XHTML entities now parse
+  (`&nbsp;` and friends).** An EPUB 2 content document references an external DTD
+  (XHTML 1.1 / OEB 1.2) that declares the standard HTML named entities, but the
+  parser never fetches an external DTD — so `&nbsp;`, the single most ordinary
+  thing in a real EPUB 2, failed the parse as an unknown entity. Nothing is
+  fetched now either: the entity set is fixed and known, so the referenced ones
+  are declared inline before parsing (positions are unaffected — no line shifts).
+  Measured on a real 171-book shelf, this affected **690 of 7207 content documents
+  (10%), across 48 of 171 books — every one of them valid**. Two things followed
+  from it, and both are fixed:
+  - **1079 invented `RSC-012` errors** (86% of all `RSC-012` on that shelf, across
+    31 books): an unparseable document's id map was built with
+    `unwrap_or_default()`, turning *"I could not read this"* into *"this has no
+    ids"*, so every fragment pointing into it was reported undefined — against ids
+    that were plainly there. "I could not check" and "I checked, and it's absent"
+    are now distinct, and only the latter reports.
+  - **163 real findings that were never reported** (157 of them `RSC-005`
+    `empty_title`): a document that fails to parse has *every* check on it
+    silently skipped, so the book validates clean.
+
+  This was the seam between two changes that were each right on their own: #12 made
+  a parse failure report `RSC-016` but deliberately let the entity scan own
+  entity-reference failures, and 0.5.9 (correctly) stopped that scan reporting
+  DTD-declared entities in EPUB 2. Each deferred to the other, so nothing reported
+  it — reopening the exact class #12 set out to close, this time silently.
+  Reporting these documents as malformed would have been the wrong fix: they are
+  valid, and it would have resurrected the false positive 0.5.8 removed.
+  (Reported by epubsana, with measurements, in #23.)
+
+  Corpus recall is unchanged (600/607): epubcheck's own corpus is mostly EPUB 3 and
+  contains no document of this shape — which is why this survived to 0.5.9.
+
 ## [0.5.9] - 2026-07-16
 
 Two more MobileRead forum fixes: an EPUB 2 false positive on the content-type

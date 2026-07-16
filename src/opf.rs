@@ -168,6 +168,35 @@ fn dom_id_order(d: &roxmltree::Document) -> HashMap<String, usize> {
     order
 }
 
+/// The `dom_id_order` of another document in the container, or `None` when
+/// that document could not be read or parsed at all.
+///
+/// The `None` matters: it is the difference between "I checked, and the id
+/// is absent" and "I could not check". Every caller here is about to decide
+/// whether some fragment reference is broken, and only the first of those
+/// two answers can honestly produce an RSC-012. Collapsing them - which is
+/// what an `unwrap_or_default()` on the parse does - turns an unreadable
+/// document into an id-less one and reports every fragment pointing into it
+/// as undefined. That was issue #23: 1079 invented RSC-012s across 31 books,
+/// 86% of every RSC-012 on a real shelf, against ids that were plainly
+/// there.
+///
+/// Decoding is BOM-aware and the XHTML DTD's entities are declared, exactly
+/// as in the main content-document walk - a target document must not fail to
+/// parse *here* for a reason it would not fail to parse *there*.
+fn target_id_order(
+    ocf: &mut Ocf,
+    name_index: &HashMap<String, String>,
+    target_nfc: &str,
+    is_epub3: bool,
+) -> Option<HashMap<String, usize>> {
+    let orig = name_index.get(target_nfc)?;
+    let bytes = ocf.read(orig)?;
+    let text = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&bytes), is_epub3);
+    let doc = parse_xml(&text).ok()?;
+    Some(dom_id_order(&doc))
+}
+
 /// Default-vocabulary prefixes EPUB reserves, and the exact URI each is
 /// reserved for - the union of every (name, URI) pair confirmed by the
 /// real corpus fixtures, both the package-level ones (EPUB 3 appendix D.2
@@ -1097,10 +1126,11 @@ fn check_ncx_content_fragments(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     let dir = parent_dir(ncx_path);
-    let mut id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
     for n in ncx_doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "content")
@@ -1147,20 +1177,16 @@ fn check_ncx_content_fragments(
             continue;
         }
         if !id_cache.contains_key(&resolved) {
-            let ids = name_index
-                .get(&resolved)
-                .cloned()
-                .and_then(|orig| ocf.read(&orig))
-                .map(|b| {
-                    let text = String::from_utf8_lossy(&b).into_owned();
-                    parse_xml(&text)
-                        .map(|d| dom_id_order(&d))
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
+            let ids = target_id_order(ocf, name_index, &resolved, is_epub3);
             id_cache.insert(resolved.clone(), ids);
         }
-        if !id_cache[&resolved].contains_key(frag) {
+        // `None` = the target could not be read/parsed, so whether the
+        // fragment resolves is unknown and unreported (see
+        // `target_id_order`).
+        let Some(ids) = &id_cache[&resolved] else {
+            continue;
+        };
+        if !ids.contains_key(frag) {
             report.push_node(
                 RSC_012,
                 Severity::Error,
@@ -3060,6 +3086,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                                 ocf,
                                 &name_index,
                                 &items,
+                                is_epub3,
                                 report,
                             );
                         }
@@ -3250,7 +3277,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // HTM-058 (same fix `css::decode_bytes` already got for
         // stylesheets, reused here rather than duplicated).
         let t = crate::css::decode_bytes(&b);
+        // The raw scans must see the document exactly as authored, so they
+        // run before the entity declarations below are added to it.
         crate::htm::check_raw(&b, &t, &path, is_epub3, report);
+        // An EPUB 2 document's DOCTYPE promises the XHTML DTD's named
+        // entities; declare them inline so `&nbsp;` doesn't fail the parse
+        // and silently skip every check below (issue #23). Line numbers are
+        // preserved, and `t` stays the text `d` was parsed from - checks
+        // below pass both together and must not disagree.
+        let t = crate::htm::declare_dtd_entities(t, is_epub3);
         let d = match parse_xml(&t) {
             Ok(d) => d,
             Err(e) => {
@@ -3263,6 +3298,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // `check_raw`'s entity scan above already owns those
                 // (undeclared / missing-';' named entities), so skip them
                 // here to avoid double-reporting the same defect.
+                //
+                // That exception rests on an invariant worth stating, since
+                // it once broke silently and took 690 documents with it
+                // (issue #23): every entity reference that fails this parse
+                // *is* reported by the scan above. `declare_dtd_entities`
+                // is what keeps it true - the one class the scan
+                // deliberately stays quiet about (an EPUB 2 document's
+                // DTD-declared `&nbsp;`, which is not a defect) is exactly
+                // the class it now makes parse. Anything still failing here
+                // is undeclared by any DTD, and the scan reports it. Do not
+                // widen this suppression without re-checking that.
                 if !crate::ocf::is_entity_reference_error(&e) {
                     report.push_full(
                         RSC_016,
@@ -4123,7 +4169,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 })
                 .is_some();
 
-            let mut frag_id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+            let mut frag_id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
 
             for a in d
                 .descendants()
@@ -4207,23 +4253,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
                 if !frag_id_cache.contains_key(&target_nfc) {
                     let ids = if target_nfc == nfc(&path) {
-                        dom_id_order(&d)
+                        // The document being walked - already parsed.
+                        Some(dom_id_order(&d))
                     } else {
-                        name_index
-                            .get(&target_nfc)
-                            .cloned()
-                            .and_then(|orig| ocf.read(&orig))
-                            .map(|b| {
-                                let t = String::from_utf8_lossy(&b).into_owned();
-                                parse_xml(&t)
-                                    .map(|d2| dom_id_order(&d2))
-                                    .unwrap_or_default()
-                            })
-                            .unwrap_or_default()
+                        target_id_order(ocf, &name_index, &target_nfc, is_epub3)
                     };
                     frag_id_cache.insert(target_nfc.clone(), ids);
                 }
-                if !frag_id_cache[&target_nfc].contains_key(frag) {
+                // `None` = the target could not be read/parsed, so whether
+                // the fragment resolves is unknown and unreported (see
+                // `target_id_order`).
+                let Some(target_ids) = &frag_id_cache[&target_nfc] else {
+                    continue;
+                };
+                if !target_ids.contains_key(frag) {
                     report.push_node(
                         RSC_012,
                         Severity::Error,
@@ -4426,7 +4469,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && n.tag_name().name() == "nav"
                     && n.attribute((EPUB_NS, "type")) == Some("toc")
             }) {
-                let mut id_order_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+                let mut id_order_cache: HashMap<String, Option<HashMap<String, usize>>> =
+                    HashMap::new();
                 // (spine_idx, dom_idx): dom_idx is 0 for a fragment-less
                 // link ("the whole document") and real-fragment-index + 1
                 // otherwise, so it always sorts before any real fragment
@@ -4454,20 +4498,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         None => 0,
                         Some(f) => {
                             if !id_order_cache.contains_key(&resolved_nfc) {
-                                let order = name_index
-                                    .get(&resolved_nfc)
-                                    .and_then(|orig| ocf.read(orig))
-                                    .and_then(|b| {
-                                        let t = String::from_utf8_lossy(&b).into_owned();
-                                        parse_xml(&t).ok().map(|d2| dom_id_order(&d2))
-                                    })
-                                    .unwrap_or_default();
+                                let order =
+                                    target_id_order(ocf, &name_index, &resolved_nfc, is_epub3);
                                 id_order_cache.insert(resolved_nfc.clone(), order);
                             }
                             // Missing ids are already caught elsewhere as
                             // broken references; skip this link here
                             // rather than letting it break the comparison.
-                            match id_order_cache[&resolved_nfc].get(f) {
+                            // An unreadable target (`None`) is skipped for
+                            // the same reason - its DOM order is unknown,
+                            // not empty.
+                            match id_order_cache[&resolved_nfc]
+                                .as_ref()
+                                .and_then(|o| o.get(f))
+                            {
                                 Some(&idx) => idx + 1,
                                 None => continue,
                             }
@@ -5471,23 +5515,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // their target document - same shape as the NCX <content src>
         // fragment check, reusing the same id_cache-per-target pattern.
         {
-            let mut id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+            let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
             for (target, frag) in &textref_targets {
                 if !id_cache.contains_key(target) {
-                    let ids = name_index
-                        .get(target)
-                        .cloned()
-                        .and_then(|orig| ocf.read(&orig))
-                        .map(|b| {
-                            let text = String::from_utf8_lossy(&b).into_owned();
-                            parse_xml(&text)
-                                .map(|d| dom_id_order(&d))
-                                .unwrap_or_default()
-                        })
-                        .unwrap_or_default();
+                    let ids = target_id_order(ocf, &name_index, target, is_epub3);
                     id_cache.insert(target.clone(), ids);
                 }
-                if !id_cache[target].contains_key(frag) {
+                // `None` = the target could not be read/parsed, so whether
+                // the fragment resolves is unknown and unreported (see
+                // `target_id_order`).
+                let Some(target_ids) = &id_cache[target] else {
+                    continue;
+                };
+                if !target_ids.contains_key(frag) {
                     report.push_at_rule(
                         RSC_012,
                         Severity::Error,
@@ -5547,7 +5587,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 continue;
             };
             let Some(b) = ocf.read(&orig) else { continue };
-            let t = String::from_utf8_lossy(&b).into_owned();
+            let t = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&b), is_epub3);
             let Ok(d) = parse_xml(&t) else { continue };
             let id_order = dom_id_order(&d);
             // Ids the SMIL references but the doc doesn't have are already

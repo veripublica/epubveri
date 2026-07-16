@@ -145,3 +145,144 @@ pub fn validate_path_with_profile(path: &Path, profile: Option<&str>) -> std::io
     }
     Ok(report)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+
+    /// Builds a minimal, otherwise-valid EPUB 2 in memory whose one content
+    /// document has the issue-#23 shape: an XHTML 1.1 DOCTYPE (so `&nbsp;`
+    /// is declared by the DTD it references), a `&nbsp;` in the text, and an
+    /// `id` the NCX points at. Sigil writes exactly this by default.
+    fn epub2_with_dtd_entities(title: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            z.start_file("mimetype", stored).unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+
+            let opts = zip::write::SimpleFileOptions::default();
+            let files: &[(&str, &str)] = &[
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+                ),
+                (
+                    "OEBPS/content.opf",
+                    r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:x</dc:identifier>
+    <dc:title>T</dc:title>
+    <dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="s2" href="Text/Section0002.htm" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="s2"/></spine>
+</package>"#,
+                ),
+                (
+                    "OEBPS/toc.ncx",
+                    r#"<?xml version="1.0"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:x"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap>
+    <navPoint id="n1" playOrder="1">
+      <navLabel><text>C1</text></navLabel>
+      <content src="Text/Section0002.htm#sigil_toc_id_3"/>
+    </navPoint>
+  </navMap>
+</ncx>"#,
+                ),
+            ];
+            let content_doc = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n\
+  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n\
+<html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+<head><title>{title}</title></head>\n\
+<body>\n\
+<h1 class=\"MsoNormal\" id=\"sigil_toc_id_3\">Chapter&nbsp;One</h1>\n\
+</body>\n\
+</html>\n"
+            );
+            for (name, body) in files
+                .iter()
+                .copied()
+                .chain([("OEBPS/Text/Section0002.htm", content_doc.as_str())])
+            {
+                z.start_file(name, opts).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Issue #23, the half that invents findings. The NCX fragment
+    /// resolves - the `id` is right there on the `<h1>` - so no RSC-012 may
+    /// be reported. Before the fix `&nbsp;` failed the parse, the id map
+    /// came back empty via an `unwrap_or_default()`, and every fragment
+    /// pointing into the document was called undefined: 1079 invented
+    /// errors across a real 171-book shelf, 86% of all RSC-012 on it.
+    #[test]
+    fn epub2_dtd_entities_do_not_invent_broken_fragments() {
+        let report = crate::validate_bytes(epub2_with_dtd_entities("C1"));
+        let bogus: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_012)
+            .map(|m| m.text.as_str())
+            .collect();
+        assert!(
+            bogus.is_empty(),
+            "the id 'sigil_toc_id_3' is defined; got {bogus:?}"
+        );
+    }
+
+    /// Issue #23, the half that hides findings - the invisible one. A
+    /// document that fails to parse has every DOM check on it skipped, and
+    /// the book quietly validates clean.
+    ///
+    /// This asserts a *positive* observation on purpose: the empty `<title>`
+    /// is a real defect sitting behind the `&nbsp;`, and RSC-005 can only
+    /// fire if the document was actually read. Asserting the absence of
+    /// something here would prove nothing - "no findings" is exactly what
+    /// the bug produced.
+    #[test]
+    fn epub2_dtd_entities_do_not_hide_the_document_from_dom_checks() {
+        let report = crate::validate_bytes(epub2_with_dtd_entities(""));
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.content_document.empty_title")),
+            "the empty <title> behind the &nbsp; must still be seen; got {:?}",
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        );
+    }
+
+    /// The document is valid given the DTD it declares, so it must not be
+    /// reported as malformed - resurrecting the RSC-016 false positive
+    /// v0.5.8 removed, on 690 documents across 48 books, is the one outcome
+    /// worse than the bug.
+    #[test]
+    fn epub2_dtd_entities_are_not_reported_as_malformed() {
+        let report = crate::validate_bytes(epub2_with_dtd_entities("C1"));
+        let fatals: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.severity == crate::report::Severity::Fatal)
+            .map(|m| (m.id, m.text.as_str()))
+            .collect();
+        assert!(fatals.is_empty(), "document is valid; got {fatals:?}");
+    }
+}
