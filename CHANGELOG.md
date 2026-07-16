@@ -12,6 +12,32 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A deprecated `epub:type` value is no longer also reported as unknown.** `sidebar`
+  and `note` drew both `OPF-088` ("is not in the default vocabulary") and `OPF-086b`
+  ("is deprecated") — claims that cannot both hold, since knowing a term is deprecated
+  means knowing the term. The vocabulary allowlist and the deprecated list lived in
+  different modules and had drifted apart; 7 of the 13 deprecated terms were missing
+  from the allowlist. Both now live in one module and the "is this a known term?"
+  answer derives from both, so the contradiction cannot be stated. An invariant test
+  over the whole table then found an eighth case nobody had reported: `figure` was in
+  neither list, so `<figure epub:type="figure">` drew a false `OPF-088` too.
+  (Reported by Doitsu on the MobileRead forum.)
+
+- **`OPF-087` now states the actual rule, and catches the cases it was missing.** The
+  Structural Semantics Vocabulary gives `table`, `table-row`, `table-cell`, `list`,
+  `list-item`, `figure` and `aside` an HTML usage context of *"Not Allowed"* — they
+  identify escapable/skippable structure on a media overlay's `seq`/`par` and mean
+  nothing on an HTML element. epubveri instead read this as *"the value restates the
+  semantic of its host element"* (`ol` + `list`, `table` + `table`, …), which agreed
+  with epubcheck on every count of its own test fixture — that fixture only ever pairs
+  each term with its matching element — but is not the rule: `<div epub:type="list">`
+  went unreported entirely. (Reported by Doitsu on the MobileRead forum.)
+
+  Corpus recall is unchanged (600/607) for both, and cannot move: it checks that the
+  expected ID was reported, not that nothing extra was, so a spurious usage-level
+  message is invisible to it — and its one `OPF-087` fixture is exactly the case where
+  the wrong rule and the right one agree.
+
 - **EPUB 2 content documents whose DOCTYPE declares the XHTML entities now parse
   (`&nbsp;` and friends).** An EPUB 2 content document references an external DTD
   (XHTML 1.1 / OEB 1.2) that declares the standard HTML named entities, but the
