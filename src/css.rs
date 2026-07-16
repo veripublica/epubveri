@@ -22,7 +22,7 @@
 //! epubveri that used to carry only a file path (issue #1; Kevin Hendricks /
 //! Sigil asked for CSS positions specifically). The position-less pub
 //! helpers below (`stylesheet_urls`, `import_targets`, `selector_class_names`,
-//! `font_face_src_urls`) are still consumed by `opf.rs` off the plain
+//! `font_face_src_urls_spanned`) are still consumed by `opf.rs` off the plain
 //! `styloria::Stylesheet`, so they keep the plain parser — they don't need
 //! positions.
 
@@ -449,6 +449,17 @@ fn check_font_face_spanned(
     css_path: &str,
     report: &mut Report,
 ) {
+    // CSS-028 (usage): purely informational - real epubcheck notes every
+    // `@font-face` it sees, so a reader comparing the two outputs isn't
+    // left wondering which tool missed an embedded font. Anchored at the
+    // `@font-face` keyword; nothing about the rule is wrong.
+    report.push_at_pos(
+        CSS_028,
+        Severity::Usage,
+        "@font-face declaration",
+        css_path,
+        Position::of_offset(css, name_span.start),
+    );
     if is_effectively_empty_spanned(block_values) {
         // An empty block has no token to point at, so anchor CSS-019 at the
         // `@font-face` keyword itself.
@@ -492,40 +503,51 @@ fn check_font_face_spanned(
     }
 }
 
-/// The `url()` targets of every `@font-face`'s `src` declaration - unlike
-/// the generic `collect_urls` pass (which deliberately skips `@font-face`
-/// blocks, handling them via `check_font_face` instead), this is used by
-/// the CSS-007 exempt-font-usage cross-reference in `opf.rs`, which needs
-/// each font's own resolved manifest media-type to decide whether it's a
-/// foreign (exempt, but usage-flagged) font.
-pub(crate) fn font_face_src_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
+/// The `url()` target of every `@font-face`'s `src` declaration, each with
+/// the span of the token it came from - unlike the generic `collect_urls`
+/// pass (which deliberately skips `@font-face` blocks, handling them via
+/// `check_font_face` instead), this is used by the CSS-007 non-standard-font
+/// cross-reference in `opf.rs`, which needs each font's own resolved
+/// manifest media-type to decide whether it's a Core Media Type.
+///
+/// Spans are carried so CSS-007 can point at the `src` url that names the
+/// font, rather than at the stylesheet as a whole - "some font in this file
+/// is wrong" leaves the reader to find which, and a stylesheet can declare
+/// many.
+pub(crate) fn font_face_src_urls_spanned(css: &str) -> Vec<Spanned<String>> {
+    let sheet = spanned::parse_stylesheet(css);
     let mut out = Vec::new();
     for rule in &sheet.rules {
-        let Rule::At(a) = rule else { continue };
+        let spanned::Rule::At(a) = &rule.node else {
+            continue;
+        };
         if !a.name.eq_ignore_ascii_case("font-face") {
             continue;
         }
         let Some(block) = &a.block else { continue };
         for chunk in block
+            .node
             .values
-            .split(|v| matches!(v, ComponentValue::Token(Token::Semicolon)))
+            .split(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Semicolon)))
         {
             let mut iter = chunk
                 .iter()
-                .filter(|v| !matches!(v, ComponentValue::Token(Token::Whitespace)));
-            let Some(ComponentValue::Token(Token::Ident(name))) = iter.next() else {
+                .filter(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)));
+            let Some(f) = iter.next() else { continue };
+            let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node else {
                 continue;
             };
             if !name.eq_ignore_ascii_case("src") {
                 continue;
             }
-            let Some(ComponentValue::Token(Token::Colon)) = iter.next() else {
+            let Some(colon) = iter.next() else { continue };
+            if !matches!(&colon.node, spanned::ComponentValue::Token(Token::Colon)) {
                 continue;
-            };
-            collect_urls(chunk, &mut out);
+            }
+            collect_urls_spanned(chunk, &mut out);
         }
     }
-    out.retain(|u| !u.is_empty());
+    out.retain(|u| !u.node.is_empty());
     out
 }
 
@@ -701,6 +723,31 @@ pub(crate) fn selector_class_names(sheet: &styloria::Stylesheet) -> HashSet<Stri
     names
 }
 
+/// Every class selector in `css`, each with the span of the name token -
+/// the same token-level scan as [`selector_class_names`], keeping where it
+/// was written.
+///
+/// CSS-029 needs this: the class name it reports on lives in the
+/// stylesheet, so pointing at the content document that merely links that
+/// stylesheet sends the reader to a file the name does not appear in.
+pub(crate) fn selector_class_names_spanned(css: &str) -> Vec<Spanned<String>> {
+    let sheet = spanned::parse_stylesheet(css);
+    let mut names = Vec::new();
+    for rule in &sheet.rules {
+        if let spanned::Rule::Qualified(q) = &rule.node {
+            for pair in q.prelude.windows(2) {
+                if let [dot, ident] = pair
+                    && matches!(&dot.node, spanned::ComponentValue::Token(Token::Delim('.')))
+                    && let spanned::ComponentValue::Token(Token::Ident(name)) = &ident.node
+                {
+                    names.push(Spanned::new(name.to_string(), dot.span));
+                }
+            }
+        }
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,10 +902,32 @@ mod tests {
 
     #[test]
     fn clean_stylesheet_no_findings() {
+        let idx = empty_index();
+        let css = "body { color: red; } .foo { margin: 0; }";
+        assert!(run(css, &idx).is_empty());
+    }
+
+    /// A clean `@font-face` draws exactly one thing: the informational
+    /// CSS-028 noting the declaration is there. It is not a defect - real
+    /// epubcheck reports the same usage note for every `@font-face` - so
+    /// nothing else may fire alongside it.
+    #[test]
+    fn clean_font_face_draws_only_the_css_028_usage_note() {
         let mut idx = empty_index();
         idx.insert("OEBPS/font.woff".to_string(), "OEBPS/font.woff".to_string());
         let css = "@font-face { font-family: X; src: url(font.woff); } body { color: red; }";
-        assert!(run(css, &idx).is_empty());
+        assert_eq!(run(css, &idx), vec![CSS_028]);
+    }
+
+    /// One note per declaration, not one per stylesheet.
+    #[test]
+    fn css_028_fires_once_per_font_face() {
+        let mut idx = empty_index();
+        idx.insert("OEBPS/a.woff".to_string(), "OEBPS/a.woff".to_string());
+        idx.insert("OEBPS/b.woff".to_string(), "OEBPS/b.woff".to_string());
+        let css = "@font-face { font-family: A; src: url(a.woff); }\n\
+                   @font-face { font-family: B; src: url(b.woff); }";
+        assert_eq!(run(css, &idx), vec![CSS_028, CSS_028]);
     }
 
     #[test]

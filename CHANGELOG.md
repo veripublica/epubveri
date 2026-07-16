@@ -38,6 +38,31 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   message is invisible to it — and its one `OPF-087` fixture is exactly the case where
   the wrong rule and the right one agree.
 
+- **`CSS-007` now says what is actually wrong, and where.** It read *"font 'X' is a
+  foreign resource, exempt from requiring a fallback"* — which describes the rule that
+  does *not* fire (fonts never need a fallback), buries the one that does, and reads as
+  a report of a non-problem. It now names the offending media type (e.g. the
+  widespread-but-never-registered `application/x-font-opentype`) and points at the
+  `@font-face` `src` that names the font, rather than at the stylesheet as a whole.
+  (Reported by Doitsu on the MobileRead forum.)
+
+- **`CSS-029` now points at the stylesheet the class name is written in**, and fires
+  once per place it is written. It pointed at the content document that merely *links*
+  that stylesheet — a file the class name does not appear in — and repeated itself once
+  per linking document. (Reported by Doitsu on the MobileRead forum.)
+
+### Added
+
+- **`OPF-086b` now names what to use instead of a deprecated `epub:type`** — e.g.
+  `sidebar` → a bare HTML `aside` element, `note` → the `footnote` semantic, `warning` →
+  the `notice` semantic. The EPUB SSV names a replacement for 5 of its 13 deprecated
+  terms; the other 8 say only that they are deprecated, rather than inventing advice.
+  (Prompted by Doitsu on the MobileRead forum.)
+
+- **`CSS-028`** (usage): notes each `@font-face` declaration, as real epubcheck does, so
+  a reader comparing the two outputs isn't left wondering which tool missed an embedded
+  font.
+
 - **EPUB 2 content documents whose DOCTYPE declares the XHTML entities now parse
   (`&nbsp;` and friends).** An EPUB 2 content document references an external DTD
   (XHTML 1.1 / OEB 1.2) that declares the standard HTML named entities, but the

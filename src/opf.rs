@@ -3221,6 +3221,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // associated stylesheets (inline <style> + linked <link
     // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
     let mut doc_class_names: HashMap<String, HashSet<String>> = HashMap::new();
+    // Where a media-overlay class name is actually *written*: (class name,
+    // the file holding that CSS, position within it). `doc_class_names`
+    // above answers "which classes does this content document see", which
+    // is what CSS-030 needs; it cannot answer "where do I go to read this
+    // one", which is what CSS-029 must tell the author - the name lives in
+    // the stylesheet, not in the document that links it. The position is
+    // `None` for an inline `<style>`, whose offsets are relative to the
+    // extracted style text rather than to the file (see `css::check`).
+    let mut mo_class_sites: Vec<(String, String, Option<Position>)> = Vec::new();
     // Whether the (required) toc nav has an epub:type="page-list" nav -
     // for the EDUPUB pagination-source cross-check after this loop.
     let mut has_page_list_nav = false;
@@ -3945,7 +3954,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         a.attribute((EPUB_NS, "type"))
                             .is_some_and(|t| t.split_whitespace().any(|tok| tok == "endnotes"))
                     });
-                if crate::ssv::DEPRECATED.iter().any(|(t, _)| *t == token) && !endnote_exempt {
+                if let Some((_, replacement)) =
+                    crate::ssv::DEPRECATED.iter().find(|(t, _)| *t == token)
+                    && !endnote_exempt
+                {
                     // epubcheck reports a deprecated epub:type semantic as
                     // usage-level OPF-086b (the corpus'
                     // `epubtype-deprecated-usage.xhtml`: "usage OPF-086b"),
@@ -3954,10 +3966,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     // same lettered-ID representation, as OPF-096 vs
                     // OPF-096b. Matches its sibling OPF-088 (usage) in this
                     // very loop.
+                    //
+                    // Naming what to use instead is the whole value of the
+                    // message: "deprecated" alone leaves the author to go
+                    // find the vocabulary themselves. The spec names a
+                    // replacement for only 5 of the 13, so the rest say
+                    // nothing rather than invent one.
+                    let text = match replacement {
+                        Some(r) => {
+                            format!("epub:type value '{token}' is deprecated; consider {r} instead")
+                        }
+                        None => format!("epub:type value '{token}' is deprecated"),
+                    };
                     report.push_node(
                         OPF_086B,
                         Severity::Usage,
-                        format!("epub:type value '{token}' is deprecated"),
+                        text,
                         path.clone(),
                         n,
                         "opf.content_document.deprecated_epub_type",
@@ -4748,12 +4772,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     None,
                     report,
                 );
+                check_exempt_font_usage(&css_text, &dir, &items, &path, report);
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
-                check_exempt_font_usage(&sheet, &dir, &items, &path, report);
+                let inline_classes = crate::css::selector_class_names(&sheet);
+                for c in inline_classes.iter().filter(|c| is_media_overlay_class(c)) {
+                    mo_class_sites.push((c.clone(), path.clone(), None));
+                }
                 doc_class_names
                     .entry(path.clone())
                     .or_default()
-                    .extend(crate::css::selector_class_names(&sheet));
+                    .extend(inline_classes);
                 for u in crate::css::stylesheet_urls(&sheet) {
                     if is_remote_url(&u) {
                         has_remote = true;
@@ -4794,6 +4822,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         .entry(path.clone())
                         .or_default()
                         .extend(crate::css::selector_class_names(&sheet));
+                    let css_path = nfc(&resolved);
+                    for c in crate::css::selector_class_names_spanned(&css_text) {
+                        if is_media_overlay_class(&c.node) {
+                            mo_class_sites.push((
+                                c.node,
+                                css_path.clone(),
+                                Some(Position::of_offset(&css_text, c.span.start)),
+                            ));
+                        }
+                    }
                     for u in crate::css::stylesheet_urls(&sheet) {
                         if is_remote_url(&u) {
                             has_remote = true;
@@ -5328,30 +5366,59 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     }
 
     // --- Media-overlay active-class CSS cross-referencing (CSS-029/030) ---
-    const WELL_KNOWN_ACTIVE_CLASS: &str = "-epub-media-overlay-active";
-    const WELL_KNOWN_PLAYBACK_CLASS: &str = "-epub-media-overlay-playing";
 
     // CSS-029 (usage): a well-known class name is used as a CSS selector
     // somewhere, but its corresponding property isn't declared at all.
-    for (well_known, declared) in [
-        (WELL_KNOWN_ACTIVE_CLASS, media_active_class.is_some()),
-        (
-            WELL_KNOWN_PLAYBACK_CLASS,
-            media_playback_active_class.is_some(),
-        ),
-    ] {
+    //
+    // Reported once per place the name is written, at that place - not once
+    // per content document that happens to link the stylesheet. The two
+    // differ whenever a stylesheet is shared: the old shape reported the
+    // same one selector once per document, each time naming a file the
+    // class name does not appear in (reported by Doitsu on the MobileRead
+    // forum).
+    mo_class_sites.sort_by(|a, b| {
+        (&a.0, &a.1, a.2.map(|p| (p.line, p.column))).cmp(&(
+            &b.0,
+            &b.1,
+            b.2.map(|p| (p.line, p.column)),
+        ))
+    });
+    mo_class_sites.dedup();
+    for (class, css_path, pos) in &mo_class_sites {
+        let declared = match class.as_str() {
+            WELL_KNOWN_ACTIVE_CLASS => media_active_class.is_some(),
+            WELL_KNOWN_PLAYBACK_CLASS => media_playback_active_class.is_some(),
+            _ => continue,
+        };
         if declared {
             continue;
         }
-        for (doc_path, classes) in &doc_class_names {
-            if classes.contains(well_known) {
-                report.push_at(
-                    CSS_029,
-                    Severity::Usage,
-                    format!("well-known media-overlay class '{well_known}' is used but not declared in the package metadata"),
-                    doc_path.clone(),
-                );
-            }
+        let property = match class.as_str() {
+            WELL_KNOWN_ACTIVE_CLASS => "media:active-class",
+            _ => "media:playback-active-class",
+        };
+        let text = format!(
+            "CSS class '{class}' is used as a selector, but no '{property}' property is declared in the package document"
+        );
+        let args = vec![class.clone(), property.to_string()];
+        match pos {
+            Some(p) => report.push_full(
+                CSS_029,
+                Severity::Usage,
+                text,
+                css_path.clone(),
+                *p,
+                "css.media_overlay.class_property_not_declared",
+                args,
+            ),
+            None => report.push_at_rule(
+                CSS_029,
+                Severity::Usage,
+                text,
+                css_path.clone(),
+                "css.media_overlay.class_property_not_declared",
+                args,
+            ),
         }
     }
 
@@ -5407,8 +5474,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // linking to it - still needs its own manifest item. OPF-014: and
         // the stylesheet's *own* manifest item needs "remote-resources"
         // declared, same as a content document or SMIL overlay would.
+        check_exempt_font_usage(&css_text, &dir, &items, &path, report);
         let sheet = styloria::Parser::parse_stylesheet(&css_text);
-        check_exempt_font_usage(&sheet, &dir, &items, &path, report);
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
             if is_remote_url(&u) {
@@ -6326,36 +6393,62 @@ const FONT_CORE_MEDIA_TYPES: [&str; 10] = [
     "application/vnd.ms-opentype",
     "image/svg+xml",
 ];
+/// The two class names EPUB reserves for media-overlay styling, each
+/// paired with the package-metadata property that must declare it
+/// (CSS-029/030).
+const WELL_KNOWN_ACTIVE_CLASS: &str = "-epub-media-overlay-active";
+const WELL_KNOWN_PLAYBACK_CLASS: &str = "-epub-media-overlay-playing";
+
+/// Whether `class` is one of the two reserved media-overlay class names.
+fn is_media_overlay_class(class: &str) -> bool {
+    class == WELL_KNOWN_ACTIVE_CLASS || class == WELL_KNOWN_PLAYBACK_CLASS
+}
+
 const OBFUSCATION_ALGORITHM: &str = "http://www.idpf.org/2008/embedding";
 
-/// CSS-007 (usage): a `@font-face src` target resolves to a manifest item
+/// CSS-007 (info): a `@font-face src` target resolves to a manifest item
 /// whose declared media-type is neither a Core Media Type nor exempt
-/// video - i.e. a genuinely foreign font (§3.4 exempts fonts from ever
-/// needing a fallback, but real epubcheck still flags the usage at Info
-/// level, confirmed via `foreign-exempt-font-valid`). Core/non-preferred-
-/// Core font types (confirmed via `resources-cmt-font-truetype-valid`,
-/// which expects this reported *zero* times) must not fire.
+/// video - i.e. the stylesheet asks for a font in a format EPUB does not
+/// standardize, like the widespread-but-never-registered
+/// `application/x-font-opentype`. Core/non-preferred-Core font types
+/// (confirmed via `resources-cmt-font-truetype-valid`, which expects this
+/// reported *zero* times) must not fire.
+///
+/// §3.4 exempts fonts from ever needing a fallback, and this used to be
+/// worded as if that were the finding ("a foreign resource, exempt from
+/// requiring a fallback"), which describes the rule that *doesn't* fire and
+/// buries the one that does - a reader could only conclude epubveri was
+/// reporting a non-problem (reported by Doitsu on the MobileRead forum).
+/// The finding is the non-standard font format; the fallback exemption is
+/// why it is Info rather than an error.
 fn check_exempt_font_usage(
-    sheet: &styloria::Stylesheet,
+    css: &str,
     dir: &str,
     items: &HashMap<String, (String, String)>,
     path: &str,
     report: &mut Report,
 ) {
-    for u in crate::css::font_face_src_urls(sheet) {
-        if is_external(&u) {
+    for u in crate::css::font_face_src_urls_spanned(css) {
+        if is_external(&u.node) {
             continue;
         }
-        let resolved = nfc(&resolve(dir, &u));
+        let resolved = nfc(&resolve(dir, &u.node));
         if let Some((_, mt)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
             && !crate::cmt::is_core_media_type(mt)
             && !crate::cmt::is_exempt_video(mt)
         {
-            report.push_at(
+            report.push_full(
                 CSS_007,
                 Severity::Info,
-                format!("font '{u}' is a foreign resource, exempt from requiring a fallback"),
+                format!(
+                    "font '{}' has media type '{mt}', which is not a Core Media Type; \
+                     fonts need no fallback, but reading systems need not support it",
+                    u.node
+                ),
                 path,
+                Position::of_offset(css, u.span.start),
+                "css.font_face.non_core_media_type",
+                vec![u.node.clone(), mt.clone()],
             );
         }
     }
@@ -6556,6 +6649,146 @@ mod tests {
     /// Build a minimal valid EPUB 3 whose spine's `ch1` content document is
     /// supplied verbatim by the caller — used to feed deliberately malformed
     /// XHTML through the real content-document loop.
+    /// Builds an EPUB 3 with a linked stylesheet `Styles/s.css` holding
+    /// `css`, and one font declared in the manifest with `font_media_type`,
+    /// for the CSS-007/CSS-029 cross-referencing checks (both need a
+    /// manifest, so they can't be reached through `css::check` alone).
+    fn epub_with_stylesheet(css: &str, font_media_type: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="s" href="Styles/s.css" media-type="text/css"/>
+    <item id="f" href="Fonts/f.ttf" media-type="{font_media_type}"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>
+<link rel="stylesheet" type="text/css" href="Styles/s.css"/></head>
+<body><p>x</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>t</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">c</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+                ),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/Styles/s.css", css),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.start_file("OEBPS/Fonts/f.ttf", o).unwrap();
+            z.write_all(b"\0\x01\0\0not-a-real-font").unwrap();
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// CSS-007 must name the media type that made it fire, and point at the
+    /// `src` that names the font. It used to say the font was "a foreign
+    /// resource, exempt from requiring a fallback" with no position at all -
+    /// which describes the rule that does *not* fire, reads as a non-problem,
+    /// and leaves a reader of a many-font stylesheet with nowhere to look
+    /// (reported by Doitsu on the MobileRead forum).
+    #[test]
+    fn css_007_names_the_media_type_and_points_at_the_src() {
+        let css = "@font-face {\n  font-family: X;\n  src: url(../Fonts/f.ttf);\n}";
+        let report =
+            crate::validate_bytes(epub_with_stylesheet(css, "application/x-font-opentype"));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("css.font_face.non_core_media_type"))
+            .expect("a non-Core-Media-Type font must be reported");
+        assert_eq!(hit.id, crate::ids::CSS_007);
+        assert!(
+            hit.text.contains("application/x-font-opentype"),
+            "the message must name what made it fire; got: {}",
+            hit.text
+        );
+        assert_eq!(hit.location.as_deref(), Some("OEBPS/Styles/s.css"));
+        // The `src` line, not the stylesheet as a whole.
+        assert_eq!(hit.position.map(|p| p.line), Some(3));
+        assert!(
+            report.is_valid(),
+            "a non-standard font type is not an error"
+        );
+    }
+
+    /// A Core Media Type font draws nothing - the check is about the format
+    /// EPUB does not standardize, not about fonts in general.
+    #[test]
+    fn css_007_is_silent_for_a_core_media_type_font() {
+        let css = "@font-face {\n  font-family: X;\n  src: url(../Fonts/f.ttf);\n}";
+        let report = crate::validate_bytes(epub_with_stylesheet(css, "font/ttf"));
+        assert!(
+            !report
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("css.font_face.non_core_media_type")),
+            "font/ttf is a Core Media Type"
+        );
+    }
+
+    /// CSS-029 must point at the stylesheet the class name is written in.
+    /// It used to point at the content document that merely links that
+    /// stylesheet - a file the name does not appear in (reported by Doitsu
+    /// on the MobileRead forum).
+    #[test]
+    fn css_029_points_at_the_stylesheet_the_class_is_written_in() {
+        let css = "body { color: red; }\n.-epub-media-overlay-active { color: blue; }";
+        let report = crate::validate_bytes(epub_with_stylesheet(css, "font/ttf"));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("css.media_overlay.class_property_not_declared"))
+            .expect("an undeclared media-overlay class must be reported");
+        assert_eq!(hit.id, crate::ids::CSS_029);
+        assert_eq!(
+            hit.location.as_deref(),
+            Some("OEBPS/Styles/s.css"),
+            "the class name is in the stylesheet, not in ch1.xhtml"
+        );
+        assert_eq!(hit.position.map(|p| p.line), Some(2));
+        assert!(
+            hit.text.contains("media:active-class"),
+            "the message must name the property that would declare it; got: {}",
+            hit.text
+        );
+    }
+
     fn epub_with_ch1(ch1: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};

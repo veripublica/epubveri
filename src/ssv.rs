@@ -125,22 +125,29 @@ const KNOWN: &[&str] = &[
     "volume",
 ];
 
-/// SSV terms the vocabulary deprecates, with the replacement the spec
-/// names, or `None` where it names none. Complete as of EPUB SSV 1.1.
+/// SSV terms the vocabulary deprecates, each with what to use instead -
+/// `None` where the spec names nothing, so there is nothing honest to
+/// suggest. Complete as of EPUB SSV 1.1 (appendix A), which names a
+/// replacement for 5 of the 13.
+///
+/// The replacement is a phrase, not a bare term, because they are not all
+/// the same kind of thing: four name another SSV semantic, while `sidebar`
+/// is replaced by an HTML element rather than by any `epub:type` value at
+/// all. It slots into "consider {replacement} instead".
 pub(crate) const DEPRECATED: &[(&str, Option<&str>)] = &[
     ("annoref", None),
     ("annotation", None),
     ("biblioentry", None),
     ("bridgehead", None),
     ("endnote", None),
-    ("help", None),
+    ("help", Some("the \"tip\" semantic")),
     ("marginalia", None),
-    ("note", None),
+    ("note", Some("the \"footnote\" semantic")),
     ("rearnote", None),
-    ("rearnotes", None),
-    ("sidebar", None),
+    ("rearnotes", Some("the \"endnotes\" semantic")),
+    ("sidebar", Some("a bare HTML \"aside\" element")),
     ("subchapter", None),
-    ("warning", None),
+    ("warning", Some("the \"notice\" semantic")),
 ];
 
 /// SSV terms whose HTML usage context the vocabulary gives as "Not
