@@ -8,7 +8,11 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.5.9] - 2026-07-16
+
+Two more MobileRead forum fixes: an EPUB 2 false positive on the content-type
+`<meta>`, and a better source location for `RSC-011`. Corpus recall is unchanged
+(600/607) — neither changes a valid/invalid verdict.
 
 ### Fixed
 
