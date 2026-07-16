@@ -3200,8 +3200,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // Every local content-doc target hyperlinked from *any* content
     // document (including the nav) - for RSC-011 (a hyperlink target not
     // listed in the spine) and OPF-096 (a linear="no" spine item not
-    // reachable via any hyperlink or the nav).
-    let mut hyperlink_targets: HashSet<String> = HashSet::new();
+    // reachable via any hyperlink or the nav). Keyed by resolved target, each
+    // remembers the *source* `<a>` that hyperlinks to it (file + position +
+    // element path), captured while its document is still parsed, so RSC-011
+    // can anchor at that link instead of the OPF package root (#22). First
+    // source per target wins.
+    struct HyperlinkSource {
+        file: String,
+        position: Position,
+        element_path: crate::xmlext::NodePath,
+    }
+    let mut hyperlink_targets: HashMap<String, HyperlinkSource> = HashMap::new();
     // Whether *any* content document in the whole book uses scripting -
     // mirrors real epubcheck's book-wide `FeatureEnum.HAS_SCRIPTS` (not
     // scoped to any one document): when true, OPF-096's "non-linear
@@ -4634,7 +4643,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         // as non-linear and always has"). Record the document
                         // as a target of itself.
                         if node.tag_name().name() == "a" {
-                            hyperlink_targets.insert(nfc(&path));
+                            hyperlink_targets.entry(nfc(&path)).or_insert_with(|| {
+                                HyperlinkSource {
+                                    file: path.clone(),
+                                    position: Position::of(node),
+                                    element_path: crate::xmlext::node_path(node),
+                                }
+                            });
                         }
                     } else if !is_external(href) {
                         if href.contains('?') {
@@ -4649,7 +4664,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             );
                         }
                         if node.tag_name().name() == "a" {
-                            hyperlink_targets.insert(nfc(&resolve(&dir, href)));
+                            hyperlink_targets
+                                .entry(nfc(&resolve(&dir, href)))
+                                .or_insert_with(|| HyperlinkSource {
+                                    file: path.clone(),
+                                    position: Position::of(node),
+                                    element_path: crate::xmlext::node_path(node),
+                                });
                         }
                     }
                 }
@@ -5001,7 +5022,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
     // --- Spine reachability (RSC-011/OPF-096) ---
     let opf_own_name_nfc = nfc(opf_path);
-    for target in &hyperlink_targets {
+    for (target, source) in &hyperlink_targets {
         if *target == opf_own_name_nfc {
             // A hyperlink to the package document itself (e.g. a CFI-style
             // self-reference) isn't a content document that could ever be
@@ -5018,12 +5039,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             nfc(p) == *target && (mt == "application/xhtml+xml" || mt == "image/svg+xml")
         });
         if is_content_doc && !spine_order.contains_key(target) && name_index.contains_key(target) {
-            report.push_at_pos(
+            // Anchor at the source `<a>` (its file + line:column + element
+            // path), not the OPF package root, matching where epubcheck points
+            // (#22).
+            report.push_full_path(
                 RSC_011,
                 Severity::Error,
                 format!("'{target}' is hyperlinked but not listed in the spine"),
-                opf_path,
-                Position::of(pkg),
+                source.file.clone(),
+                source.position,
+                source.element_path.clone(),
+                "opf.spine.hyperlinked_not_in_spine",
+                vec![target.clone()],
             );
         }
     }
@@ -5041,7 +5068,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // and a fragment-only self-link (`href="#..."`) via the self-reference
     // insert - see the hyperlink-collection pass above.
     for path in &non_linear_paths {
-        if !hyperlink_targets.contains(path) {
+        if !hyperlink_targets.contains_key(path) {
             // Real epubcheck downgrades this from an error to a usage note
             // when the book uses scripting anywhere - script could add
             // navigation/hyperlinks dynamically that this static analysis
@@ -6640,6 +6667,34 @@ mod tests {
             "EPUB 2 content-type meta must not be flagged: {:?}",
             rsc_005_rules(epub2_with_ch1(ch1))
         );
+    }
+
+    #[test]
+    fn rsc_011_anchors_at_the_source_hyperlink() {
+        // #22 (Doitsu, MobileRead #82): a hyperlink to a content document that
+        // isn't in the spine must anchor at the source `<a>` (its file +
+        // line:column + element path), not at the OPF package root. Here ch1
+        // links to the nav doc, which is in the manifest but not the spine.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>C</title></head>\n\
+            <body><p><a href=\"nav.xhtml\">to nav</a></p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::RSC_011)
+            .expect("expected an RSC-011 for the nav hyperlinked but not in spine");
+        assert_eq!(
+            m.location.as_deref(),
+            Some("OEBPS/ch1.xhtml"),
+            "must anchor in the source document, not content.opf"
+        );
+        assert!(m.position.is_some(), "must carry a source line:column");
+        assert!(
+            m.element_path.is_some(),
+            "must carry the source element path"
+        );
+        assert_eq!(m.rule, Some("opf.spine.hyperlinked_not_in_spine"));
     }
 
     #[test]
