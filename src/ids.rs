@@ -129,13 +129,14 @@ pub const OPF_099: &str = "OPF-099"; // a manifest item references the package d
 // --- CSS (via the styloria parser) ---
 pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi' property
 pub const CSS_002: &str = "CSS-002"; // @font-face 'src' has an empty url()
-pub const CSS_007: &str = "CSS-007"; // an exempt (foreign) font is used without a fallback (usage)
+pub const CSS_007: &str = "CSS-007"; // a @font-face src names a non-Core-Media-Type font (info)
 pub const CSS_005: &str = "CSS-005"; // a stylesheet link's class conflicts between alt style tags (usage)
 pub const CSS_003: &str = "CSS-003"; // a stylesheet is UTF-16 encoded
 pub const CSS_004: &str = "CSS-004"; // @charset value isn't utf-8 or utf-16
 pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)
 pub const CSS_015: &str = "CSS-015"; // an alternate stylesheet link is missing or has an empty title
 pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block
+pub const CSS_028: &str = "CSS-028"; // a @font-face declaration is present (usage)
 pub const CSS_029: &str = "CSS-029"; // well-known media-overlay class used but its property isn't declared (usage)
 pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has no matching CSS selector
 

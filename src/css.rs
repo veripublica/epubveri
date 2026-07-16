@@ -22,7 +22,7 @@
 //! epubveri that used to carry only a file path (issue #1; Kevin Hendricks /
 //! Sigil asked for CSS positions specifically). The position-less pub
 //! helpers below (`stylesheet_urls`, `import_targets`, `selector_class_names`,
-//! `font_face_src_urls`) are still consumed by `opf.rs` off the plain
+//! `font_face_src_urls_spanned`) are still consumed by `opf.rs` off the plain
 //! `styloria::Stylesheet`, so they keep the plain parser — they don't need
 //! positions.
 
@@ -74,13 +74,75 @@ pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
         .collect()
 }
 
+/// Where a stylesheet's text physically sits, so a byte offset within it
+/// can be turned into a position in the file the author actually opens.
+///
+/// A standalone `.css` file is the easy case: its offsets *are* file
+/// offsets. An inline `<style>` is not - the text handed to the CSS parser
+/// is the element's content, extracted out of the document, so an offset
+/// into it says nothing about where that byte is in the file. Reporting one
+/// as if it did is how a `direction` property on line 7 of a content
+/// document came to be reported as line 3, where the reader finds `<head>`.
+#[derive(Clone, Copy)]
+pub(crate) enum CssOrigin<'a> {
+    /// A standalone stylesheet: offsets into the CSS are offsets into the
+    /// file. Carries the file's raw bytes where the caller has them, since
+    /// the encoding checks (CSS-003/004) are exactly the ones that only mean
+    /// anything for a real file - an inline `<style>`'s encoding was already
+    /// resolved as part of its XHTML document long before its text got here.
+    File { bytes: Option<&'a [u8]> },
+    /// An inline `<style>` whose extracted text was found verbatim in `doc`
+    /// starting at `base`, so CSS offsets shift onto document offsets.
+    Inline { doc: &'a str, base: usize },
+    /// An inline `<style>` whose extracted text is *not* a verbatim slice of
+    /// the document - it came from several text nodes, a CDATA section, or
+    /// had entity references expanded - so no offset within it can be
+    /// mapped. Every finding falls back to the `<style>` element's own
+    /// position: less precise, but it points at a real place in the file
+    /// rather than a confidently wrong one.
+    Opaque(Position),
+}
+
+impl CssOrigin<'_> {
+    /// The position, in the file named alongside the finding, of byte
+    /// `offset` within `css`.
+    pub(crate) fn position(&self, css: &str, offset: usize) -> Position {
+        match self {
+            CssOrigin::File { .. } => Position::of_offset(css, offset),
+            CssOrigin::Inline { doc, base } => Position::of_offset(doc, base + offset),
+            CssOrigin::Opaque(p) => *p,
+        }
+    }
+}
+
+/// Where an inline `<style>`'s extracted `css` text sits within `doc`.
+///
+/// Verbatim-slice check rather than trust: `css` is a concatenation of the
+/// element's text descendants, which equals a plain slice of the source only
+/// when there is nothing in between and nothing was unescaped. Asking
+/// whether the concatenation really is the slice at `base` settles
+/// single-node-ness, CDATA and entity expansion in one comparison, so a
+/// position is offered only when it is exact.
+pub(crate) fn inline_origin<'a>(doc: &'a str, css: &str, style: roxmltree::Node) -> CssOrigin<'a> {
+    let base = style
+        .descendants()
+        .find(|n| n.is_text())
+        .map(|n| n.range().start);
+    match base {
+        Some(base) if doc.get(base..base + css.len()) == Some(css) => {
+            CssOrigin::Inline { doc, base }
+        }
+        _ => CssOrigin::Opaque(Position::of(style)),
+    }
+}
+
 pub(crate) fn check(
     css: &str,
     css_path: &str,
     base_dir: &str,
     name_index: &HashMap<String, String>,
     manifest_paths: &HashSet<String>,
-    raw_bytes: Option<&[u8]>,
+    origin: CssOrigin,
     report: &mut Report,
 ) {
     // Span-carrying parse: every finding below points at the exact
@@ -89,10 +151,10 @@ pub(crate) fn check(
     // positions count columns in chars just like every other finding).
     let sheet = spanned::parse_stylesheet(css);
 
-    // Encoding checks only make sense for a standalone CSS file — an inline
-    // <style> block's encoding is already resolved as part of its XHTML
-    // document by the time we see its text, so `raw_bytes` is `None` there.
-    if let Some(bytes) = raw_bytes {
+    // Encoding checks only make sense for a standalone CSS file - see
+    // `CssOrigin::File`, which is why the bytes live there rather than
+    // arriving as a separate argument no other origin could ever supply.
+    if let CssOrigin::File { bytes: Some(bytes) } = origin {
         if has_utf16_bom(bytes) {
             report.push_at(
                 CSS_003,
@@ -129,7 +191,13 @@ pub(crate) fn check(
                 collect_bad_spans(&q.block.node.values, &mut bad_spans);
                 collect_urls_spanned(&q.prelude, &mut urls);
                 collect_urls_spanned(&q.block.node.values, &mut urls);
-                check_declaration_shapes_spanned(&q.block.node.values, css, css_path, report);
+                check_declaration_shapes_spanned(
+                    &q.block.node.values,
+                    css,
+                    css_path,
+                    origin,
+                    report,
+                );
             }
             spanned::Rule::At(a) => {
                 collect_bad_spans(&a.prelude, &mut bad_spans);
@@ -142,6 +210,7 @@ pub(crate) fn check(
                             a.name_span,
                             css,
                             css_path,
+                            origin,
                             report,
                         );
                     } else {
@@ -158,9 +227,21 @@ pub(crate) fn check(
                         .iter()
                         .any(|g| a.name.eq_ignore_ascii_case(g))
                     {
-                        check_rule_list_block_spanned(&block.node.values, css, css_path, report);
+                        check_rule_list_block_spanned(
+                            &block.node.values,
+                            css,
+                            css_path,
+                            origin,
+                            report,
+                        );
                     } else {
-                        check_declaration_shapes_spanned(&block.node.values, css, css_path, report);
+                        check_declaration_shapes_spanned(
+                            &block.node.values,
+                            css,
+                            css_path,
+                            origin,
+                            report,
+                        );
                     }
                 }
                 if a.name.eq_ignore_ascii_case("import")
@@ -178,14 +259,14 @@ pub(crate) fn check(
             Severity::Error,
             "CSS syntax error",
             css_path,
-            Position::of_offset(css, span.start),
+            origin.position(css, span.start),
             "css.stylesheet.bad_token",
             Vec::new(),
         );
     }
     for u in urls {
         let url = u.node;
-        let pos = Position::of_offset(css, u.span.start);
+        let pos = origin.position(css, u.span.start);
         if url.trim_start().starts_with("file:") {
             report.push_full(
                 RSC_030,
@@ -318,6 +399,7 @@ fn check_rule_list_block_spanned(
     block_values: &[Spanned<spanned::ComponentValue>],
     css: &str,
     css_path: &str,
+    origin: CssOrigin,
     report: &mut Report,
 ) {
     for v in block_values {
@@ -326,9 +408,9 @@ fn check_rule_list_block_spanned(
                 .iter()
                 .any(|nv| matches!(&nv.node, spanned::ComponentValue::Block(_)))
             {
-                check_rule_list_block_spanned(&b.values, css, css_path, report);
+                check_rule_list_block_spanned(&b.values, css, css_path, origin, report);
             } else {
-                check_declaration_shapes_spanned(&b.values, css, css_path, report);
+                check_declaration_shapes_spanned(&b.values, css, css_path, origin, report);
             }
         }
     }
@@ -343,6 +425,7 @@ fn check_declaration_shapes_spanned(
     block_values: &[Spanned<spanned::ComponentValue>],
     css: &str,
     css_path: &str,
+    origin: CssOrigin,
     report: &mut Report,
 ) {
     for chunk in
@@ -367,7 +450,7 @@ fn check_declaration_shapes_spanned(
                     Severity::Error,
                     "CSS syntax error",
                     css_path,
-                    Position::of_offset(css, f.span.start),
+                    origin.position(css, f.span.start),
                     "css.declaration.malformed_shape",
                     Vec::new(),
                 );
@@ -383,7 +466,7 @@ fn check_declaration_shapes_spanned(
                 Severity::Error,
                 format!("use of the '{name}' property is not recommended"),
                 css_path,
-                Position::of_offset(css, f.span.start),
+                origin.position(css, f.span.start),
             );
         }
         // A malformed chunk can still contain a nested block (e.g. an
@@ -391,7 +474,7 @@ fn check_declaration_shapes_spanned(
         // recurse so declarations inside it still get checked too.
         for v in chunk {
             if let spanned::ComponentValue::Block(b) = &v.node {
-                check_declaration_shapes_spanned(&b.values, css, css_path, report);
+                check_declaration_shapes_spanned(&b.values, css, css_path, origin, report);
             }
         }
     }
@@ -447,8 +530,20 @@ fn check_font_face_spanned(
     name_span: Span,
     css: &str,
     css_path: &str,
+    origin: CssOrigin,
     report: &mut Report,
 ) {
+    // CSS-028 (usage): purely informational - real epubcheck notes every
+    // `@font-face` it sees, so a reader comparing the two outputs isn't
+    // left wondering which tool missed an embedded font. Anchored at the
+    // `@font-face` keyword; nothing about the rule is wrong.
+    report.push_at_pos(
+        CSS_028,
+        Severity::Usage,
+        "@font-face declaration",
+        css_path,
+        origin.position(css, name_span.start),
+    );
     if is_effectively_empty_spanned(block_values) {
         // An empty block has no token to point at, so anchor CSS-019 at the
         // `@font-face` keyword itself.
@@ -457,7 +552,7 @@ fn check_font_face_spanned(
             Severity::Warning,
             "@font-face has an empty declaration block",
             css_path,
-            Position::of_offset(css, name_span.start),
+            origin.position(css, name_span.start),
         );
         return;
     }
@@ -486,46 +581,57 @@ fn check_font_face_spanned(
                 Severity::Error,
                 "@font-face 'src' has an empty url()",
                 css_path,
-                Position::of_offset(css, empty.span.start),
+                origin.position(css, empty.span.start),
             );
         }
     }
 }
 
-/// The `url()` targets of every `@font-face`'s `src` declaration - unlike
-/// the generic `collect_urls` pass (which deliberately skips `@font-face`
-/// blocks, handling them via `check_font_face` instead), this is used by
-/// the CSS-007 exempt-font-usage cross-reference in `opf.rs`, which needs
-/// each font's own resolved manifest media-type to decide whether it's a
-/// foreign (exempt, but usage-flagged) font.
-pub(crate) fn font_face_src_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
+/// The `url()` target of every `@font-face`'s `src` declaration, each with
+/// the span of the token it came from - unlike the generic `collect_urls`
+/// pass (which deliberately skips `@font-face` blocks, handling them via
+/// `check_font_face` instead), this is used by the CSS-007 non-standard-font
+/// cross-reference in `opf.rs`, which needs each font's own resolved
+/// manifest media-type to decide whether it's a Core Media Type.
+///
+/// Spans are carried so CSS-007 can point at the `src` url that names the
+/// font, rather than at the stylesheet as a whole - "some font in this file
+/// is wrong" leaves the reader to find which, and a stylesheet can declare
+/// many.
+pub(crate) fn font_face_src_urls_spanned(css: &str) -> Vec<Spanned<String>> {
+    let sheet = spanned::parse_stylesheet(css);
     let mut out = Vec::new();
     for rule in &sheet.rules {
-        let Rule::At(a) = rule else { continue };
+        let spanned::Rule::At(a) = &rule.node else {
+            continue;
+        };
         if !a.name.eq_ignore_ascii_case("font-face") {
             continue;
         }
         let Some(block) = &a.block else { continue };
         for chunk in block
+            .node
             .values
-            .split(|v| matches!(v, ComponentValue::Token(Token::Semicolon)))
+            .split(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Semicolon)))
         {
             let mut iter = chunk
                 .iter()
-                .filter(|v| !matches!(v, ComponentValue::Token(Token::Whitespace)));
-            let Some(ComponentValue::Token(Token::Ident(name))) = iter.next() else {
+                .filter(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)));
+            let Some(f) = iter.next() else { continue };
+            let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node else {
                 continue;
             };
             if !name.eq_ignore_ascii_case("src") {
                 continue;
             }
-            let Some(ComponentValue::Token(Token::Colon)) = iter.next() else {
+            let Some(colon) = iter.next() else { continue };
+            if !matches!(&colon.node, spanned::ComponentValue::Token(Token::Colon)) {
                 continue;
-            };
-            collect_urls(chunk, &mut out);
+            }
+            collect_urls_spanned(chunk, &mut out);
         }
     }
-    out.retain(|u| !u.is_empty());
+    out.retain(|u| !u.node.is_empty());
     out
 }
 
@@ -701,6 +807,31 @@ pub(crate) fn selector_class_names(sheet: &styloria::Stylesheet) -> HashSet<Stri
     names
 }
 
+/// Every class selector in `css`, each with the span of the name token -
+/// the same token-level scan as [`selector_class_names`], keeping where it
+/// was written.
+///
+/// CSS-029 needs this: the class name it reports on lives in the
+/// stylesheet, so pointing at the content document that merely links that
+/// stylesheet sends the reader to a file the name does not appear in.
+pub(crate) fn selector_class_names_spanned(css: &str) -> Vec<Spanned<String>> {
+    let sheet = spanned::parse_stylesheet(css);
+    let mut names = Vec::new();
+    for rule in &sheet.rules {
+        if let spanned::Rule::Qualified(q) = &rule.node {
+            for pair in q.prelude.windows(2) {
+                if let [dot, ident] = pair
+                    && matches!(&dot.node, spanned::ComponentValue::Token(Token::Delim('.')))
+                    && let spanned::ComponentValue::Token(Token::Ident(name)) = &ident.node
+                {
+                    names.push(Spanned::new(name.to_string(), dot.span));
+                }
+            }
+        }
+    }
+    names
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -743,7 +874,7 @@ mod tests {
             "OEBPS",
             name_index,
             &HashSet::new(),
-            None,
+            CssOrigin::File { bytes: None },
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
@@ -759,7 +890,7 @@ mod tests {
             "OEBPS",
             name_index,
             &HashSet::new(),
-            None,
+            CssOrigin::File { bytes: None },
             &mut report,
         );
         report
@@ -783,7 +914,7 @@ mod tests {
             "OEBPS",
             &HashMap::new(),
             &HashSet::new(),
-            Some(bytes),
+            CssOrigin::File { bytes: Some(bytes) },
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
@@ -855,10 +986,32 @@ mod tests {
 
     #[test]
     fn clean_stylesheet_no_findings() {
+        let idx = empty_index();
+        let css = "body { color: red; } .foo { margin: 0; }";
+        assert!(run(css, &idx).is_empty());
+    }
+
+    /// A clean `@font-face` draws exactly one thing: the informational
+    /// CSS-028 noting the declaration is there. It is not a defect - real
+    /// epubcheck reports the same usage note for every `@font-face` - so
+    /// nothing else may fire alongside it.
+    #[test]
+    fn clean_font_face_draws_only_the_css_028_usage_note() {
         let mut idx = empty_index();
         idx.insert("OEBPS/font.woff".to_string(), "OEBPS/font.woff".to_string());
         let css = "@font-face { font-family: X; src: url(font.woff); } body { color: red; }";
-        assert!(run(css, &idx).is_empty());
+        assert_eq!(run(css, &idx), vec![CSS_028]);
+    }
+
+    /// One note per declaration, not one per stylesheet.
+    #[test]
+    fn css_028_fires_once_per_font_face() {
+        let mut idx = empty_index();
+        idx.insert("OEBPS/a.woff".to_string(), "OEBPS/a.woff".to_string());
+        idx.insert("OEBPS/b.woff".to_string(), "OEBPS/b.woff".to_string());
+        let css = "@font-face { font-family: A; src: url(a.woff); }\n\
+                   @font-face { font-family: B; src: url(b.woff); }";
+        assert_eq!(run(css, &idx), vec![CSS_028, CSS_028]);
     }
 
     #[test]
@@ -947,7 +1100,7 @@ mod tests {
             "OEBPS",
             &empty_index(),
             &manifest_paths,
-            None,
+            CssOrigin::File { bytes: None },
             &mut report,
         );
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
@@ -968,7 +1121,7 @@ mod tests {
             "OEBPS",
             &name_index,
             &HashSet::new(),
-            None,
+            CssOrigin::File { bytes: None },
             &mut report,
         );
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();

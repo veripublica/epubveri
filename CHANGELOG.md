@@ -8,6 +8,108 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.10] - 2026-07-17
+
+Doitsu's MobileRead report and epubsana's #23, both of which found rules that
+were wrong in ways the corpus scores green. Recall is unchanged (600/607) — no
+verdict moves except #23's, which stops inventing 1079 errors and starts
+reporting 163 real ones.
+
+### Fixed
+
+- **A deprecated `epub:type` value is no longer also reported as unknown.** `sidebar`
+  and `note` drew both `OPF-088` ("is not in the default vocabulary") and `OPF-086b`
+  ("is deprecated") — claims that cannot both hold, since knowing a term is deprecated
+  means knowing the term. The vocabulary allowlist and the deprecated list lived in
+  different modules and had drifted apart; 7 of the 13 deprecated terms were missing
+  from the allowlist. Both now live in one module and the "is this a known term?"
+  answer derives from both, so the contradiction cannot be stated. An invariant test
+  over the whole table then found an eighth case nobody had reported: `figure` was in
+  neither list, so `<figure epub:type="figure">` drew a false `OPF-088` too.
+  (Reported by Doitsu on the MobileRead forum.)
+
+- **`OPF-087` now states the actual rule, and catches the cases it was missing.** The
+  Structural Semantics Vocabulary gives `table`, `table-row`, `table-cell`, `list`,
+  `list-item`, `figure` and `aside` an HTML usage context of *"Not Allowed"* — they
+  identify escapable/skippable structure on a media overlay's `seq`/`par` and mean
+  nothing on an HTML element. epubveri instead read this as *"the value restates the
+  semantic of its host element"* (`ol` + `list`, `table` + `table`, …), which agreed
+  with epubcheck on every count of its own test fixture — that fixture only ever pairs
+  each term with its matching element — but is not the rule: `<div epub:type="list">`
+  went unreported entirely. (Reported by Doitsu on the MobileRead forum.)
+
+  Corpus recall is unchanged (600/607) for both, and cannot move: it checks that the
+  expected ID was reported, not that nothing extra was, so a spurious usage-level
+  message is invisible to it — and its one `OPF-087` fixture is exactly the case where
+  the wrong rule and the right one agree.
+
+- **`CSS-007` now says what is actually wrong, and where.** It read *"font 'X' is a
+  foreign resource, exempt from requiring a fallback"* — which describes the rule that
+  does *not* fire (fonts never need a fallback), buries the one that does, and reads as
+  a report of a non-problem. It now names the offending media type (e.g. the
+  widespread-but-never-registered `application/x-font-opentype`) and points at the
+  `@font-face` `src` that names the font, rather than at the stylesheet as a whole.
+  (Reported by Doitsu on the MobileRead forum.)
+
+- **`CSS-029` now points at the stylesheet the class name is written in**, and fires
+  once per place it is written. It pointed at the content document that merely *links*
+  that stylesheet — a file the class name does not appear in — and repeated itself once
+  per linking document. (Reported by Doitsu on the MobileRead forum.)
+
+- **CSS findings inside an inline `<style>` now report the line in the document.** They
+  reported the line within the *extracted style text* against the document's path — a
+  `direction` property on line 7 of a content document came out as line 3, where the
+  reader finds `<head>`. One root cause behind every CSS rule (`CSS-001`, `-008`,
+  `-019`, `-007`, `-028`); a linked stylesheet was never affected, since its offsets
+  are file offsets. Where the style text isn't a verbatim slice of the document (a
+  CDATA section, several text nodes, expanded entities) no offset can be mapped, so the
+  finding falls back to the `<style>` element's own position rather than a confidently
+  wrong line. (Found while fixing the above.)
+
+### Added
+
+- **`OPF-086b` now names what to use instead of a deprecated `epub:type`** — e.g.
+  `sidebar` → a bare HTML `aside` element, `note` → the `footnote` semantic, `warning` →
+  the `notice` semantic. The EPUB SSV names a replacement for 5 of its 13 deprecated
+  terms; the other 8 say only that they are deprecated, rather than inventing advice.
+  (Prompted by Doitsu on the MobileRead forum.)
+
+- **`CSS-028`** (usage): notes each `@font-face` declaration, as real epubcheck does, so
+  a reader comparing the two outputs isn't left wondering which tool missed an embedded
+  font.
+
+- **EPUB 2 content documents whose DOCTYPE declares the XHTML entities now parse
+  (`&nbsp;` and friends).** An EPUB 2 content document references an external DTD
+  (XHTML 1.1 / OEB 1.2) that declares the standard HTML named entities, but the
+  parser never fetches an external DTD — so `&nbsp;`, the single most ordinary
+  thing in a real EPUB 2, failed the parse as an unknown entity. Nothing is
+  fetched now either: the entity set is fixed and known, so the referenced ones
+  are declared inline before parsing (positions are unaffected — no line shifts).
+  Measured on a real 171-book shelf, this affected **690 of 7207 content documents
+  (10%), across 48 of 171 books — every one of them valid**. Two things followed
+  from it, and both are fixed:
+  - **1079 invented `RSC-012` errors** (86% of all `RSC-012` on that shelf, across
+    31 books): an unparseable document's id map was built with
+    `unwrap_or_default()`, turning *"I could not read this"* into *"this has no
+    ids"*, so every fragment pointing into it was reported undefined — against ids
+    that were plainly there. "I could not check" and "I checked, and it's absent"
+    are now distinct, and only the latter reports.
+  - **163 real findings that were never reported** (157 of them `RSC-005`
+    `empty_title`): a document that fails to parse has *every* check on it
+    silently skipped, so the book validates clean.
+
+  This was the seam between two changes that were each right on their own: #12 made
+  a parse failure report `RSC-016` but deliberately let the entity scan own
+  entity-reference failures, and 0.5.8 (correctly) stopped that scan reporting
+  DTD-declared entities in EPUB 2. Each deferred to the other, so nothing reported
+  it — reopening the exact class #12 set out to close, this time silently.
+  Reporting these documents as malformed would have been the wrong fix: they are
+  valid, and it would have resurrected the false positive 0.5.8 removed.
+  (Reported by epubsana, with measurements, in #23.)
+
+  Corpus recall is unchanged (600/607): epubcheck's own corpus is mostly EPUB 3 and
+  contains no document of this shape — which is why this survived to 0.5.9.
+
 ## [0.5.9] - 2026-07-16
 
 Two more MobileRead forum fixes: an EPUB 2 false positive on the content-type

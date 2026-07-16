@@ -168,6 +168,35 @@ fn dom_id_order(d: &roxmltree::Document) -> HashMap<String, usize> {
     order
 }
 
+/// The `dom_id_order` of another document in the container, or `None` when
+/// that document could not be read or parsed at all.
+///
+/// The `None` matters: it is the difference between "I checked, and the id
+/// is absent" and "I could not check". Every caller here is about to decide
+/// whether some fragment reference is broken, and only the first of those
+/// two answers can honestly produce an RSC-012. Collapsing them - which is
+/// what an `unwrap_or_default()` on the parse does - turns an unreadable
+/// document into an id-less one and reports every fragment pointing into it
+/// as undefined. That was issue #23: 1079 invented RSC-012s across 31 books,
+/// 86% of every RSC-012 on a real shelf, against ids that were plainly
+/// there.
+///
+/// Decoding is BOM-aware and the XHTML DTD's entities are declared, exactly
+/// as in the main content-document walk - a target document must not fail to
+/// parse *here* for a reason it would not fail to parse *there*.
+fn target_id_order(
+    ocf: &mut Ocf,
+    name_index: &HashMap<String, String>,
+    target_nfc: &str,
+    is_epub3: bool,
+) -> Option<HashMap<String, usize>> {
+    let orig = name_index.get(target_nfc)?;
+    let bytes = ocf.read(orig)?;
+    let text = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&bytes), is_epub3);
+    let doc = parse_xml(&text).ok()?;
+    Some(dom_id_order(&doc))
+}
+
 /// Default-vocabulary prefixes EPUB reserves, and the exact URI each is
 /// reserved for - the union of every (name, URI) pair confirmed by the
 /// real corpus fixtures, both the package-level ones (EPUB 3 appendix D.2
@@ -1097,10 +1126,11 @@ fn check_ncx_content_fragments(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     let dir = parent_dir(ncx_path);
-    let mut id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
     for n in ncx_doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "content")
@@ -1147,20 +1177,16 @@ fn check_ncx_content_fragments(
             continue;
         }
         if !id_cache.contains_key(&resolved) {
-            let ids = name_index
-                .get(&resolved)
-                .cloned()
-                .and_then(|orig| ocf.read(&orig))
-                .map(|b| {
-                    let text = String::from_utf8_lossy(&b).into_owned();
-                    parse_xml(&text)
-                        .map(|d| dom_id_order(&d))
-                        .unwrap_or_default()
-                })
-                .unwrap_or_default();
+            let ids = target_id_order(ocf, name_index, &resolved, is_epub3);
             id_cache.insert(resolved.clone(), ids);
         }
-        if !id_cache[&resolved].contains_key(frag) {
+        // `None` = the target could not be read/parsed, so whether the
+        // fragment resolves is unknown and unreported (see
+        // `target_id_order`).
+        let Some(ids) = &id_cache[&resolved] else {
+            continue;
+        };
+        if !ids.contains_key(frag) {
             report.push_node(
                 RSC_012,
                 Severity::Error,
@@ -3060,6 +3086,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                                 ocf,
                                 &name_index,
                                 &items,
+                                is_epub3,
                                 report,
                             );
                         }
@@ -3194,6 +3221,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // associated stylesheets (inline <style> + linked <link
     // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
     let mut doc_class_names: HashMap<String, HashSet<String>> = HashMap::new();
+    // Where a media-overlay class name is actually *written*: (class name,
+    // the file holding that CSS, position within it). `doc_class_names`
+    // above answers "which classes does this content document see", which
+    // is what CSS-030 needs; it cannot answer "where do I go to read this
+    // one", which is what CSS-029 must tell the author - the name lives in
+    // the stylesheet, not in the document that links it. An inline `<style>`
+    // maps through `css::CssOrigin` like every other CSS position; the
+    // `Option` is for the SVG collector, which has no CSS offsets at all.
+    let mut mo_class_sites: Vec<(String, String, Option<Position>)> = Vec::new();
     // Whether the (required) toc nav has an epub:type="page-list" nav -
     // for the EDUPUB pagination-source cross-check after this loop.
     let mut has_page_list_nav = false;
@@ -3250,7 +3286,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // HTM-058 (same fix `css::decode_bytes` already got for
         // stylesheets, reused here rather than duplicated).
         let t = crate::css::decode_bytes(&b);
+        // The raw scans must see the document exactly as authored, so they
+        // run before the entity declarations below are added to it.
         crate::htm::check_raw(&b, &t, &path, is_epub3, report);
+        // An EPUB 2 document's DOCTYPE promises the XHTML DTD's named
+        // entities; declare them inline so `&nbsp;` doesn't fail the parse
+        // and silently skip every check below (issue #23). Line numbers are
+        // preserved, and `t` stays the text `d` was parsed from - checks
+        // below pass both together and must not disagree.
+        let t = crate::htm::declare_dtd_entities(t, is_epub3);
         let d = match parse_xml(&t) {
             Ok(d) => d,
             Err(e) => {
@@ -3263,6 +3307,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // `check_raw`'s entity scan above already owns those
                 // (undeclared / missing-';' named entities), so skip them
                 // here to avoid double-reporting the same defect.
+                //
+                // That exception rests on an invariant worth stating, since
+                // it once broke silently and took 690 documents with it
+                // (issue #23): every entity reference that fails this parse
+                // *is* reported by the scan above. `declare_dtd_entities`
+                // is what keeps it true - the one class the scan
+                // deliberately stays quiet about (an EPUB 2 document's
+                // DTD-declared `&nbsp;`, which is not a defect) is exactly
+                // the class it now makes parse. Anything still failing here
+                // is undeclared by any DTD, and the scan reports it. Do not
+                // widen this suppression without re-checking that.
                 if !crate::ocf::is_entity_reference_error(&e) {
                     report.push_full(
                         RSC_016,
@@ -3864,36 +3919,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             }
         }
 
-        // epub:type default-vocabulary / deprecated / misuse taxonomies -
-        // reuses smil::is_default_vocab_type (built for SMIL's own
-        // epub:type check in an earlier increment); custom-prefixed
-        // tokens (containing ':') are always exempt.
-        const DEPRECATED_SSV: &[&str] = &[
-            "annoref",
-            "annotation",
-            "biblioentry",
-            "bridgehead",
-            "endnote",
-            "help",
-            "marginalia",
-            "note",
-            "rearnote",
-            "rearnotes",
-            "sidebar",
-            "subchapter",
-            "warning",
-        ];
+        // epub:type default-vocabulary / deprecated / HTML-usage taxonomies.
+        // The vocabulary itself lives in `ssv`; custom-prefixed tokens
+        // (containing ':') are always exempt.
         for n in d
             .descendants()
             .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
         {
             let value = n.attribute((EPUB_NS, "type")).unwrap();
-            let tag = n.tag_name().name();
             for token in value.split_whitespace() {
                 if token.contains(':') {
                     continue;
                 }
-                if !crate::smil::is_default_vocab_type(token) {
+                if !crate::ssv::is_default_vocab_type(token) {
                     report.push_node(
                         OPF_088,
                         Severity::Usage,
@@ -3916,7 +3954,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         a.attribute((EPUB_NS, "type"))
                             .is_some_and(|t| t.split_whitespace().any(|tok| tok == "endnotes"))
                     });
-                if DEPRECATED_SSV.contains(&token) && !endnote_exempt {
+                if let Some((_, replacement)) =
+                    crate::ssv::DEPRECATED.iter().find(|(t, _)| *t == token)
+                    && !endnote_exempt
+                {
                     // epubcheck reports a deprecated epub:type semantic as
                     // usage-level OPF-086b (the corpus'
                     // `epubtype-deprecated-usage.xhtml`: "usage OPF-086b"),
@@ -3925,34 +3966,54 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     // same lettered-ID representation, as OPF-096 vs
                     // OPF-096b. Matches its sibling OPF-088 (usage) in this
                     // very loop.
+                    //
+                    // Naming what to use instead is the whole value of the
+                    // message: "deprecated" alone leaves the author to go
+                    // find the vocabulary themselves. The spec names a
+                    // replacement for only 5 of the 13, so the rest say
+                    // nothing rather than invent one.
+                    let text = match replacement {
+                        Some(r) => {
+                            format!("epub:type value '{token}' is deprecated; consider {r} instead")
+                        }
+                        None => format!("epub:type value '{token}' is deprecated"),
+                    };
                     report.push_node(
                         OPF_086B,
                         Severity::Usage,
-                        format!("epub:type value '{token}' is deprecated"),
+                        text,
                         path.clone(),
                         n,
                         "opf.content_document.deprecated_epub_type",
                         vec![token.to_string()],
                     );
                 }
-                let redundant = matches!(
-                    (tag, token),
-                    ("table", "table")
-                        | ("tr", "table-row")
-                        | ("td", "table-cell")
-                        | ("ul", "list")
-                        | ("ol", "list")
-                        | ("li", "list-item")
-                        | ("figure", "figure")
-                        | ("aside", "aside")
-                );
-                if redundant {
-                    report.push_at_pos(
+                // OPF-087 (usage): the vocabulary gives these terms an HTML
+                // usage context of "Not Allowed" - they mean something only
+                // on a media overlay's `seq`/`par` (escapable/skippable
+                // structure), and nothing on an HTML element.
+                //
+                // This was previously read as "the value restates the
+                // semantic of its host element" (`ol` + `list`, `table` +
+                // `table`, ...). That agreed with the corpus fixture on
+                // every count - `epubtype-misuse-usage.xhtml` only ever
+                // pairs each term with its matching element, so both rules
+                // report its 7 - but it is not the rule: the term is not
+                // allowed on *any* HTML element, so `<div epub:type="list">`
+                // was missed entirely. A fixture agreeing is not the rule
+                // agreeing (reported by Doitsu on the MobileRead forum).
+                if crate::ssv::is_media_overlay_only(token) {
+                    report.push_node(
                         OPF_087,
                         Severity::Usage,
-                        format!("epub:type value '{token}' only restates the semantic of its host element \"{tag}\""),
+                        format!(
+                            "epub:type value '{token}' is not allowed in an XHTML content document; \
+                             it applies only to media overlays"
+                        ),
                         path.clone(),
-                        Position::of(n),
+                        n,
+                        "opf.content_document.epub_type_not_allowed_in_html",
+                        vec![token.to_string()],
                     );
                 }
             }
@@ -4123,7 +4184,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 })
                 .is_some();
 
-            let mut frag_id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+            let mut frag_id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
 
             for a in d
                 .descendants()
@@ -4207,23 +4268,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
                 if !frag_id_cache.contains_key(&target_nfc) {
                     let ids = if target_nfc == nfc(&path) {
-                        dom_id_order(&d)
+                        // The document being walked - already parsed.
+                        Some(dom_id_order(&d))
                     } else {
-                        name_index
-                            .get(&target_nfc)
-                            .cloned()
-                            .and_then(|orig| ocf.read(&orig))
-                            .map(|b| {
-                                let t = String::from_utf8_lossy(&b).into_owned();
-                                parse_xml(&t)
-                                    .map(|d2| dom_id_order(&d2))
-                                    .unwrap_or_default()
-                            })
-                            .unwrap_or_default()
+                        target_id_order(ocf, &name_index, &target_nfc, is_epub3)
                     };
                     frag_id_cache.insert(target_nfc.clone(), ids);
                 }
-                if !frag_id_cache[&target_nfc].contains_key(frag) {
+                // `None` = the target could not be read/parsed, so whether
+                // the fragment resolves is unknown and unreported (see
+                // `target_id_order`).
+                let Some(target_ids) = &frag_id_cache[&target_nfc] else {
+                    continue;
+                };
+                if !target_ids.contains_key(frag) {
                     report.push_node(
                         RSC_012,
                         Severity::Error,
@@ -4426,7 +4484,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && n.tag_name().name() == "nav"
                     && n.attribute((EPUB_NS, "type")) == Some("toc")
             }) {
-                let mut id_order_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+                let mut id_order_cache: HashMap<String, Option<HashMap<String, usize>>> =
+                    HashMap::new();
                 // (spine_idx, dom_idx): dom_idx is 0 for a fragment-less
                 // link ("the whole document") and real-fragment-index + 1
                 // otherwise, so it always sorts before any real fragment
@@ -4454,20 +4513,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         None => 0,
                         Some(f) => {
                             if !id_order_cache.contains_key(&resolved_nfc) {
-                                let order = name_index
-                                    .get(&resolved_nfc)
-                                    .and_then(|orig| ocf.read(orig))
-                                    .and_then(|b| {
-                                        let t = String::from_utf8_lossy(&b).into_owned();
-                                        parse_xml(&t).ok().map(|d2| dom_id_order(&d2))
-                                    })
-                                    .unwrap_or_default();
+                                let order =
+                                    target_id_order(ocf, &name_index, &resolved_nfc, is_epub3);
                                 id_order_cache.insert(resolved_nfc.clone(), order);
                             }
                             // Missing ids are already caught elsewhere as
                             // broken references; skip this link here
                             // rather than letting it break the comparison.
-                            match id_order_cache[&resolved_nfc].get(f) {
+                            // An unreadable target (`None`) is skipped for
+                            // the same reason - its DOM order is unknown,
+                            // not empty.
+                            match id_order_cache[&resolved_nfc]
+                                .as_ref()
+                                .and_then(|o| o.get(f))
+                            {
                                 Some(&idx) => idx + 1,
                                 None => continue,
                             }
@@ -4704,21 +4763,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .filter(|n| n.is_text())
                     .filter_map(|n| n.text())
                     .collect();
+                let origin = crate::css::inline_origin(&t, &css_text, node);
                 crate::css::check(
                     &css_text,
                     &path,
                     &dir,
                     &name_index,
                     &manifest_paths,
-                    None,
+                    origin,
                     report,
                 );
+                check_exempt_font_usage(&css_text, &dir, &items, &path, origin, report);
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
-                check_exempt_font_usage(&sheet, &dir, &items, &path, report);
+                let inline_classes = crate::css::selector_class_names(&sheet);
+                if inline_classes.iter().any(|c| is_media_overlay_class(c)) {
+                    for c in crate::css::selector_class_names_spanned(&css_text) {
+                        if is_media_overlay_class(&c.node) {
+                            mo_class_sites.push((
+                                c.node,
+                                path.clone(),
+                                Some(origin.position(&css_text, c.span.start)),
+                            ));
+                        }
+                    }
+                }
                 doc_class_names
                     .entry(path.clone())
                     .or_default()
-                    .extend(crate::css::selector_class_names(&sheet));
+                    .extend(inline_classes);
                 for u in crate::css::stylesheet_urls(&sheet) {
                     if is_remote_url(&u) {
                         has_remote = true;
@@ -4759,6 +4831,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         .entry(path.clone())
                         .or_default()
                         .extend(crate::css::selector_class_names(&sheet));
+                    let css_path = nfc(&resolved);
+                    for c in crate::css::selector_class_names_spanned(&css_text) {
+                        if is_media_overlay_class(&c.node) {
+                            mo_class_sites.push((
+                                c.node,
+                                css_path.clone(),
+                                Some(Position::of_offset(&css_text, c.span.start)),
+                            ));
+                        }
+                    }
                     for u in crate::css::stylesheet_urls(&sheet) {
                         if is_remote_url(&u) {
                             has_remote = true;
@@ -5293,30 +5375,59 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     }
 
     // --- Media-overlay active-class CSS cross-referencing (CSS-029/030) ---
-    const WELL_KNOWN_ACTIVE_CLASS: &str = "-epub-media-overlay-active";
-    const WELL_KNOWN_PLAYBACK_CLASS: &str = "-epub-media-overlay-playing";
 
     // CSS-029 (usage): a well-known class name is used as a CSS selector
     // somewhere, but its corresponding property isn't declared at all.
-    for (well_known, declared) in [
-        (WELL_KNOWN_ACTIVE_CLASS, media_active_class.is_some()),
-        (
-            WELL_KNOWN_PLAYBACK_CLASS,
-            media_playback_active_class.is_some(),
-        ),
-    ] {
+    //
+    // Reported once per place the name is written, at that place - not once
+    // per content document that happens to link the stylesheet. The two
+    // differ whenever a stylesheet is shared: the old shape reported the
+    // same one selector once per document, each time naming a file the
+    // class name does not appear in (reported by Doitsu on the MobileRead
+    // forum).
+    mo_class_sites.sort_by(|a, b| {
+        (&a.0, &a.1, a.2.map(|p| (p.line, p.column))).cmp(&(
+            &b.0,
+            &b.1,
+            b.2.map(|p| (p.line, p.column)),
+        ))
+    });
+    mo_class_sites.dedup();
+    for (class, css_path, pos) in &mo_class_sites {
+        let declared = match class.as_str() {
+            WELL_KNOWN_ACTIVE_CLASS => media_active_class.is_some(),
+            WELL_KNOWN_PLAYBACK_CLASS => media_playback_active_class.is_some(),
+            _ => continue,
+        };
         if declared {
             continue;
         }
-        for (doc_path, classes) in &doc_class_names {
-            if classes.contains(well_known) {
-                report.push_at(
-                    CSS_029,
-                    Severity::Usage,
-                    format!("well-known media-overlay class '{well_known}' is used but not declared in the package metadata"),
-                    doc_path.clone(),
-                );
-            }
+        let property = match class.as_str() {
+            WELL_KNOWN_ACTIVE_CLASS => "media:active-class",
+            _ => "media:playback-active-class",
+        };
+        let text = format!(
+            "CSS class '{class}' is used as a selector, but no '{property}' property is declared in the package document"
+        );
+        let args = vec![class.clone(), property.to_string()];
+        match pos {
+            Some(p) => report.push_full(
+                CSS_029,
+                Severity::Usage,
+                text,
+                css_path.clone(),
+                *p,
+                "css.media_overlay.class_property_not_declared",
+                args,
+            ),
+            None => report.push_at_rule(
+                CSS_029,
+                Severity::Usage,
+                text,
+                css_path.clone(),
+                "css.media_overlay.class_property_not_declared",
+                args,
+            ),
         }
     }
 
@@ -5364,7 +5475,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             &dir,
             &name_index,
             &manifest_paths,
-            Some(&b),
+            crate::css::CssOrigin::File { bytes: Some(&b) },
             report,
         );
         // RSC-008: a standalone (manifest-declared) stylesheet can
@@ -5372,8 +5483,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // linking to it - still needs its own manifest item. OPF-014: and
         // the stylesheet's *own* manifest item needs "remote-resources"
         // declared, same as a content document or SMIL overlay would.
+        check_exempt_font_usage(
+            &css_text,
+            &dir,
+            &items,
+            &path,
+            crate::css::CssOrigin::File { bytes: None },
+            report,
+        );
         let sheet = styloria::Parser::parse_stylesheet(&css_text);
-        check_exempt_font_usage(&sheet, &dir, &items, &path, report);
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
             if is_remote_url(&u) {
@@ -5471,23 +5589,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // their target document - same shape as the NCX <content src>
         // fragment check, reusing the same id_cache-per-target pattern.
         {
-            let mut id_cache: HashMap<String, HashMap<String, usize>> = HashMap::new();
+            let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
             for (target, frag) in &textref_targets {
                 if !id_cache.contains_key(target) {
-                    let ids = name_index
-                        .get(target)
-                        .cloned()
-                        .and_then(|orig| ocf.read(&orig))
-                        .map(|b| {
-                            let text = String::from_utf8_lossy(&b).into_owned();
-                            parse_xml(&text)
-                                .map(|d| dom_id_order(&d))
-                                .unwrap_or_default()
-                        })
-                        .unwrap_or_default();
+                    let ids = target_id_order(ocf, &name_index, target, is_epub3);
                     id_cache.insert(target.clone(), ids);
                 }
-                if !id_cache[target].contains_key(frag) {
+                // `None` = the target could not be read/parsed, so whether
+                // the fragment resolves is unknown and unreported (see
+                // `target_id_order`).
+                let Some(target_ids) = &id_cache[target] else {
+                    continue;
+                };
+                if !target_ids.contains_key(frag) {
                     report.push_at_rule(
                         RSC_012,
                         Severity::Error,
@@ -5547,7 +5661,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 continue;
             };
             let Some(b) = ocf.read(&orig) else { continue };
-            let t = String::from_utf8_lossy(&b).into_owned();
+            let t = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&b), is_epub3);
             let Ok(d) = parse_xml(&t) else { continue };
             let id_order = dom_id_order(&d);
             // Ids the SMIL references but the doc doesn't have are already
@@ -6295,36 +6409,63 @@ const FONT_CORE_MEDIA_TYPES: [&str; 10] = [
     "application/vnd.ms-opentype",
     "image/svg+xml",
 ];
+/// The two class names EPUB reserves for media-overlay styling, each
+/// paired with the package-metadata property that must declare it
+/// (CSS-029/030).
+const WELL_KNOWN_ACTIVE_CLASS: &str = "-epub-media-overlay-active";
+const WELL_KNOWN_PLAYBACK_CLASS: &str = "-epub-media-overlay-playing";
+
+/// Whether `class` is one of the two reserved media-overlay class names.
+fn is_media_overlay_class(class: &str) -> bool {
+    class == WELL_KNOWN_ACTIVE_CLASS || class == WELL_KNOWN_PLAYBACK_CLASS
+}
+
 const OBFUSCATION_ALGORITHM: &str = "http://www.idpf.org/2008/embedding";
 
-/// CSS-007 (usage): a `@font-face src` target resolves to a manifest item
+/// CSS-007 (info): a `@font-face src` target resolves to a manifest item
 /// whose declared media-type is neither a Core Media Type nor exempt
-/// video - i.e. a genuinely foreign font (§3.4 exempts fonts from ever
-/// needing a fallback, but real epubcheck still flags the usage at Info
-/// level, confirmed via `foreign-exempt-font-valid`). Core/non-preferred-
-/// Core font types (confirmed via `resources-cmt-font-truetype-valid`,
-/// which expects this reported *zero* times) must not fire.
+/// video - i.e. the stylesheet asks for a font in a format EPUB does not
+/// standardize, like the widespread-but-never-registered
+/// `application/x-font-opentype`. Core/non-preferred-Core font types
+/// (confirmed via `resources-cmt-font-truetype-valid`, which expects this
+/// reported *zero* times) must not fire.
+///
+/// §3.4 exempts fonts from ever needing a fallback, and this used to be
+/// worded as if that were the finding ("a foreign resource, exempt from
+/// requiring a fallback"), which describes the rule that *doesn't* fire and
+/// buries the one that does - a reader could only conclude epubveri was
+/// reporting a non-problem (reported by Doitsu on the MobileRead forum).
+/// The finding is the non-standard font format; the fallback exemption is
+/// why it is Info rather than an error.
 fn check_exempt_font_usage(
-    sheet: &styloria::Stylesheet,
+    css: &str,
     dir: &str,
     items: &HashMap<String, (String, String)>,
     path: &str,
+    origin: crate::css::CssOrigin,
     report: &mut Report,
 ) {
-    for u in crate::css::font_face_src_urls(sheet) {
-        if is_external(&u) {
+    for u in crate::css::font_face_src_urls_spanned(css) {
+        if is_external(&u.node) {
             continue;
         }
-        let resolved = nfc(&resolve(dir, &u));
+        let resolved = nfc(&resolve(dir, &u.node));
         if let Some((_, mt)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
             && !crate::cmt::is_core_media_type(mt)
             && !crate::cmt::is_exempt_video(mt)
         {
-            report.push_at(
+            report.push_full(
                 CSS_007,
                 Severity::Info,
-                format!("font '{u}' is a foreign resource, exempt from requiring a fallback"),
+                format!(
+                    "font '{}' has media type '{mt}', which is not a Core Media Type; \
+                     fonts need no fallback, but reading systems need not support it",
+                    u.node
+                ),
                 path,
+                origin.position(css, u.span.start),
+                "css.font_face.non_core_media_type",
+                vec![u.node.clone(), mt.clone()],
             );
         }
     }
@@ -6525,6 +6666,208 @@ mod tests {
     /// Build a minimal valid EPUB 3 whose spine's `ch1` content document is
     /// supplied verbatim by the caller — used to feed deliberately malformed
     /// XHTML through the real content-document loop.
+    /// Builds an EPUB 3 with a linked stylesheet `Styles/s.css` holding
+    /// `css`, and one font declared in the manifest with `font_media_type`,
+    /// for the CSS-007/CSS-029 cross-referencing checks (both need a
+    /// manifest, so they can't be reached through `css::check` alone).
+    fn epub_with_stylesheet(css: &str, font_media_type: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="s" href="Styles/s.css" media-type="text/css"/>
+    <item id="f" href="Fonts/f.ttf" media-type="{font_media_type}"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>
+<link rel="stylesheet" type="text/css" href="Styles/s.css"/></head>
+<body><p>x</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>t</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">c</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+                ),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/Styles/s.css", css),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.start_file("OEBPS/Fonts/f.ttf", o).unwrap();
+            z.write_all(b"\0\x01\0\0not-a-real-font").unwrap();
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// CSS-007 must name the media type that made it fire, and point at the
+    /// `src` that names the font. It used to say the font was "a foreign
+    /// resource, exempt from requiring a fallback" with no position at all -
+    /// which describes the rule that does *not* fire, reads as a non-problem,
+    /// and leaves a reader of a many-font stylesheet with nowhere to look
+    /// (reported by Doitsu on the MobileRead forum).
+    #[test]
+    fn css_007_names_the_media_type_and_points_at_the_src() {
+        let css = "@font-face {\n  font-family: X;\n  src: url(../Fonts/f.ttf);\n}";
+        let report =
+            crate::validate_bytes(epub_with_stylesheet(css, "application/x-font-opentype"));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("css.font_face.non_core_media_type"))
+            .expect("a non-Core-Media-Type font must be reported");
+        assert_eq!(hit.id, crate::ids::CSS_007);
+        assert!(
+            hit.text.contains("application/x-font-opentype"),
+            "the message must name what made it fire; got: {}",
+            hit.text
+        );
+        assert_eq!(hit.location.as_deref(), Some("OEBPS/Styles/s.css"));
+        // The `src` line, not the stylesheet as a whole.
+        assert_eq!(hit.position.map(|p| p.line), Some(3));
+        assert!(
+            report.is_valid(),
+            "a non-standard font type is not an error"
+        );
+    }
+
+    /// A Core Media Type font draws nothing - the check is about the format
+    /// EPUB does not standardize, not about fonts in general.
+    #[test]
+    fn css_007_is_silent_for_a_core_media_type_font() {
+        let css = "@font-face {\n  font-family: X;\n  src: url(../Fonts/f.ttf);\n}";
+        let report = crate::validate_bytes(epub_with_stylesheet(css, "font/ttf"));
+        assert!(
+            !report
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("css.font_face.non_core_media_type")),
+            "font/ttf is a Core Media Type"
+        );
+    }
+
+    /// CSS-029 must point at the stylesheet the class name is written in.
+    /// It used to point at the content document that merely links that
+    /// stylesheet - a file the name does not appear in (reported by Doitsu
+    /// on the MobileRead forum).
+    #[test]
+    fn css_029_points_at_the_stylesheet_the_class_is_written_in() {
+        let css = "body { color: red; }\n.-epub-media-overlay-active { color: blue; }";
+        let report = crate::validate_bytes(epub_with_stylesheet(css, "font/ttf"));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("css.media_overlay.class_property_not_declared"))
+            .expect("an undeclared media-overlay class must be reported");
+        assert_eq!(hit.id, crate::ids::CSS_029);
+        assert_eq!(
+            hit.location.as_deref(),
+            Some("OEBPS/Styles/s.css"),
+            "the class name is in the stylesheet, not in ch1.xhtml"
+        );
+        assert_eq!(hit.position.map(|p| p.line), Some(2));
+        assert!(
+            hit.text.contains("media:active-class"),
+            "the message must name the property that would declare it; got: {}",
+            hit.text
+        );
+    }
+
+    /// A CSS finding from an inline `<style>` must report the line the
+    /// property is on *in the file*, not in the style text extracted out of
+    /// it. It used to report the latter against the former's path: a
+    /// `direction` on line 7 came out as line 3, where the reader finds
+    /// `<head>`. Every CSS rule shared the defect, since they all take their
+    /// offsets from the extracted text.
+    #[test]
+    fn inline_style_findings_report_the_line_in_the_document() {
+        // <style> opens on line 5; `direction` is on line 7 of the file.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+            <head>\n\
+            <title>t</title>\n\
+            <style>\n\
+            body { color: red; }\n\
+            p { direction: rtl; }\n\
+            </style>\n\
+            </head>\n\
+            <body><p>x</p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::CSS_001)
+            .expect("'direction' must be reported");
+        assert_eq!(hit.location.as_deref(), Some("OEBPS/ch1.xhtml"));
+        assert_eq!(hit.position.map(|p| p.line), Some(7));
+    }
+
+    /// When the style text isn't a verbatim slice of the document - here a
+    /// CDATA section, so the extracted text and the source differ - no
+    /// offset within it can be mapped. Rather than report a confidently
+    /// wrong line, fall back to the `<style>` element's own position: less
+    /// precise, but a real place in the file.
+    #[test]
+    fn inline_style_falls_back_to_the_element_position_when_unmappable() {
+        // <style> is on line 5; the CDATA-wrapped `direction` on line 7.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+            <head>\n\
+            <title>t</title>\n\
+            <style>\n\
+            <![CDATA[\n\
+            p { direction: rtl; }\n\
+            ]]>\n\
+            </style>\n\
+            </head>\n\
+            <body><p>x</p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::CSS_001)
+            .expect("'direction' must still be reported");
+        assert_eq!(hit.location.as_deref(), Some("OEBPS/ch1.xhtml"));
+        assert_eq!(
+            hit.position.map(|p| p.line),
+            Some(5),
+            "the <style> element's own line, not a guess inside it"
+        );
+    }
+
     fn epub_with_ch1(ch1: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -6925,6 +7268,98 @@ mod tests {
         assert_eq!(hit.id, crate::ids::OPF_086B);
         assert_eq!(hit.severity, crate::report::Severity::Usage);
         assert!(report.is_valid());
+    }
+
+    /// Builds an EPUB 3 whose one content document carries `body` markup,
+    /// and returns the (rule, id) of every epub:type finding on it.
+    fn epub_type_findings(body: &str) -> Vec<(&'static str, &'static str)> {
+        let ch1 = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+            <head><title>t</title></head><body>{body}</body></html>"
+        );
+        crate::validate_bytes(epub_with_ch1(&ch1))
+            .messages
+            .iter()
+            .filter_map(|m| match m.rule {
+                Some(r @ "opf.content_document.epub_type_not_default_vocab")
+                | Some(r @ "opf.content_document.deprecated_epub_type")
+                | Some(r @ "opf.content_document.epub_type_not_allowed_in_html") => Some((r, m.id)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A deprecated term must draw OPF-086b *only*. Reporting OPF-088 "not
+    /// in the default vocabulary" alongside it contradicts itself - knowing
+    /// a term is deprecated means knowing the term. Seven deprecated terms
+    /// were missing from the vocabulary list and double-reported this way
+    /// (reported by Doitsu on the MobileRead forum); `ssv` now derives the
+    /// two answers from one table so they cannot disagree.
+    #[test]
+    fn deprecated_epub_type_is_not_also_reported_as_unknown() {
+        for term in crate::ssv::DEPRECATED.iter().map(|(t, _)| *t) {
+            // `endnote` inside an `endnotes` container is the recommended,
+            // non-deprecated usage - it has its own exemption.
+            let body = format!("<p epub:type=\"{term}\">x</p>");
+            let got = epub_type_findings(&body);
+            assert!(
+                !got.iter()
+                    .any(|(r, _)| *r == "opf.content_document.epub_type_not_default_vocab"),
+                "'{term}' is deprecated, so it is a known term; got {got:?}"
+            );
+            assert!(
+                got.iter()
+                    .any(|(r, _)| *r == "opf.content_document.deprecated_epub_type"),
+                "'{term}' must still be reported as deprecated; got {got:?}"
+            );
+        }
+    }
+
+    /// The vocabulary gives these terms an HTML usage context of "Not
+    /// Allowed" - they mean something only on a media overlay. They are
+    /// real terms, so they must draw OPF-087 and *not* OPF-088.
+    #[test]
+    fn media_overlay_only_epub_type_is_not_allowed_in_html() {
+        for term in crate::ssv::MEDIA_OVERLAY_ONLY {
+            let got = epub_type_findings(&format!("<p epub:type=\"{term}\">x</p>"));
+            assert!(
+                got.contains(&(
+                    "opf.content_document.epub_type_not_allowed_in_html",
+                    crate::ids::OPF_087
+                )),
+                "'{term}' has no HTML usage context; got {got:?}"
+            );
+            assert!(
+                !got.iter()
+                    .any(|(r, _)| *r == "opf.content_document.epub_type_not_default_vocab"),
+                "'{term}' is a real vocabulary term; got {got:?}"
+            );
+        }
+    }
+
+    /// The rule is "not allowed on an HTML element", not "restates the
+    /// semantic of its host element". The old reading only fired when the
+    /// term sat on its matching element (`ol` + `list`), so this - the same
+    /// term with nothing to restate - went unreported. epubcheck's own
+    /// fixture never covers it: it only ever pairs each term with its
+    /// matching element, which is how the wrong rule scored full marks.
+    #[test]
+    fn media_overlay_only_epub_type_is_reported_on_any_host_element() {
+        let got = epub_type_findings("<div epub:type=\"list\">x</div>");
+        assert!(
+            got.contains(&(
+                "opf.content_document.epub_type_not_allowed_in_html",
+                crate::ids::OPF_087
+            )),
+            "'list' is not allowed on any HTML element, not just <ol>/<ul>; got {got:?}"
+        );
+    }
+
+    /// An ordinary, current term draws nothing at all.
+    #[test]
+    fn current_epub_type_draws_no_findings() {
+        assert_eq!(epub_type_findings("<p epub:type=\"chapter\">x</p>"), vec![]);
     }
 
     #[test]
