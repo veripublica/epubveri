@@ -8,6 +8,32 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.9] - 2026-07-16
+
+Two more MobileRead forum fixes: an EPUB 2 false positive on the content-type
+`<meta>`, and a better source location for `RSC-011`. Corpus recall is unchanged
+(600/607) — neither changes a valid/invalid verdict.
+
+### Fixed
+
+- **EPUB 2 content documents are no longer flagged for a valid `<meta http-equiv="Content-Type">`.**
+  The rule requiring the `content` attribute to be exactly `text/html; charset=utf-8`
+  is an HTML5 (encoding-declaration-state) rule, so it applies to EPUB 3 only. EPUB 2
+  content is XHTML 1.1, served as `application/xhtml+xml`, where
+  `content="application/xhtml+xml; charset=utf-8"` is the correct form; epubcheck never
+  flags it there. It was firing for EPUB 2 too (`RSC-005`) — a false positive. Both
+  encoding-declaration checks are now gated to EPUB 3, and a duplicate copy of one of
+  them (which also double-reported on EPUB 3) was removed. (Reported by Doitsu on the
+  MobileRead forum. Same class as the EPUB-3-rule-leaking-into-EPUB-2 defect in #9.)
+
+### Changed
+
+- **`RSC-011` ("hyperlinked but not listed in the spine") now points at the source link.**
+  It used to anchor at the OPF package root (`content.opf:2:1`) because it only knew the
+  resolved target; it now anchors at the `<a>` element that creates the hyperlink — the
+  right file, its `line:column`, and (in JSON) a `data.element_path` — matching where
+  epubcheck locates it. Verdict is unchanged. (Reported by Doitsu on the MobileRead forum.)
+
 ## [0.5.8] - 2026-07-15
 
 Two fixes from MobileRead forum reports: a fatal false positive on EPUB 2 named

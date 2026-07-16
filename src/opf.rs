@@ -3200,8 +3200,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // Every local content-doc target hyperlinked from *any* content
     // document (including the nav) - for RSC-011 (a hyperlink target not
     // listed in the spine) and OPF-096 (a linear="no" spine item not
-    // reachable via any hyperlink or the nav).
-    let mut hyperlink_targets: HashSet<String> = HashSet::new();
+    // reachable via any hyperlink or the nav). Keyed by resolved target, each
+    // remembers the *source* `<a>` that hyperlinks to it (file + position +
+    // element path), captured while its document is still parsed, so RSC-011
+    // can anchor at that link instead of the OPF package root (#22). First
+    // source per target wins.
+    struct HyperlinkSource {
+        file: String,
+        position: Position,
+        element_path: crate::xmlext::NodePath,
+    }
+    let mut hyperlink_targets: HashMap<String, HyperlinkSource> = HashMap::new();
     // Whether *any* content document in the whole book uses scripting -
     // mirrors real epubcheck's book-wide `FeatureEnum.HAS_SCRIPTS` (not
     // scoped to any one document): when true, OPF-096's "non-linear
@@ -3667,48 +3676,57 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             }
         }
 
-        // Both an http-equiv Content-Type meta and a charset meta declared;
-        // and, independently, an http-equiv Content-Type meta whose value
-        // isn't exactly the expected UTF-8 declaration.
-        let has_http_equiv_content_type = d.descendants().any(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("http-equiv")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
-        });
-        let has_charset_meta = d.descendants().any(|n| {
-            n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
-        });
-        if has_http_equiv_content_type && has_charset_meta {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
-                path.clone(),
-                d.root_element(),
-                "opf.content_document.conflicting_encoding_declarations",
-                Vec::new(),
-            );
-        }
-        for n in d.descendants().filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("http-equiv")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
-        }) {
-            if !n
-                .attr_no_ns("content")
-                .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
-            {
+        // Encoding-declaration checks on `<meta>`: (1) an http-equiv
+        // Content-Type meta together with a charset meta, and (2) an http-equiv
+        // Content-Type meta whose value isn't exactly the expected UTF-8
+        // declaration. Both are HTML5 rules (the `<meta>` "encoding declaration
+        // state"), so they apply to XHTML5 content documents — i.e. EPUB 3 only.
+        // EPUB 2 content is XHTML 1.1, served as application/xhtml+xml, where
+        // `content="application/xhtml+xml; charset=utf-8"` is the traditional,
+        // valid form; epubcheck validates EPUB 2 against the XHTML 1.1 DTD, which
+        // has no such constraint, so it never flags these there (#21, same class
+        // as #9: an EPUB-3 rule must not leak into EPUB 2).
+        if is_epub3 {
+            let has_http_equiv_content_type = d.descendants().any(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attr_no_ns("http-equiv")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+            });
+            let has_charset_meta = d.descendants().any(|n| {
+                n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
+            });
+            if has_http_equiv_content_type && has_charset_meta {
                 report.push_node(
                     RSC_005,
                     Severity::Error,
-                    "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                    "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
                     path.clone(),
-                    n,
-                    "opf.content_document.invalid_content_type_meta",
+                    d.root_element(),
+                    "opf.content_document.conflicting_encoding_declarations",
                     Vec::new(),
                 );
+            }
+            for n in d.descendants().filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attr_no_ns("http-equiv")
+                        .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+            }) {
+                if !n
+                    .attr_no_ns("content")
+                    .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
+                {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                        path.clone(),
+                        n,
+                        "opf.content_document.invalid_content_type_meta",
+                        Vec::new(),
+                    );
+                }
             }
         }
 
@@ -4000,28 +4018,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     vec![v.to_string()],
                 );
             }
-        }
-
-        // Both an http-equiv Content-Type meta and a charset meta declared.
-        let has_http_equiv_content_type = d.descendants().any(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("http-equiv")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
-        });
-        let has_charset_meta = d.descendants().any(|n| {
-            n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("charset").is_some()
-        });
-        if has_http_equiv_content_type && has_charset_meta {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "must not contain both a meta element in encoding declaration state (http-equiv='content-type') and a meta element with the charset attribute",
-                path.clone(),
-                d.root_element(),
-                "opf.content_document.conflicting_encoding_declarations",
-                Vec::new(),
-            );
         }
 
         // epub:switch is deprecated - a separate, additive signal alongside
@@ -4647,7 +4643,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         // as non-linear and always has"). Record the document
                         // as a target of itself.
                         if node.tag_name().name() == "a" {
-                            hyperlink_targets.insert(nfc(&path));
+                            hyperlink_targets.entry(nfc(&path)).or_insert_with(|| {
+                                HyperlinkSource {
+                                    file: path.clone(),
+                                    position: Position::of(node),
+                                    element_path: crate::xmlext::node_path(node),
+                                }
+                            });
                         }
                     } else if !is_external(href) {
                         if href.contains('?') {
@@ -4662,7 +4664,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             );
                         }
                         if node.tag_name().name() == "a" {
-                            hyperlink_targets.insert(nfc(&resolve(&dir, href)));
+                            hyperlink_targets
+                                .entry(nfc(&resolve(&dir, href)))
+                                .or_insert_with(|| HyperlinkSource {
+                                    file: path.clone(),
+                                    position: Position::of(node),
+                                    element_path: crate::xmlext::node_path(node),
+                                });
                         }
                     }
                 }
@@ -5014,7 +5022,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
 
     // --- Spine reachability (RSC-011/OPF-096) ---
     let opf_own_name_nfc = nfc(opf_path);
-    for target in &hyperlink_targets {
+    for (target, source) in &hyperlink_targets {
         if *target == opf_own_name_nfc {
             // A hyperlink to the package document itself (e.g. a CFI-style
             // self-reference) isn't a content document that could ever be
@@ -5031,12 +5039,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             nfc(p) == *target && (mt == "application/xhtml+xml" || mt == "image/svg+xml")
         });
         if is_content_doc && !spine_order.contains_key(target) && name_index.contains_key(target) {
-            report.push_at_pos(
+            // Anchor at the source `<a>` (its file + line:column + element
+            // path), not the OPF package root, matching where epubcheck points
+            // (#22).
+            report.push_full_path(
                 RSC_011,
                 Severity::Error,
                 format!("'{target}' is hyperlinked but not listed in the spine"),
-                opf_path,
-                Position::of(pkg),
+                source.file.clone(),
+                source.position,
+                source.element_path.clone(),
+                "opf.spine.hyperlinked_not_in_spine",
+                vec![target.clone()],
             );
         }
     }
@@ -5054,7 +5068,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // and a fragment-only self-link (`href="#..."`) via the self-reference
     // insert - see the hyperlink-collection pass above.
     for path in &non_linear_paths {
-        if !hyperlink_targets.contains(path) {
+        if !hyperlink_targets.contains_key(path) {
             // Real epubcheck downgrades this from an error to a usage note
             // when the book uses scripting anywhere - script could add
             // navigation/hyperlinks dynamically that this static analysis
@@ -6568,6 +6582,136 @@ mod tests {
             .filter(|m| m.id == crate::ids::RSC_016)
             .map(|m| m.rule.unwrap_or(""))
             .collect()
+    }
+
+    /// A minimal, otherwise-valid EPUB **2** carrying the caller's full ch1
+    /// XHTML 1.1 content document — used to check that EPUB-3-only content-model
+    /// rules don't leak into EPUB 2 (#21).
+    fn epub2_with_ch1(ch1: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+</package>"#;
+        const NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:12345678-1234-1234-1234-123456789abc"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap><navPoint id="n1" playOrder="1"><navLabel><text>Ch1</text></navLabel><content src="ch1.xhtml"/></navPoint></navMap>
+</ncx>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.xhtml", ch1),
+                ("OEBPS/toc.ncx", NCX),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Every RSC-005 `rule` slug a validation of `bytes` produces.
+    fn rsc_005_rules(bytes: Vec<u8>) -> Vec<String> {
+        crate::validate_bytes(bytes)
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_005)
+            .map(|m| m.rule.unwrap_or("").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn epub2_content_type_meta_is_not_an_html5_rule() {
+        // #21 (Doitsu, MobileRead #82): `application/xhtml+xml; charset=utf-8`
+        // is the correct XHTML 1.1 encoding declaration for an EPUB 2 content
+        // document, and epubcheck never flags it. The "must be text/html;
+        // charset=utf-8" rule is HTML5-only (EPUB 3).
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title>\
+            <meta http-equiv=\"Content-Type\" content=\"application/xhtml+xml; charset=utf-8\"/>\
+            </head><body><p>hi</p></body></html>";
+        assert!(
+            !rsc_005_rules(epub2_with_ch1(ch1))
+                .iter()
+                .any(|r| r == "opf.content_document.invalid_content_type_meta"),
+            "EPUB 2 content-type meta must not be flagged: {:?}",
+            rsc_005_rules(epub2_with_ch1(ch1))
+        );
+    }
+
+    #[test]
+    fn rsc_011_anchors_at_the_source_hyperlink() {
+        // #22 (Doitsu, MobileRead #82): a hyperlink to a content document that
+        // isn't in the spine must anchor at the source `<a>` (its file +
+        // line:column + element path), not at the OPF package root. Here ch1
+        // links to the nav doc, which is in the manifest but not the spine.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>C</title></head>\n\
+            <body><p><a href=\"nav.xhtml\">to nav</a></p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::RSC_011)
+            .expect("expected an RSC-011 for the nav hyperlinked but not in spine");
+        assert_eq!(
+            m.location.as_deref(),
+            Some("OEBPS/ch1.xhtml"),
+            "must anchor in the source document, not content.opf"
+        );
+        assert!(m.position.is_some(), "must carry a source line:column");
+        assert!(
+            m.element_path.is_some(),
+            "must carry the source element path"
+        );
+        assert_eq!(m.rule, Some("opf.spine.hyperlinked_not_in_spine"));
+    }
+
+    #[test]
+    fn epub3_content_type_meta_still_strict() {
+        // EPUB 3 is XHTML5, where the encoding-declaration meta must be exactly
+        // `text/html; charset=utf-8` (matches epubcheck) — unchanged.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title>\
+            <meta http-equiv=\"Content-Type\" content=\"application/xhtml+xml; charset=utf-8\"/>\
+            </head><body><p>hi</p></body></html>";
+        assert!(
+            rsc_005_rules(epub_with_ch1(ch1))
+                .iter()
+                .any(|r| r == "opf.content_document.invalid_content_type_meta"),
+            "EPUB 3 content-type meta must still be flagged: {:?}",
+            rsc_005_rules(epub_with_ch1(ch1))
+        );
     }
 
     #[test]

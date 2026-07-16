@@ -269,6 +269,36 @@ impl Report {
         });
     }
 
+    /// Like `push_full`, but with a **pre-computed** `position` and
+    /// `element_path` (issue #22). For findings emitted after the document that
+    /// held the offending node has already gone out of scope - the source
+    /// location is captured earlier (while the node is live) and carried here.
+    /// e.g. RSC-011 anchors at the source `<a>` hyperlink, collected in an
+    /// earlier per-document pass.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_full_path(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        location: impl Into<String>,
+        position: Position,
+        element_path: crate::xmlext::NodePath,
+        rule: &'static str,
+        params: Vec<String>,
+    ) {
+        self.messages.push(Message {
+            id,
+            severity,
+            text: text.into(),
+            location: Some(location.into()),
+            position: Some(position),
+            rule: Some(rule),
+            params,
+            element_path: Some(element_path),
+        });
+    }
+
     /// Like `push_full`, but derives both the source `position` and a
     /// machine-resolvable `element_path` (issue #18) from the `roxmltree`
     /// node the finding is anchored at, instead of a pre-computed `Position`.
