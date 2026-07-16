@@ -3226,9 +3226,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // above answers "which classes does this content document see", which
     // is what CSS-030 needs; it cannot answer "where do I go to read this
     // one", which is what CSS-029 must tell the author - the name lives in
-    // the stylesheet, not in the document that links it. The position is
-    // `None` for an inline `<style>`, whose offsets are relative to the
-    // extracted style text rather than to the file (see `css::check`).
+    // the stylesheet, not in the document that links it. An inline `<style>`
+    // maps through `css::CssOrigin` like every other CSS position; the
+    // `Option` is for the SVG collector, which has no CSS offsets at all.
     let mut mo_class_sites: Vec<(String, String, Option<Position>)> = Vec::new();
     // Whether the (required) toc nav has an epub:type="page-list" nav -
     // for the EDUPUB pagination-source cross-check after this loop.
@@ -4763,20 +4763,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .filter(|n| n.is_text())
                     .filter_map(|n| n.text())
                     .collect();
+                let origin = crate::css::inline_origin(&t, &css_text, node);
                 crate::css::check(
                     &css_text,
                     &path,
                     &dir,
                     &name_index,
                     &manifest_paths,
-                    None,
+                    origin,
                     report,
                 );
-                check_exempt_font_usage(&css_text, &dir, &items, &path, report);
+                check_exempt_font_usage(&css_text, &dir, &items, &path, origin, report);
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
                 let inline_classes = crate::css::selector_class_names(&sheet);
-                for c in inline_classes.iter().filter(|c| is_media_overlay_class(c)) {
-                    mo_class_sites.push((c.clone(), path.clone(), None));
+                if inline_classes.iter().any(|c| is_media_overlay_class(c)) {
+                    for c in crate::css::selector_class_names_spanned(&css_text) {
+                        if is_media_overlay_class(&c.node) {
+                            mo_class_sites.push((
+                                c.node,
+                                path.clone(),
+                                Some(origin.position(&css_text, c.span.start)),
+                            ));
+                        }
+                    }
                 }
                 doc_class_names
                     .entry(path.clone())
@@ -5466,7 +5475,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             &dir,
             &name_index,
             &manifest_paths,
-            Some(&b),
+            crate::css::CssOrigin::File { bytes: Some(&b) },
             report,
         );
         // RSC-008: a standalone (manifest-declared) stylesheet can
@@ -5474,7 +5483,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // linking to it - still needs its own manifest item. OPF-014: and
         // the stylesheet's *own* manifest item needs "remote-resources"
         // declared, same as a content document or SMIL overlay would.
-        check_exempt_font_usage(&css_text, &dir, &items, &path, report);
+        check_exempt_font_usage(
+            &css_text,
+            &dir,
+            &items,
+            &path,
+            crate::css::CssOrigin::File { bytes: None },
+            report,
+        );
         let sheet = styloria::Parser::parse_stylesheet(&css_text);
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
@@ -6426,6 +6442,7 @@ fn check_exempt_font_usage(
     dir: &str,
     items: &HashMap<String, (String, String)>,
     path: &str,
+    origin: crate::css::CssOrigin,
     report: &mut Report,
 ) {
     for u in crate::css::font_face_src_urls_spanned(css) {
@@ -6446,7 +6463,7 @@ fn check_exempt_font_usage(
                     u.node
                 ),
                 path,
-                Position::of_offset(css, u.span.start),
+                origin.position(css, u.span.start),
                 "css.font_face.non_core_media_type",
                 vec![u.node.clone(), mt.clone()],
             );
@@ -6786,6 +6803,68 @@ mod tests {
             hit.text.contains("media:active-class"),
             "the message must name the property that would declare it; got: {}",
             hit.text
+        );
+    }
+
+    /// A CSS finding from an inline `<style>` must report the line the
+    /// property is on *in the file*, not in the style text extracted out of
+    /// it. It used to report the latter against the former's path: a
+    /// `direction` on line 7 came out as line 3, where the reader finds
+    /// `<head>`. Every CSS rule shared the defect, since they all take their
+    /// offsets from the extracted text.
+    #[test]
+    fn inline_style_findings_report_the_line_in_the_document() {
+        // <style> opens on line 5; `direction` is on line 7 of the file.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+            <head>\n\
+            <title>t</title>\n\
+            <style>\n\
+            body { color: red; }\n\
+            p { direction: rtl; }\n\
+            </style>\n\
+            </head>\n\
+            <body><p>x</p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::CSS_001)
+            .expect("'direction' must be reported");
+        assert_eq!(hit.location.as_deref(), Some("OEBPS/ch1.xhtml"));
+        assert_eq!(hit.position.map(|p| p.line), Some(7));
+    }
+
+    /// When the style text isn't a verbatim slice of the document - here a
+    /// CDATA section, so the extracted text and the source differ - no
+    /// offset within it can be mapped. Rather than report a confidently
+    /// wrong line, fall back to the `<style>` element's own position: less
+    /// precise, but a real place in the file.
+    #[test]
+    fn inline_style_falls_back_to_the_element_position_when_unmappable() {
+        // <style> is on line 5; the CDATA-wrapped `direction` on line 7.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+            <head>\n\
+            <title>t</title>\n\
+            <style>\n\
+            <![CDATA[\n\
+            p { direction: rtl; }\n\
+            ]]>\n\
+            </style>\n\
+            </head>\n\
+            <body><p>x</p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::CSS_001)
+            .expect("'direction' must still be reported");
+        assert_eq!(hit.location.as_deref(), Some("OEBPS/ch1.xhtml"));
+        assert_eq!(
+            hit.position.map(|p| p.line),
+            Some(5),
+            "the <style> element's own line, not a guess inside it"
         );
     }
 

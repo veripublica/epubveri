@@ -8,7 +8,12 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.5.10] - 2026-07-17
+
+Doitsu's MobileRead report and epubsana's #23, both of which found rules that
+were wrong in ways the corpus scores green. Recall is unchanged (600/607) — no
+verdict moves except #23's, which stops inventing 1079 errors and starts
+reporting 163 real ones.
 
 ### Fixed
 
@@ -51,6 +56,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   that stylesheet — a file the class name does not appear in — and repeated itself once
   per linking document. (Reported by Doitsu on the MobileRead forum.)
 
+- **CSS findings inside an inline `<style>` now report the line in the document.** They
+  reported the line within the *extracted style text* against the document's path — a
+  `direction` property on line 7 of a content document came out as line 3, where the
+  reader finds `<head>`. One root cause behind every CSS rule (`CSS-001`, `-008`,
+  `-019`, `-007`, `-028`); a linked stylesheet was never affected, since its offsets
+  are file offsets. Where the style text isn't a verbatim slice of the document (a
+  CDATA section, several text nodes, expanded entities) no offset can be mapped, so the
+  finding falls back to the `<style>` element's own position rather than a confidently
+  wrong line. (Found while fixing the above.)
+
 ### Added
 
 - **`OPF-086b` now names what to use instead of a deprecated `epub:type`** — e.g.
@@ -85,7 +100,7 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
   This was the seam between two changes that were each right on their own: #12 made
   a parse failure report `RSC-016` but deliberately let the entity scan own
-  entity-reference failures, and 0.5.9 (correctly) stopped that scan reporting
+  entity-reference failures, and 0.5.8 (correctly) stopped that scan reporting
   DTD-declared entities in EPUB 2. Each deferred to the other, so nothing reported
   it — reopening the exact class #12 set out to close, this time silently.
   Reporting these documents as malformed would have been the wrong fix: they are
