@@ -217,4 +217,46 @@ mod tests {
             assert!(is_default_vocab_type(t), "'{t}' must be a known term");
         }
     }
+
+    /// "Not allowed in HTML" (OPF-087) and "deprecated" (OPF-086b) are
+    /// different messages about different problems. A term in both tables
+    /// would draw two findings that each imply the other is the whole story,
+    /// so the two must stay disjoint.
+    ///
+    /// `MEDIA_OVERLAY_ONLY` and `KNOWN` deliberately *overlap*, and that is
+    /// not the same thing: `list` is a real vocabulary term (valid on a
+    /// media overlay, so `KNOWN`) that also has no HTML usage context (so
+    /// `MEDIA_OVERLAY_ONLY`). The first fact keeps SMIL from flagging it
+    /// OPF-088; the second flags it OPF-087 on an HTML element. Two contexts,
+    /// two correct answers - see `media_overlay_only_terms_are_known`, which
+    /// requires exactly this overlap.
+    #[test]
+    fn media_overlay_only_terms_are_not_also_deprecated() {
+        for t in MEDIA_OVERLAY_ONLY {
+            assert!(
+                !DEPRECATED.iter().any(|(d, _)| d == t),
+                "'{t}' is both media-overlay-only (OPF-087) and deprecated (OPF-086b)"
+            );
+        }
+    }
+
+    /// No term is listed twice inside a single table either - a duplicate
+    /// would pass every membership test while quietly doubling any
+    /// count-based reasoning built on the table.
+    #[test]
+    fn no_table_repeats_a_term() {
+        for (table, name) in [
+            (KNOWN.to_vec(), "KNOWN"),
+            (
+                DEPRECATED.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+                "DEPRECATED",
+            ),
+            (MEDIA_OVERLAY_ONLY.to_vec(), "MEDIA_OVERLAY_ONLY"),
+        ] {
+            let mut seen = std::collections::BTreeSet::new();
+            for t in &table {
+                assert!(seen.insert(*t), "'{t}' appears twice in {name}");
+            }
+        }
+    }
 }

@@ -6832,6 +6832,26 @@ fn check_font_obfuscation(
 mod tests {
     use super::is_valid_dc_date;
 
+    /// These tables are keyed lookups - `RESERVED_PREFIXES` by prefix,
+    /// `ALLOWED_EXTERNAL_IDENTIFIERS` by media type. A duplicated key makes
+    /// the first entry silently shadow the rest, and every fixture that
+    /// touches the key would keep passing on the shadowing entry, so nothing
+    /// but a table invariant would notice a copy-paste slip.
+    #[test]
+    fn keyed_tables_have_no_duplicate_keys() {
+        let mut prefixes = std::collections::BTreeSet::new();
+        for (p, _) in super::RESERVED_PREFIXES {
+            assert!(prefixes.insert(*p), "reserved prefix '{p}' is listed twice");
+        }
+        let mut media_types = std::collections::BTreeSet::new();
+        for (mt, _, _) in super::ALLOWED_EXTERNAL_IDENTIFIERS {
+            assert!(
+                media_types.insert(*mt),
+                "external-identifier media type '{mt}' is listed twice"
+            );
+        }
+    }
+
     #[test]
     fn dc_date_accepts_date_only_forms() {
         assert!(is_valid_dc_date("2011"));

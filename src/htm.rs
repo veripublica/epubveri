@@ -1792,6 +1792,24 @@ mod tests {
 
     /// Every name the table offers must actually be declarable: a bad code
     /// point would produce a declaration that fails to parse.
+    /// The named-entity table is a lookup: two entries for one name would
+    /// make the first silently shadow the second, and a name that is also
+    /// one of the five predefined entities would be declared twice in an
+    /// augmented document. Neither is reachable through a fixture - both
+    /// produce a document that still parses - so only a table invariant
+    /// catches them.
+    #[test]
+    fn named_entities_are_unique_and_disjoint_from_predefined() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (name, _) in XHTML_NAMED_ENTITIES {
+            assert!(seen.insert(*name), "'{name}' appears twice in the table");
+            assert!(
+                !PREDEFINED_ENTITIES.contains(name),
+                "'{name}' is XML-predefined and must not also be in the table"
+            );
+        }
+    }
+
     #[test]
     fn every_table_entry_declares_and_parses() {
         let refs: String = XHTML_NAMED_ENTITIES
