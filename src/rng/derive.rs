@@ -290,6 +290,36 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// Whether an attribute of name `ns:local` is permitted anywhere in `p`,
+    /// ignoring its value. Used only to classify an already-failed attribute:
+    /// if the name is allowed here, the failure was the value, not the name.
+    ///
+    /// Walked like `expected_names` - through the compositors, following each
+    /// `Ref` once under a visited-guard so a recursive grammar terminates.
+    fn attr_name_allowed(
+        &self,
+        p: &Pat,
+        ns: &str,
+        local: &str,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match &**p {
+            Pattern::Attribute(nc, _) => nc.contains(ns, local),
+            Pattern::Choice(a, b)
+            | Pattern::Group(a, b)
+            | Pattern::Interleave(a, b)
+            | Pattern::After(a, b) => {
+                self.attr_name_allowed(a, ns, local, visited)
+                    || self.attr_name_allowed(b, ns, local, visited)
+            }
+            Pattern::OneOrMore(a) => self.attr_name_allowed(a, ns, local, visited),
+            Pattern::Ref(i) => {
+                visited.insert(*i) && self.attr_name_allowed(&self.defs[*i], ns, local, visited)
+            }
+            _ => false,
+        }
+    }
+
     fn start_tag_close_deriv(&self, p: &Pat) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => {
@@ -422,11 +452,22 @@ impl<'a> Env<'a> {
         }
         for att in node.attributes() {
             let ans = att.namespace().unwrap_or("");
+            let prev = cur.clone();
             cur = self.att_deriv(&cur, ans, att.name(), att.value());
             if is_not_allowed(&cur) {
-                // *This* attribute (present, but not allowed / invalid value) is
-                // the culprit — pin it, so the finding can target `@name`.
-                blames.push(Blame::Attribute(node, att));
+                // *This* attribute is the culprit — pin it, so the finding can
+                // target `@name`. Distinguish the two ways it can fail: an
+                // attribute of this name isn't allowed at all, vs. the name is
+                // allowed but its value doesn't satisfy the datatype. Only the
+                // first is "not allowed here"; the second is a value error, and
+                // the value is worth quoting. `att_deriv` collapses both into
+                // NotAllowed, so re-ask ignoring the value to tell them apart.
+                let fault = if self.attr_name_allowed(&prev, ans, att.name(), &mut HashSet::new()) {
+                    AttributeFault::InvalidValue
+                } else {
+                    AttributeFault::NotAllowed
+                };
+                blames.push(Blame::Attribute(node, att, fault));
                 return cur;
             }
         }
@@ -456,6 +497,18 @@ fn is_not_allowed(p: &Pat) -> bool {
 /// wording: an element that is simply misplaced is *not* the same as one whose
 /// content or attributes are the problem, and reporting all of them as "not
 /// allowed here" would be plainly wrong for three of the four cases.
+/// Which way an attribute broke the content model. An attribute *name* that
+/// isn't permitted here and a permitted attribute with an invalid *value* are
+/// different problems and need different wording - "not allowed here" is
+/// wrong for the second, which is a real value we can quote.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AttributeFault {
+    /// No attribute of this name is allowed at this position.
+    NotAllowed,
+    /// The name is allowed, but the value doesn't satisfy its datatype.
+    InvalidValue,
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum ElementFault {
     /// The element itself is not permitted at this position. Carries the
@@ -480,7 +533,11 @@ pub enum ElementFault {
 /// only naming the containing element.
 pub enum Blame<'d, 'i> {
     Element(roxmltree::Node<'d, 'i>, ElementFault),
-    Attribute(roxmltree::Node<'d, 'i>, roxmltree::Attribute<'d, 'i>),
+    Attribute(
+        roxmltree::Node<'d, 'i>,
+        roxmltree::Attribute<'d, 'i>,
+        AttributeFault,
+    ),
 }
 
 impl<'d, 'i> Blame<'d, 'i> {
@@ -488,14 +545,14 @@ impl<'d, 'i> Blame<'d, 'i> {
     /// element for an attribute-level blame).
     pub fn node(&self) -> roxmltree::Node<'d, 'i> {
         match self {
-            Blame::Element(n, _) | Blame::Attribute(n, _) => *n,
+            Blame::Element(n, _) | Blame::Attribute(n, ..) => *n,
         }
     }
 
     /// The specific attribute this finding pins, when attribute-level.
     pub fn attribute(&self) -> Option<roxmltree::Attribute<'d, 'i>> {
         match self {
-            Blame::Attribute(_, a) => Some(*a),
+            Blame::Attribute(_, a, _) => Some(*a),
             Blame::Element(..) => None,
         }
     }
@@ -543,12 +600,24 @@ impl<'d, 'i> Blame<'d, 'i> {
                 };
                 (text, params)
             }
-            Blame::Attribute(_, a) => {
+            Blame::Attribute(_, a, fault) => {
                 let name = a.name();
-                (
-                    format!("attribute \"{name}\" is not allowed here"),
-                    vec![name.to_string()],
-                )
+                match fault {
+                    AttributeFault::NotAllowed => (
+                        format!("attribute \"{name}\" is not allowed here"),
+                        vec![name.to_string()],
+                    ),
+                    // The name is fine; the value is the problem, so quote it -
+                    // "not allowed here" would send the author looking at the
+                    // wrong thing. Params carry the name then the value.
+                    AttributeFault::InvalidValue => (
+                        format!(
+                            "value of attribute \"{name}\" is invalid: \"{}\"",
+                            a.value()
+                        ),
+                        vec![name.to_string(), a.value().to_string()],
+                    ),
+                }
             }
         }
     }

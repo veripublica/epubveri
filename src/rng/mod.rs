@@ -12,7 +12,9 @@ pub mod derive;
 pub mod load;
 pub mod pattern;
 
-pub use derive::{Blame, ElementFault, Grammar, validate_node, validate_node_report, validate_xml};
+pub use derive::{
+    AttributeFault, Blame, ElementFault, Grammar, validate_node, validate_node_report, validate_xml,
+};
 pub use load::{load, load_from_define};
 pub use pattern::*;
 
@@ -71,6 +73,7 @@ pub fn xhtml_grammar_epub2() -> Grammar {
 
 #[cfg(test)]
 mod tests {
+
     #[test]
     fn epub2_grammar_probe() {
         let g = crate::rng::xhtml_grammar_epub2();
@@ -179,7 +182,7 @@ mod tests {
             .into_iter()
             .map(|b| match b {
                 Blame::Element(n, _) => n.tag_name().name().to_string(),
-                Blame::Attribute(_, a) => format!("@{}", a.name()),
+                Blame::Attribute(_, a, _) => format!("@{}", a.name()),
             })
             .collect()
     }
@@ -230,7 +233,7 @@ mod tests {
                 "element \"ol\" has incomplete content",
             ),
             (
-                Blame::Attribute(ol, a),
+                Blame::Attribute(ol, a, AttributeFault::NotAllowed),
                 "attribute \"a\" is not allowed here",
             ),
         ];
@@ -466,6 +469,53 @@ mod tests {
             fail_locals(&xhtml_grammar(), &xhtml_doc("<ol><span>x</span></ol>")),
             ["span"]
         );
+    }
+
+    /// The other half of Tier-C: an attribute whose *name* isn\'t allowed and
+    /// an allowed attribute with an invalid *value* are different problems and
+    /// read differently. "not allowed here" is wrong for the second - the
+    /// value is a real thing to quote, and the name is fine.
+    #[test]
+    fn attribute_faults_distinguish_bad_name_from_bad_value() {
+        let g = xhtml_grammar();
+        let describe1 = |body: &str| {
+            let x = xhtml_doc(body);
+            let d = roxmltree::Document::parse(&x).unwrap();
+            validate_node_report(&g, d.root_element())
+                .into_iter()
+                .map(|b| b.describe().0)
+                .collect::<Vec<_>>()
+        };
+        // An obsolete/removed attribute name.
+        assert_eq!(
+            describe1("<p contextmenu=\"x\">hi</p>"),
+            ["attribute \"contextmenu\" is not allowed here"]
+        );
+        // A permitted attribute (dir) with a value outside its enumeration.
+        assert_eq!(
+            describe1("<p dir=\"sideways\">hi</p>"),
+            ["value of attribute \"dir\" is invalid: \"sideways\""]
+        );
+        // The valid value draws nothing.
+        assert!(describe1("<p dir=\"rtl\">hi</p>").is_empty());
+    }
+
+    /// The value-error carries name then value as structured params, and pins
+    /// the attribute itself (`@name`) like the name-error does.
+    #[test]
+    fn invalid_value_params_and_pinning() {
+        let g = xhtml_grammar();
+        let x = xhtml_doc("<p dir=\"sideways\">hi</p>");
+        let d = roxmltree::Document::parse(&x).unwrap();
+        let blames = validate_node_report(&g, d.root_element());
+        assert_eq!(blames.len(), 1);
+        assert!(matches!(
+            blames[0],
+            Blame::Attribute(_, _, AttributeFault::InvalidValue)
+        ));
+        let (_, params) = blames[0].describe();
+        assert_eq!(params, ["dir", "sideways"]);
+        assert_eq!(blames[0].attribute().map(|a| a.name()), Some("dir"));
     }
 
     #[test]
