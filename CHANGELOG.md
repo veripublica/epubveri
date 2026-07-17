@@ -8,6 +8,35 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Positions reported for EPUB 2 documents with DTD-declared entities are now exact.**
+  0.5.10 made those documents parse by injecting `<!ENTITY>` declarations before the
+  DOCTYPE's closing `>`. That adds no newline, so line numbers were always right — but
+  inserting text on a line pushes whatever follows it on that line to the right, and the
+  claim that "nothing is ever anchored there" was an assumption, not a fact. Measured: for
+  a document whose DOCTYPE and `<html>` share a line, the root element's column was
+  reported 25 too far. The shift cannot be avoided (fitting the declarations inside the
+  DOCTYPE's own footprint leaves room for about three entities; skipping the injection
+  sends the document back to not parsing at all, silently skipping every check on it), so
+  it is corrected instead: the injection reports which line it moved, past which column,
+  by how much, and the content-document walk subtracts it from every finding before the
+  report is handed out. Matters most to tools that edit by position — a column that is
+  right for our parser and wrong for the file on disk is worse than no column.
+
+- **The npm package now ships the commercial-license text.** `@veripublica/epubveri-wasm`
+  carried `LICENSE` (the AGPL) but not `LICENSE-COMMERCIAL.md`, so an npm consumer saw the
+  AGPL text and no word of the `LicenseRef-veripublica-Commercial` half its own
+  `package.json` declares. Two causes, both now handled: `wasm-pack` only collects licenses
+  from the crate directory (the files are copied into `epubveri-wasm/`), and npm only
+  always-packs a license file whose name is `license` plus a *dotted* extension — the
+  hyphen in `LICENSE-COMMERCIAL.md` did not match, so it was dropped. The copy is named
+  `LICENSE.COMMERCIAL.md`; the dot is functional, not style (see
+  `epubveri-wasm/README.md`). `wasm-pack`'s own `files` list can't be relied on here: it
+  writes `package.json` before it copies the licenses, so a clean build never lists them.
+
 ## [0.5.10] - 2026-07-17
 
 Doitsu's MobileRead report and epubsana's #23, both of which found rules that
