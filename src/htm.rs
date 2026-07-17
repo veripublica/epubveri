@@ -532,13 +532,16 @@ pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> (String, Opt
         let cp = xhtml_entity_codepoint(name).expect("filtered to known entities above");
         decls.push_str(&format!("<!ENTITY {name} \"&#{cp};\">"));
     }
-    let Some(doctype) = extract_doctype(&text) else {
+    let Some((doctype, subset_close)) = doctype_span(&text) else {
         return (text, None);
     };
     let dt_start = offset_in(&text, doctype);
-    let (at, decls) = match doctype.rfind(']') {
+    let (at, decls) = match subset_close {
         // An internal subset is already there - add ours to it, rather
-        // than opening a second (illegal) one.
+        // than opening a second (illegal) one. `subset_close` is the
+        // scanner's answer, not a `rfind(']')`: a public identifier is
+        // free to contain a `]`, and inserting at one would land inside
+        // the literal.
         Some(close) => (dt_start + close, decls),
         None => (dt_start + doctype.len() - 1, format!("[{decls}]")),
     };
@@ -649,15 +652,59 @@ fn declared_entity_names(text: &str) -> Vec<String> {
 /// Finds the full `<!DOCTYPE ...>` declaration, correctly skipping past
 /// any `>` inside an internal subset (`[...]`) to find the declaration's
 /// *own* closing `>`.
-fn extract_doctype(text: &str) -> Option<&str> {
+/// The `<!DOCTYPE ...>` declaration, plus the offset *within it* of its
+/// internal subset's closing `]` if it has one.
+///
+/// Scanned character by character rather than searched for, because every
+/// shortcut here has a counterexample in a real book:
+///
+/// - The declaration's own `>` is not the first `>` after it: an internal
+///   subset is full of them (`<!ENTITY nbsp "&#160;">`). So `>` only ends
+///   the declaration at subset depth 0.
+/// - A `[` is only the subset's opener if it comes *before* the declaration
+///   has ended. Searching the rest of the document for one finds the `[1]`
+///   footnote marker three chapters down and swallows everything in between
+///   (issue #25: that over-capture made `declare_dtd_entities` inject entity
+///   declarations into the middle of the body, breaking 11 real books).
+/// - Neither bracket counts inside a quoted literal — a public identifier
+///   may contain anything.
+fn doctype_span(text: &str) -> Option<(&str, Option<usize>)> {
     let start = text.find("<!DOCTYPE")?;
-    let after = &text[start..];
-    let search_from = match after.find('[') {
-        Some(bracket) => bracket + after[bracket..].find(']')?,
-        None => 0,
-    };
-    let end = after[search_from..].find('>')?;
-    Some(&after[..search_from + end + 1])
+    let bytes = text.as_bytes();
+    let mut quote: Option<u8> = None;
+    let mut depth = 0usize;
+    let mut subset_close = None;
+    let mut i = start + "<!DOCTYPE".len();
+    while i < bytes.len() {
+        let c = bytes[i];
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                }
+            }
+            None => match c {
+                b'"' | b'\'' => quote = Some(c),
+                b'[' => depth += 1,
+                b']' => {
+                    depth = depth.saturating_sub(1);
+                    if depth == 0 {
+                        subset_close = Some(i - start);
+                    }
+                }
+                // The declaration's own '>' - the one at depth 0.
+                b'>' if depth == 0 => return Some((&text[start..=i], subset_close)),
+                _ => {}
+            },
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Finds the full `<!DOCTYPE ...>` declaration - see [`doctype_span`].
+fn extract_doctype(text: &str) -> Option<&str> {
+    doctype_span(text).map(|(d, _)| d)
 }
 
 /// EPUB 2's own DOCTYPE rule for XHTML content documents - the *opposite*
@@ -1571,6 +1618,61 @@ mod tests {
         let h1 = doc.descendants().find(|n| n.has_tag_name("h1")).unwrap();
         assert_eq!(h1.attribute("id"), Some("sigil_toc_id_3"));
         assert_eq!(h1.text(), Some("a\u{a0}b"));
+    }
+
+    /// Issue #25. A `[1]` footnote marker in the body - one of the most
+    /// ordinary things in a real book - used to make `extract_doctype`
+    /// search the whole rest of the document for an internal subset, decide
+    /// the footnote's bracket was one, and inject the entity declarations
+    /// into the middle of the body. 78 false fatals across 11 books, on
+    /// documents that are perfectly valid.
+    #[test]
+    fn declare_dtd_entities_is_not_confused_by_brackets_in_the_body() {
+        let text = concat!(
+            "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n",
+            "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n",
+            "<p>A footnote marker [1] in the body.</p>\n",
+            "<p>a&nbsp;b</p>\n",
+            "</body></html>",
+        );
+        let (out, _) = declare_dtd_entities(text.to_string(), false);
+        assert!(
+            out.contains("[1] in the body"),
+            "the body must come through untouched; got:\n{out}"
+        );
+        let doc = crate::ocf::parse_xml(&out).expect("a valid document must still parse");
+        let ps: Vec<_> = doc
+            .descendants()
+            .filter(|n| n.has_tag_name("p"))
+            .filter_map(|n| n.text().map(str::to_string))
+            .collect();
+        assert_eq!(ps[0], "A footnote marker [1] in the body.");
+        assert_eq!(ps[1], "a\u{a0}b");
+    }
+
+    /// The DOCTYPE's own `>` is not the first `>` after it: an internal
+    /// subset is full of them. Nor is a `]` inside a quoted public
+    /// identifier the subset's close.
+    #[test]
+    fn doctype_span_is_bounded_correctly() {
+        // No subset, `[` and `>` further down the document.
+        let (dt, close) = doctype_span("<!DOCTYPE html SYSTEM \"a.dtd\">\n<p>[x]</p>").unwrap();
+        assert_eq!(dt, "<!DOCTYPE html SYSTEM \"a.dtd\">");
+        assert_eq!(close, None);
+
+        // A subset: the declaration ends *after* it, not at the `>` of the
+        // `<!ENTITY>` inside it.
+        let text = "<!DOCTYPE html [<!ENTITY x \"&#65;\">]>\n<p>y</p>";
+        let (dt, close) = doctype_span(text).unwrap();
+        assert_eq!(dt, "<!DOCTYPE html [<!ENTITY x \"&#65;\">]>");
+        assert_eq!(close.map(|c| &dt[c..c + 1]), Some("]"));
+
+        // Brackets inside a quoted literal belong to the literal.
+        let (dt, close) =
+            doctype_span("<!DOCTYPE html PUBLIC \"a[b]c\" \"d.dtd\">\n<p>z</p>").unwrap();
+        assert_eq!(dt, "<!DOCTYPE html PUBLIC \"a[b]c\" \"d.dtd\">");
+        assert_eq!(close, None, "the ']' is inside the public identifier");
     }
 
     /// The property the whole approach rests on: declarations are injected
