@@ -326,6 +326,32 @@ impl Report {
         });
     }
 
+    /// Like [`Report::push_node`], but the finding is about a run of text;
+    /// the element path pins the text run (`…/text()[n]`) rather than
+    /// resolving to its containing element.
+    #[allow(clippy::too_many_arguments)]
+    pub fn push_node_text(
+        &mut self,
+        id: &'static str,
+        severity: Severity,
+        text: impl Into<String>,
+        location: impl Into<String>,
+        node: roxmltree::Node,
+        rule: &'static str,
+        params: Vec<String>,
+    ) {
+        self.push_full_path(
+            id,
+            severity,
+            text,
+            location,
+            Position::of(node),
+            crate::xmlext::node_path_text(node),
+            rule,
+            params,
+        );
+    }
+
     /// Like `push_node`, but the finding is about a specific `attr` of `node`:
     /// the `element_path` ends in an `/@name` step pinning that attribute
     /// (issue #18). The `position` still points at the element.

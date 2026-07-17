@@ -3757,13 +3757,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "img")
         {
-            if n.attr_no_ns("src").is_some_and(|v| v.trim().is_empty()) {
-                report.push_node(
+            if let Some(src) = attr_no_ns_node(n, "src")
+                && src.value().trim().is_empty()
+            {
+                report.push_node_attr(
                     RSC_005,
                     Severity::Error,
                     "\"img\" element's \"src\" attribute must not be empty",
                     path.clone(),
                     n,
+                    src,
                     "opf.content_document.empty_img_src",
                     Vec::new(),
                 );
@@ -3852,19 +3855,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && n.attr_no_ns("http-equiv")
                         .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
             }) {
-                if !n
-                    .attr_no_ns("content")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
+                let content = attr_no_ns_node(n, "content");
+                if !content
+                    .is_some_and(|a| a.value().eq_ignore_ascii_case("text/html; charset=utf-8"))
                 {
-                    report.push_node(
-                        RSC_005,
-                        Severity::Error,
-                        "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
-                        path.clone(),
-                        n,
-                        "opf.content_document.invalid_content_type_meta",
-                        Vec::new(),
-                    );
+                    // Pin `@content` when there is one; a `<meta http-equiv>`
+                    // with no `content` at all has no attribute to point at.
+                    match content {
+                        Some(a) => report.push_node_attr(
+                            RSC_005,
+                            Severity::Error,
+                            "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                            path.clone(),
+                            n,
+                            a,
+                            "opf.content_document.invalid_content_type_meta",
+                            Vec::new(),
+                        ),
+                        None => report.push_node(
+                            RSC_005,
+                            Severity::Error,
+                            "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                            path.clone(),
+                            n,
+                            "opf.content_document.invalid_content_type_meta",
+                            Vec::new(),
+                        ),
+                    }
                 }
             }
         }
@@ -3988,14 +4005,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.has_attr_no_ns("role"))
         {
-            for token in n.attr_no_ns("role").unwrap().split_whitespace() {
+            let role = attr_no_ns_node(n, "role").expect("filtered on has_attr_no_ns above");
+            for token in role.value().split_whitespace() {
                 if DEPRECATED_ARIA_ROLES.contains(&token) {
-                    report.push_node(
+                    report.push_node_attr(
                         RSC_017,
                         Severity::Warning,
                         format!("\"{token}\" role is deprecated"),
                         path.clone(),
                         n,
+                        role,
                         "opf.content_document.deprecated_aria_role",
                         vec![token.to_string()],
                     );
@@ -4010,18 +4029,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
         {
-            let value = n.attribute((EPUB_NS, "type")).unwrap();
+            let type_attr =
+                attr_ns_node(n, EPUB_NS, "type").expect("filtered on the same attribute above");
+            let value = type_attr.value();
             for token in value.split_whitespace() {
                 if token.contains(':') {
                     continue;
                 }
                 if !crate::ssv::is_default_vocab_type(token) {
-                    report.push_node(
+                    report.push_node_attr(
                         OPF_088,
                         Severity::Usage,
                         format!("epub:type value '{token}' is not in the default vocabulary"),
                         path.clone(),
                         n,
+                        type_attr,
                         "opf.content_document.epub_type_not_default_vocab",
                         vec![token.to_string()],
                     );
@@ -4062,12 +4084,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         }
                         None => format!("epub:type value '{token}' is deprecated"),
                     };
-                    report.push_node(
+                    report.push_node_attr(
                         OPF_086B,
                         Severity::Usage,
                         text,
                         path.clone(),
                         n,
+                        type_attr,
                         "opf.content_document.deprecated_epub_type",
                         vec![token.to_string()],
                     );
@@ -4087,7 +4110,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // was missed entirely. A fixture agreeing is not the rule
                 // agreeing (reported by Doitsu on the MobileRead forum).
                 if crate::ssv::is_media_overlay_only(token) {
-                    report.push_node(
+                    report.push_node_attr(
                         OPF_087,
                         Severity::Usage,
                         format!(
@@ -4096,6 +4119,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         ),
                         path.clone(),
                         n,
+                        type_attr,
                         "opf.content_document.epub_type_not_allowed_in_html",
                         vec![token.to_string()],
                     );
@@ -4459,9 +4483,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
             if tag == "img"
-                && let Some(srcset) = n.attr_no_ns("srcset")
+                && let Some(srcset_attr) = attr_no_ns_node(n, "srcset")
             {
-                for candidate in srcset.split(',') {
+                for candidate in srcset_attr.value().split(',') {
                     let url = candidate.trim().split_whitespace().next().unwrap_or("");
                     if url.is_empty() || is_external(url) {
                         continue;
@@ -4473,12 +4497,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     // this must check manifest declaration (`items`),
                     // not container file existence (`name_index`).
                     if !items.values().any(|(ip, _)| nfc(ip) == resolved) {
-                        report.push_node(
+                        report.push_node_attr(
                             RSC_008,
                             Severity::Error,
                             format!("srcset candidate '{url}' is not declared in the manifest"),
                             path.clone(),
                             n,
+                            srcset_attr,
                             "opf.content_document.srcset_not_in_manifest",
                             vec![url.to_string()],
                         );
@@ -4494,19 +4519,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "use")
         {
-            let href = n
-                .attr_no_ns("href")
-                .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
-            if let Some(v) = href
-                && !is_external(v)
-                && !v.contains('#')
+            // Either spelling addresses the target; pin whichever this
+            // element actually used, so the path names the attribute the
+            // author would edit.
+            let href = attr_no_ns_node(n, "href")
+                .or_else(|| attr_ns_node(n, "http://www.w3.org/1999/xlink", "href"));
+            if let Some(a) = href
+                && !is_external(a.value())
+                && !a.value().contains('#')
             {
-                report.push_node(
+                let v = a.value();
+                report.push_node_attr(
                     RSC_015,
                     Severity::Error,
                     format!("\"use\" element's href '{v}' has no fragment identifier"),
                     path.clone(),
                     n,
+                    a,
                     "opf.content_document.use_href_missing_fragment",
                     vec![v.to_string()],
                 );

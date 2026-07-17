@@ -938,7 +938,7 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
     }) {
         for child in body.children() {
             if child.is_text() && child.text().is_some_and(|t| !t.trim().is_empty()) {
-                report.push_node(
+                report.push_node_text(
                     RSC_005,
                     Severity::Error,
                     "text is not allowed directly in \"body\"; EPUB 2 requires block-level content",

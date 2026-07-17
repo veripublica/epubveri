@@ -163,6 +163,36 @@ pub(crate) fn node_path(node: roxmltree::Node) -> NodePath {
     }
 }
 
+/// Like [`node_path`], but the finding is about a run of text rather than an
+/// element; the path ends in a `/text()[n]` step addressing that run.
+///
+/// Without this a loose-text finding resolves to its *containing element* —
+/// `element_path_string` walks ancestors and keeps only elements, so a text
+/// node's own step is dropped and the path silently points one level up. For
+/// "there is text here that shouldn't be" that is the one thing the reader
+/// needs and the one thing it didn't say.
+///
+/// `n` counts text nodes among the parent's children, 1-based, which is what
+/// XPath's `text()[n]` selects.
+pub(crate) fn node_path_text(text: roxmltree::Node) -> NodePath {
+    let mut prefixes = Prefixes::new();
+    let Some(parent) = text.parent().filter(|p| p.is_element()) else {
+        // No element to hang it off - fall back rather than invent a path.
+        return node_path(text);
+    };
+    let mut path = element_path_string(parent, &mut prefixes);
+    let idx = parent
+        .children()
+        .filter(roxmltree::Node::is_text)
+        .position(|n| n == text)
+        .map_or(1, |i| i + 1);
+    path.push_str(&format!("/text()[{idx}]"));
+    NodePath {
+        path,
+        namespaces: prefixes.into_map(),
+    }
+}
+
 /// Like [`node_path`], but the finding is about a specific attribute of `node`;
 /// the path ends in an `/@prefix:name` (or bare `/@name`) step. Pass the
 /// [`roxmltree::Attribute`] in hand so its namespace is resolved exactly, not
@@ -404,4 +434,43 @@ mod tests {
         assert_eq!(doc2.root_element().attr_no_ns("lang"), None);
         assert!(!doc2.root_element().has_attr_no_ns("lang"));
     }
+}
+
+#[cfg(test)]
+mod text_path_tests {
+    use super::*;
+
+    /// A loose-text finding must address the text run, not resolve to the
+    /// element that contains it - "there is text here that shouldn't be" is
+    /// exactly the case where the element is not the answer.
+    ///
+    /// The index is XPath's: `text()[n]` counts text nodes among the
+    /// parent's children, so the newline before `<p>` is `text()[1]` and the
+    /// loose run after it is `text()[2]`. Verified against an independent
+    /// parser's node ordering, not just eyeballed.
+    #[test]
+    fn text_path_addresses_the_run_and_counts_like_xpath() {
+        let xml =
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n<p>ok</p>\nloose\n</body></html>";
+        let d = crate::ocf::parse_xml(xml).unwrap();
+        let body = d.descendants().find(|n| n.has_tag_name("body")).unwrap();
+        let runs: Vec<_> = body.children().filter(|n| n.is_text()).collect();
+        // Two runs, not three: everything after `</p>` is one text node.
+        assert_eq!(runs.len(), 2, "got {runs:?}");
+
+        let p = node_path_text(runs[1]);
+        assert_eq!(p.path, "/h:html[1]/h:body[1]/text()[2]");
+        assert_eq!(
+            p.namespaces.get("h").map(String::as_str),
+            Some(XHTML_NS_FOR_TEST)
+        );
+
+        // The run before `<p>` is a different one, and says so.
+        assert_eq!(
+            node_path_text(runs[0]).path,
+            "/h:html[1]/h:body[1]/text()[1]"
+        );
+    }
+
+    const XHTML_NS_FOR_TEST: &str = "http://www.w3.org/1999/xhtml";
 }
