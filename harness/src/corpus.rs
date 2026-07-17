@@ -146,6 +146,19 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
         // on top of (not instead of) the wrap-synthesis mechanism above,
         // which still matters for content-document-level detection with
         // no package in play at all.
+        // "configured with the default profile" resets to no profile - it
+        // overrides a Background that set one. Unquoted, so the regex below
+        // (which wants `'name'`) never saw it, and the one scenario using it
+        // kept inheriting its file's Background `dict` profile and was scored
+        // against the wrong output entirely (issue #26). It appears exactly
+        // once in the corpus, which is why it went unnoticed.
+        if line.contains("configured with the default profile") {
+            match cur {
+                None => cli_profile_bg = None,
+                Some(i) => scenarios[i].cli_profile = None,
+            }
+            continue;
+        }
         if let Some(m) = cli_profile_re().captures(line) {
             let name = m[1].to_string();
             match cur {

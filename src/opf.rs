@@ -4249,25 +4249,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // svg-use/img fragment classification (RSC-013/RSC-015/RSC-009),
         // srcset (RSC-008), and base-URI-aware remote reclassification
         // (RSC-006) ---
-        {
-            // An absolute remote <base href>/xml:base means every
-            // relative-or-fragment-only <a href> elsewhere in *this*
-            // document actually resolves to a remote URL through it -
-            // narrower than (and additive to) the existing manifest-
-            // declared-remote-image RSC-006 check further below, since
-            // this target was never manifest-declared at all.
-            let remote_base = d
-                .descendants()
-                .find(|n| n.is_element() && n.tag_name().name() == "base")
-                .and_then(|n| n.attr_no_ns("href"))
-                .filter(|v| is_remote_url(v))
-                .or_else(|| {
-                    d.root_element()
-                        .attribute(("http://www.w3.org/XML/1998/namespace", "base"))
-                        .filter(|v| is_remote_url(v))
-                })
-                .is_some();
+        // An absolute remote <base href>/xml:base means every relative
+        // reference in *this* document resolves to a remote URL through it,
+        // not to a file in the container. Computed once for the document:
+        // the <a href> pass below uses it to reclassify targets as remote
+        // (RSC-006), and the attribute walk uses it to not go looking for
+        // them on disk.
+        let remote_base = d
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "base")
+            .and_then(|n| n.attr_no_ns("href"))
+            .filter(|v| is_remote_url(v))
+            .or_else(|| {
+                d.root_element()
+                    .attribute(("http://www.w3.org/XML/1998/namespace", "base"))
+                    .filter(|v| is_remote_url(v))
+            })
+            .is_some();
 
+        {
             let mut frag_id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
 
             for a in d
@@ -4719,7 +4719,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             remote_link_refs.insert(bare);
                         } else {
                             remote_refs.insert(bare.clone());
-                            has_remote = true;
+                            // A remote stylesheet does not ask for the
+                            // "remote-resources" property. The property
+                            // declares that the document fetches something
+                            // from the network that is *allowed* to be
+                            // there; a stylesheet never is, so declaring it
+                            // could not legitimize this and asking for it
+                            // points at the wrong half of the problem (the
+                            // RSC-006 below is the whole of it). epubcheck
+                            // draws the same line structurally - its `<link>`
+                            // handling sits outside the resource-URL path
+                            // that collects the property's requirement.
+                            // Evidenced by `resources-remote-stylesheet-error`,
+                            // which declares no property and expects RSC-006
+                            // alone (issue #26); the corpus says nothing
+                            // either way about the other restricted tags, so
+                            // they are left as they are.
+                            if tag != "link" {
+                                has_remote = true;
+                            }
                             let restricted = match tag {
                                 "img" | "iframe" => true,
                                 "script" if attr == "src" => true,
@@ -4749,6 +4767,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     // fragment-only href (e.g. "#foo") is caught by the
                     // `is_external` check above instead (fragment
                     // resolution is RSC-012, checked separately below).
+                    // Under a remote base this reference never pointed
+                    // into the container in the first place - it resolves
+                    // through the base to a remote URL - so looking for it
+                    // on disk and reporting it missing describes a file the
+                    // document never asked for (issue #26; epubcheck reports
+                    // only the RSC-006 that the remote resolution itself
+                    // earns).
+                    if remote_base {
+                        continue;
+                    }
                     let resolved = resolve(&dir, v);
                     if !name_index.contains_key(&nfc(&resolved)) {
                         // Real corpus finding, grep-verified across the
