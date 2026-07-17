@@ -1904,6 +1904,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
         }
+        // OPF-072 (usage, EPUB 2 only): a `dc:*` metadata element with no
+        // text. epubcheck reports each empty one; in EPUB 3 an empty element
+        // is a schema error instead, so this is version-scoped. `title` and
+        // `date` are excluded because they have their own, more specific
+        // empty/invalid checks above (OPF-055 / OPF-054), and reporting both
+        // would double up on the one element.
+        if is_epub2 {
+            for n in md.children().filter(|n| {
+                n.is_element()
+                    && n.tag_name().namespace() == Some(DC_ELEMENTS_NS)
+                    && !matches!(n.tag_name().name(), "title" | "date")
+            }) {
+                let text: String = n
+                    .descendants()
+                    .filter(|t| t.is_text())
+                    .filter_map(|t| t.text())
+                    .collect();
+                if text.trim().is_empty() {
+                    let name = n.tag_name().name();
+                    report.push_at_pos(
+                        OPF_072,
+                        Severity::Usage,
+                        format!("dc:{name} metadata element is empty"),
+                        opf_path,
+                        Position::of(n),
+                    );
+                }
+            }
+        }
         // dcterms:modified must be exactly 'CCYY-MM-DDThh:mm:ssZ' (the
         // message text itself is checked verbatim by a real fixture) - a
         // plain fixed-width byte-shape check, not the XPath-engine date
@@ -7823,6 +7852,112 @@ mod tests {
     /// Build a minimal valid EPUB 3 with the caller's extra lines injected
     /// into the OPF `<metadata>` — used to exercise metadata-level checks
     /// (here, deprecated `<link rel>` keywords).
+    /// A minimal EPUB (version `ver`, e.g. "2.0" or "3.0") whose metadata
+    /// carries `dc_extra` verbatim, for the empty-metadata checks.
+    fn epub_with_metadata(ver: &str, dc_extra: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let modified = if ver.starts_with('3') {
+            "<meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>"
+        } else {
+            ""
+        };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    {modified}
+    {dc_extra}
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+                ),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// OPF-072 (usage): an empty `dc:*` metadata element, EPUB 2 only. In
+    /// EPUB 3 an empty element is a schema error, so it must not fire there.
+    /// Requested by Doitsu on the MobileRead forum - the one thing epubcheck
+    /// caught on his final test case that we did not.
+    #[test]
+    fn empty_dc_metadata_is_opf_072_in_epub2_only() {
+        let rules = |bytes: Vec<u8>| {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_072)
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        };
+        // EPUB 2: an empty dc:subject is reported at usage level.
+        let r = rules(epub_with_metadata("2.0", "<dc:subject></dc:subject>"));
+        assert_eq!(r.len(), 1, "got {r:?}");
+        assert!(r[0].contains("dc:subject"), "got {r:?}");
+        let report = crate::validate_bytes(epub_with_metadata("2.0", "<dc:subject/>"));
+        assert!(
+            report
+                .messages
+                .iter()
+                .find(|m| m.id == crate::ids::OPF_072)
+                .is_some_and(|m| m.severity == crate::report::Severity::Usage)
+        );
+        // Whitespace-only counts as empty; a real value does not.
+        assert_eq!(
+            rules(epub_with_metadata("2.0", "<dc:source>  </dc:source>")).len(),
+            1
+        );
+        assert_eq!(
+            rules(epub_with_metadata("2.0", "<dc:source>x</dc:source>")).len(),
+            0
+        );
+        // EPUB 3: not OPF-072 (empty is a schema error there instead).
+        assert_eq!(
+            rules(epub_with_metadata("3.0", "<dc:subject></dc:subject>")).len(),
+            0
+        );
+        // title and date are excluded - they have their own checks, and
+        // reporting OPF-072 too would double up.
+        assert_eq!(
+            rules(epub_with_metadata("2.0", "<dc:date></dc:date>")).len(),
+            0
+        );
+    }
+
     fn epub_with_extra_metadata(extra: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
