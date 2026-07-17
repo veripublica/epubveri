@@ -8,6 +8,80 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.13] - 2026-07-17
+
+An EPUB 2 content model - EPUB 2 books are no longer validated against HTML5 -
+plus the rest of Tier-C's message detail. **This changes verdicts for EPUB 2
+books**: see the note under the first entry.
+
+### Fixed / Changed
+
+- **EPUB 2 content documents now use an EPUB 2 (XHTML 1.1 + OPS 2.0.1) content
+  model.** They were validated against the EPUB 3 (HTML5) grammar, which is wrong
+  in both directions: `<big>`/`<tt>`/`<acronym>` are valid XHTML 1.1 but removed
+  in HTML5 (we flagged them), and `<s>`/`<u>` and the HTML5 additions are the
+  reverse (we missed them). Now they match epubcheck. (#24, reported by Doitsu on
+  the MobileRead forum.)
+
+  **Heads-up — this newly flags common shapes.** XHTML 1.1 is block-level under
+  `<body>` (and `<p>` takes inline content only), so a `<br>` or `<span>` directly
+  under `<body>`, or a block element inside a `<p>`, is now an `RSC-005` error.
+  This is very common - Calibre and similar tools produce it - and on two real
+  EPUB 2 books it went from 0 findings to 401 and 25. This is **not a regression**:
+  those documents are XHTML 1.1 invalid and epubcheck reports them identically. The
+  point is parity; repair is a separate tool's job. (#13, reported by Doitsu.)
+
+- **`RSC-005` messages now name what was expected, and tell a bad attribute name
+  from a bad value.** A content-model rejection reads `element "span" is not allowed
+  here; expected one of "address", "blockquote", … "ul"` where the model is a
+  genuine constraint (epubcheck lists these too). And an attribute failure now
+  distinguishes `attribute "x" is not allowed here` (unknown name) from `value of
+  attribute "dir" is invalid: "sideways"` (known name, bad value) - the two were
+  one message before. (Tier-C.)
+
+- **`OPF-018` is downgraded to the usage-level `OPF-018b` for scripted content** -
+  a declared-but-unused `remote-resources` property can't be disproven when a
+  script might fetch remotely, so epubcheck reports it as usage, and now so do we.
+  (#27.)
+
+## [0.5.12] - 2026-07-17
+
+Fixes a false-fatal regression epubsana reported (#25), plus everything found by
+auditing for its kind and by two new corpus-harness scoring checks. Corpus recall
+599/607.
+
+### Fixed
+
+- **EPUB 2 documents with a `[` in the body no longer draw a false fatal.** 0.5.11's
+  DTD-entity injection searched the whole document for the DOCTYPE's internal subset
+  rather than the DOCTYPE itself, so a `[1]` footnote marker was mistaken for it and
+  the entity declarations were injected into the body, breaking the parse. 78 false
+  fatals across 11 valid books on a real shelf; the DOCTYPE is now scanned, not
+  searched, and the same bug in two other DOCTYPE readers is fixed with it. (#25,
+  reported by epubsana.)
+
+- **`OPF-043` is now an error** (was a warning) - a spine item the reading system
+  can't render, with no fallback, is a hole in the reading order; epubcheck's
+  severity table and fixture both say error.
+
+- **A valid EPUB 2 DTBook book is no longer flagged `OPF-043`.** The content types
+  allowed directly in the spine are version-specific - XHTML or SVG in EPUB 3, but
+  XHTML or DTBook (`application/x-dtbook+xml`) in EPUB 2 - and we applied the EPUB 3
+  set to all. (Surfaced by the `OPF-043` severity fix.)
+
+### Changed
+
+- **`element_path` (JSON) now pins the attribute or text run a finding is about** -
+  eight content-document findings about a specific attribute end their path in
+  `/@name` instead of stopping at the element, and loose-text findings end in
+  `/text()[n]`. (#20.)
+
+- **The corpus harness now scores two more things** (internal, but it's how the
+  above were found): over-reporting (findings on a book that expects one specific
+  thing) and severity agreement (an id reported at the wrong severity). Both drove
+  real fixes; both are now clean. Plus invariant tests over the rule tables - the
+  class of bug no fixture can reach. (#26.)
+
 ## [0.5.11] - 2026-07-17
 
 Doitsu's EPUB 2 test case and JSWolf's unused-resource request, both from the MobileRead
