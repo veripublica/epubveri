@@ -90,6 +90,7 @@ pub const OPF_003: &str = "OPF-003"; // a container resource isn't listed in the
 pub const OPF_014: &str = "OPF-014"; // a content property (remote-resources/scripted/svg) is used but not declared
 pub const OPF_015: &str = "OPF-015"; // a content property is declared but not needed
 pub const OPF_018: &str = "OPF-018"; // a content property is declared but not needed (warning variant)
+pub const OPF_018B: &str = "OPF-018b"; // same, but usage-level: the book uses scripting, which could reference a remote resource dynamically
 pub const OPF_025: &str = "OPF-025"; // an attribute value must be a single token, not a list
 pub const OPF_026: &str = "OPF-026"; // a meta property name is not well-formed
 pub const OPF_027: &str = "OPF-027"; // an unknown/unprefixed value is used for a known-vocabulary attribute
