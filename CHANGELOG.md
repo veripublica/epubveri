@@ -8,7 +8,14 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.5.11] - 2026-07-17
+
+Doitsu's EPUB 2 test case and JSWolf's unused-resource request, both from the MobileRead
+thread, plus a position fix and a licensing gap found along the way. Corpus recall is
+unchanged (600/607) — and could not move for any of it, which is becoming the pattern
+worth naming: epubcheck's corpus scores none of these, either because the finding is
+usage-level (invisible to a metric that checks the expected ID was reported, not that
+nothing extra was) or because it has no scenario for the rule at all.
 
 ### Added
 
@@ -30,6 +37,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   author's call, which is why this is usage and not advice.
 
 ### Fixed
+
+- **`OPF-096` no longer fires on EPUB 2.** "Non-linear content is not reachable from the
+  reading order" is an EPUB 3 requirement; EPUB 2.0.1 has none, so we were inventing an
+  error on books epubcheck passes. Three independent signals agreed: every `OPF-096`
+  fixture in epubcheck's corpus lives under `epub3/`, epubcheck stays silent on a real
+  EPUB 2 book that we flagged, and the note already in our own code cited epubcheck's
+  *EPUB 3* checker as where the rule came from. Same class as #9, #21 and #24 — an EPUB 3
+  rule leaking into EPUB 2. (Reported by Doitsu on the MobileRead forum.)
+
+- **Duplicate NCX `playOrder` values are now reported** (`RSC-005`). `playOrder` is the
+  reading position, so two elements claiming the same one while pointing elsewhere is a
+  contradiction; epubcheck flagged four on a real book where epubveri flagged none. The
+  exception is what stops this being a plain duplicate scan: elements naming the *same*
+  target may share a value, since that is one position reached by two routes. Every
+  colliding element is reported, not one arbitrary member. (Reported by Doitsu on the
+  MobileRead forum.)
+
+- **`OPF-062` (usage) is now reported for Adobe's `page-map` spine extension.** The
+  attribute already drew an `RSC-005`; the two say different things — one that the document
+  is invalid, the other *which* non-standard feature is in use, which is the part that tells
+  an author whether they meant it. (Reported by Doitsu on the MobileRead forum.)
 
 - **Positions reported for EPUB 2 documents with DTD-declared entities are now exact.**
   0.5.10 made those documents parse by injecting `<!ENTITY>` declarations before the
