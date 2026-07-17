@@ -3023,8 +3023,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             // spine without a fallback; otherwise walk the
                             // 'fallback' chain (bounded, in case of a cycle)
                             // looking for one that resolves to a core type.
-                            let is_core =
-                                |mt: &str| mt == "application/xhtml+xml" || mt == "image/svg+xml";
+                            // The set of "blessed" spine content types is
+                            // version-specific: EPUB 3 is XHTML or SVG, but
+                            // EPUB 2 is XHTML or DTBook (`application/
+                            // x-dtbook+xml`), a first-class content type there.
+                            // Using the EPUB 3 set for everything reported a
+                            // valid EPUB 2 DTBook book as OPF-043 - harmless
+                            // while OPF-043 was a warning, a false *error* once
+                            // it became one (issue #26; same EPUB-3-into-EPUB-2
+                            // class as #24).
+                            let is_core = |mt: &str| {
+                                mt == "application/xhtml+xml"
+                                    || if is_epub3 {
+                                        mt == "image/svg+xml"
+                                    } else {
+                                        mt == "application/x-dtbook+xml"
+                                    }
+                            };
                             let mut covered = is_core(mt);
                             let mut cur = idref;
                             let mut hops = 0;
@@ -3052,9 +3067,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                                         Position::of(ir),
                                     );
                                 } else {
+                                    // Error, not a warning: a spine item the
+                                    // reading system cannot render and has no
+                                    // fallback for is a hole in the reading
+                                    // order. epubcheck's severity table says
+                                    // ERROR and its one fixture says "Then
+                                    // error OPF-043" - two independent
+                                    // statements, and we disagreed with both,
+                                    // invisibly (issue #26).
                                     report.push_at_pos(
                                         OPF_043,
-                                        Severity::Warning,
+                                        Severity::Error,
                                         format!("spine item idref '{idref}' has non-content media-type '{mt}' with no verified fallback"),
                                         opf_path,
                                         Position::of(ir),
