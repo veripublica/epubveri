@@ -3305,7 +3305,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // deliberately deferred, separate extension), so it must not treat an
     // SVG doc's absence from `doc_class_names` as "no CSS found."
     let xhtml_doc_paths: HashSet<String> = content_docs.iter().cloned().collect();
-    let xhtml_grammar = crate::rng::xhtml_grammar();
+    // Content documents are validated against the version's own content model:
+    // EPUB 3 is XHTML5, EPUB 2 is XHTML 1.1 + OPS 2.0.1 - different
+    // vocabularies in both directions (`big`/`tt` valid only in EPUB 2, the
+    // HTML5 additions and `s`/`u` valid only in EPUB 3). Using the EPUB 3
+    // grammar for everything produced false positives and false negatives at
+    // once on real EPUB 2 books (issue #24).
+    let xhtml_grammar = if is_epub3 {
+        crate::rng::xhtml_grammar()
+    } else {
+        crate::rng::xhtml_grammar_epub2()
+    };
     // content-doc resolved-path -> CSS class names used in its own
     // associated stylesheets (inline <style> + linked <link
     // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
@@ -5145,9 +5155,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         vec![name.to_string()],
                     );
                 } else if declared_here && !used {
+                    // For `remote-resources` specifically, scripted content
+                    // changes the verdict from a warning to a usage note: a
+                    // script can fetch a remote resource dynamically, which
+                    // static analysis cannot see, so the property can't be
+                    // disproven - only left unverified. epubcheck reports
+                    // OPF-018b (usage) instead of OPF-018 (warning) in that
+                    // case, the same HAS_SCRIPTS downgrade as OPF-096b and
+                    // RSC-006b. scripted/svg have no such variant.
+                    let (id, sev) = if name == "remote-resources" && has_script {
+                        (OPF_018B, Severity::Usage)
+                    } else {
+                        (unused_id, unused_sev)
+                    };
                     report.push_at_pos(
-                        unused_id,
-                        unused_sev,
+                        id,
+                        sev,
                         format!(
                             "the \"{name}\" property is declared but doesn't appear to be needed"
                         ),
@@ -7305,6 +7328,100 @@ mod tests {
         );
     }
 
+    /// EPUB 3 whose `ch1` manifest item declares `ch1_props` (e.g.
+    /// `"scripted remote-resources"`) and whose `ch1` body is `ch1_body`.
+    /// Nothing here actually *uses* remote resources, so declaring
+    /// `remote-resources` is always "declared but unused" - the OPF-018 /
+    /// OPF-018b case, gated on whether the body scripts.
+    fn epub_declaring_props(ch1_props: &str, ch1_body: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" properties="{ch1_props}"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        let ch1 = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body>{ch1_body}</body></html>"
+        );
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav></body></html>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ("OEBPS/nav.xhtml", NAV),
+            ] {
+                zip.start_file(name, o).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// `remote-resources` declared but nothing remote is used: a warning
+    /// (OPF-018) normally, but a *usage* note (OPF-018b) when the document
+    /// scripts - a script could fetch a remote resource dynamically, so the
+    /// property can't be disproven, only left unverified. Matches
+    /// epubcheck's HAS_SCRIPTS downgrade (same shape as OPF-096/096b).
+    #[test]
+    fn remote_resources_declared_unused_is_warning_without_script() {
+        let report = crate::validate_bytes(epub_declaring_props("remote-resources", "<p>x</p>"));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.text.contains("remote-resources"))
+            .expect("declared-but-unused remote-resources must be reported");
+        assert_eq!(hit.id, crate::ids::OPF_018);
+        assert_eq!(hit.severity, crate::report::Severity::Warning);
+    }
+
+    #[test]
+    fn remote_resources_declared_unused_is_usage_with_script() {
+        let report = crate::validate_bytes(epub_declaring_props(
+            "scripted remote-resources",
+            "<script>var x=1;</script><p>x</p>",
+        ));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.text.contains("remote-resources"))
+            .expect("declared-but-unused remote-resources must still be reported");
+        assert_eq!(hit.id, crate::ids::OPF_018B, "scripted -> OPF-018b");
+        assert_eq!(hit.severity, crate::report::Severity::Usage);
+        assert!(report.is_valid(), "usage does not invalidate");
+    }
+
     fn epub_with_ch1(ch1: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -7585,6 +7702,37 @@ mod tests {
             .filter(|m| m.id == crate::ids::RSC_005)
             .map(|m| m.rule.unwrap_or("").to_string())
             .collect()
+    }
+
+    /// #24 end-to-end: an EPUB 2 book is validated against the EPUB 2 content
+    /// model, not the EPUB 3 one. `<big>` (valid XHTML 1.1, removed in HTML5)
+    /// must pass, and `<s>` (valid HTML5, absent from XHTML 1.1) must be
+    /// flagged - the exact false-positive/false-negative pair Doitsu reported.
+    #[test]
+    fn epub2_content_uses_the_epub2_grammar() {
+        let body = |inner: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{inner}</body></html>"
+            )
+        };
+        assert!(
+            crate::validate_bytes(epub2_with_ch1(&body("<p>a <big>b</big> c</p>"))).is_valid(),
+            "<big> is valid XHTML 1.1 and must not be flagged in EPUB 2"
+        );
+        let report = crate::validate_bytes(epub2_with_ch1(&body("<p>a <s>b</s> c</p>")));
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.content_document.schema_violation")
+                    && m.text.contains("\"s\"")),
+            "<s> is absent from XHTML 1.1 and must be flagged in EPUB 2; got {:?}",
+            report.messages.iter().map(|m| &m.text).collect::<Vec<_>>()
+        );
     }
 
     #[test]

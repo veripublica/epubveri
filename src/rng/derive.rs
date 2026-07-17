@@ -94,6 +94,49 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// The distinct local names an element could legally start with at this
+    /// point in the pattern - the pattern's first-set, restricted to names
+    /// concrete enough to name in a message.
+    ///
+    /// Walked the same way as `nullable`: a `Group`/`After` contributes its
+    /// second half only when its first half is nullable (an optional prefix
+    /// lets a later element start), a `Choice` contributes both, and a `Ref`
+    /// is followed once (a `visited` guard breaks recursive grammars). This
+    /// is what turns "element X is not allowed here" into "…; expected one of
+    /// li" - the set is collected at the point the offending element was
+    /// rejected, so it is exactly what would have been accepted instead.
+    fn expected_names(&self, p: &Pat, out: &mut Vec<String>, visited: &mut HashSet<usize>) {
+        match &**p {
+            Pattern::Element(nc, _) => {
+                let mut locals = Vec::new();
+                nc.concrete_locals(&mut locals);
+                for l in locals {
+                    if !out.iter().any(|e| e == l) {
+                        out.push(l.to_string());
+                    }
+                }
+            }
+            Pattern::Choice(a, b) | Pattern::Interleave(a, b) => {
+                self.expected_names(a, out, visited);
+                self.expected_names(b, out, visited);
+            }
+            Pattern::Group(a, b) | Pattern::After(a, b) => {
+                self.expected_names(a, out, visited);
+                if self.nullable(a) {
+                    self.expected_names(b, out, visited);
+                }
+            }
+            Pattern::OneOrMore(a) => self.expected_names(a, out, visited),
+            Pattern::Ref(i) => {
+                if visited.insert(*i) {
+                    self.expected_names(&self.defs[*i], out, visited);
+                }
+            }
+            // Text/Data/Value/Attribute/Empty/NotAllowed name no element.
+            _ => {}
+        }
+    }
+
     fn text_deriv(&self, p: &Pat, s: &str) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => choice(self.text_deriv(a, s), self.text_deriv(b, s)),
@@ -247,6 +290,36 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// Whether an attribute of name `ns:local` is permitted anywhere in `p`,
+    /// ignoring its value. Used only to classify an already-failed attribute:
+    /// if the name is allowed here, the failure was the value, not the name.
+    ///
+    /// Walked like `expected_names` - through the compositors, following each
+    /// `Ref` once under a visited-guard so a recursive grammar terminates.
+    fn attr_name_allowed(
+        &self,
+        p: &Pat,
+        ns: &str,
+        local: &str,
+        visited: &mut HashSet<usize>,
+    ) -> bool {
+        match &**p {
+            Pattern::Attribute(nc, _) => nc.contains(ns, local),
+            Pattern::Choice(a, b)
+            | Pattern::Group(a, b)
+            | Pattern::Interleave(a, b)
+            | Pattern::After(a, b) => {
+                self.attr_name_allowed(a, ns, local, visited)
+                    || self.attr_name_allowed(b, ns, local, visited)
+            }
+            Pattern::OneOrMore(a) => self.attr_name_allowed(a, ns, local, visited),
+            Pattern::Ref(i) => {
+                visited.insert(*i) && self.attr_name_allowed(&self.defs[*i], ns, local, visited)
+            }
+            _ => false,
+        }
+    }
+
     fn start_tag_close_deriv(&self, p: &Pat) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => {
@@ -292,11 +365,20 @@ impl<'a> Env<'a> {
     // be validated is reported and then halts that branch. A document is valid
     // iff `blames` stays empty — recovery may leave the final pattern nullable
     // even when errors were found, so nullability is no longer the oracle.
+    /// Validate `parent`'s children against pattern `p`.
+    ///
+    /// `in_rejected` is set when descending *into* an element that was itself
+    /// already rejected (for diagnostics - see the call site). In that mode
+    /// loose text is ignored: the container is gone, so its text can't be
+    /// "not allowed here" against a model it was never going to satisfy, and
+    /// scoring it would double-report. Element children are still checked, so
+    /// a bad element nested inside a bad container is still found.
     fn children_deriv<'d, 'i>(
         &self,
         p: &Pat,
         parent: roxmltree::Node<'d, 'i>,
         blames: &mut Vec<Blame<'d, 'i>>,
+        in_rejected: bool,
     ) -> Pat {
         let mut cur = p.clone();
         for n in parent.children() {
@@ -306,8 +388,21 @@ impl<'a> Env<'a> {
                 if is_not_allowed(&self.start_tag_open_deriv(&cur, ns, local)) {
                     // Name not allowed here: report and skip it, keeping `cur`
                     // (an element that never fit can't have consumed anything),
-                    // so the remaining siblings are still validated.
-                    blames.push(Blame::Element(n, ElementFault::NotAllowed));
+                    // so the remaining siblings are still validated. `cur` is
+                    // the pattern still expected at this position, so its
+                    // first-set is exactly what would have been accepted.
+                    let mut expected = Vec::new();
+                    self.expected_names(&cur, &mut expected, &mut HashSet::new());
+                    blames.push(Blame::Element(n, ElementFault::NotAllowed(expected)));
+                    // Descend into the rejected element and check its children
+                    // against this same position, for diagnostics only - the
+                    // returned pattern is discarded so siblings still see the
+                    // pre-rejection `cur`. A rejected container can hold errors
+                    // of its own, and reporting only the container hides them:
+                    // an obsolete `<center>` wrapping obsolete `<font>`/`<s>`
+                    // would report just the `<center>` and stay silent on the
+                    // rest, where epubcheck names each (issue #24).
+                    let _ = self.children_deriv(&cur, n, blames, true);
                     continue;
                 }
                 cur = self.child_deriv(&cur, n, blames);
@@ -315,6 +410,9 @@ impl<'a> Env<'a> {
                     break; // the child's own attributes/content couldn't recover
                 }
             } else if n.is_text() {
+                if in_rejected {
+                    continue;
+                }
                 let s = n.text().unwrap_or("");
                 if is_ws(s) {
                     // Whitespace is harmless: `choice(cur, NA) = cur`, so an
@@ -347,16 +445,29 @@ impl<'a> Env<'a> {
         if is_not_allowed(&cur) {
             // Only reached for the root element; sibling name-mismatches are
             // handled (and skipped) in `children_deriv`.
-            blames.push(Blame::Element(node, ElementFault::NotAllowed));
+            let mut expected = Vec::new();
+            self.expected_names(p, &mut expected, &mut HashSet::new());
+            blames.push(Blame::Element(node, ElementFault::NotAllowed(expected)));
             return cur;
         }
         for att in node.attributes() {
             let ans = att.namespace().unwrap_or("");
+            let prev = cur.clone();
             cur = self.att_deriv(&cur, ans, att.name(), att.value());
             if is_not_allowed(&cur) {
-                // *This* attribute (present, but not allowed / invalid value) is
-                // the culprit — pin it, so the finding can target `@name`.
-                blames.push(Blame::Attribute(node, att));
+                // *This* attribute is the culprit — pin it, so the finding can
+                // target `@name`. Distinguish the two ways it can fail: an
+                // attribute of this name isn't allowed at all, vs. the name is
+                // allowed but its value doesn't satisfy the datatype. Only the
+                // first is "not allowed here"; the second is a value error, and
+                // the value is worth quoting. `att_deriv` collapses both into
+                // NotAllowed, so re-ask ignoring the value to tell them apart.
+                let fault = if self.attr_name_allowed(&prev, ans, att.name(), &mut HashSet::new()) {
+                    AttributeFault::InvalidValue
+                } else {
+                    AttributeFault::NotAllowed
+                };
+                blames.push(Blame::Attribute(node, att, fault));
                 return cur;
             }
         }
@@ -365,7 +476,7 @@ impl<'a> Env<'a> {
             blames.push(Blame::Element(node, ElementFault::MissingAttribute));
             return cur;
         }
-        cur = self.children_deriv(&cur, node, blames);
+        cur = self.children_deriv(&cur, node, blames, false);
         if is_not_allowed(&cur) {
             return cur; // a descendant failed; `children_deriv` recorded it
         }
@@ -386,10 +497,26 @@ fn is_not_allowed(p: &Pat) -> bool {
 /// wording: an element that is simply misplaced is *not* the same as one whose
 /// content or attributes are the problem, and reporting all of them as "not
 /// allowed here" would be plainly wrong for three of the four cases.
+/// Which way an attribute broke the content model. An attribute *name* that
+/// isn't permitted here and a permitted attribute with an invalid *value* are
+/// different problems and need different wording - "not allowed here" is
+/// wrong for the second, which is a real value we can quote.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ElementFault {
-    /// The element itself is not permitted at this position.
+pub enum AttributeFault {
+    /// No attribute of this name is allowed at this position.
     NotAllowed,
+    /// The name is allowed, but the value doesn't satisfy its datatype.
+    InvalidValue,
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ElementFault {
+    /// The element itself is not permitted at this position. Carries the
+    /// local names that *would* have been accepted there (the pattern's
+    /// first-set at the point of rejection), for the "; expected one of …"
+    /// tail - empty when the position admits only wildcard-named content, in
+    /// which case no suggestion is made.
+    NotAllowed(Vec<String>),
     /// Non-whitespace character data is not permitted directly in this element.
     TextNotAllowed,
     /// The element is missing a required attribute.
@@ -406,7 +533,11 @@ pub enum ElementFault {
 /// only naming the containing element.
 pub enum Blame<'d, 'i> {
     Element(roxmltree::Node<'d, 'i>, ElementFault),
-    Attribute(roxmltree::Node<'d, 'i>, roxmltree::Attribute<'d, 'i>),
+    Attribute(
+        roxmltree::Node<'d, 'i>,
+        roxmltree::Attribute<'d, 'i>,
+        AttributeFault,
+    ),
 }
 
 impl<'d, 'i> Blame<'d, 'i> {
@@ -414,14 +545,14 @@ impl<'d, 'i> Blame<'d, 'i> {
     /// element for an attribute-level blame).
     pub fn node(&self) -> roxmltree::Node<'d, 'i> {
         match self {
-            Blame::Element(n, _) | Blame::Attribute(n, _) => *n,
+            Blame::Element(n, _) | Blame::Attribute(n, ..) => *n,
         }
     }
 
     /// The specific attribute this finding pins, when attribute-level.
     pub fn attribute(&self) -> Option<roxmltree::Attribute<'d, 'i>> {
         match self {
-            Blame::Attribute(_, a) => Some(*a),
+            Blame::Attribute(_, a, _) => Some(*a),
             Blame::Element(..) => None,
         }
     }
@@ -435,8 +566,33 @@ impl<'d, 'i> Blame<'d, 'i> {
         match self {
             Blame::Element(n, fault) => {
                 let name = n.tag_name().name();
+                let mut params = vec![name.to_string()];
                 let text = match fault {
-                    ElementFault::NotAllowed => format!("element \"{name}\" is not allowed here"),
+                    ElementFault::NotAllowed(expected) => {
+                        let mut t = format!("element \"{name}\" is not allowed here");
+                        // Name what would have fit - but only when the set is
+                        // small enough to be a real constraint. Our grammar is
+                        // deliberately permissive on nesting order (flow and
+                        // phrasing share one large pool), so a loose position's
+                        // first-set can run to 80+ names; that isn't "expected
+                        // X", it's "almost anything is allowed here", and
+                        // printing it would bury the actual problem. A tight
+                        // model (an `<html>` wanting `head`, a table row wanting
+                        // cells) yields a handful, which is exactly the case
+                        // worth naming. epubcheck draws the same practical line.
+                        // Threshold high enough to print a genuine content
+                        // model (XHTML 1.1's body-level block set is ~22 names,
+                        // which epubcheck lists in full), low enough to suppress
+                        // our permissive pools' 80-name flow set, which is
+                        // "almost anything" rather than a constraint.
+                        const MAX_SUGGESTED: usize = 24;
+                        let distinct = distinct_sorted(expected);
+                        if !distinct.is_empty() && distinct.len() <= MAX_SUGGESTED {
+                            t.push_str(&format!("; expected {}", one_of(&distinct)));
+                            params.extend(distinct);
+                        }
+                        t
+                    }
                     ElementFault::TextNotAllowed => {
                         format!("character data is not allowed in element \"{name}\"")
                     }
@@ -447,16 +603,47 @@ impl<'d, 'i> Blame<'d, 'i> {
                         format!("element \"{name}\" has incomplete content")
                     }
                 };
-                (text, vec![name.to_string()])
+                (text, params)
             }
-            Blame::Attribute(_, a) => {
+            Blame::Attribute(_, a, fault) => {
                 let name = a.name();
-                (
-                    format!("attribute \"{name}\" is not allowed here"),
-                    vec![name.to_string()],
-                )
+                match fault {
+                    AttributeFault::NotAllowed => (
+                        format!("attribute \"{name}\" is not allowed here"),
+                        vec![name.to_string()],
+                    ),
+                    // The name is fine; the value is the problem, so quote it -
+                    // "not allowed here" would send the author looking at the
+                    // wrong thing. Params carry the name then the value.
+                    AttributeFault::InvalidValue => (
+                        format!(
+                            "value of attribute \"{name}\" is invalid: \"{}\"",
+                            a.value()
+                        ),
+                        vec![name.to_string(), a.value().to_string()],
+                    ),
+                }
             }
         }
+    }
+}
+
+/// The first-set as a stable, de-duplicated, sorted list - so both the count
+/// (for the suggestion threshold) and the message order are deterministic
+/// regardless of the order names fell out of the pattern.
+fn distinct_sorted(names: &[String]) -> Vec<String> {
+    let mut v: Vec<String> = names.to_vec();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// One name reads as `"head"`; several as `one of "td", "th"`.
+pub(crate) fn one_of(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+    match quoted.as_slice() {
+        [only] => only.clone(),
+        _ => format!("one of {}", quoted.join(", ")),
     }
 }
 

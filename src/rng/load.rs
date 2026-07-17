@@ -36,6 +36,21 @@ struct Loader {
 
 /// Parse a RELAX NG (XML syntax) schema string into a [`Grammar`].
 pub fn load(xml: &str) -> Result<Grammar, String> {
+    load_impl(xml, None)
+}
+
+/// Like [`load`], but starts from a named `<define>` instead of the grammar's
+/// own `<start>`. One `<grammar>` can then hold several entry points that
+/// share its definitions - used to keep the EPUB 2 and EPUB 3 content models
+/// in one schema (issue #24): the large, version-independent machinery
+/// (global attributes, the obsolete-attribute catch-all, foreign content,
+/// `epub:switch`) is defined once, and each version's `<define>`d root selects
+/// only the element pool that differs. Nothing is duplicated but the pools.
+pub fn load_from_define(xml: &str, start_define: &str) -> Result<Grammar, String> {
+    load_impl(xml, Some(start_define))
+}
+
+fn load_impl(xml: &str, start_define: Option<&str>) -> Result<Grammar, String> {
     let doc = roxmltree::Document::parse(xml).map_err(|e| e.to_string())?;
     let root = doc.root_element();
     let ns0 = root.attr_no_ns("ns").unwrap_or("");
@@ -53,10 +68,24 @@ pub fn load(xml: &str) -> Result<Grammar, String> {
         }
         let l = Loader { index };
 
-        let start = rng_children(root)
-            .find(|c| lname(*c) == "start")
-            .ok_or("<grammar> has no <start>")?;
-        let start_pat = l.group_nodes(&rng_children(start).collect::<Vec<_>>(), ns0, dt0)?;
+        let start_pat = match start_define {
+            // Start from the named define: resolve it to a Ref, exactly as a
+            // `<ref>` in the grammar would, so recursion and memoization work
+            // identically to a normal start.
+            Some(name) => {
+                let idx = *l
+                    .index
+                    .get(name)
+                    .ok_or_else(|| format!("no <define name=\"{name}\"> to start from"))?;
+                std::rc::Rc::new(crate::rng::pattern::Pattern::Ref(idx))
+            }
+            None => {
+                let start = rng_children(root)
+                    .find(|c| lname(*c) == "start")
+                    .ok_or("<grammar> has no <start>")?;
+                l.group_nodes(&rng_children(start).collect::<Vec<_>>(), ns0, dt0)?
+            }
+        };
 
         let mut defs = Vec::with_capacity(def_nodes.len());
         for d in &def_nodes {
