@@ -43,6 +43,27 @@ impl NameClass {
             NameClass::Choice(a, b) => a.contains(ns, local) || b.contains(ns, local),
         }
     }
+
+    /// The concrete local names this class names outright, appended to `out`.
+    ///
+    /// Only `Name` classes contribute a name a reader could act on. The
+    /// wildcards (`AnyName`, `NsName`, and the `*Except` forms) match by rule
+    /// rather than by enumerating members, so there is no finite list to
+    /// suggest - they are deliberately skipped, which is why the caller must
+    /// treat an empty result as "can't say" rather than "nothing is allowed".
+    pub fn concrete_locals<'a>(&'a self, out: &mut Vec<&'a str>) {
+        match self {
+            NameClass::Name { local, .. } => out.push(local),
+            NameClass::Choice(a, b) => {
+                a.concrete_locals(out);
+                b.concrete_locals(out);
+            }
+            NameClass::AnyName
+            | NameClass::AnyNameExcept(_)
+            | NameClass::NsName { .. }
+            | NameClass::NsNameExcept { .. } => {}
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -252,8 +273,8 @@ pub fn zero_or_more(p: Pat) -> Pat {
     choice(one_or_more(p), empty())
 }
 
-/// `nullable` lives in `derive.rs` now (it must resolve `Ref` against the
-/// grammar's definitions), so it is not a free function here.
+// `nullable` lives in `derive.rs` now (it must resolve `Ref` against the
+// grammar's definitions), so it is not a free function here.
 
 /// A `<name ns:local>` name class with no namespace (the common attribute case).
 pub fn local_name(local: &str) -> NameClass {

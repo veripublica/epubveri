@@ -63,6 +63,7 @@ pub fn xhtml_grammar() -> Grammar {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     const MIN_OPF: &str = concat!(
@@ -152,7 +153,7 @@ mod tests {
 
         let cases: [(Blame, &str); 5] = [
             (
-                Blame::Element(p, ElementFault::NotAllowed),
+                Blame::Element(p, ElementFault::NotAllowed(Vec::new())),
                 "element \"p\" is not allowed here",
             ),
             (
@@ -194,7 +195,12 @@ mod tests {
         let doc = roxmltree::Document::parse("<note><to>x</to><extra/></note>").unwrap();
         let blames = validate_node_report(&g, doc.root_element());
         let (text, _) = blames[0].describe();
-        assert_eq!(text, "element \"extra\" is not allowed here");
+        // Tier-C: the toy `note` model expects `from` at this position, so
+        // the message names it.
+        assert_eq!(
+            text,
+            "element \"extra\" is not allowed here; expected \"from\""
+        );
     }
 
     const CVALID: &str = concat!(
@@ -255,6 +261,58 @@ mod tests {
     fn xhtml_grammar_accepts_valid_content_doc() {
         let xml = xhtml_doc("<p epub:type=\"chapter\">Hello <em>world</em>.</p>");
         assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    /// Tier-C: a "not allowed here" finding names what *would* have fit when
+    /// the position's model is tight enough for the list to be a real
+    /// constraint. `<html>` wants `head` then `body`, so a document that puts
+    /// `body` where `head` belongs gets told exactly that.
+    #[test]
+    fn not_allowed_names_the_expected_element_when_the_set_is_small() {
+        let g = xhtml_grammar();
+        let xml = format!("<html {XHTML_NS_DECLS}><body/></html>");
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let blames = validate_node_report(&g, doc.root_element());
+        let texts: Vec<String> = blames.iter().map(|b| b.describe().0).collect();
+        assert!(
+            texts.iter().any(|t| t.contains("expected \"head\"")),
+            "expected a \"head\" suggestion; got {texts:?}"
+        );
+        // The suggestion also travels as structured params, for machine
+        // consumers and i18n.
+        let params: Vec<String> = blames.iter().flat_map(|b| b.describe().1).collect();
+        assert!(params.iter().any(|p| p == "head"), "got {params:?}");
+    }
+
+    /// ...and stays silent when the model is permissive. Our grammar shares
+    /// one large pool for flow content, so `<ul><div>` sits at a position that
+    /// admits 80-odd names - not a suggestion anyone can use, so the bare
+    /// message stands rather than dumping the pool.
+    #[test]
+    fn not_allowed_omits_the_list_when_the_set_is_huge() {
+        let g = xhtml_grammar();
+        let xml = xhtml_doc("<ul><div>x</div></ul>");
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        for b in validate_node_report(&g, doc.root_element()) {
+            let (text, _) = b.describe();
+            if text.contains("\"div\"") {
+                assert!(
+                    !text.contains("expected"),
+                    "a permissive position must not list its pool; got: {text}"
+                );
+            }
+        }
+    }
+
+    /// The suggestion order is deterministic - sorted, not
+    /// pattern-traversal order - so the message never changes between runs.
+    #[test]
+    fn expected_list_is_sorted_and_deduplicated() {
+        assert_eq!(
+            super::derive::one_of(&["td".to_string(), "th".to_string()]),
+            "one of \"td\", \"th\""
+        );
+        assert_eq!(super::derive::one_of(&["head".to_string()]), "\"head\"");
     }
 
     #[test]
