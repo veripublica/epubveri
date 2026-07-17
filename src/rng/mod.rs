@@ -518,6 +518,77 @@ mod tests {
         assert_eq!(blames[0].attribute().map(|a| a.name()), Some("dir"));
     }
 
+    /// #13 (Doitsu, MobileRead): XHTML 1.1 body is block-level, so loose text
+    /// and inline elements directly under it are content-model errors. HTML5
+    /// (EPUB 3) treats the same as valid flow content, so this is EPUB 2 only.
+    /// The suggestion is the real block set, which epubcheck lists in full.
+    #[test]
+    fn epub2_body_is_block_level() {
+        let g = xhtml_grammar_epub2();
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let report = |b: &str| {
+            let x = doc(b);
+            validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .into_iter()
+                .map(|bl| bl.describe().0)
+                .collect::<Vec<_>>()
+        };
+        // A <span> directly under body: rejected, with the block set named.
+        let r = report("<p>a</p><span>x</span>");
+        assert!(
+            r.iter()
+                .any(|m| m.contains("element \"span\" is not allowed here")
+                    && m.contains("expected one of")
+                    && m.contains("\"blockquote\"")
+                    && m.contains("\"ul\"")),
+            "got {r:?}"
+        );
+        // Loose text under body.
+        assert!(
+            report("<p>a</p>loose text")
+                .iter()
+                .any(|m| m.contains("character data is not allowed in element \"body\"")),
+            "loose text under body must be flagged"
+        );
+        // A bare <br> under body (the common 1Q84 shape) is rejected too -
+        // <br> is inline.
+        assert!(!report("<p>a</p><br/><p>b</p>").is_empty());
+        // But a body of only block elements is fine.
+        assert!(report("<h1>T</h1><p>a</p><ul><li>x</li></ul>").is_empty());
+    }
+
+    /// XHTML 1.1 `<p>` (and headings, address, dt) take inline content only,
+    /// so a block element inside one is an error - `<p><div>` is a common
+    /// authoring mistake epubcheck reports. `<div>`/`<li>`/table cells stay
+    /// flow (permissive), so ordinary nesting is untouched.
+    #[test]
+    fn epub2_p_is_inline_only() {
+        let g = xhtml_grammar_epub2();
+        let ok2 = |b: &str| {
+            let x = format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>"
+            );
+            validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .is_empty()
+        };
+        assert!(!ok2("<p><div>x</div></p>"), "block inside p is an error");
+        assert!(
+            !ok2("<h2><p>x</p></h2>"),
+            "block inside a heading is an error"
+        );
+        assert!(
+            ok2("<p>Hi <em>t</em> <span>s</span></p>"),
+            "inline in p is fine"
+        );
+        assert!(
+            ok2("<div><p>x</p> and <span>text</span></div>"),
+            "div takes flow"
+        );
+        assert!(ok2("<ul><li><p>x</p> t</li></ul>"), "li takes flow");
+    }
+
     #[test]
     fn xhtml_grammar_rejects_obsolete_element() {
         let xml = xhtml_doc("<keygen/>");

@@ -580,7 +580,12 @@ impl<'d, 'i> Blame<'d, 'i> {
                         // model (an `<html>` wanting `head`, a table row wanting
                         // cells) yields a handful, which is exactly the case
                         // worth naming. epubcheck draws the same practical line.
-                        const MAX_SUGGESTED: usize = 8;
+                        // Threshold high enough to print a genuine content
+                        // model (XHTML 1.1's body-level block set is ~22 names,
+                        // which epubcheck lists in full), low enough to suppress
+                        // our permissive pools' 80-name flow set, which is
+                        // "almost anything" rather than a constraint.
+                        const MAX_SUGGESTED: usize = 24;
                         let distinct = distinct_sorted(expected);
                         if !distinct.is_empty() && distinct.len() <= MAX_SUGGESTED {
                             t.push_str(&format!("; expected {}", one_of(&distinct)));
