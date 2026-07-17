@@ -532,13 +532,13 @@ pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> (String, Opt
         let cp = xhtml_entity_codepoint(name).expect("filtered to known entities above");
         decls.push_str(&format!("<!ENTITY {name} \"&#{cp};\">"));
     }
-    let Some((doctype, subset_close)) = doctype_span(&text) else {
+    let Some((doctype, subset)) = doctype_span(&text) else {
         return (text, None);
     };
     let dt_start = offset_in(&text, doctype);
-    let (at, decls) = match subset_close {
+    let (at, decls) = match subset.map(|r| r.end) {
         // An internal subset is already there - add ours to it, rather
-        // than opening a second (illegal) one. `subset_close` is the
+        // than opening a second (illegal) one. The position is the
         // scanner's answer, not a `rfind(']')`: a public identifier is
         // free to contain a `]`, and inserting at one would land inside
         // the literal.
@@ -625,17 +625,17 @@ fn mask_comments_and_cdata(text: &str) -> String {
 /// (`<!ENTITY name "...">`), so a legitimately custom-declared entity
 /// reference isn't misflagged as unknown.
 fn declared_entity_names(text: &str) -> Vec<String> {
-    let Some(start) = text.find("<!DOCTYPE") else {
+    // Bounded by the DOCTYPE, via the same scanner `declare_dtd_entities`
+    // uses - see `doctype_span`. Searching the document for a `[` instead
+    // was the #25 bug, and it is not harmless here either: a document with
+    // no internal subset but a `[1]` in its body would have that body text
+    // scanned as if it were the subset, and a subset holding a quoted `]`
+    // (`<!ENTITY x "]">`) would be cut short, so a genuinely declared entity
+    // would be missed and reported as an undeclared fatal.
+    let Some((doctype, Some(range))) = doctype_span(text) else {
         return Vec::new();
     };
-    let after = &text[start..];
-    let Some(open) = after.find('[') else {
-        return Vec::new();
-    };
-    let Some(close) = after[open..].find(']') else {
-        return Vec::new();
-    };
-    let subset = &after[open + 1..open + close];
+    let subset = &doctype[range];
     let mut names = Vec::new();
     let mut i = 0;
     while let Some(rel) = subset[i..].find("<!ENTITY") {
@@ -652,8 +652,9 @@ fn declared_entity_names(text: &str) -> Vec<String> {
 /// Finds the full `<!DOCTYPE ...>` declaration, correctly skipping past
 /// any `>` inside an internal subset (`[...]`) to find the declaration's
 /// *own* closing `>`.
-/// The `<!DOCTYPE ...>` declaration, plus the offset *within it* of its
-/// internal subset's closing `]` if it has one.
+/// The `<!DOCTYPE ...>` declaration, plus the extent of its internal subset
+/// (the range *between* the brackets, relative to the declaration's start)
+/// if it has one.
 ///
 /// Scanned character by character rather than searched for, because every
 /// shortcut here has a counterexample in a real book:
@@ -668,12 +669,13 @@ fn declared_entity_names(text: &str) -> Vec<String> {
 ///   declarations into the middle of the body, breaking 11 real books).
 /// - Neither bracket counts inside a quoted literal — a public identifier
 ///   may contain anything.
-fn doctype_span(text: &str) -> Option<(&str, Option<usize>)> {
+fn doctype_span(text: &str) -> Option<(&str, Option<std::ops::Range<usize>>)> {
     let start = text.find("<!DOCTYPE")?;
     let bytes = text.as_bytes();
     let mut quote: Option<u8> = None;
     let mut depth = 0usize;
-    let mut subset_close = None;
+    let mut subset_open = None;
+    let mut subset: Option<std::ops::Range<usize>> = None;
     let mut i = start + "<!DOCTYPE".len();
     while i < bytes.len() {
         let c = bytes[i];
@@ -685,15 +687,22 @@ fn doctype_span(text: &str) -> Option<(&str, Option<usize>)> {
             }
             None => match c {
                 b'"' | b'\'' => quote = Some(c),
-                b'[' => depth += 1,
+                b'[' => {
+                    if depth == 0 {
+                        subset_open = Some(i - start + 1);
+                    }
+                    depth += 1;
+                }
                 b']' => {
                     depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        subset_close = Some(i - start);
+                    if depth == 0
+                        && let Some(open) = subset_open
+                    {
+                        subset = Some(open..i - start);
                     }
                 }
                 // The declaration's own '>' - the one at depth 0.
-                b'>' if depth == 0 => return Some((&text[start..=i], subset_close)),
+                b'>' if depth == 0 => return Some((&text[start..=i], subset)),
                 _ => {}
             },
         }
@@ -763,10 +772,12 @@ fn check_doctype(text: &str, path: &str, report: &mut Report) {
             Vec::new(),
         );
     }
-    if let (Some(open), Some(close)) = (doctype.find('['), doctype.rfind(']'))
-        && close > open
-    {
-        let subset = &doctype[open + 1..close];
+    // The subset comes from the scanner, not from `find('[')`/`rfind(']')`
+    // over the declaration: a public identifier may contain either bracket,
+    // and locating the subset by searching for them is the mistake #25 was
+    // made of.
+    if let Some((doctype, Some(range))) = doctype_span(text) {
+        let subset = &doctype[range];
         for (i, _) in subset.match_indices("<!ENTITY") {
             let rest = &subset[i..];
             let Some(end) = rest.find('>') else { continue };
@@ -1657,22 +1668,33 @@ mod tests {
     #[test]
     fn doctype_span_is_bounded_correctly() {
         // No subset, `[` and `>` further down the document.
-        let (dt, close) = doctype_span("<!DOCTYPE html SYSTEM \"a.dtd\">\n<p>[x]</p>").unwrap();
+        let (dt, subset) = doctype_span("<!DOCTYPE html SYSTEM \"a.dtd\">\n<p>[x]</p>").unwrap();
         assert_eq!(dt, "<!DOCTYPE html SYSTEM \"a.dtd\">");
-        assert_eq!(close, None);
+        assert_eq!(subset, None);
 
         // A subset: the declaration ends *after* it, not at the `>` of the
-        // `<!ENTITY>` inside it.
+        // `<!ENTITY>` inside it, and the reported range is its contents.
         let text = "<!DOCTYPE html [<!ENTITY x \"&#65;\">]>\n<p>y</p>";
-        let (dt, close) = doctype_span(text).unwrap();
+        let (dt, subset) = doctype_span(text).unwrap();
         assert_eq!(dt, "<!DOCTYPE html [<!ENTITY x \"&#65;\">]>");
-        assert_eq!(close.map(|c| &dt[c..c + 1]), Some("]"));
+        assert_eq!(subset.map(|r| &dt[r]), Some("<!ENTITY x \"&#65;\">"));
 
         // Brackets inside a quoted literal belong to the literal.
-        let (dt, close) =
+        let (dt, subset) =
             doctype_span("<!DOCTYPE html PUBLIC \"a[b]c\" \"d.dtd\">\n<p>z</p>").unwrap();
         assert_eq!(dt, "<!DOCTYPE html PUBLIC \"a[b]c\" \"d.dtd\">");
-        assert_eq!(close, None, "the ']' is inside the public identifier");
+        assert_eq!(subset, None, "the ']' is inside the public identifier");
+
+        // A `]` inside an entity value does not close the subset: cutting it
+        // short there would drop `y`'s declaration, and a declared entity
+        // reported as undeclared is a fatal.
+        let text = "<!DOCTYPE html [<!ENTITY x \"]\"><!ENTITY y \"&#66;\">]>\n<p>z</p>";
+        let (dt, subset) = doctype_span(text).unwrap();
+        assert_eq!(
+            subset.map(|r| &dt[r]),
+            Some("<!ENTITY x \"]\"><!ENTITY y \"&#66;\">")
+        );
+        assert_eq!(declared_entity_names(text), vec!["x", "y"]);
     }
 
     /// The property the whole approach rests on: declarations are injected
