@@ -74,6 +74,21 @@ pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
         .collect()
 }
 
+/// Whether an `@charset` value names UTF-8 or UTF-16 — the two encodings a
+/// CSS resource may declare (CSS-004; a UTF-16 one additionally draws
+/// CSS-003, since UTF-8 is what it *should* be).
+///
+/// The byte-order variants count: `UTF-16BE` and `UTF-16LE` are UTF-16, so
+/// matching the name literally reports a corpus fixture that declares
+/// `UTF-16BE` as if it had declared Latin-1 (issue #26).
+fn is_utf8_or_utf16(charset: &str) -> bool {
+    let c = charset.trim();
+    c.eq_ignore_ascii_case("utf-8")
+        || c.eq_ignore_ascii_case("utf-16")
+        || c.eq_ignore_ascii_case("utf-16be")
+        || c.eq_ignore_ascii_case("utf-16le")
+}
+
 /// Where a stylesheet's text physically sits, so a byte offset within it
 /// can be turned into a position in the file the author actually opens.
 ///
@@ -168,8 +183,7 @@ pub(crate) fn check(
                 charset_value_spanned(&a.prelude)
             }
             _ => None,
-        }) && !charset.eq_ignore_ascii_case("utf-8")
-            && !charset.eq_ignore_ascii_case("utf-16")
+        }) && !is_utf8_or_utf16(&charset)
         {
             report.push_at(
                 CSS_004,
@@ -957,6 +971,28 @@ mod tests {
     fn non_utf8_16_charset_errors() {
         let findings = run_bytes(b"@charset \"ISO-8859-1\";\nbody { color: red; }");
         assert!(findings.contains(&CSS_004));
+    }
+
+    /// `UTF-16BE`/`UTF-16LE` *are* UTF-16. Matching the name literally
+    /// reported a stylesheet declaring `UTF-16BE` as if it had declared
+    /// Latin-1 — on epubcheck's own fixture, which expects the UTF-16
+    /// warning and nothing else.
+    #[test]
+    fn utf16_byte_order_variants_are_utf16() {
+        for cs in ["UTF-16", "UTF-16BE", "utf-16le", "UTF-8", " utf-8 "] {
+            let css = format!("@charset \"{cs}\";\nbody {{ color: red; }}");
+            assert!(
+                !run_bytes(css.as_bytes()).contains(&CSS_004),
+                "'{cs}' is a permitted encoding"
+            );
+        }
+        for cs in ["ISO-8859-1", "windows-1252", "utf-32", "utf-16x"] {
+            let css = format!("@charset \"{cs}\";\nbody {{ color: red; }}");
+            assert!(
+                run_bytes(css.as_bytes()).contains(&CSS_004),
+                "'{cs}' is not utf-8 or utf-16"
+            );
+        }
     }
 
     #[test]

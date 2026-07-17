@@ -320,11 +320,27 @@ There are three distinct layers, answering three different questions:
    and the exact error/warning it's supposed to produce (or that it
    should be completely clean). This tool parses those `.feature`
    files, builds (or wraps) the corresponding EPUB fixture, runs it
-   through epubveri, and reports: what fraction of "this should error"
-   cases got the *exact same message ID* epubcheck itself would report,
-   and what fraction of "this should be clean" cases stayed clean (no
-   false alarms) — broken down by message-ID family (`RSC-`, `OPF-`,
-   `HTM-`, ...). This is the headline number quoted in the main README.
+   through epubveri, and reports three numbers: what fraction of "this
+   should error" cases got the *exact same message ID* epubcheck itself
+   would report, what fraction of "this should be clean" cases stayed
+   clean (no false alarms), and — for the scenarios that expect an error
+   *and* assert "no other errors or warnings" — what fraction we
+   over-reported on. All broken down by message-ID family (`RSC-`,
+   `OPF-`, `HTM-`, ...). The first is the headline number quoted in the
+   main README.
+
+   **Know what these numbers cannot see** (issue #26; four rules were
+   found wrong in one week without any of them moving). Recall asks
+   whether the expected id was reported, never whether something else was
+   too — that is what the third number is for, and it was added late. But
+   even that only covers warning-and-above, because that is all
+   epubcheck's fixtures assert the absence of: **nothing in this corpus
+   scores a spurious *usage*-level finding**, and no amount of harness
+   strictness changes that. Nor can it score a rule for which epubcheck
+   defines a message but writes no scenario (`OPF-097`), or a document
+   shape it simply has no fixture of (the EPUB 2 DTD-entity documents in
+   #23). For those classes the honest instruments are invariant tests over
+   our own rule tables (see `ssv.rs`) and real books.
 
    epubcheck's own test corpus isn't redistributed in this
    repository — it's a separate project under a separate license. It's

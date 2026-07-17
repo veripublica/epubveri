@@ -27,6 +27,14 @@ struct Scenario {
     name: Option<String>,
     errs: BTreeSet<String>,
     warns: BTreeSet<String>,
+    /// Ids the scenario expects at *usage* or *info* level - the quiet
+    /// band, where the book is still valid. Kept apart from `errs`, because
+    /// lumping them in (which this did) makes such a scenario look like it
+    /// demands a non-zero exit code, and scores a correct run as a miss.
+    /// The corpus uses five levels: error (489), warning (71), usage (25),
+    /// fatal (16), info (3). `fatal` belongs with `errs` - it is the
+    /// strongest error, not a lesser one.
+    usages: BTreeSet<String>,
     clean: bool,
     as_nav: bool,
     edupub_profile: bool,
@@ -60,7 +68,26 @@ fn cli_profile_re() -> &'static Regex {
 
 fn following_errs_warns_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"the following (errors?|warnings?) are reported").unwrap())
+    // "the" is optional and the case varies - the corpus has both "the
+    // following errors are reported" (15) and "following warnings are
+    // reported" (1). Missing the latter dropped its rows into the
+    // *error* bucket, so three deprecation warnings were scored as
+    // expected errors.
+    RE.get_or_init(|| {
+        Regex::new(r"(?i)(?:the )?following (errors?|warnings?) are reported").unwrap()
+    })
+}
+
+/// The severity word a "… is reported" step states, normalized.
+///
+/// The corpus writes seven forms across five levels: `error` (484),
+/// `warning` (70), `usage` (19), `fatal error` (16), `the error` (3),
+/// `info` (3), `Usage` (1). Matching them with `contains("usage")` missed
+/// the capitalized one and read it as an error; a word-boundary match with
+/// `fatal error` ordered before `error` handles all seven.
+fn severity_word_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\b(fatal error|error|warning|usage|info)\b").unwrap())
 }
 
 fn no_errors_warnings_re() -> &'static Regex {
@@ -146,6 +173,19 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
         // on top of (not instead of) the wrap-synthesis mechanism above,
         // which still matters for content-document-level detection with
         // no package in play at all.
+        // "configured with the default profile" resets to no profile - it
+        // overrides a Background that set one. Unquoted, so the regex below
+        // (which wants `'name'`) never saw it, and the one scenario using it
+        // kept inheriting its file's Background `dict` profile and was scored
+        // against the wrong output entirely (issue #26). It appears exactly
+        // once in the corpus, which is why it went unnoticed.
+        if line.contains("configured with the default profile") {
+            match cur {
+                None => cli_profile_bg = None,
+                Some(i) => scenarios[i].cli_profile = None,
+            }
+            continue;
+        }
         if let Some(m) = cli_profile_re().captures(line) {
             let name = m[1].to_string();
             match cur {
@@ -172,6 +212,7 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
                 name: None,
                 errs: BTreeSet::new(),
                 warns: BTreeSet::new(),
+                usages: BTreeSet::new(),
                 clean: false,
                 as_nav: false,
                 edupub_profile: edupub_profile_bg,
@@ -230,11 +271,22 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
                 .captures_iter(line)
                 .map(|c| c[1].to_string())
                 .collect();
-            if line.contains("warning") {
-                scenarios[cur_idx].warns.extend(ids);
-            } else {
-                // 'error' or 'fatal error'
-                scenarios[cur_idx].errs.extend(ids);
+            // The corpus states a severity on every one of these steps and
+            // it is not decoration: "usage X" means the book stays valid.
+            // Reading everything that isn't a warning as an error put 25
+            // usage steps into `errs`, where each one demanded a non-zero
+            // exit code the book was never going to produce (issue #26).
+            // `info` and `usage` are scored together as the quiet band -
+            // both mean the book is still valid, and the difference between
+            // them never changes a verdict. `fatal` belongs with the errors:
+            // it is the strongest one, not a lesser one.
+            let word = severity_word_re()
+                .captures(line)
+                .map(|c| c[1].to_ascii_lowercase());
+            match word.as_deref() {
+                Some("usage") | Some("info") => scenarios[cur_idx].usages.extend(ids),
+                Some("warning") => scenarios[cur_idx].warns.extend(ids),
+                _ => scenarios[cur_idx].errs.extend(ids),
             }
         }
         if no_errors_warnings_re().is_match(line) {
@@ -438,11 +490,27 @@ fn resolve(s: &Scenario, res_dir: &Path) -> Resolved {
 /// case) is a filesystem-level check that only exists on the `_path`
 /// entry point, matching what the real CLI (and Python's own
 /// subprocess-based harness) actually exercises.
-fn run(path: &Path, cli_profile: Option<&str>) -> (Vec<String>, Vec<String>, i32) {
+/// What one fixture's validation produced, for scoring.
+struct Run {
+    /// Every reported id, any severity.
+    ids: Vec<String>,
+    /// Ids reported at error-or-above - "did we flag an error".
+    error_ids: Vec<String>,
+    /// Ids reported at warning-or-above. This is the set epubcheck's
+    /// "and no other errors or warnings are reported" talks about, so it is
+    /// the one the over-reporting score below compares against; `ids` would
+    /// count usage notes the assertion never mentions.
+    warn_ids: Vec<String>,
+    /// Exit code: 0 valid, 1 not.
+    rc: i32,
+}
+
+fn run(path: &Path, cli_profile: Option<&str>) -> Run {
     let report =
         epubveri::validate_path_with_profile(path, cli_profile).expect("read epub for validation");
     let mut ids = Vec::with_capacity(report.messages.len());
     let mut error_ids = Vec::new();
+    let mut warn_ids = Vec::new();
     for m in &report.messages {
         // Same a/b/c sub-case normalization `id_re()` already applies to
         // expected ids parsed from feature-file text (e.g. "OPF-096b" ->
@@ -458,13 +526,26 @@ fn run(path: &Path, cli_profile: Option<&str>) -> (Vec<String>, Vec<String>, i32
         // now that these findings carry Severity::Fatal rather than Error.
         if matches!(
             m.severity,
+            epubveri::report::Severity::Error
+                | epubveri::report::Severity::Fatal
+                | epubveri::report::Severity::Warning
+        ) {
+            warn_ids.push(id.clone());
+        }
+        if matches!(
+            m.severity,
             epubveri::report::Severity::Error | epubveri::report::Severity::Fatal
         ) {
             error_ids.push(id);
         }
     }
     let rc = if report.is_valid() { 0 } else { 1 };
-    (ids, error_ids, rc)
+    Run {
+        ids,
+        error_ids,
+        warn_ids,
+        rc,
+    }
 }
 
 fn normalize_id(id: &str) -> String {
@@ -480,9 +561,30 @@ fn family(id: &str) -> &str {
 
 /// Formats a string list the way Python's `repr(list)` does (single
 /// quotes), for cosmetic diff-parity with the original script's output.
+/// Renders a list of ids, collapsing runs of the same id to `'X' x12`.
+///
+/// Diagnostics are read by a person deciding what to look at next, and a
+/// wrapped fixture can legitimately produce a dozen of one id - the harness
+/// declares every sibling file in the fixture's directory as a manifest item
+/// so that references resolve, and each one nothing references is then an
+/// honest OPF-097. Printing sixteen copies of it buries the one id the miss
+/// was actually about. Lossless: the count is still there.
 fn py_list(items: &[String]) -> String {
-    let quoted: Vec<String> = items.iter().map(|s| format!("'{s}'")).collect();
-    format!("[{}]", quoted.join(", "))
+    let mut out: Vec<String> = Vec::new();
+    let mut i = 0;
+    while i < items.len() {
+        let mut n = 1;
+        while i + n < items.len() && items[i + n] == items[i] {
+            n += 1;
+        }
+        out.push(if n > 1 {
+            format!("'{}' x{n}", items[i])
+        } else {
+            format!("'{}'", items[i])
+        });
+        i += n;
+    }
+    format!("[{}]", out.join(", "))
 }
 
 // Dedicated epubcheck IDs our validator emits (reconciled 2026-06-27). RSC-005 is
@@ -511,6 +613,16 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     // purely cosmetic, but worth being reproducible).
     let mut skipped: BTreeMap<&'static str, u32> = BTreeMap::new();
     let (mut n_clean, mut n_clean_pass, mut n_clean_fp) = (0u32, 0u32, 0u32);
+    // Scenarios that expect something AND assert "no other errors or
+    // warnings" - the half of that assertion we used to drop (issue #26).
+    let (mut n_strict, mut n_strict_extra) = (0u32, 0u32);
+    // Severity agreement: the corpus states one on every expectation, and
+    // until now the harness parsed it and threw it away - an id we report at
+    // the wrong severity scored as an exact hit (issue #26).
+    let (mut n_sev, mut n_sev_bad) = (0u32, 0u32);
+    let mut sev_examples: Vec<(String, String, String, String)> = Vec::new();
+    let mut extra_examples: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut extra_family: BTreeMap<String, u32> = BTreeMap::new();
     let (mut n_err, mut n_detect, mut n_exact) = (0u32, 0u32, 0u32);
     let (mut n_inscope, mut n_inscope_exact) = (0u32, 0u32);
     let mut exp_family: BTreeMap<String, u32> = BTreeMap::new();
@@ -532,7 +644,12 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
                 single_doc_wrap,
             } => (path, is_temp, single_doc_wrap),
         };
-        let (ids, error_ids, mut rc) = run(&path, s.cli_profile.as_deref());
+        let Run {
+            ids,
+            error_ids,
+            warn_ids,
+            mut rc,
+        } = run(&path, s.cli_profile.as_deref());
         if is_temp {
             let _ = std::fs::remove_file(&path);
         }
@@ -569,7 +686,12 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
         // something for scenarios that expect an actual error - exact-ID
         // recall (the more important number) counts warning-only ones
         // correctly either way.
-        let expected: BTreeSet<&String> = s.errs.iter().chain(s.warns.iter()).collect();
+        let expected: BTreeSet<&String> = s
+            .errs
+            .iter()
+            .chain(s.warns.iter())
+            .chain(s.usages.iter())
+            .collect();
         if !expected.is_empty() {
             n_err += 1;
             for e in &expected {
@@ -600,6 +722,97 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
                     ids.clone()
                 };
                 miss_all.push((s.name.clone().unwrap_or_default(), exp_sorted, got));
+            }
+            // The other half of "Then error X is reported / And no other
+            // errors or warnings are reported". We check the first clause
+            // above; this checks the second (issue #26). Only for full
+            // books: a wrapped bare fixture's extras are mostly our own
+            // wrapper's RSC-001s for resources the fragment references and
+            // the synthetic container doesn't have - noise, not findings.
+            // Compared at warning-or-above, since that is the severity range
+            // the assertion actually names; epubcheck's fixtures never
+            // assert the absence of usage notes, so that class stays
+            // invisible here no matter what (see #26).
+            // Did the ids we got right land at the severity epubcheck states?
+            // Compared in bands, since that is all the corpus commits to:
+            // error-or-above / warning / everything quieter.
+            for e in &expected {
+                let ours_err = error_ids.iter().any(|i| i == *e);
+                let ours_warn = !ours_err && warn_ids.iter().any(|i| i == *e);
+                let ours_any = ids.iter().any(|i| i == *e);
+                if !ours_any {
+                    continue; // a miss, already counted as one
+                }
+                let (want, got) = if s.errs.contains(*e) {
+                    (
+                        "error",
+                        if ours_err {
+                            "error"
+                        } else if ours_warn {
+                            "warning"
+                        } else {
+                            "usage"
+                        },
+                    )
+                } else if s.warns.contains(*e) {
+                    (
+                        "warning",
+                        if ours_err {
+                            "error"
+                        } else if ours_warn {
+                            "warning"
+                        } else {
+                            "usage"
+                        },
+                    )
+                } else {
+                    (
+                        "usage",
+                        if ours_err {
+                            "error"
+                        } else if ours_warn {
+                            "warning"
+                        } else {
+                            "usage"
+                        },
+                    )
+                };
+                n_sev += 1;
+                if want != got {
+                    n_sev_bad += 1;
+                    if sev_examples.len() < 12 {
+                        sev_examples.push((
+                            s.name.clone().unwrap_or_default(),
+                            (*e).clone(),
+                            want.to_string(),
+                            got.to_string(),
+                        ));
+                    }
+                }
+            }
+            if s.clean && !single_doc_wrap {
+                n_strict += 1;
+                let extra: Vec<String> = warn_ids
+                    .iter()
+                    .filter(|i| !expected.iter().any(|e| *e == i.as_str()))
+                    .cloned()
+                    .collect();
+                if !extra.is_empty() {
+                    n_strict_extra += 1;
+                    for e in &extra {
+                        *extra_family.entry(e.clone()).or_insert(0) += 1;
+                    }
+                    if extra_examples.len() < 12 {
+                        let mut exp_sorted: Vec<String> =
+                            expected.iter().map(|e| e.to_string()).collect();
+                        exp_sorted.sort();
+                        extra_examples.push((
+                            s.name.clone().unwrap_or_default(),
+                            exp_sorted,
+                            extra,
+                        ));
+                    }
+                }
             }
             if expected.iter().any(|e| TARGET_IDS.contains(&e.as_str())) {
                 n_inscope += 1;
@@ -664,6 +877,29 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
         pct(n_inscope_exact, n_inscope)
     );
 
+    println!("\n-- severity agreement on the ids we do report: {n_sev} --");
+    println!(
+        "  WRONG SEVERITY: {n_sev_bad}/{n_sev} = {}",
+        pct(n_sev_bad, n_sev)
+    );
+    for (name, id, want, got) in &sev_examples {
+        println!("    {name}: {id} - epubcheck says {want}, we say {got}");
+    }
+
+    println!(
+        "\n-- should-ERROR cases that also say \"and no other errors or warnings\": {n_strict} --"
+    );
+    println!(
+        "  OVER-REPORTED (we added something): {n_strict_extra}/{n_strict} = {}",
+        pct(n_strict_extra, n_strict)
+    );
+    if !extra_family.is_empty() {
+        let mut fam: Vec<_> = extra_family.iter().collect();
+        fam.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let fam_s: Vec<String> = fam.iter().map(|(id, n)| format!("{id} x{n}")).collect();
+        println!("  extra ids: {}", fam_s.join(", "));
+    }
+
     println!("\n-- should-be-CLEAN cases: {n_clean} --");
     println!(
         "  passed (we stayed silent): {n_clean_pass}/{n_clean} = {}",
@@ -706,6 +942,17 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
         println!("\n-- FALSE-POSITIVE examples (clean file, we errored) --");
         for (name, got) in &fp_examples {
             println!("  {name}  ->  {}", py_list(got));
+        }
+    }
+    if !extra_examples.is_empty() {
+        println!("\n-- OVER-REPORTED examples (fixture expects X and nothing else) --");
+        for (name, expected, extra) in &extra_examples {
+            println!("  {name}");
+            println!(
+                "      expected {}  EXTRA {}",
+                py_list(expected),
+                py_list(extra)
+            );
         }
     }
     println!();

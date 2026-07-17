@@ -1497,6 +1497,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             vec![version.to_string()],
         );
     }
+    // Without a version there is no spec to check against, so OPF-001 is the
+    // only thing that can honestly be said and everything below would be
+    // guessing. epubcheck stops here too, structurally: it picks its package
+    // checker *by version*, and an unknown version selects none, so the
+    // document is never validated (`OCFChecker`). That is why its
+    // `opf-legacy-oebps12-error` fixture - an OEBPS 1.2 package, wrong
+    // namespace, `<dc-metadata>`, `text/x-oeb1-document`, plenty for us to
+    // complain about - expects OPF-001 *and nothing else*. We were reporting
+    // six extra findings on it, all of them about a spec the book never
+    // claimed to follow (issue #26).
+    if !(version.starts_with("2.") || version.starts_with("3.")) {
+        return;
+    }
     let is_epub3 = version.starts_with("3.");
     let is_epub2 = version.starts_with("2.");
     // The 'dict'/'edupub'/'preview' CLI profiles are all EPUB 3-only
@@ -3010,8 +3023,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             // spine without a fallback; otherwise walk the
                             // 'fallback' chain (bounded, in case of a cycle)
                             // looking for one that resolves to a core type.
-                            let is_core =
-                                |mt: &str| mt == "application/xhtml+xml" || mt == "image/svg+xml";
+                            // The set of "blessed" spine content types is
+                            // version-specific: EPUB 3 is XHTML or SVG, but
+                            // EPUB 2 is XHTML or DTBook (`application/
+                            // x-dtbook+xml`), a first-class content type there.
+                            // Using the EPUB 3 set for everything reported a
+                            // valid EPUB 2 DTBook book as OPF-043 - harmless
+                            // while OPF-043 was a warning, a false *error* once
+                            // it became one (issue #26; same EPUB-3-into-EPUB-2
+                            // class as #24).
+                            let is_core = |mt: &str| {
+                                mt == "application/xhtml+xml"
+                                    || if is_epub3 {
+                                        mt == "image/svg+xml"
+                                    } else {
+                                        mt == "application/x-dtbook+xml"
+                                    }
+                            };
                             let mut covered = is_core(mt);
                             let mut cur = idref;
                             let mut hops = 0;
@@ -3039,9 +3067,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                                         Position::of(ir),
                                     );
                                 } else {
+                                    // Error, not a warning: a spine item the
+                                    // reading system cannot render and has no
+                                    // fallback for is a hole in the reading
+                                    // order. epubcheck's severity table says
+                                    // ERROR and its one fixture says "Then
+                                    // error OPF-043" - two independent
+                                    // statements, and we disagreed with both,
+                                    // invisibly (issue #26).
                                     report.push_at_pos(
                                         OPF_043,
-                                        Severity::Warning,
+                                        Severity::Error,
                                         format!("spine item idref '{idref}' has non-content media-type '{mt}' with no verified fallback"),
                                         opf_path,
                                         Position::of(ir),
@@ -3744,13 +3780,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "img")
         {
-            if n.attr_no_ns("src").is_some_and(|v| v.trim().is_empty()) {
-                report.push_node(
+            if let Some(src) = attr_no_ns_node(n, "src")
+                && src.value().trim().is_empty()
+            {
+                report.push_node_attr(
                     RSC_005,
                     Severity::Error,
                     "\"img\" element's \"src\" attribute must not be empty",
                     path.clone(),
                     n,
+                    src,
                     "opf.content_document.empty_img_src",
                     Vec::new(),
                 );
@@ -3839,19 +3878,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     && n.attr_no_ns("http-equiv")
                         .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
             }) {
-                if !n
-                    .attr_no_ns("content")
-                    .is_some_and(|v| v.eq_ignore_ascii_case("text/html; charset=utf-8"))
+                let content = attr_no_ns_node(n, "content");
+                if !content
+                    .is_some_and(|a| a.value().eq_ignore_ascii_case("text/html; charset=utf-8"))
                 {
-                    report.push_node(
-                        RSC_005,
-                        Severity::Error,
-                        "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
-                        path.clone(),
-                        n,
-                        "opf.content_document.invalid_content_type_meta",
-                        Vec::new(),
-                    );
+                    // Pin `@content` when there is one; a `<meta http-equiv>`
+                    // with no `content` at all has no attribute to point at.
+                    match content {
+                        Some(a) => report.push_node_attr(
+                            RSC_005,
+                            Severity::Error,
+                            "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                            path.clone(),
+                            n,
+                            a,
+                            "opf.content_document.invalid_content_type_meta",
+                            Vec::new(),
+                        ),
+                        None => report.push_node(
+                            RSC_005,
+                            Severity::Error,
+                            "the \"content\" attribute must have the value \"text/html; charset=utf-8\"",
+                            path.clone(),
+                            n,
+                            "opf.content_document.invalid_content_type_meta",
+                            Vec::new(),
+                        ),
+                    }
                 }
             }
         }
@@ -3975,14 +4028,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.has_attr_no_ns("role"))
         {
-            for token in n.attr_no_ns("role").unwrap().split_whitespace() {
+            let role = attr_no_ns_node(n, "role").expect("filtered on has_attr_no_ns above");
+            for token in role.value().split_whitespace() {
                 if DEPRECATED_ARIA_ROLES.contains(&token) {
-                    report.push_node(
+                    report.push_node_attr(
                         RSC_017,
                         Severity::Warning,
                         format!("\"{token}\" role is deprecated"),
                         path.clone(),
                         n,
+                        role,
                         "opf.content_document.deprecated_aria_role",
                         vec![token.to_string()],
                     );
@@ -3997,18 +4052,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
         {
-            let value = n.attribute((EPUB_NS, "type")).unwrap();
+            let type_attr =
+                attr_ns_node(n, EPUB_NS, "type").expect("filtered on the same attribute above");
+            let value = type_attr.value();
             for token in value.split_whitespace() {
                 if token.contains(':') {
                     continue;
                 }
                 if !crate::ssv::is_default_vocab_type(token) {
-                    report.push_node(
+                    report.push_node_attr(
                         OPF_088,
                         Severity::Usage,
                         format!("epub:type value '{token}' is not in the default vocabulary"),
                         path.clone(),
                         n,
+                        type_attr,
                         "opf.content_document.epub_type_not_default_vocab",
                         vec![token.to_string()],
                     );
@@ -4049,12 +4107,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         }
                         None => format!("epub:type value '{token}' is deprecated"),
                     };
-                    report.push_node(
+                    report.push_node_attr(
                         OPF_086B,
                         Severity::Usage,
                         text,
                         path.clone(),
                         n,
+                        type_attr,
                         "opf.content_document.deprecated_epub_type",
                         vec![token.to_string()],
                     );
@@ -4074,7 +4133,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 // was missed entirely. A fixture agreeing is not the rule
                 // agreeing (reported by Doitsu on the MobileRead forum).
                 if crate::ssv::is_media_overlay_only(token) {
-                    report.push_node(
+                    report.push_node_attr(
                         OPF_087,
                         Severity::Usage,
                         format!(
@@ -4083,6 +4142,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                         ),
                         path.clone(),
                         n,
+                        type_attr,
                         "opf.content_document.epub_type_not_allowed_in_html",
                         vec![token.to_string()],
                     );
@@ -4236,25 +4296,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // svg-use/img fragment classification (RSC-013/RSC-015/RSC-009),
         // srcset (RSC-008), and base-URI-aware remote reclassification
         // (RSC-006) ---
-        {
-            // An absolute remote <base href>/xml:base means every
-            // relative-or-fragment-only <a href> elsewhere in *this*
-            // document actually resolves to a remote URL through it -
-            // narrower than (and additive to) the existing manifest-
-            // declared-remote-image RSC-006 check further below, since
-            // this target was never manifest-declared at all.
-            let remote_base = d
-                .descendants()
-                .find(|n| n.is_element() && n.tag_name().name() == "base")
-                .and_then(|n| n.attr_no_ns("href"))
-                .filter(|v| is_remote_url(v))
-                .or_else(|| {
-                    d.root_element()
-                        .attribute(("http://www.w3.org/XML/1998/namespace", "base"))
-                        .filter(|v| is_remote_url(v))
-                })
-                .is_some();
+        // An absolute remote <base href>/xml:base means every relative
+        // reference in *this* document resolves to a remote URL through it,
+        // not to a file in the container. Computed once for the document:
+        // the <a href> pass below uses it to reclassify targets as remote
+        // (RSC-006), and the attribute walk uses it to not go looking for
+        // them on disk.
+        let remote_base = d
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "base")
+            .and_then(|n| n.attr_no_ns("href"))
+            .filter(|v| is_remote_url(v))
+            .or_else(|| {
+                d.root_element()
+                    .attribute(("http://www.w3.org/XML/1998/namespace", "base"))
+                    .filter(|v| is_remote_url(v))
+            })
+            .is_some();
 
+        {
             let mut frag_id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
 
             for a in d
@@ -4446,9 +4506,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 }
             }
             if tag == "img"
-                && let Some(srcset) = n.attr_no_ns("srcset")
+                && let Some(srcset_attr) = attr_no_ns_node(n, "srcset")
             {
-                for candidate in srcset.split(',') {
+                for candidate in srcset_attr.value().split(',') {
                     let url = candidate.trim().split_whitespace().next().unwrap_or("");
                     if url.is_empty() || is_external(url) {
                         continue;
@@ -4460,12 +4520,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     // this must check manifest declaration (`items`),
                     // not container file existence (`name_index`).
                     if !items.values().any(|(ip, _)| nfc(ip) == resolved) {
-                        report.push_node(
+                        report.push_node_attr(
                             RSC_008,
                             Severity::Error,
                             format!("srcset candidate '{url}' is not declared in the manifest"),
                             path.clone(),
                             n,
+                            srcset_attr,
                             "opf.content_document.srcset_not_in_manifest",
                             vec![url.to_string()],
                         );
@@ -4481,19 +4542,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "use")
         {
-            let href = n
-                .attr_no_ns("href")
-                .or_else(|| n.attribute(("http://www.w3.org/1999/xlink", "href")));
-            if let Some(v) = href
-                && !is_external(v)
-                && !v.contains('#')
+            // Either spelling addresses the target; pin whichever this
+            // element actually used, so the path names the attribute the
+            // author would edit.
+            let href = attr_no_ns_node(n, "href")
+                .or_else(|| attr_ns_node(n, "http://www.w3.org/1999/xlink", "href"));
+            if let Some(a) = href
+                && !is_external(a.value())
+                && !a.value().contains('#')
             {
-                report.push_node(
+                let v = a.value();
+                report.push_node_attr(
                     RSC_015,
                     Severity::Error,
                     format!("\"use\" element's href '{v}' has no fragment identifier"),
                     path.clone(),
                     n,
+                    a,
                     "opf.content_document.use_href_missing_fragment",
                     vec![v.to_string()],
                 );
@@ -4706,7 +4771,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             remote_link_refs.insert(bare);
                         } else {
                             remote_refs.insert(bare.clone());
-                            has_remote = true;
+                            // A remote stylesheet does not ask for the
+                            // "remote-resources" property. The property
+                            // declares that the document fetches something
+                            // from the network that is *allowed* to be
+                            // there; a stylesheet never is, so declaring it
+                            // could not legitimize this and asking for it
+                            // points at the wrong half of the problem (the
+                            // RSC-006 below is the whole of it). epubcheck
+                            // draws the same line structurally - its `<link>`
+                            // handling sits outside the resource-URL path
+                            // that collects the property's requirement.
+                            // Evidenced by `resources-remote-stylesheet-error`,
+                            // which declares no property and expects RSC-006
+                            // alone (issue #26); the corpus says nothing
+                            // either way about the other restricted tags, so
+                            // they are left as they are.
+                            if tag != "link" {
+                                has_remote = true;
+                            }
                             let restricted = match tag {
                                 "img" | "iframe" => true,
                                 "script" if attr == "src" => true,
@@ -4736,6 +4819,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     // fragment-only href (e.g. "#foo") is caught by the
                     // `is_external` check above instead (fragment
                     // resolution is RSC-012, checked separately below).
+                    // Under a remote base this reference never pointed
+                    // into the container in the first place - it resolves
+                    // through the base to a remote URL - so looking for it
+                    // on disk and reporting it missing describes a file the
+                    // document never asked for (issue #26; epubcheck reports
+                    // only the RSC-006 that the remote resolution itself
+                    // earns).
+                    if remote_base {
+                        continue;
+                    }
                     let resolved = resolve(&dir, v);
                     if !name_index.contains_key(&nfc(&resolved)) {
                         // Real corpus finding, grep-verified across the
@@ -5150,9 +5243,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 vec![r.clone()],
             );
         }
-        // RSC-031: any remote reference (exempt or restricted) using a
-        // plain `http://` URL instead of `https://`.
-        for r in &remote_refs {
+        // RSC-031: a remote reference using a plain `http://` URL instead
+        // of `https://`.
+        //
+        // Not for the ones that just drew RSC-006 above: if the resource is
+        // not allowed to be remote *at all* in this context, its scheme is
+        // beside the point, and saying "also, use https" invites fixing the
+        // wrong half. epubcheck draws the same line by construction - it
+        // reports RSC-006 and aborts that reference's checks, with RSC-031
+        // on the `else` branch (`ResourceReferencesChecker`). Four corpus
+        // scenarios expect RSC-006 "and no other errors or warnings"; we
+        // were adding RSC-031 to every one (issue #26).
+        for r in remote_refs.difference(&restricted_remote_refs) {
             if r.starts_with("http://") {
                 report.push_at_pos(
                     RSC_031,
@@ -6729,6 +6831,26 @@ fn check_font_obfuscation(
 #[cfg(test)]
 mod tests {
     use super::is_valid_dc_date;
+
+    /// These tables are keyed lookups - `RESERVED_PREFIXES` by prefix,
+    /// `ALLOWED_EXTERNAL_IDENTIFIERS` by media type. A duplicated key makes
+    /// the first entry silently shadow the rest, and every fixture that
+    /// touches the key would keep passing on the shadowing entry, so nothing
+    /// but a table invariant would notice a copy-paste slip.
+    #[test]
+    fn keyed_tables_have_no_duplicate_keys() {
+        let mut prefixes = std::collections::BTreeSet::new();
+        for (p, _) in super::RESERVED_PREFIXES {
+            assert!(prefixes.insert(*p), "reserved prefix '{p}' is listed twice");
+        }
+        let mut media_types = std::collections::BTreeSet::new();
+        for (mt, _, _) in super::ALLOWED_EXTERNAL_IDENTIFIERS {
+            assert!(
+                media_types.insert(*mt),
+                "external-identifier media type '{mt}' is listed twice"
+            );
+        }
+    }
 
     #[test]
     fn dc_date_accepts_date_only_forms() {

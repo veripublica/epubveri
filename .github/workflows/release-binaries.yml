@@ -1,7 +1,17 @@
 name: Release binaries
 
 # Builds the `epubveri` CLI for a broad set of Linux/macOS/Windows targets
-# and attaches the archives to the matching GitHub Release. Pure Rust with
+# and attaches the archives to the matching GitHub Release.
+#
+# Two jobs on purpose. The 8 build jobs only ever produce artifacts; a single
+# `release` job then collects them and writes to the Release once. Having all
+# 8 attach concurrently - which is what this did until v0.5.10 - means 8
+# writers racing for one release, and the failure mode is not a clean one: on
+# v0.5.10 a GitHub API outage (`GET /releases/tags/{tag}` returning its error
+# page instead of JSON) took out 7 of the 8 and left the release *published
+# with 1 of 8 binaries*. That looks released. Nobody notices that 7 platforms
+# silently have nothing. One writer means one failure, and a failed release
+# looks failed. Pure Rust with
 # no C dependencies, so every target builds on a runner of its own native
 # architecture (x86_64 and ARM64 runners for both Linux and macOS; the one
 # genuine cross-compile is ARM64 Windows, which the MSVC toolchain links
@@ -19,10 +29,10 @@ on:
         description: "Existing tag/release to attach binaries to (e.g. v0.4.0)"
         required: true
 
-# GITHUB_TOKEN defaults to read-only; softprops/action-gh-release needs
-# write access to attach files to an existing release.
+# GITHUB_TOKEN defaults to read-only. Only the `release` job needs to write,
+# so the write scope is granted there rather than to the build matrix.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
@@ -98,11 +108,28 @@ jobs:
             epubveri-${{ matrix.target }}.zip
           if-no-files-found: ignore
 
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      # Every build job's archive, into one directory.
+      - name: Download build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List what will be attached
+        run: ls -l dist
+
       # Populate the GitHub Release body from this version's CHANGELOG.md
       # section, so the release notes never have to be filled in by hand
-      # (they used to be, and got forgotten for a few releases). Every matrix
-      # job writes the same file and sets the same body — idempotent. `bash`
-      # is available on all runners incl. Windows.
+      # (they used to be, and got forgotten for a few releases).
       - name: Extract release notes from CHANGELOG
         shell: bash
         run: |
@@ -118,11 +145,10 @@ jobs:
           echo "----- extracted release notes -----"
           cat RELEASE_NOTES.md
 
+      # One writer, one call, every archive.
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
           body_path: RELEASE_NOTES.md
-          files: |
-            epubveri-${{ matrix.target }}.tar.gz
-            epubveri-${{ matrix.target }}.zip
+          files: dist/*
