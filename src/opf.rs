@@ -2882,6 +2882,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 "opf.spine.pagemap_not_allowed",
                 Vec::new(),
             );
+            // OPF-062 (usage): epubcheck notes the extension's *presence*
+            // alongside the schema error above - two findings for the one
+            // attribute, saying different things. The RSC-005 says the
+            // document is invalid; this says which non-standard feature it
+            // is, which is what tells an author whether they meant to use
+            // it. Reported missing by Doitsu on the MobileRead forum.
+            report.push_node(
+                OPF_062,
+                Severity::Usage,
+                "the Adobe 'page-map' spine extension is in use; it was never part of any EPUB specification",
+                opf_path,
+                sp,
+                "opf.spine.adobe_pagemap_usage",
+                Vec::new(),
+            );
             if !items.contains_key(page_map.trim()) {
                 report.push_at_pos(
                     OPF_063,
@@ -5169,8 +5184,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // full-href landmark link (`href="nav.xhtml"`) via the resolve() insert,
     // and a fragment-only self-link (`href="#..."`) via the self-reference
     // insert - see the hyperlink-collection pass above.
+    //
+    // EPUB 3 only. The reachability requirement is EPUB 3's ("Each EPUB
+    // content document referenced from the spine with linear=no must be
+    // reachable"); EPUB 2.0.1 has no such rule, and epubcheck implements it
+    // in `OPFChecker30` - its EPUB-3 checker - which is what the severity
+    // note below was read off in the first place. Every OPF-096 fixture in
+    // epubcheck's corpus lives under `epub3/`, and epubcheck stays silent on
+    // a real EPUB 2 book with an unreachable `linear=no` document that we
+    // used to flag (reported by Doitsu on the MobileRead forum). Same class
+    // as #9 and #21: an EPUB 3 rule leaking into EPUB 2.
     for path in &non_linear_paths {
-        if !hyperlink_targets.contains_key(path) {
+        if is_epub3 && !hyperlink_targets.contains_key(path) {
             // Real epubcheck downgrades this from an error to a usage note
             // when the book uses scripting anywhere - script could add
             // navigation/hyperlinks dynamically that this static analysis
@@ -6986,6 +7011,127 @@ mod tests {
             (want.line, want.column),
             "reported position must describe the original file, not the augmented text"
         );
+    }
+
+    /// Builds a minimal EPUB 2 whose `<spine>` carries `spine_attrs` and
+    /// whose second document (`cover.xhtml`) carries `cover_itemref_attrs`.
+    /// Nothing links to cover.xhtml, so `linear="no"` on it makes it
+    /// unreachable - the OPF-096 shape, in an EPUB 2.
+    fn epub2_spine_case(spine_attrs: &str, cover_itemref_attrs: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ncx"{spine_attrs}>
+    <itemref idref="ch1"/>
+    <itemref idref="cover"{cover_itemref_attrs}/>
+  </spine>
+</package>"#
+        );
+        const NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:12345678-1234-1234-1234-123456789abc"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap><navPoint id="n1" playOrder="1"><navLabel><text>Ch1</text></navLabel><content src="ch1.xhtml"/></navPoint></navMap>
+</ncx>"#;
+        const DOC: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\"\n\
+              \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+                ),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/toc.ncx", NCX),
+                ("OEBPS/ch1.xhtml", DOC),
+                ("OEBPS/cover.xhtml", DOC),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// OPF-096 ("non-linear content is not reachable") is an EPUB 3 rule:
+    /// EPUB 2.0.1 has no reachability requirement, and epubcheck implements
+    /// it in its EPUB-3 checker only. We were applying it to EPUB 2 as well,
+    /// inventing an error on books epubcheck passes (reported by Doitsu on
+    /// the MobileRead forum) - the same EPUB-3-rule-leaks-into-EPUB-2 class
+    /// as #9 and #21.
+    #[test]
+    fn opf_096_does_not_apply_to_epub2() {
+        let report = crate::validate_bytes(epub2_spine_case("", " linear=\"no\""));
+        let hits: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::OPF_096 || m.id == crate::ids::OPF_096B)
+            .map(|m| m.text.as_str())
+            .collect();
+        assert!(
+            hits.is_empty(),
+            "EPUB 2 has no reachability rule; got {hits:?}"
+        );
+    }
+
+    /// The Adobe `page-map` spine attribute draws two findings that say
+    /// different things: RSC-005 (the document is invalid) and OPF-062
+    /// (*which* non-standard feature is in use — the part that tells an
+    /// author whether they meant it). We had only the first; epubcheck emits
+    /// both (reported by Doitsu on the MobileRead forum).
+    #[test]
+    fn adobe_page_map_draws_both_the_error_and_the_usage_note() {
+        let report = crate::validate_bytes(epub2_spine_case(" page-map=\"pm\"", ""));
+        let rules: Vec<_> = report
+            .messages
+            .iter()
+            .filter_map(|m| m.rule)
+            .filter(|r| r.starts_with("opf.spine."))
+            .collect();
+        assert!(
+            rules.contains(&"opf.spine.pagemap_not_allowed"),
+            "got {rules:?}"
+        );
+        assert!(
+            rules.contains(&"opf.spine.adobe_pagemap_usage"),
+            "the usage note naming the extension is missing; got {rules:?}"
+        );
+        let usage = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("opf.spine.adobe_pagemap_usage"))
+            .unwrap();
+        assert_eq!(usage.id, crate::ids::OPF_062);
+        assert_eq!(usage.severity, crate::report::Severity::Usage);
     }
 
     fn epub2_with_ch1(ch1: &str) -> Vec<u8> {

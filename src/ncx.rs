@@ -54,6 +54,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
 
     check_id_attributes(&d, ncx_path, report);
     check_page_target_types(&d, ncx_path, report);
+    check_play_order(&d, ncx_path, report);
 }
 
 /// Every `id` attribute anywhere in the NCX must be a valid XML NCName
@@ -127,6 +128,76 @@ fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &m
     }
 }
 
+/// `playOrder` is optional, but where present it must be unique across
+/// every `navPoint`/`navTarget`/`pageTarget` in the document - it *is* the
+/// reading order, so two elements claiming the same position is a
+/// contradiction.
+///
+/// The one exception is the reason this can't be a plain duplicate scan:
+/// elements that point at the **same target** may share a playOrder, since
+/// they name one position reached by two routes (a navPoint and the
+/// pageTarget for the same page, say). So a value is only a violation when
+/// the elements carrying it disagree about where they go, and then every one
+/// of them is reported - the defect is the collision, not one arbitrary
+/// member of it, and a reader given a single line would have to hunt for the
+/// other. Matches epubcheck, which reports each colliding element.
+///
+/// (Reported missing by Doitsu on the MobileRead forum: epubcheck flagged
+/// four elements on a real EPUB 2 book where epubveri flagged none.)
+fn check_play_order(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    use std::collections::HashMap;
+
+    // playOrder -> the elements claiming it, each with the target it names.
+    let mut claims: HashMap<&str, Vec<(roxmltree::Node, String)>> = HashMap::new();
+    for n in doc.descendants().filter(|n| {
+        n.is_element() && matches!(n.tag_name().name(), "navPoint" | "navTarget" | "pageTarget")
+    }) {
+        let Some(order) = n.attr_no_ns("playOrder") else {
+            continue;
+        };
+        let target = n
+            .children()
+            .find(|c| c.is_element() && c.tag_name().name() == "content")
+            .and_then(|c| c.attr_no_ns("src"))
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        claims.entry(order).or_default().push((n, target));
+    }
+
+    // Collected first, then reported in document order: `claims` is keyed by
+    // a hash, so reporting straight out of it would order the findings
+    // differently from run to run. epubcheck reports these in document
+    // order, and so should we - a report that reshuffles itself between
+    // identical runs is one nobody can diff.
+    let mut offenders: Vec<(roxmltree::Node, &str)> = Vec::new();
+    for (order, holders) in &claims {
+        if holders.len() < 2 {
+            continue;
+        }
+        let first = &holders[0].1;
+        if holders.iter().all(|(_, t)| t == first) {
+            // One position, reached by several routes - legitimate.
+            continue;
+        }
+        offenders.extend(holders.iter().map(|(n, _)| (*n, *order)));
+    }
+    offenders.sort_by_key(|(n, _)| n.range().start);
+    for (n, order) in offenders {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!(
+                "identical playOrder value '{order}' on elements that do not refer to the same target"
+            ),
+            ncx_path,
+            n,
+            "ncx.play_order.duplicate",
+            vec![order.to_string()],
+        );
+    }
+}
+
 fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Report) {
     let Some(text_el) = container
         .children()
@@ -156,6 +227,120 @@ fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Rep
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Reports (rule, line) for every finding, so a test can assert *which*
+    /// elements were named rather than just how many.
+    fn run_at(ncx: &str) -> Vec<(Option<&'static str>, u32)> {
+        let mut report = Report::new();
+        check(ncx, "toc.ncx", "uid", &mut report);
+        report
+            .messages
+            .iter()
+            .map(|m| (m.rule, m.position.map(|p| p.line).unwrap_or(0)))
+            .collect()
+    }
+
+    const PLAY_ORDER_NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="uid"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap>
+    <navPoint id="n1" playOrder="1">
+      <navLabel><text>Cover</text></navLabel>
+      <content src="cover.xhtml"/>
+    </navPoint>
+    <navPoint id="n2" playOrder="2">
+      <navLabel><text>Ch1</text></navLabel>
+      <content src="chapter1.xhtml"/>
+    </navPoint>
+  </navMap>
+  <pageList id="pl">
+    <navLabel><text>Pages</text></navLabel>
+    <pageTarget id="p1" type="normal" value="1" playOrder="1">
+      <navLabel><text>1</text></navLabel>
+      <content src="chapter1.xhtml#page_1"/>
+    </pageTarget>
+    <pageTarget id="p2" type="normal" value="2" playOrder="2">
+      <navLabel><text>2</text></navLabel>
+      <content src="chapter1.xhtml#page_2"/>
+    </pageTarget>
+  </pageList>
+</ncx>"#;
+
+    /// `playOrder` is the reading position, so two elements claiming the same
+    /// one while pointing somewhere different is a contradiction. Every
+    /// colliding element is named: the defect is the collision, and a reader
+    /// handed one line would have to hunt for its partner.
+    ///
+    /// Reported missing by Doitsu (MobileRead): epubcheck flags four elements
+    /// on this shape, epubveri flagged none.
+    #[test]
+    fn duplicate_play_order_reports_every_colliding_element() {
+        let got = run_at(PLAY_ORDER_NCX);
+        let dups: Vec<u32> = got
+            .iter()
+            .filter(|(r, _)| *r == Some("ncx.play_order.duplicate"))
+            .map(|(_, line)| *line)
+            .collect();
+        // The two navPoints and the two pageTargets, in document order.
+        assert_eq!(dups, vec![6, 10, 17, 21], "got {got:?}");
+    }
+
+    /// Document order, every time. The grouping is keyed by a hash, so
+    /// reporting straight out of it reshuffles the findings between
+    /// identical runs — which was the first version's actual behaviour.
+    #[test]
+    fn duplicate_play_order_is_reported_in_a_stable_order() {
+        let first = run_at(PLAY_ORDER_NCX);
+        for _ in 0..8 {
+            assert_eq!(run_at(PLAY_ORDER_NCX), first);
+        }
+    }
+
+    /// The exception that stops this being a plain duplicate scan: one
+    /// position reached by two routes is legitimate, so a shared playOrder
+    /// whose elements name the *same* target must stay silent.
+    #[test]
+    fn same_play_order_pointing_at_the_same_target_is_valid() {
+        let ncx = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="uid"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap>
+    <navPoint id="n1" playOrder="1">
+      <navLabel><text>Ch1</text></navLabel>
+      <content src="chapter1.xhtml"/>
+    </navPoint>
+  </navMap>
+  <pageList id="pl">
+    <navLabel><text>Pages</text></navLabel>
+    <pageTarget id="p1" type="normal" value="1" playOrder="1">
+      <navLabel><text>1</text></navLabel>
+      <content src="chapter1.xhtml"/>
+    </pageTarget>
+  </pageList>
+</ncx>"#;
+        assert!(
+            !run_at(ncx)
+                .iter()
+                .any(|(r, _)| *r == Some("ncx.play_order.duplicate")),
+            "one position reached by two routes is not a collision"
+        );
+    }
+
+    /// playOrder is optional; a document that omits it entirely has nothing
+    /// to collide.
+    #[test]
+    fn absent_play_order_is_not_a_collision() {
+        let ncx = PLAY_ORDER_NCX
+            .replace(" playOrder=\"1\"", "")
+            .replace(" playOrder=\"2\"", "");
+        assert!(
+            !run_at(&ncx)
+                .iter()
+                .any(|(r, _)| *r == Some("ncx.play_order.duplicate"))
+        );
+    }
 
     fn run(ncx: &str, uid: &str) -> Vec<&'static str> {
         let mut report = Report::new();
