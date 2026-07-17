@@ -122,6 +122,7 @@ pub const OPF_062: &str = "OPF-062"; // the Adobe page-map extension is in use (
 pub const OPF_063: &str = "OPF-063"; // a page-map reference doesn't resolve to a real id (warning)
 pub const OPF_092: &str = "OPF-092"; // a language tag is empty/whitespace or not well-formed
 pub const OPF_093: &str = "OPF-093"; // a local link is missing its required media-type attribute
+pub const OPF_097: &str = "OPF-097"; // a manifest resource that no document references (usage)
 pub const OPF_096: &str = "OPF-096"; // non-linear content isn't reachable from the reading order
 pub const OPF_096B: &str = "OPF-096b"; // same, but usage-level: the book uses scripting, which could add reachability dynamically
 pub const OPF_098: &str = "OPF-098"; // a link target must not reference a manifest item id

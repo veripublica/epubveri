@@ -168,6 +168,42 @@ fn dom_id_order(d: &roxmltree::Document) -> HashMap<String, usize> {
     order
 }
 
+/// Whether an `(element, attribute)` pair is a reference that *consumes* the
+/// target as a publication resource, as opposed to merely pointing at it.
+///
+/// This is the distinction OPF-097 turns on, and it is not the obvious one:
+/// a `<a href>` hyperlink does **not** count. "Referenced" there means the
+/// resource is embedded or loaded by a document - an image drawn, a
+/// stylesheet applied, a font loaded - not that some page links to it.
+/// epubcheck draws the same line (`Reference.Type.isPublicationResourceReference`:
+/// GENERIC, STYLESHEET, FONT, IMAGE, AUDIO, VIDEO, TRACK, MEDIA_OVERLAY are
+/// resource references; HYPERLINK, CITE, the SVG paint/symbol references and
+/// the nav links are not).
+///
+/// CSS `url()`s and `@import`s are resource references too, but they come
+/// from the stylesheet passes rather than from an element attribute, so they
+/// are collected there.
+fn is_resource_reference(node: roxmltree::Node, attr: &str) -> bool {
+    match (node.tag_name().name(), attr) {
+        // Loaded and rendered by the document.
+        ("img", "src") | ("video", "poster") | ("object", "data") => true,
+        ("audio" | "video" | "source" | "track" | "embed" | "iframe", "src") => true,
+        ("script", "src") => true,
+        // Only a stylesheet link consumes its target; `<link rel="next">`
+        // and friends are navigation, not resources.
+        ("link", "href") => node.attr_no_ns("rel").is_some_and(|r| {
+            r.split_whitespace()
+                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+        }),
+        // MathML's `altimg` is an image the renderer draws when it can't do
+        // MathML - a resource by any reading.
+        (_, "altimg") => true,
+        // `<a href>`/`<area href>` are hyperlinks; `cite` is a citation URL.
+        // Neither consumes anything.
+        _ => false,
+    }
+}
+
 /// The `dom_id_order` of another document in the container, or `None` when
 /// that document could not be read or parsed at all.
 ///
@@ -3292,6 +3328,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     let collection_index_paths: HashSet<String> = crate::indexes::linked_paths(&pkg, &base_dir);
     let is_index_pub = opf_dc_type.as_deref() == Some("index");
     let mut any_index_content = false;
+    // Every publication resource some document actually *consumes* - drawn,
+    // applied, loaded (see `is_resource_reference`). Manifest items that
+    // never appear here are what OPF-097 reports. Collected across the whole
+    // walk, since any document may be the one that uses a given resource.
+    let mut resource_refs: HashSet<String> = HashSet::new();
     let mut pending_dtd_fix: Option<(usize, String, crate::htm::DtdShift)> = None;
     for path in content_docs {
         if let Some((from, p, sh)) = pending_dtd_fix.take() {
@@ -4603,8 +4644,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             if node.tag_name().name() == "base" {
                 continue;
             }
+            // SVG's `<image>`/`<use>` address their target with a
+            // *namespaced* `xlink:href`, which the bare-name attribute walk
+            // below cannot see. An `<image>` draws its target, so it is a
+            // resource reference; `<use>`/paint references point inside a
+            // document and are not (matching epubcheck's SVG_SYMBOL /
+            // SVG_PAINT, which it also excludes).
+            if node.tag_name().name() == "image"
+                && let Some(v) = node
+                    .attr_no_ns("href")
+                    .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")))
+                && !is_external(v)
+            {
+                resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+            }
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
                 if let Some(v) = node.attr_no_ns(attr) {
+                    if !is_external(v) && is_resource_reference(node, attr) {
+                        resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+                    }
                     if v.trim_start().starts_with("file:") {
                         report.push_node(
                             RSC_030,
@@ -4822,6 +4880,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     .or_default()
                     .extend(inline_classes);
                 for u in crate::css::stylesheet_urls(&sheet) {
+                    // A stylesheet's url()/@import targets are consumed
+                    // resources too (fonts, images, imported sheets) - see
+                    // OPF-097 below. Inline <style> resolves against this
+                    // document's own directory.
+                    if !is_external(&u) {
+                        resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
+                    }
                     if is_remote_url(&u) {
                         has_remote = true;
                         remote_refs.insert(strip_url_fragment(&u));
@@ -4871,7 +4936,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                             ));
                         }
                     }
+                    let css_dir = parent_dir(&resolved);
                     for u in crate::css::stylesheet_urls(&sheet) {
+                        // Resolved against the stylesheet's own directory,
+                        // not the document that links it.
+                        if !is_external(&u) {
+                            resource_refs
+                                .insert(nfc(&resolve(&css_dir, strip_url_fragment(&u).trim())));
+                        }
                         if is_remote_url(&u) {
                             has_remote = true;
                             remote_refs.insert(strip_url_fragment(&u));
@@ -5539,6 +5611,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         let sheet = styloria::Parser::parse_stylesheet(&css_text);
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
+            // Consumed resources, for OPF-097 - a font is "used" if any
+            // stylesheet in the manifest asks for it, exactly as epubcheck
+            // registers references from every CSS resource it checks.
+            if !is_external(&u) {
+                resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
+            }
             if is_remote_url(&u) {
                 css_has_remote = true;
                 let u = strip_url_fragment(&u);
@@ -5567,6 +5645,79 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 "opf.content_document.property_used_undeclared",
                 vec!["remote-resources".to_string()],
             );
+        }
+    }
+
+    // --- OPF-097: manifest resources nothing consumes ---
+    //
+    // A resource declared in the manifest that no document ever draws,
+    // applies or loads is almost certainly dead weight - a font left behind
+    // by an earlier revision, an image no page uses. epubcheck reports it as
+    // a usage note; the book stays valid (requested on the MobileRead forum
+    // by JSWolf, for unused fonts and images specifically).
+    //
+    // "Referenced" is narrower than it sounds and the narrowness is the
+    // whole rule: a hyperlink to a document does *not* count (see
+    // `is_resource_reference`). What is exempt instead is what the container
+    // itself reaches: anything in the spine, the nav document, and the NCX
+    // are all consumed by the reading system rather than by a document, so
+    // they can never be "unused".
+    //
+    // "No *content document* references it" is the exact claim, and the
+    // precision matters: a `properties="cover-image"` cover really is
+    // referenced - by the package document, and used by the reading system -
+    // yet no content document draws it, so it is reported. epubcheck reports
+    // it too (its rule has no cover exemption either), and the note is
+    // factually true; what to do about it is the author's call, which is why
+    // this is usage and not advice.
+    //
+    // EPUB 3 only - the rule lives in epubcheck's EPUB-3 checker, and there
+    // is no EPUB 2 counterpart.
+    if is_epub3 {
+        // A media-overlay attribute consumes its SMIL, and the SMIL's own
+        // audio/text targets are consumed in turn (collected by the overlay
+        // pass); both arrive as manifest ids or paths rather than as
+        // document references, so fold them in here.
+        let overlay_paths: HashSet<&String> = content_doc_overlay.values().collect();
+        let manifest = pkg
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "manifest");
+        if let Some(mn) = manifest {
+            for item in mn
+                .children()
+                .filter(|n| n.is_element() && n.tag_name().name() == "item")
+            {
+                let Some(href) = item.attr_no_ns("href") else {
+                    continue;
+                };
+                if is_external(href) {
+                    continue;
+                }
+                let resolved = nfc(&resolve(&base_dir, href));
+                let mt = item.attr_no_ns("media-type").unwrap_or_default();
+                let is_nav = item
+                    .attr_no_ns("properties")
+                    .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
+                if spine_order.contains_key(&resolved)
+                    || is_nav
+                    || mt == "application/x-dtbncx+xml"
+                    || overlay_paths.contains(&resolved)
+                    || resource_refs.contains(&resolved)
+                {
+                    continue;
+                }
+                report.push_node(
+                    OPF_097,
+                    Severity::Usage,
+                    format!(
+                        "'{href}' is declared in the manifest, but no content document references it"
+                    ),
+                    opf_path,
+                    item,
+                    "opf.manifest_item.never_referenced",
+                    vec![href.to_string()],
+                );
+            }
         }
     }
 
@@ -6777,6 +6928,124 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// Builds an EPUB 3 with a stylesheet, a font that `css` uses, and a
+    /// second font (`Fonts/orphan.ttf`) that nothing mentions at all.
+    fn epub_with_stylesheet_and_orphans(css: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="s" href="Styles/s.css" media-type="text/css"/>
+    <item id="f" href="Fonts/f.ttf" media-type="font/ttf"/>
+    <item id="orphan" href="Fonts/orphan.ttf" media-type="font/ttf"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>
+<link rel="stylesheet" type="text/css" href="Styles/s.css"/></head>
+<body><p>x</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>t</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">c</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#,
+                ),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/Styles/s.css", css),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            for f in ["OEBPS/Fonts/f.ttf", "OEBPS/Fonts/orphan.ttf"] {
+                z.start_file(f, o).unwrap();
+                z.write_all(b"\0\x01\0\0not-a-real-font").unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Parses `<tag attr="x"/>` and asks `is_resource_reference` about it.
+    fn is_resource_reference_for_test(tag: &str, attr: &str) -> bool {
+        let xml = format!("<{tag} {attr}=\"x\"/>");
+        let d = crate::ocf::parse_xml(&xml).unwrap();
+        super::is_resource_reference(d.root_element(), attr)
+    }
+
+    /// OPF-097: a manifest resource nothing consumes. Requested on the
+    /// MobileRead forum by JSWolf, for unused fonts and images.
+    ///
+    /// Asserts both directions on one book, because the check is only worth
+    /// anything if it is silent about the resources that *are* used - a
+    /// checker that flags everything tells you nothing, and this one's
+    /// output invites deleting files.
+    #[test]
+    fn opf_097_reports_only_the_resources_nothing_uses() {
+        let css = "@font-face {\n  font-family: X;\n  src: url(../Fonts/f.ttf);\n}";
+        let report = crate::validate_bytes(epub_with_stylesheet_and_orphans(css));
+        let unused: Vec<&str> = report
+            .messages
+            .iter()
+            .filter(|m| m.rule == Some("opf.manifest_item.never_referenced"))
+            .map(|m| m.text.as_str())
+            .collect();
+        assert_eq!(unused.len(), 1, "exactly the orphan font; got {unused:?}");
+        assert!(unused[0].contains("Fonts/orphan.ttf"), "got {unused:?}");
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("opf.manifest_item.never_referenced"))
+            .unwrap();
+        assert_eq!(hit.id, crate::ids::OPF_097);
+        assert_eq!(hit.severity, crate::report::Severity::Usage);
+        assert!(report.is_valid(), "an unused resource is not an error");
+    }
+
+    /// A hyperlink does not consume its target. This is the whole point of
+    /// the rule and the least obvious part of it: epubcheck counts only
+    /// references that embed or load a resource (IMAGE, FONT, STYLESHEET,
+    /// …), never HYPERLINK. Getting this wrong in the permissive direction
+    /// would silently disable the check for every linked document.
+    #[test]
+    fn opf_097_a_hyperlink_does_not_count_as_a_reference() {
+        assert!(!is_resource_reference_for_test("a", "href"));
+        assert!(!is_resource_reference_for_test("area", "href"));
+        // ...while the things that really do load their target do count.
+        assert!(is_resource_reference_for_test("img", "src"));
+        assert!(is_resource_reference_for_test("audio", "src"));
+        assert!(is_resource_reference_for_test("track", "src"));
+        assert!(is_resource_reference_for_test("object", "data"));
     }
 
     /// CSS-007 must name the media type that made it fire, and point at the

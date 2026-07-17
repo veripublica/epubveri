@@ -10,6 +10,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`OPF-097`: a manifest resource that no content document uses** (usage). An unused font
+  or image is almost always dead weight left by an earlier revision; the book stays valid
+  and the note says which. (Requested by JSWolf on the MobileRead forum, for unused fonts
+  and images specifically. epubcheck has the rule; epubveri simply hadn't implemented it —
+  no new message ID was invented.)
+
+  "Referenced" is narrower than it sounds, and the narrowness is the rule: a **hyperlink
+  does not count**. Only references that embed or load a resource do — an image drawn, a
+  stylesheet applied, a font loaded, a media overlay attached. What is exempt is what the
+  *container* consumes rather than a document: the spine, the nav document, the NCX.
+
+  Note the message says "no **content document** references it", and the precision is
+  deliberate: a `properties="cover-image"` cover with no cover page is reported, because it
+  is referenced by the package document and used by the reading system, but drawn by
+  nothing. epubcheck reports it too. The note is factually true; what to do about it is the
+  author's call, which is why this is usage and not advice.
+
 ### Fixed
 
 - **Positions reported for EPUB 2 documents with DTD-declared entities are now exact.**
