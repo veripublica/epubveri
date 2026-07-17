@@ -106,4 +106,18 @@ matches how you'll load it; use `--target nodejs` for Node.
 
 Dual-licensed: **AGPL-3.0-only OR a commercial license** (`LicenseRef-veripublica-Commercial`).
 Open-source use is free under the AGPL; closed/commercial embedders should contact the
-author for a commercial license. See the main repository for details.
+author for a commercial license. Both texts ship inside the npm package —
+`LICENSE` (the AGPL) and `LICENSE.COMMERCIAL.md` (what the `LicenseRef-` above
+means, and who to ask).
+
+> **The `.` in `LICENSE.COMMERCIAL.md` is load-bearing — do not rename it to a
+> hyphen.** These two files are copies of the repository root's `LICENSE` and
+> `LICENSE-COMMERCIAL.md`; `wasm-pack` only picks up licenses from the crate
+> directory, so the copies have to live here. npm then always packs a file
+> matching `license` optionally followed by a *dotted* extension, whatever
+> `files` says — a hyphen does not match, and the file is silently dropped from
+> the tarball. That is not hypothetical: it is what happened to
+> `LICENSE-COMMERCIAL.md` in 0.5.10, which shipped the AGPL text with no word of
+> the commercial option beside it. Relying on `wasm-pack`'s own `files` list
+> instead is not an option — it writes `package.json` *before* it copies the
+> licenses, so a clean build never lists them.

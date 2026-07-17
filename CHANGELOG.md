@@ -8,6 +8,82 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.11] - 2026-07-17
+
+Doitsu's EPUB 2 test case and JSWolf's unused-resource request, both from the MobileRead
+thread, plus a position fix and a licensing gap found along the way. Corpus recall is
+unchanged (600/607) — and could not move for any of it, which is becoming the pattern
+worth naming: epubcheck's corpus scores none of these, either because the finding is
+usage-level (invisible to a metric that checks the expected ID was reported, not that
+nothing extra was) or because it has no scenario for the rule at all.
+
+### Added
+
+- **`OPF-097`: a manifest resource that no content document uses** (usage). An unused font
+  or image is almost always dead weight left by an earlier revision; the book stays valid
+  and the note says which. (Requested by JSWolf on the MobileRead forum, for unused fonts
+  and images specifically. epubcheck has the rule; epubveri simply hadn't implemented it —
+  no new message ID was invented.)
+
+  "Referenced" is narrower than it sounds, and the narrowness is the rule: a **hyperlink
+  does not count**. Only references that embed or load a resource do — an image drawn, a
+  stylesheet applied, a font loaded, a media overlay attached. What is exempt is what the
+  *container* consumes rather than a document: the spine, the nav document, the NCX.
+
+  Note the message says "no **content document** references it", and the precision is
+  deliberate: a `properties="cover-image"` cover with no cover page is reported, because it
+  is referenced by the package document and used by the reading system, but drawn by
+  nothing. epubcheck reports it too. The note is factually true; what to do about it is the
+  author's call, which is why this is usage and not advice.
+
+### Fixed
+
+- **`OPF-096` no longer fires on EPUB 2.** "Non-linear content is not reachable from the
+  reading order" is an EPUB 3 requirement; EPUB 2.0.1 has none, so we were inventing an
+  error on books epubcheck passes. Three independent signals agreed: every `OPF-096`
+  fixture in epubcheck's corpus lives under `epub3/`, epubcheck stays silent on a real
+  EPUB 2 book that we flagged, and the note already in our own code cited epubcheck's
+  *EPUB 3* checker as where the rule came from. Same class as #9, #21 and #24 — an EPUB 3
+  rule leaking into EPUB 2. (Reported by Doitsu on the MobileRead forum.)
+
+- **Duplicate NCX `playOrder` values are now reported** (`RSC-005`). `playOrder` is the
+  reading position, so two elements claiming the same one while pointing elsewhere is a
+  contradiction; epubcheck flagged four on a real book where epubveri flagged none. The
+  exception is what stops this being a plain duplicate scan: elements naming the *same*
+  target may share a value, since that is one position reached by two routes. Every
+  colliding element is reported, not one arbitrary member. (Reported by Doitsu on the
+  MobileRead forum.)
+
+- **`OPF-062` (usage) is now reported for Adobe's `page-map` spine extension.** The
+  attribute already drew an `RSC-005`; the two say different things — one that the document
+  is invalid, the other *which* non-standard feature is in use, which is the part that tells
+  an author whether they meant it. (Reported by Doitsu on the MobileRead forum.)
+
+- **Positions reported for EPUB 2 documents with DTD-declared entities are now exact.**
+  0.5.10 made those documents parse by injecting `<!ENTITY>` declarations before the
+  DOCTYPE's closing `>`. That adds no newline, so line numbers were always right — but
+  inserting text on a line pushes whatever follows it on that line to the right, and the
+  claim that "nothing is ever anchored there" was an assumption, not a fact. Measured: for
+  a document whose DOCTYPE and `<html>` share a line, the root element's column was
+  reported 25 too far. The shift cannot be avoided (fitting the declarations inside the
+  DOCTYPE's own footprint leaves room for about three entities; skipping the injection
+  sends the document back to not parsing at all, silently skipping every check on it), so
+  it is corrected instead: the injection reports which line it moved, past which column,
+  by how much, and the content-document walk subtracts it from every finding before the
+  report is handed out. Matters most to tools that edit by position — a column that is
+  right for our parser and wrong for the file on disk is worse than no column.
+
+- **The npm package now ships the commercial-license text.** `@veripublica/epubveri-wasm`
+  carried `LICENSE` (the AGPL) but not `LICENSE-COMMERCIAL.md`, so an npm consumer saw the
+  AGPL text and no word of the `LicenseRef-veripublica-Commercial` half its own
+  `package.json` declares. Two causes, both now handled: `wasm-pack` only collects licenses
+  from the crate directory (the files are copied into `epubveri-wasm/`), and npm only
+  always-packs a license file whose name is `license` plus a *dotted* extension — the
+  hyphen in `LICENSE-COMMERCIAL.md` did not match, so it was dropped. The copy is named
+  `LICENSE.COMMERCIAL.md`; the dot is functional, not style (see
+  `epubveri-wasm/README.md`). `wasm-pack`'s own `files` list can't be relied on here: it
+  writes `package.json` before it copies the licenses, so a clean build never lists them.
+
 ## [0.5.10] - 2026-07-17
 
 Doitsu's MobileRead report and epubsana's #23, both of which found rules that
