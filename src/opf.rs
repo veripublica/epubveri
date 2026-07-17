@@ -192,7 +192,9 @@ fn target_id_order(
 ) -> Option<HashMap<String, usize>> {
     let orig = name_index.get(target_nfc)?;
     let bytes = ocf.read(orig)?;
-    let text = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&bytes), is_epub3);
+    // The shift is irrelevant here: this reads an id map out of the DOM and
+    // never reports a position.
+    let (text, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&bytes), is_epub3);
     let doc = parse_xml(&text).ok()?;
     Some(dom_id_order(&doc))
 }
@@ -3275,7 +3277,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     let collection_index_paths: HashSet<String> = crate::indexes::linked_paths(&pkg, &base_dir);
     let is_index_pub = opf_dc_type.as_deref() == Some("index");
     let mut any_index_content = false;
+    let mut pending_dtd_fix: Option<(usize, String, crate::htm::DtdShift)> = None;
     for path in content_docs {
+        if let Some((from, p, sh)) = pending_dtd_fix.take() {
+            crate::htm::correct_dtd_shift(&mut report.messages[from..], &p, sh);
+        }
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
         };
@@ -3294,7 +3300,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         // and silently skip every check below (issue #23). Line numbers are
         // preserved, and `t` stays the text `d` was parsed from - checks
         // below pass both together and must not disagree.
-        let t = crate::htm::declare_dtd_entities(t, is_epub3);
+        let (t, dtd_shift) = crate::htm::declare_dtd_entities(t, is_epub3);
+        // Every finding this iteration is about to push carries a position
+        // taken from `t`, which the injection above moved. Record where this
+        // document's findings start; they get corrected back onto the real
+        // file at the top of the next iteration (and after the loop for the
+        // last document) - deliberately not at the end of this body, which
+        // the many `continue`s below would skip.
+        if let Some(sh) = dtd_shift {
+            pending_dtd_fix = Some((report.messages.len(), path.clone(), sh));
+        }
         let d = match parse_xml(&t) {
             Ok(d) => d,
             Err(e) => {
@@ -5063,6 +5078,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
         }
     }
 
+    // The last document has no next iteration to correct its findings.
+    if let Some((from, p, sh)) = pending_dtd_fix.take() {
+        crate::htm::correct_dtd_shift(&mut report.messages[from..], &p, sh);
+    }
+
     // Whole-publication index fallback: only when neither a manifest
     // properties="index" item nor an index/index-group collection
     // narrows things down to specific documents - a confirmed index
@@ -5661,7 +5681,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 continue;
             };
             let Some(b) = ocf.read(&orig) else { continue };
-            let t = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&b), is_epub3);
+            // DOM-order only, no positions reported - shift irrelevant.
+            let (t, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&b), is_epub3);
             let Ok(d) = parse_xml(&t) else { continue };
             let id_order = dom_id_order(&d);
             // Ids the SMIL references but the doc doesn't have are already
@@ -6930,6 +6951,43 @@ mod tests {
     /// A minimal, otherwise-valid EPUB **2** carrying the caller's full ch1
     /// XHTML 1.1 content document — used to check that EPUB-3-only content-model
     /// rules don't leak into EPUB 2 (#21).
+    /// Issue #23's position guarantee, at its hardest point. When the
+    /// DOCTYPE's closing `>` and the root element share a line, the entity
+    /// declarations injected before that `>` push the root's column to the
+    /// right in the text epubveri parses. Measured before this was
+    /// corrected: `<html>` moved 25 columns.
+    ///
+    /// It has to be corrected rather than avoided - inserting text on a line
+    /// necessarily moves what follows it, and not injecting would send the
+    /// document back to not parsing at all. So the reported column must
+    /// describe the file on disk, not the text we parsed. epubsana locates
+    /// nodes by these positions and edits files in place; a column that is
+    /// right for our parser and wrong for the file is worse than none.
+    #[test]
+    fn epub2_dtd_entities_report_columns_of_the_real_file() {
+        // DOCTYPE, root and an empty <title> all on line 2, after a &nbsp;
+        // document. `epub_type_findings`-style single-line shape on purpose.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+            \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+            <head><title></title></head><body><p>a&nbsp;b</p></body></html>";
+        let report = crate::validate_bytes(epub2_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("opf.content_document.empty_title"))
+            .expect("the empty <title> behind the &nbsp; must be seen");
+        let pos = hit.position.expect("a position");
+        // Where <title> really is, in the file the author has.
+        let want = crate::report::Position::of_offset(ch1, ch1.find("<title>").unwrap());
+        assert_eq!(
+            (pos.line, pos.column),
+            (want.line, want.column),
+            "reported position must describe the original file, not the augmented text"
+        );
+    }
+
     fn epub2_with_ch1(ch1: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};

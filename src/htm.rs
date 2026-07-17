@@ -484,21 +484,32 @@ fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Repo
 /// external one, so a document that declares its own `&nbsp;` keeps its own
 /// definition — `declared_entity_names` skips those here anyway.
 ///
-/// **Positions are preserved.** The declarations go in immediately before
-/// the DOCTYPE's own closing `>`, all on one line, adding no newline — so
-/// every line number in the returned text still matches the original, and
-/// only columns on the DOCTYPE's closing line shift (nothing is ever
-/// anchored there; content starts at the root element below it).
+/// **Positions.** The declarations go in immediately before the DOCTYPE's
+/// own closing `>`, all on one line and adding no newline, so every *line*
+/// number in the returned text still matches the original. *Columns* cannot
+/// be preserved by construction — inserting text necessarily pushes
+/// anything after it on the same line to the right — so the returned
+/// [`DtdShift`] says exactly what to subtract, and the content-document walk
+/// applies it to every finding before the report is handed out
+/// (`correct_dtd_shift`). Callers that only read the DOM (an id map, say)
+/// and never report a position can ignore it.
 ///
-/// Returns `text` untouched unless it is an EPUB 2 document with a
-/// recognized XHTML/OEB DOCTYPE (see `EPUB2_XHTML_PUBLIC_IDS`) that really
-/// does reference a standard named entity it hasn't declared itself. In
-/// particular EPUB 3 is left strictly alone: named references other than
+/// Growing text is unavoidable here: fitting the declarations inside the
+/// DOCTYPE's own footprint would leave room for about three entities, and a
+/// French EPUB 2 routinely uses more. Skipping the injection for the awkward
+/// documents is worse still — they would go back to not parsing, which
+/// silently skips every check on them, and that is the very defect this
+/// function exists to fix.
+///
+/// Returns `text` untouched (and no shift) unless it is an EPUB 2 document
+/// with a recognized XHTML/OEB DOCTYPE (see `EPUB2_XHTML_PUBLIC_IDS`) that
+/// really does reference a standard named entity it hasn't declared itself.
+/// In particular EPUB 3 is left strictly alone: named references other than
 /// the predefined five are a genuine error there, and making them parse
 /// would be papering over one.
-pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> String {
+pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> (String, Option<DtdShift>) {
     if is_epub3 || !has_epub2_xhtml_doctype(&text) {
-        return text;
+        return (text, None);
     }
     let declared = declared_entity_names(&text);
     let masked = mask_comments_and_cdata(&text);
@@ -514,7 +525,7 @@ pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> String {
         }
     }
     if needed.is_empty() {
-        return text;
+        return (text, None);
     }
     let mut decls = String::new();
     for name in &needed {
@@ -522,7 +533,7 @@ pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> String {
         decls.push_str(&format!("<!ENTITY {name} \"&#{cp};\">"));
     }
     let Some(doctype) = extract_doctype(&text) else {
-        return text;
+        return (text, None);
     };
     let dt_start = offset_in(&text, doctype);
     let (at, decls) = match doctype.rfind(']') {
@@ -531,11 +542,55 @@ pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> String {
         Some(close) => (dt_start + close, decls),
         None => (dt_start + doctype.len() - 1, format!("[{decls}]")),
     };
+    // Where the insertion lands in the *original* text - that is the line
+    // whose columns move, and everything at a greater column on it moves by
+    // exactly the inserted width.
+    let anchor = Position::of_offset(&text, at);
+    let shift = DtdShift {
+        line: anchor.line,
+        after_column: anchor.column,
+        chars: decls.chars().count() as u32,
+    };
     let mut out = String::with_capacity(text.len() + decls.len());
     out.push_str(&text[..at]);
     out.push_str(&decls);
     out.push_str(&text[at..]);
-    out
+    (out, Some(shift))
+}
+
+/// How far `declare_dtd_entities` pushed one line's columns to the right.
+///
+/// Only a single line is ever affected (the one holding the DOCTYPE's
+/// closing `>`), and only its columns: the injection adds no newline, so
+/// line numbers are already exact everywhere.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DtdShift {
+    /// The 1-based line the declarations were inserted into.
+    line: u32,
+    /// Columns strictly greater than this, on that line, moved right.
+    after_column: u32,
+    /// How far they moved, in chars (positions count chars, not bytes).
+    chars: u32,
+}
+
+/// Undo a [`DtdShift`] across the findings a content document produced, so
+/// every reported position describes the file the author actually has rather
+/// than the augmented text epubveri parsed.
+///
+/// This matters beyond tidiness: downstream repair tools (epubsana) locate
+/// nodes by the position epubveri reports and edit the file in place. A
+/// column that is right for our parser and wrong for the file on disk is
+/// worse than no column at all.
+pub(crate) fn correct_dtd_shift(messages: &mut [crate::report::Message], path: &str, s: DtdShift) {
+    for m in messages {
+        if m.location.as_deref() == Some(path)
+            && let Some(p) = m.position.as_mut()
+            && p.line == s.line
+            && p.column > s.after_column
+        {
+            p.column -= s.chars;
+        }
+    }
 }
 
 /// Blanks out (with spaces, preserving every other byte offset) any '&'
@@ -1511,7 +1566,7 @@ mod tests {
             crate::ocf::parse_xml(text).is_err(),
             "precondition: the raw document is what roxmltree cannot parse"
         );
-        let out = declare_dtd_entities(text.to_string(), false);
+        let (out, _) = declare_dtd_entities(text.to_string(), false);
         let doc = crate::ocf::parse_xml(&out).expect("declared entities should let it parse");
         let h1 = doc.descendants().find(|n| n.has_tag_name("h1")).unwrap();
         assert_eq!(h1.attribute("id"), Some("sigil_toc_id_3"));
@@ -1531,7 +1586,7 @@ mod tests {
             "<h1 id=\"x\">t</h1>\n",
             "</body></html>",
         );
-        let out = declare_dtd_entities(text.to_string(), false);
+        let (out, _) = declare_dtd_entities(text.to_string(), false);
         assert_eq!(
             out.lines().count(),
             text.lines().count(),
@@ -1549,9 +1604,9 @@ mod tests {
     #[test]
     fn declare_dtd_entities_leaves_epub3_alone() {
         let text = "<!DOCTYPE html>\n<html><body><p>a&nbsp;b</p></body></html>";
-        assert_eq!(declare_dtd_entities(text.to_string(), true), text);
+        assert_eq!(declare_dtd_entities(text.to_string(), true).0, text);
         // ... and so is an EPUB 2 document with no XHTML DTD to promise them.
-        assert_eq!(declare_dtd_entities(text.to_string(), false), text);
+        assert_eq!(declare_dtd_entities(text.to_string(), false).0, text);
     }
 
     /// Only entities the DTD actually declares are covered; an invented one
@@ -1564,7 +1619,7 @@ mod tests {
             "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
             "<html><body><p>a&madeupname;b</p></body></html>",
         );
-        let out = declare_dtd_entities(text.to_string(), false);
+        let (out, _) = declare_dtd_entities(text.to_string(), false);
         assert_eq!(out, text, "nothing to declare");
         assert!(crate::ocf::parse_xml(&out).is_err());
         let mut report = Report::default();
@@ -1588,7 +1643,7 @@ mod tests {
             "]>\n",
             "<html><body><p>a&nbsp;b&mdash;c</p></body></html>",
         );
-        let out = declare_dtd_entities(text.to_string(), false);
+        let (out, _) = declare_dtd_entities(text.to_string(), false);
         assert_eq!(out.matches('[').count(), 1, "no second internal subset");
         let doc = crate::ocf::parse_xml(&out).unwrap();
         let p = doc.descendants().find(|n| n.has_tag_name("p")).unwrap();
@@ -1608,7 +1663,7 @@ mod tests {
             "  \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\n",
             "<html><body><!-- &nbsp; --><p>x</p></body></html>",
         );
-        assert_eq!(declare_dtd_entities(text.to_string(), false), text);
+        assert_eq!(declare_dtd_entities(text.to_string(), false).0, text);
     }
 
     /// Every name the table offers must actually be declarable: a bad code
@@ -1627,7 +1682,7 @@ mod tests {
             ),
             refs
         );
-        let out = declare_dtd_entities(text, false);
+        let (out, _) = declare_dtd_entities(text, false);
         let doc = crate::ocf::parse_xml(&out).expect("all 248 must parse");
         let p = doc.descendants().find(|n| n.has_tag_name("p")).unwrap();
         let got: Vec<char> = p.text().unwrap().chars().collect();
