@@ -32,8 +32,15 @@
     </rule>
   </pattern>
 
+  <!-- EPUB 3 only, same reasoning (and the same fix) as opf-date-cardinality
+       below: epubcheck's package schema is where this rule lives, and that
+       schema is only applied to EPUB 3 packages. An EPUB 2 package whose
+       unique-identifier resolves to nothing draws epubcheck's hand-coded
+       OPF-030 and no schema error - we were adding an RSC-005 saying the
+       same thing in worse words (issue #26). Our own OPF-030 check covers
+       both versions, so nothing is lost. -->
   <pattern id="opf-unique-identifier">
-    <rule context="opf:package[@unique-identifier]">
+    <rule context="opf:package[starts-with(@version,'3')][@unique-identifier]">
       <assert
         test="/opf:package/opf:metadata/dc:identifier[normalize-space(@id) = normalize-space(current()/@unique-identifier)]"
         >package unique-identifier "<value-of select="normalize-space(@unique-identifier)"/>" does not

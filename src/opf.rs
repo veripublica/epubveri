@@ -1497,6 +1497,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             vec![version.to_string()],
         );
     }
+    // Without a version there is no spec to check against, so OPF-001 is the
+    // only thing that can honestly be said and everything below would be
+    // guessing. epubcheck stops here too, structurally: it picks its package
+    // checker *by version*, and an unknown version selects none, so the
+    // document is never validated (`OCFChecker`). That is why its
+    // `opf-legacy-oebps12-error` fixture - an OEBPS 1.2 package, wrong
+    // namespace, `<dc-metadata>`, `text/x-oeb1-document`, plenty for us to
+    // complain about - expects OPF-001 *and nothing else*. We were reporting
+    // six extra findings on it, all of them about a spec the book never
+    // claimed to follow (issue #26).
+    if !(version.starts_with("2.") || version.starts_with("3.")) {
+        return;
+    }
     let is_epub3 = version.starts_with("3.");
     let is_epub2 = version.starts_with("2.");
     // The 'dict'/'edupub'/'preview' CLI profiles are all EPUB 3-only
@@ -5150,9 +5163,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                 vec![r.clone()],
             );
         }
-        // RSC-031: any remote reference (exempt or restricted) using a
-        // plain `http://` URL instead of `https://`.
-        for r in &remote_refs {
+        // RSC-031: a remote reference using a plain `http://` URL instead
+        // of `https://`.
+        //
+        // Not for the ones that just drew RSC-006 above: if the resource is
+        // not allowed to be remote *at all* in this context, its scheme is
+        // beside the point, and saying "also, use https" invites fixing the
+        // wrong half. epubcheck draws the same line by construction - it
+        // reports RSC-006 and aborts that reference's checks, with RSC-031
+        // on the `else` branch (`ResourceReferencesChecker`). Four corpus
+        // scenarios expect RSC-006 "and no other errors or warnings"; we
+        // were adding RSC-031 to every one (issue #26).
+        for r in remote_refs.difference(&restricted_remote_refs) {
             if r.starts_with("http://") {
                 report.push_at_pos(
                     RSC_031,
