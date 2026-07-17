@@ -3305,7 +3305,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
     // deliberately deferred, separate extension), so it must not treat an
     // SVG doc's absence from `doc_class_names` as "no CSS found."
     let xhtml_doc_paths: HashSet<String> = content_docs.iter().cloned().collect();
-    let xhtml_grammar = crate::rng::xhtml_grammar();
+    // Content documents are validated against the version's own content model:
+    // EPUB 3 is XHTML5, EPUB 2 is XHTML 1.1 + OPS 2.0.1 - different
+    // vocabularies in both directions (`big`/`tt` valid only in EPUB 2, the
+    // HTML5 additions and `s`/`u` valid only in EPUB 3). Using the EPUB 3
+    // grammar for everything produced false positives and false negatives at
+    // once on real EPUB 2 books (issue #24).
+    let xhtml_grammar = if is_epub3 {
+        crate::rng::xhtml_grammar()
+    } else {
+        crate::rng::xhtml_grammar_epub2()
+    };
     // content-doc resolved-path -> CSS class names used in its own
     // associated stylesheets (inline <style> + linked <link
     // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
@@ -7692,6 +7702,37 @@ mod tests {
             .filter(|m| m.id == crate::ids::RSC_005)
             .map(|m| m.rule.unwrap_or("").to_string())
             .collect()
+    }
+
+    /// #24 end-to-end: an EPUB 2 book is validated against the EPUB 2 content
+    /// model, not the EPUB 3 one. `<big>` (valid XHTML 1.1, removed in HTML5)
+    /// must pass, and `<s>` (valid HTML5, absent from XHTML 1.1) must be
+    /// flagged - the exact false-positive/false-negative pair Doitsu reported.
+    #[test]
+    fn epub2_content_uses_the_epub2_grammar() {
+        let body = |inner: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{inner}</body></html>"
+            )
+        };
+        assert!(
+            crate::validate_bytes(epub2_with_ch1(&body("<p>a <big>b</big> c</p>"))).is_valid(),
+            "<big> is valid XHTML 1.1 and must not be flagged in EPUB 2"
+        );
+        let report = crate::validate_bytes(epub2_with_ch1(&body("<p>a <s>b</s> c</p>")));
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.content_document.schema_violation")
+                    && m.text.contains("\"s\"")),
+            "<s> is absent from XHTML 1.1 and must be flagged in EPUB 2; got {:?}",
+            report.messages.iter().map(|m| &m.text).collect::<Vec<_>>()
+        );
     }
 
     #[test]

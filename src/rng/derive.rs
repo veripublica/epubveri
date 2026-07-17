@@ -335,11 +335,20 @@ impl<'a> Env<'a> {
     // be validated is reported and then halts that branch. A document is valid
     // iff `blames` stays empty — recovery may leave the final pattern nullable
     // even when errors were found, so nullability is no longer the oracle.
+    /// Validate `parent`'s children against pattern `p`.
+    ///
+    /// `in_rejected` is set when descending *into* an element that was itself
+    /// already rejected (for diagnostics - see the call site). In that mode
+    /// loose text is ignored: the container is gone, so its text can't be
+    /// "not allowed here" against a model it was never going to satisfy, and
+    /// scoring it would double-report. Element children are still checked, so
+    /// a bad element nested inside a bad container is still found.
     fn children_deriv<'d, 'i>(
         &self,
         p: &Pat,
         parent: roxmltree::Node<'d, 'i>,
         blames: &mut Vec<Blame<'d, 'i>>,
+        in_rejected: bool,
     ) -> Pat {
         let mut cur = p.clone();
         for n in parent.children() {
@@ -355,6 +364,15 @@ impl<'a> Env<'a> {
                     let mut expected = Vec::new();
                     self.expected_names(&cur, &mut expected, &mut HashSet::new());
                     blames.push(Blame::Element(n, ElementFault::NotAllowed(expected)));
+                    // Descend into the rejected element and check its children
+                    // against this same position, for diagnostics only - the
+                    // returned pattern is discarded so siblings still see the
+                    // pre-rejection `cur`. A rejected container can hold errors
+                    // of its own, and reporting only the container hides them:
+                    // an obsolete `<center>` wrapping obsolete `<font>`/`<s>`
+                    // would report just the `<center>` and stay silent on the
+                    // rest, where epubcheck names each (issue #24).
+                    let _ = self.children_deriv(&cur, n, blames, true);
                     continue;
                 }
                 cur = self.child_deriv(&cur, n, blames);
@@ -362,6 +380,9 @@ impl<'a> Env<'a> {
                     break; // the child's own attributes/content couldn't recover
                 }
             } else if n.is_text() {
+                if in_rejected {
+                    continue;
+                }
                 let s = n.text().unwrap_or("");
                 if is_ws(s) {
                     // Whitespace is harmless: `choice(cur, NA) = cur`, so an
@@ -414,7 +435,7 @@ impl<'a> Env<'a> {
             blames.push(Blame::Element(node, ElementFault::MissingAttribute));
             return cur;
         }
-        cur = self.children_deriv(&cur, node, blames);
+        cur = self.children_deriv(&cur, node, blames, false);
         if is_not_allowed(&cur) {
             return cur; // a descendant failed; `children_deriv` recorded it
         }

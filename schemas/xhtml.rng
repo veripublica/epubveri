@@ -782,4 +782,208 @@
     <mixed><zeroOrMore><ref name="flowChoice"/></zeroOrMore></mixed>
   </define>
 
+  <!-- ============================================================ -->
+  <!-- EPUB 2 (XHTML 1.1 + OPS 2.0.1) content model.                 -->
+  <!--                                                              -->
+  <!-- Reached via `load_from_define(rng, "htmlEl-epub2")`, so it   -->
+  <!-- shares this schema's version-independent machinery - global  -->
+  <!-- attributes, the obsolete-attribute catch-all, the head       -->
+  <!-- vocabulary, opaque foreign (SVG/MathML) content - and only   -->
+  <!-- redefines the element pool (issue #24). Same "STRICT on      -->
+  <!-- vocabulary, PERMISSIVE on nesting" design as the EPUB 3 model -->
+  <!-- above: one mixed pool, no per-element nesting rules, so the   -->
+  <!-- only thing that differs from EPUB 3 is *which elements exist*.-->
+  <!--                                                              -->
+  <!-- The vocabulary is XHTML 1.1 as OPS 2.0.1 profiles it - which  -->
+  <!-- is not plain XHTML 1.1 and not HTML5. Present here and absent -->
+  <!-- from EPUB 3: `big`, `tt`, `acronym`, `applet`. Present in     -->
+  <!-- EPUB 3 and absent here: every HTML5 addition (`section`,      -->
+  <!-- `article`, `nav`, `figure`, `audio`, `video`, forms…) plus     -->
+  <!-- `s`, `u`, `mark`, `ruby`, `time`, which HTML5 (re)introduced  -->
+  <!-- but XHTML 1.1 has not. `s`/`u` being valid HTML5 but invalid  -->
+  <!-- here is exactly the false-negative Doitsu reported; `big`/    -->
+  <!-- `tt` being valid here but removed in HTML5 is the false       -->
+  <!-- positive. Both fall out of the vocabulary, with no per-        -->
+  <!-- element code. `epub:switch` is an EPUB 3 construct and is not  -->
+  <!-- in this pool.                                                 -->
+  <!-- ============================================================ -->
+
+  <define name="htmlEl-epub2">
+    <element name="html">
+      <ref name="globalAttrs"/>
+      <ref name="headEl"/>
+      <ref name="bodyEl-epub2"/>
+    </element>
+  </define>
+
+  <define name="bodyEl-epub2">
+    <element name="body"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+  </define>
+
+  <!-- The one content pool: text plus any EPUB 2 element, in any order. -->
+  <define name="epub2Flow">
+    <mixed><zeroOrMore><ref name="epub2Choice"/></zeroOrMore></mixed>
+  </define>
+
+  <define name="epub2Choice">
+    <choice>
+      <!-- Phrasing / inline (XHTML 1.1 + OPS): note big, tt, acronym; note
+           the absence of s, u, mark, small stays (HTML4/XHTML1.1 had it). -->
+      <ref name="aEl-epub2"/>
+      <element name="span"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="em"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="strong"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="b"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="i"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="small"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="big"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="tt"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="sub"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="sup"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="cite"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="code"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="kbd"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="samp"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="var"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="dfn"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="abbr"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="acronym"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="q"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="bdo"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="del"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="ins"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="br"><ref name="globalAttrs"/></element>
+      <ref name="imgEl"/>
+      <ref name="iframeEl"/>
+      <ref name="objectEl-epub2"/>
+      <element name="applet">
+        <ref name="globalAttrs"/>
+        <interleave>
+          <zeroOrMore><ref name="paramEl"/></zeroOrMore>
+          <ref name="epub2Flow"/>
+        </interleave>
+      </element>
+      <ref name="mapEl"/>
+
+      <!-- Block -->
+      <element name="p"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="div"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="blockquote">
+        <ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <ref name="epub2Flow"/>
+      </element>
+      <element name="address"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="pre"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="hr"><ref name="globalAttrs"/></element>
+      <element name="h1"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="h2"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="h3"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="h4"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="h5"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="h6"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <ref name="olEl-epub2"/>
+      <ref name="ulEl-epub2"/>
+      <ref name="dlEl-epub2"/>
+      <ref name="tableEl-epub2"/>
+
+      <!-- Both inline and block in OPS 2.0.1 -->
+      <ref name="scriptEl"/>
+      <element name="noscript"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+
+      <!-- SVG (and MathML) as opaque, namespace-rooted subtrees, shared with
+           the EPUB 3 model - their own content models are out of scope here
+           too. NOT `foreignContent` directly: that matches any element in any
+           namespace (it is the *inside* of an svg/math root), so putting it in
+           this choice would accept every XHTML element we just excluded. -->
+      <ref name="svgEl"/>
+      <ref name="mathEl"/>
+    </choice>
+  </define>
+
+  <define name="aEl-epub2">
+    <element name="a">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="rel"><data type="string"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <ref name="epub2Flow"/>
+    </element>
+  </define>
+
+  <define name="objectEl-epub2">
+    <element name="object">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="data"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <interleave>
+        <zeroOrMore><ref name="paramEl"/></zeroOrMore>
+        <ref name="epub2Flow"/>
+      </interleave>
+    </element>
+  </define>
+
+  <define name="olEl-epub2">
+    <element name="ol">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="start"><data type="integer"/></attribute></optional>
+      <zeroOrMore><ref name="liEl-epub2"/></zeroOrMore>
+    </element>
+  </define>
+
+  <define name="ulEl-epub2">
+    <element name="ul"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl-epub2"/></zeroOrMore></element>
+  </define>
+
+  <define name="liEl-epub2">
+    <element name="li"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+  </define>
+
+  <define name="dlEl-epub2">
+    <element name="dl">
+      <ref name="globalAttrs"/>
+      <zeroOrMore>
+        <choice>
+          <element name="dt"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+          <element name="dd"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="tableEl-epub2">
+    <element name="table">
+      <ref name="globalAttrs"/>
+      <optional>
+        <attribute name="border">
+          <choice><value type="token"></value><value>1</value></choice>
+        </attribute>
+      </optional>
+      <optional><element name="caption"><ref name="globalAttrs"/><ref name="epub2Flow"/></element></optional>
+      <zeroOrMore>
+        <choice>
+          <element name="thead"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          <element name="tbody"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          <element name="tfoot"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          <element name="colgroup"><ref name="globalAttrs"/><zeroOrMore><element name="col"><ref name="globalAttrs"/></element></zeroOrMore></element>
+          <element name="col"><ref name="globalAttrs"/></element>
+          <ref name="trEl-epub2"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="trEl-epub2">
+    <element name="tr"><ref name="globalAttrs"/><zeroOrMore><ref name="cellEl-epub2"/></zeroOrMore></element>
+  </define>
+
+  <define name="cellEl-epub2">
+    <choice>
+      <element name="td"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="th"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+    </choice>
+  </define>
+
 </grammar>

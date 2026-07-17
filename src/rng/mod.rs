@@ -13,7 +13,7 @@ pub mod load;
 pub mod pattern;
 
 pub use derive::{Blame, ElementFault, Grammar, validate_node, validate_node_report, validate_xml};
-pub use load::load;
+pub use load::{load, load_from_define};
 pub use pattern::*;
 
 /// The OCF container namespace.
@@ -56,13 +56,74 @@ pub fn package_grammar() -> Grammar {
 /// epubcheck/W3C). See `schemas/xhtml.rng` for the scope/design notes.
 pub const XHTML_RNG: &str = include_str!("../../schemas/xhtml.rng");
 
-/// Load the built-in XHTML content-document grammar.
+/// Load the built-in **EPUB 3** XHTML (HTML5) content-document grammar.
 pub fn xhtml_grammar() -> Grammar {
     load(XHTML_RNG).expect("built-in xhtml.rng must parse")
 }
 
+/// Load the built-in **EPUB 2** (XHTML 1.1 + OPS 2.0.1) content-document
+/// grammar - the same schema, entered at its EPUB 2 root so it shares all the
+/// version-independent machinery and differs only in the element pool (issue
+/// #24). See the EPUB 2 section of `schemas/xhtml.rng`.
+pub fn xhtml_grammar_epub2() -> Grammar {
+    load_from_define(XHTML_RNG, "htmlEl-epub2").expect("built-in xhtml.rng epub2 root must parse")
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn epub2_grammar_probe() {
+        let g = crate::rng::xhtml_grammar_epub2();
+        let doc = |body: &str| {
+            format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body>{body}</body></html>"
+            )
+        };
+        let cases = [
+            (
+                "big (valid XHTML1.1, removed HTML5)",
+                "<p>x <big>b</big> y</p>",
+                true,
+            ),
+            ("tt", "<p><tt>code</tt></p>", true),
+            ("acronym", "<p><acronym>WWW</acronym></p>", true),
+            (
+                "font (invalid)",
+                "<p><font color=\"red\">x</font></p>",
+                false,
+            ),
+            (
+                "s (valid HTML5, invalid XHTML1.1)",
+                "<p><s>x</s></p>",
+                false,
+            ),
+            (
+                "u (valid HTML5, invalid XHTML1.1)",
+                "<p><u>x</u></p>",
+                false,
+            ),
+            ("strike (invalid)", "<p><strike>x</strike></p>", false),
+            ("center (invalid)", "<center><p>x</p></center>", false),
+            ("section (HTML5 only)", "<section><p>x</p></section>", false),
+            ("nav (HTML5 only)", "<nav><p>x</p></nav>", false),
+            ("audio (HTML5 only)", "<p><audio src=\"a.mp3\"/></p>", false),
+            (
+                "ordinary p/em/strong",
+                "<p>Hello <em>world</em> and <strong>bold</strong>.</p>",
+                true,
+            ),
+            ("table", "<table><tr><td>c</td></tr></table>", true),
+            ("ol>li", "<ol><li>x</li></ol>", true),
+        ];
+        for (label, body, want_valid) in cases {
+            let xml = doc(body);
+            let d = crate::ocf::parse_xml(&xml).unwrap();
+            let bl = crate::rng::validate_node_report(&g, d.root_element());
+            let valid = bl.is_empty();
+            let mark = if valid == want_valid { "OK " } else { "XX " };
+            eprintln!("{mark}[{}] valid={valid} (want {want_valid})", label);
+        }
+    }
 
     use super::*;
 
@@ -313,6 +374,98 @@ mod tests {
             "one of \"td\", \"th\""
         );
         assert_eq!(super::derive::one_of(&["head".to_string()]), "\"head\"");
+    }
+
+    /// EPUB 2 (XHTML 1.1 + OPS 2.0.1) vocabulary differs from HTML5 in both
+    /// directions, and this is issue #24's whole point (Doitsu, MobileRead).
+    /// `big`/`tt`/`acronym` are valid here but removed in HTML5; `s`/`u` and
+    /// every HTML5 addition are the reverse. Both fall out of the vocabulary
+    /// with no per-element code.
+    #[test]
+    fn epub2_grammar_matches_the_xhtml11_vocabulary() {
+        let g = xhtml_grammar_epub2();
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let ok2 = |b: &str| {
+            let x = doc(b);
+            validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .is_empty()
+        };
+        // Valid in XHTML 1.1, removed in HTML5 - false positives before #24.
+        for b in [
+            "<p><big>b</big></p>",
+            "<p><tt>c</tt></p>",
+            "<p><acronym>W</acronym></p>",
+        ] {
+            assert!(ok2(b), "should be valid in EPUB 2: {b}");
+        }
+        // Invalid in XHTML 1.1. `s`/`u` are valid HTML5, which is exactly the
+        // false negative Doitsu reported; the rest are invalid in both.
+        for b in [
+            "<p><font color=\"red\">x</font></p>",
+            "<p><s>x</s></p>",
+            "<p><u>x</u></p>",
+            "<p><strike>x</strike></p>",
+            "<center><p>x</p></center>",
+            // HTML5 additions, none in OPS 2.0.1.
+            "<section><p>x</p></section>",
+            "<nav><p>x</p></nav>",
+            "<p><mark>x</mark></p>",
+            "<figure><p>x</p></figure>",
+        ] {
+            assert!(!ok2(b), "should be invalid in EPUB 2: {b}");
+        }
+        // Ordinary content the two versions share stays valid.
+        for b in [
+            "<p>Hi <em>there</em> <strong>bold</strong>.</p>",
+            "<ol><li>a</li></ol>",
+            "<table><tr><td>c</td></tr></table>",
+            "<blockquote><p>q</p></blockquote>",
+        ] {
+            assert!(ok2(b), "should be valid in EPUB 2: {b}");
+        }
+    }
+
+    /// A rejected container is not the end of the story: recovery descends
+    /// into it and reports the bad elements nested inside, too. Doitsu\'s
+    /// case is an obsolete `<center>` wrapping obsolete `<font>`/`<s>`/… -
+    /// epubcheck names each, and reporting only the `<center>` would hide the
+    /// rest (issue #24). The container\'s own loose text is not re-reported,
+    /// though - it went down with the container.
+    #[test]
+    fn recovery_descends_into_a_rejected_container() {
+        let g = xhtml_grammar_epub2();
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>\
+             <center><p>text <font>x</font> and <s>y</s></p></center></body></html>"
+        );
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let named: Vec<String> = validate_node_report(&g, doc.root_element())
+            .into_iter()
+            .filter_map(|b| match b {
+                Blame::Element(n, ElementFault::NotAllowed(_)) => {
+                    Some(n.tag_name().name().to_string())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            named,
+            ["center", "font", "s"],
+            "the container and its bad contents"
+        );
+    }
+
+    /// The flip side: descending must not re-report the rejected container\'s
+    /// text as a loose-text error. `<ol><span>x</span></ol>` blames the
+    /// `<span>` once - not a second time for the `x` inside it.
+    #[test]
+    fn recovery_descent_does_not_double_report_text() {
+        assert_eq!(
+            fail_locals(&xhtml_grammar(), &xhtml_doc("<ol><span>x</span></ol>")),
+            ["span"]
+        );
     }
 
     #[test]
