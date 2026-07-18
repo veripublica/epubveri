@@ -3642,6 +3642,9 @@ pub fn check(
                 for (message, position) in crate::schematron::run(sch, &d) {
                     report.push_at_pos(RSC_005, Severity::Error, message, path.clone(), position);
                 }
+                // IDREF/IDREFS resolution (hand-coded; needs per-token iteration
+                // the Schematron's XPath 1.0 core can't do). EPUB 3 only.
+                crate::htm::check_idref_resolution(&d, &path, report);
             }
         }
 

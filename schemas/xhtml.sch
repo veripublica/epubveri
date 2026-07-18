@@ -9,12 +9,15 @@
   schemas/xhtml.rng.
 
   These are the HTML5 content-model constraints a RELAX NG grammar cannot
-  express (a node must / must not have a given ancestor), so schemas/xhtml.rng
-  handles element/text placement and this handles nesting. EPUB 3 only.
-  Every violation is reported by epubcheck as RSC-005; we match that.
+  express — ancestor/descendant nesting rules and attribute-level structural
+  rules — so schemas/xhtml.rng handles element/text placement and this handles
+  the rest. (idref/idrefs *resolution* is hand-coded in htm.rs, since checking
+  every whitespace-separated token needs iteration the XPath 1.0 core lacks.)
+  EPUB 3 only. Every violation is reported by epubcheck as RSC-005; we match that.
 -->
 <schema xmlns="http://purl.oclc.org/dsdl/schematron">
   <ns uri="http://www.w3.org/1999/xhtml" prefix="h"/>
+  <ns uri="http://www.w3.org/2001/10/synthesis" prefix="ssml"/>
 
   <!-- No interactive content nested inside interactive content (a, button). -->
   <pattern id="no-interactive-in-a--a">
@@ -198,6 +201,47 @@
   <pattern id="required-ancestor--img-ismap">
     <rule context="h:img[@ismap]">
       <assert test="ancestor::h:a[@href]">an "img (with ismap)" element must appear inside a "a (with href)" element</assert>
+    </rule>
+  </pattern>
+
+  <!-- Attribute-level content-model constraints (group A). Structural rules a
+       grammar can't state; idref/idrefs *resolution* is hand-coded in htm.rs
+       (it needs per-token iteration the XPath 1.0 core can't express). -->
+
+  <pattern id="map-name-unique">
+    <rule context="h:map[@name]">
+      <assert test="count(//h:map[@name = current()/@name]) = 1">duplicate map name "<value-of select="@name"/>"</assert>
+    </rule>
+  </pattern>
+  <pattern id="map-id-equals-name">
+    <rule context="h:map[@id and @name]">
+      <assert test="@id = @name">a "map" element's "id" must equal its "name"</assert>
+    </rule>
+  </pattern>
+  <pattern id="select-single-selected">
+    <rule context="h:select[not(@multiple)]">
+      <report test="count(descendant::h:option[@selected]) &gt; 1">a "select" without "multiple" must not have more than one selected "option"</report>
+    </rule>
+  </pattern>
+  <pattern id="link-sizes-icon-only">
+    <rule context="h:link[@sizes]">
+      <assert test="@rel='icon'">the "sizes" attribute is only allowed on a "link" whose "rel" is "icon"</assert>
+    </rule>
+  </pattern>
+  <pattern id="meta-charset-once">
+    <rule context="h:meta[@charset]">
+      <assert test="count(preceding-sibling::h:meta[@charset]) = 0">only one "meta" element with a "charset" attribute is allowed per document</assert>
+    </rule>
+  </pattern>
+  <pattern id="ssml-ph-not-nested">
+    <rule context="*[@ssml:ph]">
+      <report test="ancestor::*[@ssml:ph]">the "ssml:ph" attribute must not appear on a descendant of an element that also carries it</report>
+    </rule>
+  </pattern>
+  <pattern id="track-rules">
+    <rule context="h:track">
+      <report test="@label and normalize-space(@label) = ''">a "track" element's "label" must not be empty</report>
+      <report test="@default and preceding-sibling::h:track[@default]">only one "track" of a media element may have the "default" attribute</report>
     </rule>
   </pattern>
 </schema>

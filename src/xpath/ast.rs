@@ -14,6 +14,10 @@ pub enum Axis {
     Parent,
     Ancestor,
     AncestorOrSelf,
+    /// Element siblings before this node, nearest first. Only the element
+    /// preceding-siblings are visited (our name tests only ever match
+    /// elements), which is all the schemas need it for.
+    PrecedingSibling,
     SelfAxis,
 }
 

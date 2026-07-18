@@ -538,10 +538,10 @@ mod tests {
 
     #[test]
     fn xhtml_schema_parses_with_expected_rule_count() {
-        // Guards the generated rule table: 17 disallowed-descendant + 2
-        // required-ancestor + 14 interactive-content patterns. A regeneration
-        // that dropped rules would trip this.
-        assert_eq!(xhtml_schema().patterns.len(), 33);
+        // Guards the rule table: 33 nesting patterns (17 disallowed-descendant
+        // + 2 required-ancestor + 14 interactive-content) plus 7 attribute-
+        // level patterns. A change that dropped rules would trip this.
+        assert_eq!(xhtml_schema().patterns.len(), 40);
     }
 
     #[test]
@@ -588,6 +588,34 @@ mod tests {
                 r##"<p><a href="#"><span>ok</span></a></p><form><p>ok</p></form><map name="m"><area alt="a" /></map>"##
             )
             .is_empty()
+        );
+    }
+
+    #[test]
+    fn attribute_level_rules_fire() {
+        // Duplicate map name — fires on each of the two maps (as epubcheck does).
+        assert_eq!(
+            xhtml_findings(
+                r#"<map name="m"><area alt="a" /></map><map name="m"><area alt="b" /></map>"#
+            )
+            .len(),
+            2
+        );
+        // A <select> without @multiple but two selected options.
+        assert_eq!(
+            xhtml_findings(
+                r#"<select><option selected="selected">a</option><option selected="selected">b</option></select>"#
+            )
+            .len(),
+            1
+        );
+        // Two <track default> — exercises the preceding-sibling axis.
+        assert_eq!(
+            xhtml_findings(
+                r#"<video><track default="default" /><track default="default" /></video>"#
+            )
+            .len(),
+            1
         );
     }
 }

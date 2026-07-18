@@ -10,6 +10,7 @@
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
+use crate::xmlext::NodeExt;
 
 /// The byte offset of `needle` within `haystack`, assuming `needle` is
 /// literally a subslice of `haystack` (as produced by `&haystack[a..b]` or
@@ -1257,6 +1258,196 @@ fn is_valid_flat_duration(s: &str) -> bool {
     any
 }
 
+const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
+
+/// Whether `n` is an XHTML element that a `<label for>` may target.
+fn is_labelable(n: roxmltree::Node) -> bool {
+    if n.tag_name().namespace() != Some(XHTML_NS) {
+        return false;
+    }
+    match n.tag_name().name() {
+        "button" | "meter" | "output" | "progress" | "select" | "textarea" => true,
+        "input" => n.attr_no_ns("type") != Some("hidden"),
+        _ => false,
+    }
+}
+
+fn push_idref(
+    report: &mut Report,
+    path: &str,
+    node: roxmltree::Node,
+    attr: &str,
+    id: &str,
+    why: &str,
+) {
+    report.push_node(
+        RSC_005,
+        Severity::Error,
+        format!("the \"{attr}\" attribute refers to \"{id}\", {why}"),
+        path.to_string(),
+        node,
+        "opf.content_document.idref_unresolved",
+        vec![attr.to_string(), id.to_string()],
+    );
+}
+
+/// EPUB 3 (XHTML5) IDREF/IDREFS resolution: every id referenced by an ARIA
+/// relationship, `@form`, `@list`, `label/@for`, `@headers`,
+/// `@aria-activedescendant`, or a MathML `@xref`/`@indenttarget` must resolve
+/// to an element in the same document — and, where the reference is typed, to
+/// the right kind of element. epubcheck enforces these in its XHTML Schematron
+/// and reports RSC-005; done here in Rust because checking each
+/// whitespace-separated token needs iteration the XPath 1.0 core lacks.
+pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, report: &mut Report) {
+    // id -> owning element (first wins; a duplicate id is a separate error).
+    let mut id_owner: std::collections::HashMap<&str, roxmltree::Node> =
+        std::collections::HashMap::new();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(id) = n.attr_no_ns("id") {
+            id_owner.entry(id).or_insert(n);
+        }
+    }
+    let no_such = "which is not the id of any element in the document";
+
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        let is_html = n.tag_name().namespace() == Some(XHTML_NS);
+        let local = n.tag_name().name();
+
+        // ARIA relationship IDREFS (on any element): every token must resolve.
+        for attr in [
+            "aria-describedby",
+            "aria-labelledby",
+            "aria-controls",
+            "aria-flowto",
+            "aria-owns",
+        ] {
+            if let Some(v) = n.attr_no_ns(attr) {
+                for tok in v.split_whitespace() {
+                    if !id_owner.contains_key(tok) {
+                        push_idref(report, path, n, attr, tok, no_such);
+                    }
+                }
+            }
+        }
+
+        // @aria-activedescendant: a single id that must be a *descendant*.
+        if let Some(id) = n.attr_no_ns("aria-activedescendant") {
+            let is_descendant = n
+                .descendants()
+                .skip(1)
+                .any(|d| d.is_element() && d.attr_no_ns("id") == Some(id));
+            if !is_descendant {
+                push_idref(
+                    report,
+                    path,
+                    n,
+                    "aria-activedescendant",
+                    id,
+                    "which is not a descendant element",
+                );
+            }
+        }
+
+        if is_html {
+            // @form -> a "form" element.
+            if let Some(id) = n.attr_no_ns("form") {
+                let ok = id_owner.get(id).is_some_and(|t| {
+                    t.tag_name().name() == "form" && t.tag_name().namespace() == Some(XHTML_NS)
+                });
+                if !ok {
+                    push_idref(
+                        report,
+                        path,
+                        n,
+                        "form",
+                        id,
+                        "which is not a \"form\" element",
+                    );
+                }
+            }
+            // input/@list -> a "datalist" element.
+            if local == "input"
+                && let Some(id) = n.attr_no_ns("list")
+            {
+                let ok = id_owner.get(id).is_some_and(|t| {
+                    t.tag_name().name() == "datalist" && t.tag_name().namespace() == Some(XHTML_NS)
+                });
+                if !ok {
+                    push_idref(
+                        report,
+                        path,
+                        n,
+                        "list",
+                        id,
+                        "which is not a \"datalist\" element",
+                    );
+                }
+            }
+            // label/@for -> a labelable element; output/@for -> IDREFS to any.
+            if let Some(v) = n.attr_no_ns("for") {
+                if local == "label" {
+                    match id_owner.get(v) {
+                        None => push_idref(report, path, n, "for", v, no_such),
+                        Some(t) if !is_labelable(*t) => push_idref(
+                            report,
+                            path,
+                            n,
+                            "for",
+                            v,
+                            "which is not a labelable element",
+                        ),
+                        Some(_) => {}
+                    }
+                } else if local == "output" {
+                    for tok in v.split_whitespace() {
+                        if !id_owner.contains_key(tok) {
+                            push_idref(report, path, n, "for", tok, no_such);
+                        }
+                    }
+                }
+            }
+            // @headers -> "th" cells in the same table.
+            if let Some(v) = n.attr_no_ns("headers") {
+                let table = n.ancestors().find(|a| {
+                    a.is_element()
+                        && a.tag_name().name() == "table"
+                        && a.tag_name().namespace() == Some(XHTML_NS)
+                });
+                for tok in v.split_whitespace() {
+                    let ok = table.is_some_and(|t| {
+                        t.descendants().any(|d| {
+                            d.tag_name().name() == "th"
+                                && d.tag_name().namespace() == Some(XHTML_NS)
+                                && d.attr_no_ns("id") == Some(tok)
+                        })
+                    });
+                    if !ok {
+                        push_idref(
+                            report,
+                            path,
+                            n,
+                            "headers",
+                            tok,
+                            "which is not a \"th\" cell in the same table",
+                        );
+                    }
+                }
+            }
+        }
+
+        // MathML @xref / @indenttarget -> any element.
+        if n.tag_name().namespace() == Some(MATHML_NS) {
+            for attr in ["xref", "indenttarget"] {
+                if let Some(id) = n.attr_no_ns(attr)
+                    && !id_owner.contains_key(id)
+                {
+                    push_idref(report, path, n, attr, id, no_such);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1281,6 +1472,79 @@ mod tests {
         let mut report = Report::new();
         check_dom_epub2(&d, "content.xhtml", &mut report);
         report.messages.iter().filter_map(|m| m.rule).collect()
+    }
+
+    /// Run IDREF/IDREFS resolution over a `<body>` snippet; return the message
+    /// texts of the RSC-005 findings.
+    fn idref_findings(body: &str) -> Vec<String> {
+        let xml = format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
+        );
+        let d = crate::ocf::parse_xml(&xml).unwrap();
+        let mut report = Report::new();
+        check_idref_resolution(&d, "c.xhtml", &mut report);
+        report.messages.into_iter().map(|m| m.text).collect()
+    }
+
+    #[test]
+    fn idref_broken_aria_flagged_valid_clean() {
+        let f = idref_findings(r#"<p aria-describedby="miss">x</p>"#);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(
+            f[0].contains("aria-describedby") && f[0].contains("miss"),
+            "{f:?}"
+        );
+        assert!(idref_findings(r#"<p id="d">d</p><p aria-describedby="d">x</p>"#).is_empty());
+    }
+
+    #[test]
+    fn idref_multi_token_flags_only_the_missing_one() {
+        let f = idref_findings(r#"<p id="ok">a</p><p aria-labelledby="ok miss">x</p>"#);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].contains("miss"), "{f:?}");
+    }
+
+    #[test]
+    fn idref_typed_form_needs_a_form_target() {
+        assert_eq!(
+            idref_findings(r#"<div id="x">a</div><input form="x"/>"#).len(),
+            1
+        );
+        assert!(idref_findings(r#"<form id="f"><input form="f"/></form>"#).is_empty());
+    }
+
+    #[test]
+    fn idref_label_for_needs_a_labelable_target() {
+        assert_eq!(
+            idref_findings(r#"<p id="p">a</p><label for="p">x</label>"#).len(),
+            1
+        );
+        assert!(idref_findings(r#"<input id="i"/><label for="i">x</label>"#).is_empty());
+    }
+
+    #[test]
+    fn idref_aria_activedescendant_must_be_a_descendant() {
+        assert_eq!(
+            idref_findings(r#"<p id="o">o</p><div aria-activedescendant="o">x</div>"#).len(),
+            1
+        );
+        assert!(
+            idref_findings(r#"<div aria-activedescendant="c"><span id="c">x</span></div>"#)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn idref_headers_must_be_th_in_the_same_table() {
+        assert_eq!(
+            idref_findings(r#"<table><tr><td id="c">h</td><td headers="c">x</td></tr></table>"#)
+                .len(),
+            1
+        );
+        assert!(
+            idref_findings(r#"<table><tr><th id="c">h</th><td headers="c">x</td></tr></table>"#)
+                .is_empty()
+        );
     }
 
     #[test]

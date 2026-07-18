@@ -284,6 +284,7 @@ impl Parser {
                     "parent" => Axis::Parent,
                     "ancestor" => Axis::Ancestor,
                     "ancestor-or-self" => Axis::AncestorOrSelf,
+                    "preceding-sibling" => Axis::PrecedingSibling,
                     "self" => Axis::SelfAxis,
                     other => return Err(format!("unsupported XPath axis '{other}'")),
                 }

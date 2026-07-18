@@ -379,6 +379,17 @@ fn axis_step<'a, 'input>(
             .filter(|a| name_test_matches_elem(*a, test, namespaces))
             .map(NodeRef::Elem)
             .collect(),
+        Axis::PrecedingSibling => {
+            let mut sibs = Vec::new();
+            let mut cur = elem.prev_sibling_element();
+            while let Some(s) = cur {
+                if name_test_matches_elem(s, test, namespaces) {
+                    sibs.push(NodeRef::Elem(s));
+                }
+                cur = s.prev_sibling_element();
+            }
+            sibs
+        }
         Axis::SelfAxis => {
             if matches!(test, NameTest::Any) || name_test_matches_elem(elem, test, namespaces) {
                 vec![NodeRef::Elem(elem)]
