@@ -927,30 +927,12 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
             }
         }
     }
-    // XHTML 1.1's `body` content model is block-level only (`(%Block.mix;)*`, no
-    // `#PCDATA`), so text directly inside `<body>` is a content-model error in
-    // EPUB 2 - unlike EPUB 3, whose HTML5 body allows flow content including bare
-    // text (#13; the EPUB 2 half, unambiguous and matching epubcheck). Reported
-    // per occurrence, anchored at the text run for a precise line:column.
-    for body in d.descendants().filter(|n| {
-        n.is_element()
-            && n.tag_name().namespace() == Some(XHTML_NS)
-            && n.tag_name().name() == "body"
-    }) {
-        for child in body.children() {
-            if child.is_text() && child.text().is_some_and(|t| !t.trim().is_empty()) {
-                report.push_node_text(
-                    RSC_005,
-                    Severity::Error,
-                    "text is not allowed directly in \"body\"; EPUB 2 requires block-level content",
-                    path,
-                    child,
-                    "htm.epub2_dom.bare_text_in_body",
-                    Vec::new(),
-                );
-            }
-        }
-    }
+    // Bare text directly in `<body>` (and any other block-only element) is an
+    // EPUB 2 content-model error, but it's now caught by the EPUB 2 RELAX NG
+    // grammar (schemas/xhtml.rng, added in 0.5.13/#24), which supersedes the
+    // hand-coded check that used to live here. Keeping both double-reported the
+    // same stray text (Doitsu, MobileRead #100); the grammar is the single
+    // source of truth for the content model.
 }
 
 /// DOM/attribute-level checks on an already-parsed content document.
@@ -1548,27 +1530,15 @@ mod tests {
     }
 
     #[test]
-    fn epub2_bare_text_in_body_is_a_content_model_error() {
-        // XHTML 1.1 `body` is block-level only, so loose text there is an error
-        // in EPUB 2 (#13). Reported once per text run; whitespace is ignored;
-        // text wrapped in a block element is fine.
-        let bare =
-            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>Call me Ishmael.</body></html>"#;
-        assert_eq!(run_dom_epub2(bare), vec!["htm.epub2_dom.bare_text_in_body"]);
-
-        let two =
-            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>one<p>ok</p>two</body></html>"#;
-        assert_eq!(
-            run_dom_epub2(two),
-            vec![
-                "htm.epub2_dom.bare_text_in_body",
-                "htm.epub2_dom.bare_text_in_body"
-            ]
-        );
-
-        let wrapped =
-            r#"<html xmlns="http://www.w3.org/1999/xhtml"><body>  <p>ok</p>  </body></html>"#;
-        assert!(run_dom_epub2(wrapped).is_empty());
+    fn epub2_dom_flags_html5_only_element() {
+        // check_dom_epub2 still carries the EPUB 2-specific hand-coded checks
+        // (bare text in body moved to the RELAX NG grammar to stop a double
+        // report — Doitsu, MobileRead #100). A HTML5-only element like <section>
+        // is not in XHTML 1.1, so it is flagged.
+        let doc = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><section>x</section></body></html>"#;
+        assert_eq!(run_dom_epub2(doc), vec!["htm.epub2_dom.html5_only_element"]);
+        let ok = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div>x</div></body></html>"#;
+        assert!(run_dom_epub2(ok).is_empty());
     }
 
     #[test]
