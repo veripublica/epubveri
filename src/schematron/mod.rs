@@ -92,6 +92,17 @@ pub fn package_schema() -> Schema {
     load(PACKAGE_SCH).expect("built-in package.sch must parse")
 }
 
+/// Our own EPUB 3 XHTML content-model Schematron rules (nesting constraints a
+/// RELAX NG grammar can't express — a node must / must not have a given
+/// ancestor). Clean-room, same stance as [`PACKAGE_SCH`]. See
+/// `schemas/xhtml.sch`.
+pub const XHTML_SCH: &str = include_str!("../../schemas/xhtml.sch");
+
+/// Load the built-in EPUB 3 XHTML content-model Schematron schema.
+pub fn xhtml_schema() -> Schema {
+    load(XHTML_SCH).expect("built-in xhtml.sch must parse")
+}
+
 pub fn load(xml: &str) -> Result<Schema, String> {
     let doc = Document::parse(xml).map_err(|e| e.to_string())?;
     let root = doc.root_element();
@@ -509,5 +520,102 @@ mod tests {
         }
         assert!(!flags_second_date("2.0"), "EPUB 2 allows multiple dc:date");
         assert!(flags_second_date("3.0"), "EPUB 3 allows only one dc:date");
+    }
+
+    // --- EPUB 3 XHTML content-model nesting (schemas/xhtml.sch) ---
+
+    /// Run the built-in xhtml content-model schema over a `<body>` snippet.
+    fn xhtml_findings(body: &str) -> Vec<String> {
+        let xml = format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
+        );
+        let doc = Document::parse(&xml).unwrap();
+        run(&xhtml_schema(), &doc)
+            .into_iter()
+            .map(|(t, _)| t)
+            .collect()
+    }
+
+    #[test]
+    fn xhtml_schema_parses_with_expected_rule_count() {
+        // Guards the rule table: 33 nesting patterns (17 disallowed-descendant
+        // + 2 required-ancestor + 14 interactive-content) plus 7 attribute-
+        // level patterns. A change that dropped rules would trip this.
+        assert_eq!(xhtml_schema().patterns.len(), 40);
+    }
+
+    #[test]
+    fn nested_interactive_content_is_flagged() {
+        // a inside a (the reported case), and a button inside an a.
+        let a_in_a = xhtml_findings(r##"<p><a href="#">x<a href="#">y</a></a></p>"##);
+        assert_eq!(a_in_a.len(), 1, "{a_in_a:?}");
+        assert!(a_in_a[0].contains(r#"inside an "a""#), "{a_in_a:?}");
+
+        let btn_in_a = xhtml_findings(r##"<p><a href="#"><button>y</button></a></p>"##);
+        assert_eq!(btn_in_a.len(), 1, "{btn_in_a:?}");
+        assert!(btn_in_a[0].contains("button"), "{btn_in_a:?}");
+    }
+
+    #[test]
+    fn disallowed_descendant_is_flagged() {
+        assert_eq!(
+            xhtml_findings("<form><form><p>x</p></form></form>"),
+            vec![r#"a "form" element must not appear inside a "form" element"#.to_string()]
+        );
+        assert_eq!(
+            xhtml_findings("<header><header>x</header></header>").len(),
+            1
+        );
+        assert_eq!(
+            xhtml_findings("<p><label>x<label>y</label></label></p>").len(),
+            1
+        );
+    }
+
+    #[test]
+    fn required_ancestor_is_flagged_when_missing() {
+        // An <area> with no <map> ancestor.
+        let f = xhtml_findings(r#"<p><area alt="x" /></p>"#);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert!(f[0].contains("area") && f[0].contains("map"), "{f:?}");
+    }
+
+    #[test]
+    fn valid_nesting_is_clean() {
+        // Non-interactive child of <a>; a normal form; an <area> inside a <map>.
+        assert!(
+            xhtml_findings(
+                r##"<p><a href="#"><span>ok</span></a></p><form><p>ok</p></form><map name="m"><area alt="a" /></map>"##
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn attribute_level_rules_fire() {
+        // Duplicate map name — fires on each of the two maps (as epubcheck does).
+        assert_eq!(
+            xhtml_findings(
+                r#"<map name="m"><area alt="a" /></map><map name="m"><area alt="b" /></map>"#
+            )
+            .len(),
+            2
+        );
+        // A <select> without @multiple but two selected options.
+        assert_eq!(
+            xhtml_findings(
+                r#"<select><option selected="selected">a</option><option selected="selected">b</option></select>"#
+            )
+            .len(),
+            1
+        );
+        // Two <track default> — exercises the preceding-sibling axis.
+        assert_eq!(
+            xhtml_findings(
+                r#"<video><track default="default" /><track default="default" /></video>"#
+            )
+            .len(),
+            1
+        );
     }
 }

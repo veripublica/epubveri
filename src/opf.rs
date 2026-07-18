@@ -3351,6 +3351,12 @@ pub fn check(
     } else {
         crate::rng::xhtml_grammar_epub2()
     };
+    // The HTML5 content-model *nesting* constraints the RELAX NG grammar above
+    // structurally can't express (a node must / must not have a given
+    // ancestor: interactive content not inside <a>, no nested <form>, …).
+    // EPUB 3 only — these are XHTML5 rules; EPUB 2 uses its own grammar and has
+    // no such Schematron. Built once, run per content document below.
+    let xhtml_sch = is_epub3.then(crate::schematron::xhtml_schema);
     // content-doc resolved-path -> CSS class names used in its own
     // associated stylesheets (inline <style> + linked <link
     // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
@@ -3629,6 +3635,16 @@ pub fn check(
                         params,
                     ),
                 }
+            }
+            // EPUB 3 content-model nesting constraints (Schematron), reported as
+            // RSC-005 at the offending element, matching epubcheck.
+            if let Some(sch) = &xhtml_sch {
+                for (message, position) in crate::schematron::run(sch, &d) {
+                    report.push_at_pos(RSC_005, Severity::Error, message, path.clone(), position);
+                }
+                // IDREF/IDREFS resolution (hand-coded; needs per-token iteration
+                // the Schematron's XPath 1.0 core can't do). EPUB 3 only.
+                crate::htm::check_idref_resolution(&d, &path, report);
             }
         }
 
