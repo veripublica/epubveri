@@ -61,9 +61,25 @@ fn peek_opf_version(ocf: &mut ocf::Ocf, opf_path: &str) -> Option<String> {
     doc.root_element().attr_no_ns("version").map(String::from)
 }
 
+/// Optional validation settings. `Options::default()` is exactly the behavior
+/// of [`validate_bytes`] — no profile, advisory off — so passing it changes
+/// nothing.
+#[derive(Debug, Clone, Default)]
+pub struct Options {
+    /// EPUB extension-spec profile — see [`validate_bytes_with_profile`].
+    pub profile: Option<String>,
+    /// Enable opt-in *advisory* checks: currently unknown CSS property and
+    /// descriptor names (`ADV-*`, `Usage` severity, via the `styloria`
+    /// validator). Off by default, and with it off the output is byte-identical
+    /// to before. epubcheck has no verdict on these, so they are never on by
+    /// default — this is the "beyond epubcheck's verdict is opt-in, never
+    /// default" stance made concrete.
+    pub advisory: bool,
+}
+
 /// Validate raw EPUB bytes and return a [`Report`].
 pub fn validate_bytes(bytes: Vec<u8>) -> Report {
-    validate_bytes_with_profile(bytes, None)
+    validate_bytes_with_options(bytes, &Options::default())
 }
 
 /// Validate raw EPUB bytes under a specific EPUB extension-spec profile,
@@ -78,6 +94,19 @@ pub fn validate_bytes(bytes: Vec<u8>) -> Report {
 /// project's general design principle: this project doesn't second-
 /// guess or reject its own inputs).
 pub fn validate_bytes_with_profile(bytes: Vec<u8>, profile: Option<&str>) -> Report {
+    validate_bytes_with_options(
+        bytes,
+        &Options {
+            profile: profile.map(String::from),
+            advisory: false,
+        },
+    )
+}
+
+/// Validate raw EPUB bytes under explicit [`Options`] (profile + advisory).
+pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report {
+    let profile = options.profile.as_deref();
+    let advisory = options.advisory;
     let mut report = Report::new();
     let mut container = match ocf::open(bytes, &mut report) {
         Some(c) => c,
@@ -90,7 +119,7 @@ pub fn validate_bytes_with_profile(bytes: Vec<u8>, profile: Option<&str>) -> Rep
     // with a reflowable + fixed-layout rendition) legitimately declares
     // more than one, each validated as its own, independent OPF.
     for opf_path in &opf_paths {
-        opf::check(&mut container, opf_path, profile, &mut report);
+        opf::check(&mut container, opf_path, profile, advisory, &mut report);
     }
     // Checked once for the whole publication (not per-rendition): the
     // multi-rendition dc:type cardinality cross-check reads
@@ -124,13 +153,24 @@ pub fn validate_bytes_with_profile(bytes: Vec<u8>, profile: Option<&str>) -> Rep
 
 /// Validate an EPUB file on disk.
 pub fn validate_path(path: &Path) -> std::io::Result<Report> {
-    validate_path_with_profile(path, None)
+    validate_path_with_options(path, &Options::default())
 }
 
 /// Validate an EPUB file on disk under a specific EPUB extension-spec
 /// profile - see [`validate_bytes_with_profile`].
 pub fn validate_path_with_profile(path: &Path, profile: Option<&str>) -> std::io::Result<Report> {
-    let mut report = validate_bytes_with_profile(std::fs::read(path)?, profile);
+    validate_path_with_options(
+        path,
+        &Options {
+            profile: profile.map(String::from),
+            advisory: false,
+        },
+    )
+}
+
+/// Validate an EPUB file on disk under explicit [`Options`] (profile + advisory).
+pub fn validate_path_with_options(path: &Path, options: &Options) -> std::io::Result<Report> {
+    let mut report = validate_bytes_with_options(std::fs::read(path)?, options);
     // PKG-016: the file's own ".epub" extension should be lowercase - a
     // filesystem-level concern `validate_bytes` alone can't see, since it
     // only ever receives raw bytes with no filename attached.

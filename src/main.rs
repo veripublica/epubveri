@@ -33,6 +33,10 @@ OPTIONS:
                            see the veripublica FORMATS spec).
         --profile <NAME>   Also check against an EPUB extension profile: one of
                            dict, edupub, idx, preview.
+        --advisory         Also emit opt-in advisory findings epubcheck has no
+                           verdict on (currently unknown CSS property/descriptor
+                           names, as ADV-* at usage severity). Off by default;
+                           never affects the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
     -h, --help             Print this help to stdout and exit 0.
 
@@ -56,6 +60,7 @@ enum Cli {
         inputs: Vec<String>,
         format: String,
         profile: Option<String>,
+        advisory: bool,
     },
     /// `-h`/`--help` was requested (short-circuits everything else).
     Help,
@@ -78,6 +83,7 @@ fn parse(args: &[String]) -> Cli {
     let mut inputs: Vec<String> = Vec::new();
     let mut format: Option<String> = None;
     let mut profile: Option<String> = None;
+    let mut advisory = false;
     let mut help = false;
     let mut version = false;
     let mut error: Option<String> = None;
@@ -111,6 +117,7 @@ fn parse(args: &[String]) -> Cli {
             match name {
                 "help" => help = true,
                 "version" => version = true,
+                "advisory" => advisory = true,
                 "input" | "format" | "profile" => {
                     let value = match attached {
                         Some(v) => v,
@@ -206,6 +213,7 @@ fn parse(args: &[String]) -> Cli {
         inputs,
         format: format.unwrap_or_else(|| "human".to_string()),
         profile,
+        advisory,
     }
 }
 
@@ -229,19 +237,24 @@ fn main() -> ExitCode {
             inputs,
             format,
             profile,
-        } => run(&inputs, &format, profile.as_deref()),
+            advisory,
+        } => run(&inputs, &format, profile.as_deref(), advisory),
     }
 }
 
 /// Validate every input, report on each, and aggregate the exit code: `2` if
 /// any input could not be read, else `1` if any has errors/fatals, else `0`.
-fn run(inputs: &[String], format: &str, profile: Option<&str>) -> ExitCode {
+fn run(inputs: &[String], format: &str, profile: Option<&str>, advisory: bool) -> ExitCode {
+    let options = epubveri::Options {
+        profile: profile.map(String::from),
+        advisory,
+    };
     // Validate everything first; an input that can't be read carries its own
     // message rather than a verdict.
     let results: Vec<(&String, Result<epubveri::report::Report, String>)> = inputs
         .iter()
         .map(|path| {
-            let r = epubveri::validate_path_with_profile(Path::new(path), profile)
+            let r = epubveri::validate_path_with_options(Path::new(path), &options)
                 .map_err(|e| format!("cannot read {path}: {e}"));
             (path, r)
         })
@@ -338,13 +351,14 @@ mod tests {
         parse(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 
-    fn run_of(argv: &[&str]) -> (Vec<String>, String, Option<String>) {
+    fn run_of(argv: &[&str]) -> (Vec<String>, String, Option<String>, bool) {
         match parse_str(argv) {
             Cli::Run {
                 inputs,
                 format,
                 profile,
-            } => (inputs, format, profile),
+                advisory,
+            } => (inputs, format, profile, advisory),
             other => panic!("expected Run, got {other:?}"),
         }
     }
@@ -370,30 +384,31 @@ mod tests {
             vec!["--input=book.epub"],
             vec!["-ibook.epub"],
         ] {
-            let (inputs, format, profile) = run_of(&argv);
+            let (inputs, format, profile, advisory) = run_of(&argv);
             assert_eq!(inputs, vec!["book.epub"]);
             assert_eq!(format, "human");
             assert_eq!(profile, None);
+            assert!(!advisory, "advisory must default off");
         }
     }
 
     #[test]
     fn repeated_input_accumulates_in_order() {
-        let (inputs, _, _) = run_of(&["-i", "a.epub", "-i", "b.epub"]);
+        let (inputs, _, _, _) = run_of(&["-i", "a.epub", "-i", "b.epub"]);
         assert_eq!(inputs, vec!["a.epub", "b.epub"]);
     }
 
     #[test]
     fn a_value_token_is_never_reparsed_as_an_option() {
         // The token after -i is its value even when it looks like a flag.
-        let (inputs, _, _) = run_of(&["-i", "-q.epub"]);
+        let (inputs, _, _, _) = run_of(&["-i", "-q.epub"]);
         assert_eq!(inputs, vec!["-q.epub"]);
     }
 
     #[test]
     fn bundled_value_flag_takes_the_remainder_posix() {
         // -iv means -i v, not -i -v.
-        let (inputs, _, _) = run_of(&["-iv"]);
+        let (inputs, _, _, _) = run_of(&["-iv"]);
         assert_eq!(inputs, vec!["v"]);
     }
 
@@ -434,7 +449,7 @@ mod tests {
 
     #[test]
     fn json_is_an_accepted_format() {
-        let (_, format, _) = run_of(&["--format", "json", "-i", "a.epub"]);
+        let (_, format, _, _) = run_of(&["--format", "json", "-i", "a.epub"]);
         assert_eq!(format, "json");
     }
 
@@ -454,10 +469,18 @@ mod tests {
 
     #[test]
     fn profile_and_format_pass_through_when_valid() {
-        let (inputs, format, profile) =
+        let (inputs, format, profile, _) =
             run_of(&["--profile", "edupub", "--format", "ids", "-i", "a.epub"]);
         assert_eq!(inputs, vec!["a.epub"]);
         assert_eq!(format, "ids");
         assert_eq!(profile, Some("edupub".to_string()));
+    }
+
+    #[test]
+    fn advisory_flag_is_parsed_and_defaults_off() {
+        let (_, _, _, advisory) = run_of(&["-i", "a.epub"]);
+        assert!(!advisory);
+        let (_, _, _, advisory) = run_of(&["--advisory", "-i", "a.epub"]);
+        assert!(advisory);
     }
 }

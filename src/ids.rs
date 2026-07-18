@@ -11,6 +11,14 @@
 //!
 //! Only a handful of our structural checks have dedicated codes; those are used
 //! verbatim below. Our message *wording* is our own (we do not copy epubcheck's).
+//!
+//! **One deliberate exception — the `ADV-*` advisory family.** Every other ID
+//! here is one epubcheck also emits; `ADV-*` is epubveri's own, for opt-in
+//! *advisory* checks epubcheck has no verdict on (enabled only by `--advisory`,
+//! always `Usage` severity, never affecting the exit code). It is given a
+//! distinct family precisely so it can never be mistaken for an epubcheck code:
+//! matching epubcheck on verdicts means not inventing a `CSS-0xx` it doesn't
+//! define. See the [`crate::css`] unknown-property/descriptor checks.
 
 // --- Packaging / OCF ---
 pub const PKG_003: &str = "PKG-003"; // the zip file is empty
@@ -142,6 +150,10 @@ pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration blo
 pub const CSS_028: &str = "CSS-028"; // a @font-face declaration is present (usage)
 pub const CSS_029: &str = "CSS-029"; // well-known media-overlay class used but its property isn't declared (usage)
 pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has no matching CSS selector
+
+// --- Advisory (epubveri-owned, opt-in via --advisory; see the module note) ---
+pub const ADV_001: &str = "ADV-001"; // a declaration uses a property CSS does not define (usage)
+pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not define (usage)
 
 // --- Media Overlays (SMIL) ---
 pub const MED_003: &str = "MED-003"; // a <picture> element's own <img> fallback references a foreign resource
