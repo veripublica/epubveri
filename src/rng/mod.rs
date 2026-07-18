@@ -222,7 +222,7 @@ mod tests {
             ),
             (
                 Blame::Element(ol, ElementFault::TextNotAllowed),
-                "character data is not allowed in element \"ol\"",
+                "stray text is not allowed directly in \"ol\"; wrap it in an element",
             ),
             (
                 Blame::Element(ol, ElementFault::MissingAttribute),
@@ -549,7 +549,7 @@ mod tests {
         assert!(
             report("<p>a</p>loose text")
                 .iter()
-                .any(|m| m.contains("character data is not allowed in element \"body\"")),
+                .any(|m| m.contains("stray text is not allowed directly in \"body\"")),
             "loose text under body must be flagged"
         );
         // A bare <br> under body (the common 1Q84 shape) is rejected too -

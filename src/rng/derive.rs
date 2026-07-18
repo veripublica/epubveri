@@ -594,7 +594,9 @@ impl<'d, 'i> Blame<'d, 'i> {
                         t
                     }
                     ElementFault::TextNotAllowed => {
-                        format!("character data is not allowed in element \"{name}\"")
+                        format!(
+                            "stray text is not allowed directly in \"{name}\"; wrap it in an element"
+                        )
                     }
                     ElementFault::MissingAttribute => {
                         format!("element \"{name}\" is missing a required attribute")
