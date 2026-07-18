@@ -59,7 +59,11 @@ interface Item {
   data?: { params: string[] };
 }
 
-function validate(bytes: Uint8Array, profile?: string | null): Report;
+function validate(
+  bytes: Uint8Array,
+  profile?: string | null,
+  advisory?: boolean | null,
+): Report;
 function version(): string;
 ```
 
@@ -68,6 +72,14 @@ function version(): string;
 `profile` mirrors epubcheck's `--profile` flag: pass `"dict"`, `"edupub"`, `"idx"`,
 `"preview"`, or `undefined`/`null` for default behavior. Unknown names are treated as
 `undefined` (permissive).
+
+### Advisory checks
+
+`advisory` mirrors the CLI `--advisory` flag: pass `true` to also emit the opt-in advisory
+findings epubcheck has no verdict on — currently unknown CSS property and descriptor names
+(`ADV-001`/`ADV-002`, at `usage` severity). It is **off by default**: leaving the argument
+out, or passing `false`/`undefined`, produces a byte-identical report, so existing
+two-argument callers are unaffected.
 
 ### One CLI-only difference
 

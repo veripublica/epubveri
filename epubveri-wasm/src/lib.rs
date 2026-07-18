@@ -13,7 +13,8 @@
 //! ```js
 //! import init, { validate } from "epubveri-wasm";
 //! await init();
-//! const report = validate(new Uint8Array(epubArrayBuffer), undefined);
+//! const report = validate(new Uint8Array(epubArrayBuffer), undefined, undefined);
+//! // pass `true` as the third argument to also run the opt-in advisory checks.
 //! // report.status === "ok" | "problems"
 //! // report.summary.errors, report.items[i].code, report.items[i].severity, ...
 //! ```
@@ -91,12 +92,24 @@ pub struct Data {
 /// `"idx"`, `"preview"`, or `undefined`/`null` for default behavior. Unknown
 /// names behave like `undefined` (permissive).
 ///
+/// `advisory` mirrors the CLI `--advisory` flag: pass `true` to also emit the
+/// opt-in advisory findings epubcheck has no verdict on (unknown CSS
+/// property/descriptor names, `ADV-*`, at usage severity). `undefined`/`false`
+/// leaves them off, and with them off the report is byte-identical — so
+/// existing two-argument callers are unaffected.
+///
 /// Note: the CLI-only PKG-016 check (the `.epub` file extension should be
 /// lowercase) is filename-based and intentionally not reachable here — this
 /// entry point only ever sees bytes, never a filename.
 #[wasm_bindgen]
-pub fn validate(bytes: &[u8], profile: Option<String>) -> Report {
-    let report = epubveri::validate_bytes_with_profile(bytes.to_vec(), profile.as_deref());
+pub fn validate(bytes: &[u8], profile: Option<String>, advisory: Option<bool>) -> Report {
+    let report = epubveri::validate_bytes_with_options(
+        bytes.to_vec(),
+        &epubveri::Options {
+            profile,
+            advisory: advisory.unwrap_or(false),
+        },
+    );
     Report {
         status: if report.is_valid() { "ok" } else { "problems" }.to_string(),
         summary: Summary {
