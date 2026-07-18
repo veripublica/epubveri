@@ -8,10 +8,18 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.5.14] - 2026-07-18
+
+Two additions, both opt-in or usage-level, so no book's verdict changes: an
+EPUB 2 empty-metadata usage note (OPF-072), and an opt-in CSS advisory layer.
 
 ### Added
 
+- **OPF-072 (usage): an empty `dc:*` metadata element in an EPUB 2 package.**
+  A `dc:` element (other than `dc:title`/`dc:date`, which have their own rules)
+  whose content is empty or whitespace-only now draws OPF-072 at usage severity,
+  matching epubcheck. EPUB 2 only. (#95, reported by Doitsu on the MobileRead
+  forum.)
 - **Opt-in CSS advisory checks (`--advisory`), via `styloria` 0.3.** Enables
   tool-owned advisory findings epubcheck has no verdict on — currently unknown
   CSS **property** names (`ADV-001`) and unknown at-rule **descriptor** names
