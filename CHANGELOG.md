@@ -8,6 +8,41 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.15] - 2026-07-19
+
+The EPUB 3 XHTML **content model** is now validated comprehensively (#13).
+**This changes verdicts**: a book that nests elements illegally, or references
+a missing id, is now reported invalid (RSC-005) where earlier releases passed
+it — matching epubcheck. The corpus is unchanged (verdict-neutral there), but
+real books with these mistakes will newly fail.
+
+### Added
+
+- **Content-model nesting rules (RSC-005, EPUB 3), via a new XHTML Schematron.**
+  Constraints a grammar can't express — a node must / must not have a given
+  ancestor: interactive content not inside `<a>`/`<button>` (including a nested
+  `<a>`); the disallowed-descendant pairs (`form`-in-`form`, `label`-in-`label`,
+  `header`/`footer`/`address` nesting, `audio`/`video` nesting, `dfn`,
+  `table`-in-`caption`, `meter`/`progress`); and the required-ancestor rules
+  (`area`→`map`, `img[@ismap]`→`a[@href]`). (Element/text *placement* was
+  already caught by the RELAX NG grammar.)
+- **IDREF/IDREFS resolution (RSC-005, EPUB 3).** Every id referenced by an ARIA
+  relationship (`aria-describedby`/`-labelledby`/`-controls`/`-flowto`/`-owns`),
+  `@form`, `input/@list`, `label/@for`, `output/@for`, `@headers`,
+  `@aria-activedescendant`, or a MathML `@xref`/`@indenttarget` must resolve —
+  and, where typed, to the right kind of element (`@form`→a `form`,
+  `label/@for`→a labelable element, `@headers`→a `th` in the same table,
+  `@aria-activedescendant`→a descendant, …).
+- **Structural attribute rules (RSC-005, EPUB 3):** duplicate `map` name, a
+  `map`'s `@id` must equal its `@name`, a `select` without `@multiple` may have
+  at most one selected `option`, `@sizes` only on a `rel="icon"` link, one
+  `<meta charset>` per document, no nested `ssml:ph`, and the `<track>`
+  label/`default` rules.
+- **wasm: the opt-in `--advisory` flag is now exposed.** `validate()` takes a
+  third argument, `advisory?: boolean`; off by default, so existing
+  two-argument callers get a byte-identical report. The browser demo gained an
+  "Advisory checks" toggle.
+
 ## [0.5.14] - 2026-07-18
 
 Two additions, both opt-in or usage-level, so no book's verdict changes: an
