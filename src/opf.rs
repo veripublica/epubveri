@@ -1397,7 +1397,13 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
     }
 }
 
-pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut Report) {
+pub fn check(
+    ocf: &mut Ocf,
+    opf_path: &str,
+    profile: Option<&str>,
+    advisory: bool,
+    report: &mut Report,
+) {
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
         None => {
@@ -4991,6 +4997,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
                     &name_index,
                     &manifest_paths,
                     origin,
+                    advisory,
                     report,
                 );
                 check_exempt_font_usage(&css_text, &dir, &items, &path, origin, report);
@@ -5143,7 +5150,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             // CSS-008: a `style="..."` attribute is a plain declaration
             // list, same malformed-shape check as a stylesheet's own block.
             if let Some(style) = node.attr_no_ns("style") {
-                crate::css::check_style_attribute(style, &path, report);
+                crate::css::check_style_attribute(style, &path, advisory, report);
             }
         }
         book_has_scripts |= has_script;
@@ -5747,6 +5754,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, profile: Option<&str>, report: &mut 
             &name_index,
             &manifest_paths,
             crate::css::CssOrigin::File { bytes: Some(&b) },
+            advisory,
             report,
         );
         // RSC-008: a standalone (manifest-declared) stylesheet can

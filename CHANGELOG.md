@@ -8,6 +8,23 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **Opt-in CSS advisory checks (`--advisory`), via `styloria` 0.3.** Enables
+  tool-owned advisory findings epubcheck has no verdict on — currently unknown
+  CSS **property** names (`ADV-001`) and unknown at-rule **descriptor** names
+  (`ADV-002`, e.g. a bogus `@font-face` descriptor), in stylesheets, inline
+  `<style>` blocks, and `style="…"` attributes. Always `Usage` severity, so
+  they never affect the exit code, and **off by default** — with the flag off
+  the output is byte-identical (the corpus is unchanged: 599/607, 0 over-
+  reported). `ADV-*` is a deliberately distinct, epubveri-owned message family:
+  matching epubcheck on verdicts means not inventing a `CSS-0xx` it does not
+  define. Library API: `Options { profile, advisory }` with
+  `validate_bytes_with_options` / `validate_path_with_options`.
+- Dependency: `styloria` 0.2 → 0.3 (adds its `validate` layer).
+
 ## [0.5.13] - 2026-07-17
 
 An EPUB 2 content model - EPUB 2 books are no longer validated against HTML5 -

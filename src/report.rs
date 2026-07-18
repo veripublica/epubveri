@@ -98,7 +98,9 @@ impl Position {
 
 #[derive(Debug, Clone)]
 pub struct Message {
-    /// epubcheck-compatible message ID (e.g. "RSC-001"). See `ids.rs`.
+    /// epubcheck-compatible message ID (e.g. "RSC-001"). See `ids.rs`. The one
+    /// exception is the tool-owned `ADV-*` advisory family (opt-in, `--advisory`),
+    /// which epubcheck has no equivalent for.
     pub id: &'static str,
     pub severity: Severity,
     pub text: String,

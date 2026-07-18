@@ -28,7 +28,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use styloria::{ComponentValue, Parser, Rule, Span, Spanned, Token, spanned};
+use styloria::{
+    ComponentValue, DiagnosticKind, Parser, Rule, Span, Spanned, Token, spanned,
+    validate_declaration_list, validate_stylesheet,
+};
 
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
@@ -151,6 +154,7 @@ pub(crate) fn inline_origin<'a>(doc: &'a str, css: &str, style: roxmltree::Node)
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check(
     css: &str,
     css_path: &str,
@@ -158,6 +162,7 @@ pub(crate) fn check(
     name_index: &HashMap<String, String>,
     manifest_paths: &HashSet<String>,
     origin: CssOrigin,
+    advisory: bool,
     report: &mut Report,
 ) {
     // Span-carrying parse: every finding below points at the exact
@@ -347,6 +352,44 @@ pub(crate) fn check(
             (true, true) => {}
         }
     }
+
+    // Opt-in advisory pass (--advisory): unknown property/descriptor names,
+    // which epubcheck does not check. Off by default, so the default output is
+    // byte-identical. Positions map through `origin` like every CSS finding.
+    if advisory {
+        for d in validate_stylesheet(css) {
+            let (id, rule, text, params) = advisory_fields(&d);
+            report.push_full(
+                id,
+                Severity::Usage,
+                text,
+                css_path,
+                origin.position(css, d.span.start),
+                rule,
+                params,
+            );
+        }
+    }
+}
+
+/// The `(id, rule, text, params)` for one styloria advisory diagnostic. `Usage`
+/// severity and a tool-owned `ADV-*` id, so it is advisory only and never moves
+/// the verdict. Shared by the stylesheet and `style="…"` attribute paths.
+fn advisory_fields(d: &styloria::Diagnostic) -> (&'static str, &'static str, String, Vec<String>) {
+    match d.kind {
+        DiagnosticKind::UnknownProperty => (
+            ADV_001,
+            "css.property.unknown",
+            format!("'{}' is not a recognized CSS property", d.name),
+            vec![d.name.clone()],
+        ),
+        DiagnosticKind::UnknownDescriptor { at_rule } => (
+            ADV_002,
+            "css.descriptor.unknown",
+            format!("'{}' is not a recognized descriptor for @{at_rule}", d.name),
+            vec![d.name.clone(), at_rule.to_string()],
+        ),
+    }
 }
 
 /// A `style="..."` attribute value is a plain declaration list (no
@@ -355,11 +398,21 @@ pub(crate) fn check(
 /// styloria's existing tokenizer/parser produces the same
 /// `&[ComponentValue]` shape, rather than adding a new styloria entry
 /// point for a one-off caller.
-pub(crate) fn check_style_attribute(value: &str, path: &str, report: &mut Report) {
+pub(crate) fn check_style_attribute(value: &str, path: &str, advisory: bool, report: &mut Report) {
     let wrapped = format!("x{{{value}}}");
     let sheet = Parser::parse_stylesheet(&wrapped);
     if let Some(Rule::Qualified(q)) = sheet.rules.first() {
         check_declaration_shapes(&q.block.values, path, report);
+    }
+
+    // Opt-in advisory pass. A style attribute is a bare declaration list;
+    // styloria 0.3 validates one directly. No document byte-offset is available
+    // here, so the finding anchors at the file (path), not a line:column.
+    if advisory {
+        for d in validate_declaration_list(value) {
+            let (id, rule, text, params) = advisory_fields(&d);
+            report.push_at_rule(id, Severity::Usage, text, path, rule, params);
+        }
     }
 }
 
@@ -889,6 +942,7 @@ mod tests {
             name_index,
             &HashSet::new(),
             CssOrigin::File { bytes: None },
+            false,
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
@@ -905,6 +959,7 @@ mod tests {
             name_index,
             &HashSet::new(),
             CssOrigin::File { bytes: None },
+            false,
             &mut report,
         );
         report
@@ -929,6 +984,7 @@ mod tests {
             &HashMap::new(),
             &HashSet::new(),
             CssOrigin::File { bytes: Some(bytes) },
+            false,
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
@@ -936,6 +992,76 @@ mod tests {
 
     fn empty_index() -> HashMap<String, String> {
         HashMap::new()
+    }
+
+    /// Run `check` with the advisory pass enabled and return the report.
+    fn run_advisory(css: &str) -> Report {
+        let mut report = Report::new();
+        check(
+            css,
+            "style.css",
+            "OEBPS",
+            &empty_index(),
+            &HashSet::new(),
+            CssOrigin::File { bytes: None },
+            true,
+            &mut report,
+        );
+        report
+    }
+
+    #[test]
+    fn advisory_off_by_default_emits_no_adv() {
+        // The default path (advisory = false) must be byte-identical: an unknown
+        // property draws nothing.
+        let findings = run("p { font-eight: bold; }", &empty_index());
+        assert!(!findings.iter().any(|id| id.starts_with("ADV-")));
+    }
+
+    #[test]
+    fn advisory_flags_unknown_property_as_adv001() {
+        let report = run_advisory("p { font-eight: bold; }");
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == ADV_001)
+            .expect("ADV-001 emitted");
+        assert_eq!(m.severity, Severity::Usage);
+        assert_eq!(m.rule, Some("css.property.unknown"));
+        assert_eq!(m.params, vec!["font-eight".to_string()]);
+        assert!(m.position.is_some(), "carries a line:column");
+    }
+
+    #[test]
+    fn advisory_flags_unknown_descriptor_as_adv002() {
+        // `color` is a real property but not a @font-face descriptor.
+        let report = run_advisory("@font-face { font-family: F; color: red }");
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == ADV_002)
+            .expect("ADV-002 emitted");
+        assert_eq!(m.severity, Severity::Usage);
+        assert_eq!(m.rule, Some("css.descriptor.unknown"));
+        assert_eq!(m.params, vec!["color".to_string(), "font-face".to_string()]);
+    }
+
+    #[test]
+    fn advisory_is_silent_on_valid_and_exempt_css() {
+        // Known property, vendor-prefixed, and custom property: all clean.
+        let report = run_advisory("p { color: red; -webkit-hyphens: auto; --x: 1 }");
+        assert!(!report.messages.iter().any(|m| m.id.starts_with("ADV-")));
+    }
+
+    #[test]
+    fn advisory_checks_style_attributes() {
+        let mut report = Report::new();
+        check_style_attribute("font-eight: bold", "doc.xhtml", true, &mut report);
+        assert!(report.messages.iter().any(|m| m.id == ADV_001));
+        // ...and off by default:
+        let mut off = Report::new();
+        check_style_attribute("font-eight: bold", "doc.xhtml", false, &mut off);
+        assert!(!off.messages.iter().any(|m| m.id.starts_with("ADV-")));
     }
 
     #[test]
@@ -1137,6 +1263,7 @@ mod tests {
             &empty_index(),
             &manifest_paths,
             CssOrigin::File { bytes: None },
+            false,
             &mut report,
         );
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
@@ -1158,6 +1285,7 @@ mod tests {
             &name_index,
             &HashSet::new(),
             CssOrigin::File { bytes: None },
+            false,
             &mut report,
         );
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
