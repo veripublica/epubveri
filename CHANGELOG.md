@@ -8,6 +8,24 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.16] - 2026-07-20
+
+### Fixed
+
+- **Bare text directly in an EPUB 2 `<body>` was reported twice.** A hand-coded
+  check (from 0.5.7, before an EPUB 2 content model existed) and the EPUB 2
+  RELAX NG grammar (0.5.13) both flagged the same stray text. Removed the
+  hand-coded check — the grammar is the single source of truth, and it also
+  covers bare text in any other block-only element. (Doitsu, MobileRead.)
+
+### Changed
+
+- **The content-model "text not allowed" message is now plainer.** It read
+  `character data is not allowed in element "X"`, which an average ebook
+  creator won't parse; it now reads `stray text is not allowed directly in
+  "X"; wrap it in an element` — saying what's wrong and what to do. Applies to
+  both EPUB 2 and EPUB 3 (e.g. loose text in a `<ul>`). (Doitsu/JSWolf.)
+
 ## [0.5.15] - 2026-07-19
 
 The EPUB 3 XHTML **content model** is now validated comprehensively (#13).
