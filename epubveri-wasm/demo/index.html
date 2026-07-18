@@ -70,6 +70,12 @@
         Drop an <strong>.epub</strong> here, or click to choose one.
       </label>
 
+      <label class="opt">
+        <input type="checkbox" id="advisory" />
+        Advisory checks (opt-in) — also flag unknown CSS property/descriptor names
+        (<code>ADV-*</code>, usage). Off by default; never changes the verdict.
+      </label>
+
       <p class="status" id="status">Loading validator…</p>
 
       <section id="result" hidden>
@@ -125,15 +131,25 @@
           statusEl.textContent = "Failed to load the validator: " + e;
         });
 
+      let lastFile = null;
+
       async function run(file) {
         if (!ready) return;
+        lastFile = file;
         statusEl.textContent = `Validating ${file.name} (${file.size.toLocaleString()} bytes)…`;
         const bytes = new Uint8Array(await file.arrayBuffer());
+        const advisory = document.getElementById("advisory").checked;
         const t0 = performance.now();
-        const report = validate(bytes, undefined);
+        const report = validate(bytes, undefined, advisory);
         const ms = (performance.now() - t0).toFixed(1);
         render(report, file.name, ms);
       }
+
+      // Re-validate the current file when the advisory toggle changes, so the
+      // effect is visible without re-dropping.
+      document.getElementById("advisory").addEventListener("change", () => {
+        if (lastFile) run(lastFile);
+      });
 
       function render(report, name, ms) {
         // `report` is the envelope's inputs[i] shape: { status, summary, items }.

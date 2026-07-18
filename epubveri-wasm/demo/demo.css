@@ -215,3 +215,15 @@ button:disabled, select:disabled { opacity: .45; cursor: default; }
   border-radius: 6px; text-transform: uppercase; letter-spacing: .03em;
   white-space: nowrap;
 }
+
+/* Opt-in toggle under the drop zone (e.g. advisory checks). */
+.opt {
+  display: flex; align-items: flex-start; gap: .5rem;
+  margin: .75rem 0 0; font-size: .85rem; color: var(--muted);
+  cursor: pointer; line-height: 1.4;
+}
+.opt input { margin-top: .15rem; accent-color: var(--accent); }
+.opt code {
+  font-size: .8em; padding: 0 .25rem;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 4px;
+}
