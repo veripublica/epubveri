@@ -119,6 +119,7 @@ pub const OPF_052: &str = "OPF-052"; // a dc:creator/contributor role isn't a re
 pub const OPF_053: &str = "OPF-053"; // a dc:date value doesn't follow recommended ISO 8601 syntax (warning, EPUB3)
 pub const OPF_054: &str = "OPF-054"; // a dc:date value is empty or doesn't conform to ISO 8601 (error, EPUB2)
 pub const OPF_055: &str = "OPF-055"; // a dc:title value is empty (warning)
+pub const OPF_072: &str = "OPF-072"; // a dc metadata element is empty (usage, EPUB2)
 pub const OPF_062: &str = "OPF-062"; // the Adobe page-map extension is in use (usage)
 pub const OPF_063: &str = "OPF-063"; // a page-map reference doesn't resolve to a real id (warning)
 pub const OPF_092: &str = "OPF-092"; // a language tag is empty/whitespace or not well-formed
