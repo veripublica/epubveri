@@ -8,6 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.17] - 2026-07-20
+
+### Added
+
+- **Obsolete/presentational HTML attributes are now flagged (RSC-005),
+  matching EPUBCheck.** `link`/`vlink`/`clear` (removed with no valid host) are
+  rejected on any element; `width`/`size` on `<hr>` are rejected while staying
+  valid on their real hosts (`width` on `<img>`, `size` on `<input>`); and
+  `name` on `<a>` is rejected under the EPUB 2 content model only — EPUBCheck's
+  XHTML5 (EPUB 3) schema still permits it, so flagging it there would
+  over-report. Every occurrence is reported at its own attribute, matching
+  EPUBCheck's per-attribute output for both EPUB 2 and EPUB 3. (Doitsu,
+  MobileRead #107.)
+
 ## [0.5.16] - 2026-07-20
 
 ### Fixed

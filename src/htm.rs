@@ -873,6 +873,84 @@ const HTML5_ONLY_ELEMENTS: [&str; 26] = [
     "wbr",
 ];
 
+/// Presentational attributes HTML5 removed and epubcheck rejects (RSC-005)
+/// wherever they appear - none is valid on any element, so they're matched on
+/// every host. `link`/`vlink` are HTML4 `<body>` attributes, `clear` an HTML4
+/// `<br>` attribute; no HTML5 element defines any of them (nor does any element
+/// legitimately carry an attribute of these names elsewhere).
+const OBSOLETE_GLOBAL_ATTRS: &[&str] = &["link", "vlink", "clear"];
+
+/// Obsolete-on-their-host attributes that stay *valid on other elements*, so
+/// they can't be denied globally (`width` is still valid on
+/// `<img>`/`<canvas>`/..., `size` on `<input>`/`<select>`) - epubcheck rejects
+/// them only on the legacy host. Flagged in *both* content-model versions.
+const OBSOLETE_HOST_ATTRS: &[(&str, &[&str])] = &[("hr", &["width", "size"])];
+
+/// Host-specific obsolete attributes epubcheck rejects only under the EPUB 2
+/// content model. `name` on `<a>` is the case that matters: epubcheck's XHTML5
+/// (EPUB 3) schema still permits it, while its OPS 2.0.1 (EPUB 2) content model
+/// rejects it - so flagging it in EPUB 3 would over-report against epubcheck
+/// (verified against Doitsu's paired EPUB 2 / EPUB 3 output, #107).
+const OBSOLETE_HOST_ATTRS_EPUB2: &[(&str, &[&str])] = &[("a", &["name"])];
+
+/// Obsolete/presentational HTML attributes epubcheck flags as RSC-005
+/// (MobileRead #107 / issue #30). The RELAX NG grammar's attribute handling
+/// can't stand in for this: a globally-invalid attribute aborts the whole
+/// element's content model on the first hit (leaving every later element in the
+/// document unreported - verified: `<body vlink link>` yielded a single message
+/// and nothing below it), and the host-specific ones stay valid on other
+/// elements, so a global denial would misfire on the near-universal
+/// `<meta name>`/`<img width>`. A direct per-attribute pass reports every
+/// occurrence at its own element, matching epubcheck's one-message-per-attribute
+/// output. Which attributes count is version-sensitive (see the tables above).
+pub(crate) fn check_obsolete_attrs(
+    d: &roxmltree::Document,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    let host_lookup = |table: &'static [(&str, &[&str])], el: &str| -> &'static [&'static str] {
+        table
+            .iter()
+            .find(|(name, _)| *name == el)
+            .map(|(_, attrs)| *attrs)
+            .unwrap_or(&[])
+    };
+    for node in d.descendants().filter(|n| n.is_element()) {
+        if node.tag_name().namespace() != Some(XHTML_NS) {
+            continue;
+        }
+        let el = node.tag_name().name();
+        let host_attrs = host_lookup(OBSOLETE_HOST_ATTRS, el);
+        let host_attrs_v2: &[&str] = if is_epub3 {
+            &[]
+        } else {
+            host_lookup(OBSOLETE_HOST_ATTRS_EPUB2, el)
+        };
+        for attr in node.attributes() {
+            if attr.namespace().is_some() {
+                continue;
+            }
+            let name = attr.name();
+            if OBSOLETE_GLOBAL_ATTRS.contains(&name)
+                || host_attrs.contains(&name)
+                || host_attrs_v2.contains(&name)
+            {
+                report.push_node_attr(
+                    RSC_005,
+                    Severity::Error,
+                    format!("attribute \"{name}\" not allowed here"),
+                    path,
+                    node,
+                    attr,
+                    "htm.obsolete_attribute",
+                    vec![name.to_string()],
+                );
+            }
+        }
+    }
+}
+
 /// EPUB 2's own content-document DOM rules - the opposite scope from
 /// `check_dom` below (EPUB 2 only, not EPUB 3): no HTML5-only elements,
 /// no custom-namespaced attributes at all (XHTML 1.1 is closed, unlike
@@ -939,6 +1017,10 @@ pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut 
 /// EPUB3-only, same reasoning as `check_raw` above (all confirmed from the
 /// `epub3/06-content-document/content-document-xhtml.feature` section).
 pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, report: &mut Report) {
+    // Obsolete/presentational attributes are rejected in both content-model
+    // versions (with a version-sensitive set), so this runs before the EPUB
+    // 3-only gate below (#107 / #30).
+    check_obsolete_attrs(d, path, is_epub3, report);
     if !is_epub3 {
         return;
     }
@@ -2070,5 +2152,80 @@ mod tests {
                 "&{name}; expanded to the wrong character"
             );
         }
+    }
+
+    /// Names of the attributes `check_obsolete_attrs` flags, sorted, so a test
+    /// can assert the exact set for a given content-model version (#107 / #30).
+    fn obsolete_attrs(xhtml: &str, is_epub3: bool) -> Vec<String> {
+        let d = crate::ocf::parse_xml(xhtml).unwrap();
+        let mut report = Report::new();
+        check_obsolete_attrs(&d, "content.xhtml", is_epub3, &mut report);
+        let mut names: Vec<String> = report
+            .messages
+            .iter()
+            .filter(|m| m.rule == Some("htm.obsolete_attribute"))
+            .map(|m| m.params[0].clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// Doitsu's #107 body: obsolete/presentational attributes on their legacy
+    /// hosts. `{ns}` lets the same markup stand in for EPUB 2 and EPUB 3.
+    fn word_html(ns: &str) -> String {
+        format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"{ns}>
+<head><title>t</title></head>
+<body vlink="purple" link="blue">
+<h1 vlink="purple" link="blue">t</h1>
+<p><br clear="all"/></p>
+<p><a name="_ftn3">fn</a></p>
+<hr width="33%" size="1"/>
+</body></html>"#
+        )
+    }
+
+    #[test]
+    fn obsolete_attrs_epub3_omits_a_name() {
+        // EPUB 3 (XHTML5): epubcheck flags link/vlink/clear/width/size but still
+        // permits `name` on `<a>`, so we must not report it - matches Doitsu's
+        // epub3_word_html_attrs.epub output exactly.
+        let epub3 = r#" xmlns:epub="http://www.idpf.org/2007/ops""#;
+        assert_eq!(
+            obsolete_attrs(&word_html(epub3), true),
+            vec!["clear", "link", "link", "size", "vlink", "vlink", "width"]
+        );
+    }
+
+    #[test]
+    fn obsolete_attrs_epub2_includes_a_name() {
+        // EPUB 2 (OPS 2.0.1): same set plus `name` on `<a>`, which epubcheck's
+        // EPUB 2 content model rejects.
+        assert_eq!(
+            obsolete_attrs(&word_html(""), false),
+            vec![
+                "clear", "link", "link", "name", "size", "vlink", "vlink", "width"
+            ]
+        );
+    }
+
+    #[test]
+    fn obsolete_attrs_leave_valid_hosts_alone() {
+        // The host-specific names stay valid on other elements: `name` on
+        // `<meta>`/`<input>`/`<select>`, `width`/`height` on `<img>`, `size` on
+        // `<input>`. None of these may be flagged, in either version - a global
+        // denial here would misfire on the near-universal `<meta name>`.
+        let doc = r#"<html xmlns="http://www.w3.org/1999/xhtml">
+<head><title>t</title><meta name="author" content="x"/></head>
+<body>
+<img src="a.png" width="10" height="20" alt=""/>
+<input name="q" size="8"/>
+<select name="s"><option>x</option></select>
+<a name="anchor">still fine in epub2 only-context is handled elsewhere</a>
+</body></html>"#;
+        // `<a name>` is intentionally present: valid in EPUB 3, so epub3 must be
+        // clean; EPUB 2 will flag exactly that one and nothing else here.
+        assert!(obsolete_attrs(doc, true).is_empty());
+        assert_eq!(obsolete_attrs(doc, false), vec!["name"]);
     }
 }
