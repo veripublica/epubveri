@@ -407,6 +407,36 @@ impl Report {
     pub fn is_valid(&self) -> bool {
         self.errors() == 0 && self.fatals() == 0
     }
+
+    /// Order findings the way epubcheck does — by document position — so a book
+    /// reads top-to-bottom instead of in check-execution order. Checks run in
+    /// passes (grammar, then Schematron, then hand-coded, then CSS, …) and each
+    /// walks the document its own way, so without this the same error scattered
+    /// down a file comes out interleaved by *which check* found it, not *where*
+    /// — and any check that iterates a hash container adds a nondeterministic
+    /// shuffle on top (MobileRead #111 / issue #32).
+    ///
+    /// Files keep their existing first-seen order — the spine/processing order
+    /// the validator already emits them in — so only the ordering *within* each
+    /// file changes, sorted by `(line, column)`. The sort is stable, so findings
+    /// at the same spot (and file-level findings with no position, which sort to
+    /// the front of their file) keep their original relative order. Called once
+    /// at the end of validation, so every consumer (CLI, wasm, JSON) sees it.
+    pub fn sort_by_document_order(&mut self) {
+        let mut file_order: std::collections::HashMap<Option<String>, usize> =
+            std::collections::HashMap::new();
+        for m in &self.messages {
+            if !file_order.contains_key(&m.location) {
+                file_order.insert(m.location.clone(), file_order.len());
+            }
+        }
+        self.messages.sort_by_key(|m| {
+            (
+                file_order[&m.location],
+                m.position.map(|p| (p.line, p.column)),
+            )
+        });
+    }
 }
 
 #[cfg(test)]
@@ -485,5 +515,46 @@ mod tests {
         let offset = xml.rfind("<child/>").unwrap();
         let via_offset = Position::of_offset(xml, offset);
         assert_eq!(via_node, via_offset);
+    }
+
+    #[test]
+    fn sort_orders_within_file_by_position_keeping_first_seen_file_order() {
+        let mut r = Report::new();
+        let pos = |line, column| Position { line, column };
+        // File B is seen first, its findings pushed out of position order (as
+        // separate check passes would); then a B file-level finding with no
+        // position; then file A. Only within-file order should change.
+        r.push_at_pos("RSC-005", Severity::Error, "b:20", "B.xhtml", pos(20, 1));
+        r.push_at_pos("RSC-005", Severity::Error, "b:5:9", "B.xhtml", pos(5, 9));
+        r.push_at_pos("RSC-005", Severity::Error, "b:5:2", "B.xhtml", pos(5, 2));
+        r.push_at("RSC-005", Severity::Error, "b:file-level", "B.xhtml");
+        r.push_at_pos("RSC-005", Severity::Error, "a:3", "A.xhtml", pos(3, 1));
+
+        r.sort_by_document_order();
+
+        let order: Vec<&str> = r.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(
+            order,
+            vec![
+                "b:file-level", // no position sorts to the front of its file
+                "b:5:2",        // (5,2) before (5,9) before (20,1)
+                "b:5:9",
+                "b:20",
+                "a:3", // file A stays after B (first-seen file order preserved)
+            ]
+        );
+    }
+
+    #[test]
+    fn sort_is_stable_for_findings_at_the_same_position() {
+        let mut r = Report::new();
+        let pos = Position { line: 9, column: 1 };
+        // Two findings at the exact same spot (e.g. two bad attributes on one
+        // element) must keep the order they were pushed in.
+        r.push_at_pos("RSC-005", Severity::Error, "first", "c.xhtml", pos);
+        r.push_at_pos("RSC-005", Severity::Error, "second", "c.xhtml", pos);
+        r.sort_by_document_order();
+        let order: Vec<&str> = r.messages.iter().map(|m| m.text.as_str()).collect();
+        assert_eq!(order, vec!["first", "second"]);
     }
 }

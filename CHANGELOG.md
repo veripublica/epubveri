@@ -8,6 +8,19 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.5.18] - 2026-07-20
+
+### Fixed
+
+- **Findings are now listed in document order.** They were emitted in
+  check-execution order (grammar pass, then Schematron, then the hand-coded and
+  CSS passes), so a book with many findings — especially several of the same
+  kind scattered down a file — came out interleaved by *which check* found each
+  one rather than by *where* it is, and any check backed by a hash container
+  added a nondeterministic shuffle on top. Findings within each file are now
+  sorted by line and column (files keep their reading order), and two runs over
+  the same book produce identical output. (rantanplan, MobileRead.)
+
 ## [0.5.17] - 2026-07-20
 
 ### Added
