@@ -148,6 +148,8 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     // rather than letting it grow for the life of a long-lived embedded
     // process validating many books.
     rng::clear_intern_cache();
+    // Present findings in document order, not check-execution order (#32).
+    report.sort_by_document_order();
     report
 }
 
