@@ -1,6 +1,6 @@
 [package]
 name = "epubveri-wasm"
-version = "0.5.16"
+version = "0.5.17"
 edition = "2024"
 description = "WebAssembly bindings for epubveri — a pure-Rust, JVM-free EPUB validator that runs in the browser."
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
