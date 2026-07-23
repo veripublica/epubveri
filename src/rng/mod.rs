@@ -796,4 +796,42 @@ mod tests {
         );
         assert!(ok(&xhtml_grammar_epub2(), &xml));
     }
+
+    // #34 slice B: on* event-handler attributes.
+
+    #[test]
+    fn xhtml_grammar_accepts_generic_event_handlers() {
+        let xml = xhtml_doc(concat!(
+            "<button onclick=\"doIt()\" onmouseover=\"hi()\">go</button>",
+            "<img src=\"a.png\" alt=\"\" onerror=\"fallback()\"/>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_body_only_window_events_via_wildcard() {
+        // onunload/onpageshow/etc. (epubcheck's body.attrs.on*, mod/html5/
+        // meta.rnc) are deliberately left ungranted by this slice - see
+        // the comment above bodyEl in schemas/xhtml.rng for why (giving
+        // them a body-only grammar rule made them wrongly rejected
+        // elsewhere, since anyOtherAttr's except-list isn't per-element).
+        // Still purely wildcard-covered, on <body> and elsewhere alike,
+        // same as before this slice - this locks that in as a regression
+        // guard until #36 properly scopes them to <body>.
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body onload=\"init()\" onunload=\"cleanup()\" onpageshow=\"show()\">\
+             <p onunload=\"also fine for now\">hi</p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_generic_event_handlers() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body onload=\"init()\"><p onclick=\"hi()\">hi</p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
 }

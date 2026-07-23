@@ -106,6 +106,20 @@
     <element name="body"><ref name="globalAttrs"/><ref name="flowContent"/></element>
   </define>
 
+  <!-- #34 slice B: the <body>-only window/document lifecycle events
+       (mod/html5/meta.rnc, body.attrs.on* - onunload/onpageshow/etc.) are
+       deliberately NOT given their own grammar rule yet. Granting them
+       only on <body> requires excluding them from anyOtherAttr's
+       except-list everywhere else too (RNG's attribute-uniqueness rule is
+       global, not per-element) - which would make them rejected on every
+       *other* element pre-#36, breaking this slice's verdict-neutrality
+       (caught by xhtml_grammar_accepts_body_only_window_events_anywhere_
+       pre_cutover failing when first tried). Properly scoping them to
+       <body> only is meaningful once the wildcard is gone, i.e. #36
+       territory - left fully wildcard-covered (no schema change at all)
+       until then, same as this issue's other per-element-enforcement
+       deferrals (role's token enum, aria-* value types). -->
+
   <!-- ============ global attributes ============ -->
 
   <define name="langValue">
@@ -184,11 +198,100 @@
     <optional><attribute name="popover"><data type="token"/></attribute></optional>
 
     <!-- Core-scripting non-event globals (mod/html5/common.rnc /
-         core-scripting.rnc). The on* event-handler set is a separate,
-         later addition (#34 slice B) pending a scripted-content-detection
-         review - see docs/PROGRESS_LOG.md / issue #34. -->
+         core-scripting.rnc). -->
     <optional><attribute name="autofocus"><data type="token"/></attribute></optional>
     <optional><attribute name="nonce"><data type="string"/></attribute></optional>
+
+    <!-- #34 slice B: the generic on* event-handler set (mod/html5/
+         core-scripting.rnc, common.attrs.scripting - folded into every
+         element via common.attrs.other, so global here too). Value-
+         permissive (string, not syntax-checked as ECMAScript - epubcheck's
+         own schema doesn't check it either, see epubcheck.patch notes).
+         NOTE: filed as its own issue (#37), not fixed here - has_script
+         (OPF-014/015 "scripted" detection, src/opf.rs) currently keys off
+         any <input>/<button>/<select>/<textarea> element regardless of
+         attributes, and does not look at on* at all. Adding these names
+         to the grammar is independent of that detection bug. -->
+    <optional><attribute name="onauxclick"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforeinput"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforematch"><data type="string"/></attribute></optional>
+    <optional><attribute name="onblur"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncancel"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncanplay"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncanplaythrough"><data type="string"/></attribute></optional>
+    <optional><attribute name="onchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onclick"><data type="string"/></attribute></optional>
+    <optional><attribute name="onclose"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncontextlost"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncontextmenu"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncontextrestored"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncopy"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncuechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncut"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondblclick"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondrag"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragend"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragenter"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragleave"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragover"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragstart"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondrop"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondurationchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onemptied"><data type="string"/></attribute></optional>
+    <optional><attribute name="onended"><data type="string"/></attribute></optional>
+    <optional><attribute name="onerror"><data type="string"/></attribute></optional>
+    <optional><attribute name="onfocus"><data type="string"/></attribute></optional>
+    <optional><attribute name="onformdata"><data type="string"/></attribute></optional>
+    <optional><attribute name="oninput"><data type="string"/></attribute></optional>
+    <optional><attribute name="oninvalid"><data type="string"/></attribute></optional>
+    <optional><attribute name="onkeydown"><data type="string"/></attribute></optional>
+    <optional><attribute name="onkeypress"><data type="string"/></attribute></optional>
+    <optional><attribute name="onkeyup"><data type="string"/></attribute></optional>
+    <optional><attribute name="onload"><data type="string"/></attribute></optional>
+    <optional><attribute name="onloadeddata"><data type="string"/></attribute></optional>
+    <optional><attribute name="onloadedmetadata"><data type="string"/></attribute></optional>
+    <optional><attribute name="onloadstart"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmousedown"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseenter"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseleave"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmousemove"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseout"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseover"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseup"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpaste"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpause"><data type="string"/></attribute></optional>
+    <optional><attribute name="onplay"><data type="string"/></attribute></optional>
+    <optional><attribute name="onplaying"><data type="string"/></attribute></optional>
+    <optional><attribute name="onprogress"><data type="string"/></attribute></optional>
+    <optional><attribute name="onratechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onreset"><data type="string"/></attribute></optional>
+    <optional><attribute name="onresize"><data type="string"/></attribute></optional>
+    <optional><attribute name="onscroll"><data type="string"/></attribute></optional>
+    <optional><attribute name="onscrollend"><data type="string"/></attribute></optional>
+    <optional><attribute name="onsecuritypolicyviolation"><data type="string"/></attribute></optional>
+    <optional><attribute name="onseeked"><data type="string"/></attribute></optional>
+    <optional><attribute name="onseeking"><data type="string"/></attribute></optional>
+    <optional><attribute name="onselect"><data type="string"/></attribute></optional>
+    <optional><attribute name="onslotchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onstalled"><data type="string"/></attribute></optional>
+    <optional><attribute name="onsubmit"><data type="string"/></attribute></optional>
+    <optional><attribute name="onsuspend"><data type="string"/></attribute></optional>
+    <optional><attribute name="ontimeupdate"><data type="string"/></attribute></optional>
+    <optional><attribute name="ontoggle"><data type="string"/></attribute></optional>
+    <optional><attribute name="onvolumechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onwaiting"><data type="string"/></attribute></optional>
+    <optional><attribute name="onwheel"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerover"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerenter"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerdown"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointermove"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerrawupdate"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerup"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointercancel"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerout"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerleave"><data type="string"/></attribute></optional>
+    <optional><attribute name="ongotpointercapture"><data type="string"/></attribute></optional>
+    <optional><attribute name="onlostpointercapture"><data type="string"/></attribute></optional>
 
     <!-- WAI-ARIA 1.2 global states/properties (mod/html5/aria.rnc) plus
          `role` itself. Names only, value-permissive: epubcheck's schema
@@ -298,6 +401,87 @@
             <name>aria-relevant</name>
             <name>aria-roledescription</name>
             <name>aria-description</name>
+            <!-- #34 slice B: the generic on* event-handler set. -->
+            <name>onauxclick</name>
+            <name>onbeforeinput</name>
+            <name>onbeforematch</name>
+            <name>onblur</name>
+            <name>oncancel</name>
+            <name>oncanplay</name>
+            <name>oncanplaythrough</name>
+            <name>onchange</name>
+            <name>onclick</name>
+            <name>onclose</name>
+            <name>oncontextlost</name>
+            <name>oncontextmenu</name>
+            <name>oncontextrestored</name>
+            <name>oncopy</name>
+            <name>oncuechange</name>
+            <name>oncut</name>
+            <name>ondblclick</name>
+            <name>ondrag</name>
+            <name>ondragend</name>
+            <name>ondragenter</name>
+            <name>ondragleave</name>
+            <name>ondragover</name>
+            <name>ondragstart</name>
+            <name>ondrop</name>
+            <name>ondurationchange</name>
+            <name>onemptied</name>
+            <name>onended</name>
+            <name>onerror</name>
+            <name>onfocus</name>
+            <name>onformdata</name>
+            <name>oninput</name>
+            <name>oninvalid</name>
+            <name>onkeydown</name>
+            <name>onkeypress</name>
+            <name>onkeyup</name>
+            <name>onload</name>
+            <name>onloadeddata</name>
+            <name>onloadedmetadata</name>
+            <name>onloadstart</name>
+            <name>onmousedown</name>
+            <name>onmouseenter</name>
+            <name>onmouseleave</name>
+            <name>onmousemove</name>
+            <name>onmouseout</name>
+            <name>onmouseover</name>
+            <name>onmouseup</name>
+            <name>onpaste</name>
+            <name>onpause</name>
+            <name>onplay</name>
+            <name>onplaying</name>
+            <name>onprogress</name>
+            <name>onratechange</name>
+            <name>onreset</name>
+            <name>onresize</name>
+            <name>onscroll</name>
+            <name>onscrollend</name>
+            <name>onsecuritypolicyviolation</name>
+            <name>onseeked</name>
+            <name>onseeking</name>
+            <name>onselect</name>
+            <name>onslotchange</name>
+            <name>onstalled</name>
+            <name>onsubmit</name>
+            <name>onsuspend</name>
+            <name>ontimeupdate</name>
+            <name>ontoggle</name>
+            <name>onvolumechange</name>
+            <name>onwaiting</name>
+            <name>onwheel</name>
+            <name>onpointerover</name>
+            <name>onpointerenter</name>
+            <name>onpointerdown</name>
+            <name>onpointermove</name>
+            <name>onpointerrawupdate</name>
+            <name>onpointerup</name>
+            <name>onpointercancel</name>
+            <name>onpointerout</name>
+            <name>onpointerleave</name>
+            <name>ongotpointercapture</name>
+            <name>onlostpointercapture</name>
           </except>
         </anyName>
       </attribute>
