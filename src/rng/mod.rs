@@ -834,4 +834,31 @@ mod tests {
         );
         assert!(ok(&xhtml_grammar_epub2(), &xml));
     }
+
+    // #34 slice C: RDFA 1.1 global attributes.
+
+    #[test]
+    fn xhtml_grammar_accepts_rdfa_attributes() {
+        let xml = xhtml_doc(concat!(
+            "<div about=\"#me\" typeof=\"foaf:Person\" vocab=\"http://xmlns.com/foaf/0.1/\">",
+            "<p property=\"foaf:name\" datatype=\"xsd:string\">Baris</p>",
+            "<a rev=\"foaf:knows\" resource=\"#you\" href=\"#you\">friend</a>",
+            "<span property=\"foaf:topic\" inlist=\"\" content=\"x\">t</span>",
+            "</div>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_still_accepts_rel_anywhere() {
+        // `rel` was deliberately NOT added as a new global (collides with
+        // <a>'s existing explicit definition) - this locks in that it's
+        // still accepted both on <a> (its own rule) and elsewhere (still
+        // wildcard-covered), unchanged by slice C.
+        let xml = xhtml_doc(concat!(
+            "<a href=\"x\" rel=\"nofollow\">x</a>",
+            "<span rel=\"license\">y</span>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
 }

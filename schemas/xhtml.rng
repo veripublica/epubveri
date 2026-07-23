@@ -190,6 +190,35 @@
          added (#35 territory - epub: namespaced attribute family). -->
     <optional><attribute name="prefix"><data type="string"/></attribute></optional>
 
+    <!-- #34 slice C: the rest of RDFA 1.1's global attribute set
+         (mod/html5/rdfa.rnc, via epubcheck's epub-xhtml-inc.rnc). Checked
+         each name against the existing grammar first (grep for
+         `name="X"` across this file) - all nine are unclaimed by any
+         per-element definition, so no collision. Value-permissive
+         (string, not a real CURIE/SafeCURIE/term-list grammar) for the
+         same name-only-scope reason as the rest of #34.
+
+         `rel` is the one RDFA global name deliberately NOT added here:
+         `<a>` (both EPUB 3's aEl and EPUB 2's aEl-epub2) already has its
+         own explicit `rel` definition, already value-permissive
+         (`<data type="string"/>`), so a second global one would collide
+         (RNG attribute uniqueness) on <a> specifically. Elsewhere `rel`
+         stays exactly as before - purely wildcard-covered - since
+         excluding it from anyOtherAttr's except-list without granting it
+         everywhere it's actually used would repeat slice B's
+         body-only-events regression (a name excluded from the global
+         wildcard but only re-granted on some elements becomes wrongly
+         rejected on the rest). -->
+    <optional><attribute name="about"><data type="string"/></attribute></optional>
+    <optional><attribute name="property"><data type="string"/></attribute></optional>
+    <optional><attribute name="typeof"><data type="string"/></attribute></optional>
+    <optional><attribute name="vocab"><data type="string"/></attribute></optional>
+    <optional><attribute name="content"><data type="string"/></attribute></optional>
+    <optional><attribute name="datatype"><data type="string"/></attribute></optional>
+    <optional><attribute name="resource"><data type="string"/></attribute></optional>
+    <optional><attribute name="rev"><data type="string"/></attribute></optional>
+    <optional><attribute name="inlist"><data type="string"/></attribute></optional>
+
     <!-- HTML5 interaction/editing globals (mod/html5/applications.rnc). -->
     <optional><attribute name="draggable"><data type="token"/></attribute></optional>
     <optional><attribute name="inputmode"><data type="token"/></attribute></optional>
@@ -373,6 +402,17 @@
             <name>is</name>
             <name>slot</name>
             <name>prefix</name>
+            <!-- #34 slice C: RDFA globals. `rel` deliberately excluded
+                 from this list - see the comment above its definitions. -->
+            <name>about</name>
+            <name>property</name>
+            <name>typeof</name>
+            <name>vocab</name>
+            <name>content</name>
+            <name>datatype</name>
+            <name>resource</name>
+            <name>rev</name>
+            <name>inlist</name>
             <name>draggable</name>
             <name>inputmode</name>
             <name>enterkeyhint</name>
