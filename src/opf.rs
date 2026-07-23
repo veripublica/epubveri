@@ -7893,6 +7893,50 @@ mod tests {
         assert!(!report.is_valid());
     }
 
+    #[test]
+    fn data_star_attributes_are_not_reported_as_unknown() {
+        // #35/#36 (part of the #31 attribute-allowlist epic): data-* is
+        // genuinely open-ended - no RELAX NG name class can express "any
+        // name starting with data-" - so it has no grammar rule at all.
+        // Now that #36 has removed the permissive wildcard, the grammar
+        // alone WOULD blame a well-formed data-* attribute as "not
+        // allowed" (confirmed: this test would fail without the
+        // suppression). htm::is_data_attribute_name + its call site in the
+        // RSC-005 emission loop above catch exactly this case. This is the
+        // real end-to-end test #35 could only note as a future TODO, since
+        // it wasn't reachable before the wildcard was actually gone.
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p data-foo=\"bar\" data-x-y-z=\"1\">hi</p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        assert!(report.is_valid(), "got: {:?}", report.messages);
+        assert!(rsc_005_rules(epub_with_ch1(ch1)).is_empty());
+    }
+
+    #[test]
+    fn malformed_data_star_attribute_is_htm_061_only_not_also_rsc_005() {
+        // The suppression is name-shape-only (not re-validating the
+        // suffix) so a malformed data-* name isn't silently accepted - it
+        // still fails HTM-061 - but it must not ALSO draw a redundant
+        // RSC-005 for the same defect (the double-report class of bug this
+        // epic has hit and fixed twice already, in svg.rs and 0.5.10/
+        // 0.5.16 before it).
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p data-Bad=\"x\">hi</p></body></html>";
+        let report = crate::validate_bytes(epub_with_ch1(ch1));
+        assert!(
+            report.messages.iter().any(|m| m.id == crate::ids::HTM_061),
+            "got: {:?}",
+            report.messages
+        );
+        assert!(
+            rsc_005_rules(epub_with_ch1(ch1)).is_empty(),
+            "got: {:?}",
+            report.messages
+        );
+    }
+
     /// Build a minimal valid EPUB 3 with the caller's extra lines injected
     /// into the OPF `<metadata>` — used to exercise metadata-level checks
     /// (here, deprecated `<link rel>` keywords).

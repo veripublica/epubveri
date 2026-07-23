@@ -651,6 +651,26 @@ mod tests {
     }
 
     #[test]
+    fn xhtml_grammar_rejects_unknown_and_mistyped_attributes() {
+        // The whole point of #31: a made-up name and a typo of a real one
+        // must both be rejected now that the wildcard is gone (Doitsu,
+        // MobileRead #110). Each should be its own blamed attribute.
+        let xml = xhtml_doc("<p fake=\"fake\" clas=\"header\">*</p>");
+        let locs = fail_locals(&xhtml_grammar(), &xml);
+        assert_eq!(locs, vec!["@fake", "@clas"]);
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_rejects_unknown_and_mistyped_attributes() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p fake=\"fake\" clas=\"header\">*</p></body></html>"
+        );
+        let locs = fail_locals(&xhtml_grammar_epub2(), &xml);
+        assert_eq!(locs, vec!["@fake", "@clas"]);
+    }
+
+    #[test]
     fn xhtml_grammar_rejects_style_in_body() {
         let xml = xhtml_doc("<style>p{color:red}</style>");
         assert!(!ok(&xhtml_grammar(), &xml));
@@ -809,21 +829,26 @@ mod tests {
     }
 
     #[test]
-    fn xhtml_grammar_accepts_body_only_window_events_via_wildcard() {
+    fn xhtml_grammar_accepts_body_only_window_events_on_body() {
         // onunload/onpageshow/etc. (epubcheck's body.attrs.on*, mod/html5/
-        // meta.rnc) are deliberately left ungranted by this slice - see
-        // the comment above bodyEl in schemas/xhtml.rng for why (giving
-        // them a body-only grammar rule made them wrongly rejected
-        // elsewhere, since anyOtherAttr's except-list isn't per-element).
-        // Still purely wildcard-covered, on <body> and elsewhere alike,
-        // same as before this slice - this locks that in as a regression
-        // guard until #36 properly scopes them to <body>.
+        // meta.rnc) are properly scoped to <body> as of the #36 cutover -
+        // see bodyOnlyEvents in schemas/xhtml.rng.
         let xml = format!(
             "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
              <body onload=\"init()\" onunload=\"cleanup()\" onpageshow=\"show()\">\
-             <p onunload=\"also fine for now\">hi</p></body></html>"
+             <p>hi</p></body></html>"
         );
         assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_body_only_window_events_elsewhere() {
+        // The other half of the same story: now that the wildcard is gone,
+        // onunload genuinely isn't allowed outside <body> - it's not a
+        // generic event handler (onclick et al are global; this family
+        // isn't).
+        let xml = xhtml_doc("<p onunload=\"x()\">hi</p>");
+        assert!(!ok(&xhtml_grammar(), &xml));
     }
 
     #[test]

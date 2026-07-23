@@ -103,6 +103,11 @@
            (`content` is already global, added in #34 slice C's RDFA set,
            and already granted here via globalAttrsCore). -->
       <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <!-- #36: found by the cutover itself - <meta charset="utf-8"> (the
+           single most common `<meta>` shape in real EPUB 3 documents) was
+           entirely wildcard-covered and had no explicit rule anywhere,
+           missed by every prior slice's recon. -->
+      <optional><attribute name="charset"><data type="string"/></attribute></optional>
     </element>
   </define>
   <define name="linkEl">
@@ -123,22 +128,37 @@
   </define>
 
   <define name="bodyEl">
-    <element name="body"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+    <element name="body"><ref name="globalAttrs"/><ref name="bodyOnlyEvents"/><ref name="flowContent"/></element>
   </define>
 
-  <!-- #34 slice B: the <body>-only window/document lifecycle events
-       (mod/html5/meta.rnc, body.attrs.on* - onunload/onpageshow/etc.) are
-       deliberately NOT given their own grammar rule yet. Granting them
-       only on <body> requires excluding them from anyOtherAttr's
-       except-list everywhere else too (RNG's attribute-uniqueness rule is
-       global, not per-element) - which would make them rejected on every
-       *other* element pre-#36, breaking this slice's verdict-neutrality
-       (caught by xhtml_grammar_accepts_body_only_window_events_anywhere_
-       pre_cutover failing when first tried). Properly scoping them to
-       <body> only is meaningful once the wildcard is gone, i.e. #36
-       territory - left fully wildcard-covered (no schema change at all)
-       until then, same as this issue's other per-element-enforcement
-       deferrals (role's token enum, aria-* value types). -->
+  <!-- #36 cutover: the <body>-only window/document lifecycle events
+       (mod/html5/meta.rnc, body.attrs.on*). #34 slice B deferred these -
+       scoping them to <body> only while the wildcard was still active
+       would have excluded them from anyOtherAttr's except-list (global,
+       not per-element) and made them wrongly rejected on every *other*
+       element pre-cutover. Now that the wildcard is gone entirely, that
+       risk doesn't exist - these just need their own rule like everything
+       else, and this is the one family that was deliberately left with
+       NO rule at all until now (everything else got a permissive
+       placeholder somewhere; this one had nowhere to go before). -->
+  <define name="bodyOnlyEvents">
+    <optional><attribute name="onafterprint"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforeprint"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforeunload"><data type="string"/></attribute></optional>
+    <optional><attribute name="onhashchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onlanguagechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmessage"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmessageerror"><data type="string"/></attribute></optional>
+    <optional><attribute name="onoffline"><data type="string"/></attribute></optional>
+    <optional><attribute name="ononline"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpagehide"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpageshow"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpopstate"><data type="string"/></attribute></optional>
+    <optional><attribute name="onrejectionhandled"><data type="string"/></attribute></optional>
+    <optional><attribute name="onstorage"><data type="string"/></attribute></optional>
+    <optional><attribute name="onunhandledrejection"><data type="string"/></attribute></optional>
+    <optional><attribute name="onunload"><data type="string"/></attribute></optional>
+  </define>
 
   <!-- ============ global attributes ============ -->
 
@@ -392,7 +412,147 @@
     <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
 
-    <ref name="anyOtherAttr"/>
+    <!-- #36: the rest of ARIA 1.2's states/properties - #34 slice A only
+           added the *global* ones (per-role-scoped ones were out of scope
+           there). Real epubcheck corpus fixture edupub-heading-aria-role-
+           valid.xhtml uses aria-level outside any role-pairing machinery
+           we implement, so - same as everywhere else in this epic - kept
+           as simple permissive globals rather than building real
+           role/attribute-pairing validation. -->
+    <optional><attribute name="aria-checked"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-expanded"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-pressed"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-selected"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-activedescendant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-autocomplete"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colcount"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colindex"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-level"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-modal"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-multiline"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-multiselectable"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-orientation"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-placeholder"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-posinset"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-setsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-readonly"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-required"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowcount"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowindex"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-sort"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuemax"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuemin"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuenow"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuetext"><data type="string"/></attribute></optional>
+
+    <!-- #36: found by the cutover - <meta http-equiv="..." content="...">
+         is one of the two most common <meta> shapes in real EPUB 3
+         documents (the other, `name`, was already added in #33) and had
+         no explicit rule anywhere; confirmed against epubcheck's own
+         corpus fixture http-equiv-valid.xhtml. Kept here rather than on
+         metaEl specifically since http-equiv is meta-only in practice but
+         this mirrors how every other #36-discovered gap was fixed. -->
+    <optional><attribute name="http-equiv"><data type="string"/></attribute></optional>
+
+    <!-- #36: ITS 2.0 (Internationalization Tag Set) attributes. Confirmed
+         needed against epubcheck's own corpus fixture attrs-its-valid.xhtml
+         (its-locale-filter-list/its-term used on <p>/<span>). The full
+         name list is only formally enumerated in epubcheck's schema as
+         part of <embed>'s own element-specific wildcard
+         (mod/html5/embed.rnc, embed.attrs.other, itself marked
+         "# REVISIT common.attrs" by epubcheck's own authors) - not
+         actually global there - yet the corpus fixture proves epubcheck
+         accepts them elsewhere too (some other, non-RNG validation path
+         we can't see from the vendored schema files alone). Rather than
+         treat `its-*` as a genuine open-ended suppression like `data-*`
+         (which would accept any made-up its-nonsense name), enumerated
+         the real finite list epubcheck's own schema names - more precise,
+         and this family is small enough that it's cheap to get right. -->
+    <optional><attribute name="its-loc-note"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-note-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-note-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-term-info-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-term"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-term-confidence"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-within-text"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-domain-mapping"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-confidence"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-class-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-ident"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-ident-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-source"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-locale-filter-list"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-locale-filter-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-person"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-person-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-org"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-org-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-tool"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-tool-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-person"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-person-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-org"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-org-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-tool"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-tool-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-prov-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-provenance-records-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issues-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-comment"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-severity"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-profile-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-enabled"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-score"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-vote"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-score-threshold"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-vote-threshold"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-profile-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-mt-confidence"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-allowed-characters"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-storage-size"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-storage-encoding"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-line-break-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-annotators-ref"><data type="string"/></attribute></optional>
+
+    <!-- #36: any attribute in a genuinely foreign (non-empty) namespace,
+         except the ones already given their own explicit rule above/
+         elsewhere. Confirmed needed, not a hypothetical: epubcheck's own
+         corpus fixture attrs-custom-ns-valid.xhtml has
+         `<body custom:attribute="allowed" xmlns:custom="http://example.org">`
+         - a wholly made-up namespace and attribute name, and it's a
+         should-be-VALID fixture. This also naturally covers `ssml:ph`/
+         `ssml:alphabet` (proven needed by ssml-valid.xhtml), which had no
+         explicit rule of their own despite #34's recon noting they were
+         "already global" in epubcheck's real schema - that note described
+         epubcheck's structure, but nothing in this epic had actually
+         implemented it yet. Uses the engine's existing NsName machinery
+         (confirmed correctly threaded, unlike anyName's ns attribute -
+         see #38) rather than any new engine work: `<anyName>` matches
+         every namespace by RELAX NG's real semantics, and excepting
+         `<nsName ns="">` (i.e. "no namespace") plus every specific
+         namespaced name already granted elsewhere yields exactly "any
+         OTHER namespace." A malformed/impersonated reserved namespace
+         (one that resolves to a w3.org/idpf.org host but isn't a real
+         known one) is still caught separately by HTM-054 in htm.rs, which
+         runs independently of this grammar. -->
+    <zeroOrMore>
+      <attribute>
+        <anyName>
+          <except>
+            <nsName ns=""/>
+            <name>xml:lang</name>
+            <name>xml:base</name>
+            <name>xml:space</name>
+            <name>epub:type</name>
+            <name>epub:trigger</name>
+            <name>epub:prefix</name>
+          </except>
+        </anyName>
+      </attribute>
+    </zeroOrMore>
   </define>
 
   <define name="globalAttrs">
@@ -405,297 +565,23 @@
     <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
   </define>
 
-  <!-- Any attribute other than the standard globals/element-specifics above,
-       explicitly excluding: (a) known-obsolete/removed attribute names, and
-       (b) the handful of names we give a real value-level constraint to
-       elsewhere (so this permissive fallback can't silently bypass them —
-       RELAX NG's choice-based attribute matching means an unconstrained
-       catch-all would otherwise make any co-existing strict pattern a no-op).
-       This is how obsolete-attribute errors are caught without an exhaustive
-       allow-list, since RELAX NG name classes can't express prefix wildcards
-       like "any data-* attribute". -->
-  <define name="anyOtherAttr">
-    <zeroOrMore>
-      <attribute>
-        <anyName ns="">
-          <except>
-            <name>typemustmatch</name>
-            <name>contextmenu</name>
-            <name>dropzone</name>
-            <name>pubdate</name>
-            <name>seamless</name>
-            <name>aria-describedat</name>
-            <name>dir</name>
-            <name>translate</name>
-            <name>lang</name>
-            <name>xml:lang</name>
-            <name>epub:type</name>
-            <name>epub:trigger</name>
-            <name>border</name>
-            <!-- #34 slice A: names given a real (if permissive) definition
-                 in globalAttrsCore above, so the wildcard must not also
-                 match them (RELAX NG requires disjoint attribute name
-                 classes within a group). -->
-            <name>itemscope</name>
-            <name>itemid</name>
-            <name>itemref</name>
-            <name>itemprop</name>
-            <name>itemtype</name>
-            <name>is</name>
-            <name>slot</name>
-            <name>prefix</name>
-            <!-- #34 slice C: RDFA globals. `rel` deliberately excluded
-                 from this list - see the comment above its definitions. -->
-            <name>about</name>
-            <name>property</name>
-            <name>typeof</name>
-            <name>vocab</name>
-            <name>content</name>
-            <name>datatype</name>
-            <name>resource</name>
-            <name>rev</name>
-            <name>inlist</name>
-            <!-- #35: xml:base/xml:space/epub:prefix. -->
-            <name>xml:base</name>
-            <name>xml:space</name>
-            <name>epub:prefix</name>
-            <name>draggable</name>
-            <name>inputmode</name>
-            <name>enterkeyhint</name>
-            <name>autocapitalize</name>
-            <name>popover</name>
-            <name>autofocus</name>
-            <name>nonce</name>
-            <name>role</name>
-            <name>aria-atomic</name>
-            <name>aria-busy</name>
-            <name>aria-controls</name>
-            <name>aria-current</name>
-            <name>aria-describedby</name>
-            <name>aria-details</name>
-            <name>aria-disabled</name>
-            <name>aria-errormessage</name>
-            <name>aria-flowto</name>
-            <name>aria-haspopup</name>
-            <name>aria-hidden</name>
-            <name>aria-invalid</name>
-            <name>aria-keyshortcuts</name>
-            <name>aria-label</name>
-            <name>aria-labelledby</name>
-            <name>aria-live</name>
-            <name>aria-owns</name>
-            <name>aria-relevant</name>
-            <name>aria-roledescription</name>
-            <name>aria-description</name>
-            <!-- #34 slice B: the generic on* event-handler set. -->
-            <name>onauxclick</name>
-            <name>onbeforeinput</name>
-            <name>onbeforematch</name>
-            <name>onblur</name>
-            <name>oncancel</name>
-            <name>oncanplay</name>
-            <name>oncanplaythrough</name>
-            <name>onchange</name>
-            <name>onclick</name>
-            <name>onclose</name>
-            <name>oncontextlost</name>
-            <name>oncontextmenu</name>
-            <name>oncontextrestored</name>
-            <name>oncopy</name>
-            <name>oncuechange</name>
-            <name>oncut</name>
-            <name>ondblclick</name>
-            <name>ondrag</name>
-            <name>ondragend</name>
-            <name>ondragenter</name>
-            <name>ondragleave</name>
-            <name>ondragover</name>
-            <name>ondragstart</name>
-            <name>ondrop</name>
-            <name>ondurationchange</name>
-            <name>onemptied</name>
-            <name>onended</name>
-            <name>onerror</name>
-            <name>onfocus</name>
-            <name>onformdata</name>
-            <name>oninput</name>
-            <name>oninvalid</name>
-            <name>onkeydown</name>
-            <name>onkeypress</name>
-            <name>onkeyup</name>
-            <name>onload</name>
-            <name>onloadeddata</name>
-            <name>onloadedmetadata</name>
-            <name>onloadstart</name>
-            <name>onmousedown</name>
-            <name>onmouseenter</name>
-            <name>onmouseleave</name>
-            <name>onmousemove</name>
-            <name>onmouseout</name>
-            <name>onmouseover</name>
-            <name>onmouseup</name>
-            <name>onpaste</name>
-            <name>onpause</name>
-            <name>onplay</name>
-            <name>onplaying</name>
-            <name>onprogress</name>
-            <name>onratechange</name>
-            <name>onreset</name>
-            <name>onresize</name>
-            <name>onscroll</name>
-            <name>onscrollend</name>
-            <name>onsecuritypolicyviolation</name>
-            <name>onseeked</name>
-            <name>onseeking</name>
-            <name>onselect</name>
-            <name>onslotchange</name>
-            <name>onstalled</name>
-            <name>onsubmit</name>
-            <name>onsuspend</name>
-            <name>ontimeupdate</name>
-            <name>ontoggle</name>
-            <name>onvolumechange</name>
-            <name>onwaiting</name>
-            <name>onwheel</name>
-            <name>onpointerover</name>
-            <name>onpointerenter</name>
-            <name>onpointerdown</name>
-            <name>onpointermove</name>
-            <name>onpointerrawupdate</name>
-            <name>onpointerup</name>
-            <name>onpointercancel</name>
-            <name>onpointerout</name>
-            <name>onpointerleave</name>
-            <name>ongotpointercapture</name>
-            <name>onlostpointercapture</name>
-            <!-- #33: forms vocabulary (input/select/textarea/button), both
-                 newly-added and pre-existing element-specific names. NOT
-                 just tidiness - a name matchable by both an element's own
-                 rule AND this wildcard is genuine grammar ambiguity, and
-                 the derivative validator explores both alternatives at
-                 every such attribute, compounding per attribute (2^n).
-                 Confirmed empirically (see the bisect_* scratch timing
-                 tests in src/rng/mod.rs, temporary, to be removed): with
-                 the wildcard's ~140-name except-list, an unexcepted
-                 element with ~15 ambiguous attributes present took ~8s to
-                 validate; <input>'s full ~29-attribute completion made it
-                 effectively hang (tens of minutes). Excepting these names
-                 restores determinism (each attribute matches exactly one
-                 alternative) and linear time. Some of these (name, value,
-                 type, size, form, ...) are legitimately used on other
-                 elements too via this same wildcard - verified via the
-                 full corpus run, not just by inspection, same discipline
-                 as every other slice in this epic. -->
-            <name>type</name>
-            <name>name</name>
-            <name>value</name>
-            <name>list</name>
-            <name>form</name>
-            <name>disabled</name>
-            <name>placeholder</name>
-            <name>checked</name>
-            <name>required</name>
-            <name>min</name>
-            <name>max</name>
-            <name>step</name>
-            <name>pattern</name>
-            <name>multiple</name>
-            <name>accept</name>
-            <name>autocomplete</name>
-            <name>size</name>
-            <name>maxlength</name>
-            <name>minlength</name>
-            <name>readonly</name>
-            <name>src</name>
-            <name>alt</name>
-            <name>dirname</name>
-            <name>capture</name>
-            <name>height</name>
-            <name>width</name>
-            <name>formaction</name>
-            <name>formmethod</name>
-            <name>formnovalidate</name>
-            <name>formtarget</name>
-            <name>formenctype</name>
-            <name>rows</name>
-            <name>cols</name>
-            <name>wrap</name>
-            <name>popovertarget</name>
-            <name>popovertargetaction</name>
-            <!-- #33 slice 2: a/area/img/ins/del.attrs completion. Applying
-                 #39's lesson proactively - every per-element attribute
-                 this slice touches (old or new) gets excepted, not just
-                 the newly-added names, to avoid reintroducing the
-                 exponential-ambiguity bug found in slice 1. -->
-            <name>href</name>
-            <name>target</name>
-            <name>download</name>
-            <name>hreflang</name>
-            <name>ping</name>
-            <name>referrerpolicy</name>
-            <name>shape</name>
-            <name>coords</name>
-            <name>loading</name>
-            <name>decoding</name>
-            <name>crossorigin</name>
-            <name>ismap</name>
-            <name>cite</name>
-            <name>datetime</name>
-            <name>id</name>
-            <name>class</name>
-            <name>style</name>
-            <name>title</name>
-            <name>tabindex</name>
-            <name>hidden</name>
-            <name>accesskey</name>
-            <name>contenteditable</name>
-            <name>spellcheck</name>
-            <!-- #33 slice 3: media/tables/object/remaining-forms
-                 completion, both newly-added and pre-existing
-                 element-specific names (applying #39's lesson to close
-                 out the latent instances a broader recon turned up, not
-                 just the ones this slice's own new additions touch). -->
-            <name>muted</name>
-            <name>preload</name>
-            <name>playsinline</name>
-            <name>low</name>
-            <name>high</name>
-            <name>optimum</name>
-            <name>usemap</name>
-            <name>label</name>
-            <name>controls</name>
-            <name>autoplay</name>
-            <name>loop</name>
-            <name>poster</name>
-            <name>kind</name>
-            <name>srclang</name>
-            <name>default</name>
-            <name>media</name>
-            <name>srcset</name>
-            <name>sizes</name>
-            <name>colspan</name>
-            <name>rowspan</name>
-            <name>headers</name>
-            <name>scope</name>
-            <name>span</name>
-            <name>data</name>
-            <name>for</name>
-            <name>selected</name>
-            <name>action</name>
-            <name>method</name>
-            <name>enctype</name>
-            <name>open</name>
-            <name>start</name>
-            <name>reversed</name>
-            <name>rel</name>
-            <name>required-namespace</name>
-            <name>required-version</name>
-          </except>
-        </anyName>
-      </attribute>
-    </zeroOrMore>
-  </define>
 
+  <!-- #36 cutover (issue #31 epic): the permissive `anyOtherAttr` wildcard
+       that used to sit here - matching any unnamespaced attribute name
+       except a curated denylist - is gone. Every element's attribute
+       allowlist above is now closed: an unknown or mistyped attribute
+       name (e.g. `<p fake="fake" clas="header">`) is rejected as RSC-005,
+       matching epubcheck, rather than silently accepted. Getting here was
+       staged across issues #33/#34/#35 (built and corpus-verified behind
+       the still-present wildcard first, each addition verdict-neutral on
+       its own), with #39 tracking a real engine-level risk the staging
+       surfaced along the way (unexcepted per-element attributes caused
+       genuine, exponential-time grammar ambiguity - moot now that the
+       wildcard driving that ambiguity is gone, but worth knowing about if
+       this file's structure changes again). `data-*` (open-ended, no
+       RELAX NG name class can express a prefix wildcard) is handled
+       outside this grammar entirely - see `htm::is_data_attribute_name`
+       and its call site in `opf.rs`'s RSC-005 emission loop. -->
   <!-- ============ content-model pools (permissive on order/count) ============ -->
 
   <define name="phrasingContent">
@@ -1168,8 +1054,7 @@
   <define name="tableEl">
     <element name="table">
       <ref name="globalAttrs"/>
-      <!-- HTML5's obsolete-but-conforming `border` values are only "" or "1";
-           excluded from anyOtherAttr above so this is the only legal path. -->
+      <!-- HTML5's obsolete-but-conforming `border` values are only "" or "1". -->
       <optional>
         <attribute name="border">
           <choice><value type="token"></value><value>1</value></choice>
@@ -1465,7 +1350,7 @@
        directly under it are content-model errors (#13). This is *not*
        HTML5, where the same is valid flow content, so it is EPUB 2 only. -->
   <define name="bodyEl-epub2">
-    <element name="body"><ref name="globalAttrs"/><ref name="epub2Block"/></element>
+    <element name="body"><ref name="globalAttrs"/><ref name="bodyOnlyEvents"/><ref name="epub2Block"/></element>
   </define>
 
   <!-- Three content pools, the XHTML 1.1 block/inline distinction (#13):
