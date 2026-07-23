@@ -1047,4 +1047,32 @@ mod tests {
         ));
         assert!(ok(&xhtml_grammar(), &xml));
     }
+
+    // #40: <dialog> and <search> - HTML5-only elements the grammar was
+    // missing entirely.
+
+    #[test]
+    fn xhtml_grammar_accepts_dialog_and_search() {
+        let xml = xhtml_doc(concat!(
+            "<dialog open=\"open\"><p>hi</p></dialog>",
+            "<search><p>find</p></search>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_rejects_dialog_and_search() {
+        // HTML5-only - XHTML 1.1 (EPUB 2) predates both, so they must stay
+        // rejected there, same as <section>/<nav>/etc.
+        let dialog = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><dialog><p>hi</p></dialog></body></html>"
+        );
+        assert!(!ok(&xhtml_grammar_epub2(), &dialog));
+        let search = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><search><p>find</p></search></body></html>"
+        );
+        assert!(!ok(&xhtml_grammar_epub2(), &search));
+    }
 }
