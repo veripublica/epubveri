@@ -651,6 +651,26 @@ mod tests {
     }
 
     #[test]
+    fn xhtml_grammar_rejects_unknown_and_mistyped_attributes() {
+        // The whole point of #31: a made-up name and a typo of a real one
+        // must both be rejected now that the wildcard is gone (Doitsu,
+        // MobileRead #110). Each should be its own blamed attribute.
+        let xml = xhtml_doc("<p fake=\"fake\" clas=\"header\">*</p>");
+        let locs = fail_locals(&xhtml_grammar(), &xml);
+        assert_eq!(locs, vec!["@fake", "@clas"]);
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_rejects_unknown_and_mistyped_attributes() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p fake=\"fake\" clas=\"header\">*</p></body></html>"
+        );
+        let locs = fail_locals(&xhtml_grammar_epub2(), &xml);
+        assert_eq!(locs, vec!["@fake", "@clas"]);
+    }
+
+    #[test]
     fn xhtml_grammar_rejects_style_in_body() {
         let xml = xhtml_doc("<style>p{color:red}</style>");
         assert!(!ok(&xhtml_grammar(), &xml));
@@ -709,5 +729,322 @@ mod tests {
             + "><head><title>T</title>\
                <meta epub:type=\"toc\" charset=\"utf-8\"/></head><body/></html>";
         assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    // #34 slice A: newly-enumerated global attribute names. Still
+    // wildcard-covered today (verdict-neutral by construction, so a bad
+    // value can't be asserted rejected yet - only that a real-shape value
+    // is accepted, same as before).
+
+    #[test]
+    fn xhtml_grammar_accepts_microdata_attributes() {
+        let xml = xhtml_doc(concat!(
+            "<div itemscope=\"itemscope\" itemtype=\"https://schema.org/Book\" ",
+            "itemid=\"urn:isbn:0000\"><p itemprop=\"name\">T</p></div>",
+            "<div itemref=\"a b\"></div>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_url_shaped_itemprop() {
+        // HTML5 microdata allows an itemprop value to be an absolute URL,
+        // not just a plain token (epubcheck corpus fixture
+        // microdata-valid.xhtml: itemprop="http://example.com/color" and
+        // itemprop="name http://example.com/fn" - a mixed list). This
+        // regressed once already (NMTOKEN rejected the "/"), see the
+        // itemprop definition's comment in schemas/xhtml.rng.
+        let xml = xhtml_doc(concat!(
+            "<p itemprop=\"http://example.com/color\">black</p>",
+            "<h1 itemprop=\"name http://example.com/fn\">Hedral</h1>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_rdfa_prefix_on_html() {
+        // Pulled forward from #34 slice C - see the `prefix` definition's
+        // comment in schemas/xhtml.rng. Matches epubcheck corpus fixture
+        // microdata-valid.xhtml, which combines RDFA `prefix` with
+        // microdata attributes on the same document.
+        let xml = "<html ".to_string()
+            + XHTML_NS_DECLS
+            + " prefix=\"foaf: http://xmlns.com/foaf/0.1/\">\
+               <head><title>T</title></head><body/></html>";
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_web_component_attributes() {
+        let xml = xhtml_doc("<p is=\"x-highlight\" slot=\"body\">hi</p>");
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_interaction_editing_attributes() {
+        let xml = xhtml_doc(concat!(
+            "<p draggable=\"true\" inputmode=\"numeric\" enterkeyhint=\"go\" ",
+            "autocapitalize=\"words\" popover=\"auto\">hi</p>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_autofocus_and_nonce() {
+        let xml = xhtml_doc("<p autofocus=\"autofocus\" nonce=\"abc123\">hi</p>");
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_role_and_aria_globals() {
+        let xml = xhtml_doc(concat!(
+            "<p role=\"note\" aria-label=\"x\" aria-hidden=\"true\" ",
+            "aria-describedby=\"y\" aria-live=\"polite\">hi</p>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_role_and_aria_globals() {
+        // globalAttrsCore is shared with the EPUB 2 grammar; #34 doesn't
+        // decide EPUB 2/XHTML 1.1 correctness for these HTML5-only
+        // families (tracked separately for the #36 cutover), but pre-#36
+        // behavior must stay identical to the wildcard's on both grammars.
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p role=\"note\" aria-label=\"x\">hi</p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
+
+    // #34 slice B: on* event-handler attributes.
+
+    #[test]
+    fn xhtml_grammar_accepts_generic_event_handlers() {
+        let xml = xhtml_doc(concat!(
+            "<button onclick=\"doIt()\" onmouseover=\"hi()\">go</button>",
+            "<img src=\"a.png\" alt=\"\" onerror=\"fallback()\"/>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_body_only_window_events_on_body() {
+        // onunload/onpageshow/etc. (epubcheck's body.attrs.on*, mod/html5/
+        // meta.rnc) are properly scoped to <body> as of the #36 cutover -
+        // see bodyOnlyEvents in schemas/xhtml.rng.
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body onload=\"init()\" onunload=\"cleanup()\" onpageshow=\"show()\">\
+             <p>hi</p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_rejects_body_only_window_events_elsewhere() {
+        // The other half of the same story: now that the wildcard is gone,
+        // onunload genuinely isn't allowed outside <body> - it's not a
+        // generic event handler (onclick et al are global; this family
+        // isn't).
+        let xml = xhtml_doc("<p onunload=\"x()\">hi</p>");
+        assert!(!ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_generic_event_handlers() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body onload=\"init()\"><p onclick=\"hi()\">hi</p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
+
+    // #34 slice C: RDFA 1.1 global attributes.
+
+    #[test]
+    fn xhtml_grammar_accepts_rdfa_attributes() {
+        let xml = xhtml_doc(concat!(
+            "<div about=\"#me\" typeof=\"foaf:Person\" vocab=\"http://xmlns.com/foaf/0.1/\">",
+            "<p property=\"foaf:name\" datatype=\"xsd:string\">Baris</p>",
+            "<a rev=\"foaf:knows\" resource=\"#you\" href=\"#you\">friend</a>",
+            "<span property=\"foaf:topic\" inlist=\"\" content=\"x\">t</span>",
+            "</div>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_rel_anywhere() {
+        // `rel` is now a genuine global (RDFA, #33 slice 3 - see the
+        // comment above its definition in schemas/xhtml.rng for why it
+        // moved from a per-element <a>/<area> attribute to one shared
+        // global one). Accepted both on <a> and on a plain element,
+        // matching real epubcheck (RDFA grants `rel` everywhere, not just
+        // on <a>).
+        let xml = xhtml_doc(concat!(
+            "<a href=\"x\" rel=\"nofollow\">x</a>",
+            "<span rel=\"license\">y</span>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    // #35: xml:*/epub:* namespaced attribute families.
+
+    #[test]
+    fn xhtml_grammar_accepts_xml_base_and_space() {
+        let xml = xhtml_doc(concat!(
+            "<blockquote xml:base=\"http://example.com/\" xml:space=\"preserve\">",
+            "  quoted   text  ",
+            "</blockquote>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_epub_prefix_on_html() {
+        let xml = "<html ".to_string()
+            + XHTML_NS_DECLS
+            + " epub:prefix=\"myvocab: http://example.com/vocab#\">\
+               <head><title>T</title></head><body/></html>";
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    // #33: forms vocabulary completion (input/select/textarea/button),
+    // against real gaps found auditing epubcheck's web-forms(2).rnc.
+
+    #[test]
+    fn xhtml_grammar_accepts_input_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<input type=\"text\" required=\"required\" min=\"1\" max=\"10\" step=\"1\" ",
+            "pattern=\"[0-9]+\" multiple=\"multiple\" accept=\"image/*\" autocomplete=\"off\" ",
+            "size=\"20\" maxlength=\"50\" minlength=\"1\" readonly=\"readonly\" ",
+            "src=\"x.png\" alt=\"x\" dirname=\"x.dir\" capture=\"user\" height=\"20\" ",
+            "width=\"20\" formaction=\"x\" formmethod=\"post\" formnovalidate=\"formnovalidate\" ",
+            "formtarget=\"_blank\" formenctype=\"multipart/form-data\"/>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_select_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<select required=\"required\" name=\"x\" size=\"3\" autocomplete=\"off\">",
+            "<option>a</option></select>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_textarea_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<textarea required=\"required\" name=\"x\" rows=\"4\" cols=\"40\" wrap=\"soft\" ",
+            "placeholder=\"p\" maxlength=\"200\" minlength=\"0\" readonly=\"readonly\" ",
+            "autocomplete=\"off\" dirname=\"x.dir\"></textarea>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_button_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<button name=\"x\" value=\"v\" formaction=\"x\" formmethod=\"post\" ",
+            "formnovalidate=\"formnovalidate\" formtarget=\"_blank\" ",
+            "formenctype=\"multipart/form-data\" popovertarget=\"x\" ",
+            "popovertargetaction=\"toggle\">go</button>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    // #33 slice 2: a/area/img/ins/del attribute completion.
+
+    #[test]
+    fn xhtml_grammar_accepts_a_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<a href=\"x\" download=\"file.pdf\" hreflang=\"en\" ping=\"http://x/\" ",
+            "referrerpolicy=\"no-referrer\">link</a>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_a_download_and_hreflang_not_ping() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p><a href=\"x\" download=\"f\" hreflang=\"en\">link</a></p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_area_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<map name=\"m\"><area shape=\"rect\" coords=\"0,0,10,10\" href=\"x\" ",
+            "alt=\"a\" download=\"f\" rel=\"nofollow\" ping=\"http://x/\"/></map>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_img_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<img src=\"x.png\" alt=\"\" loading=\"lazy\" decoding=\"async\" ",
+            "crossorigin=\"anonymous\" referrerpolicy=\"no-referrer\" ismap=\"ismap\"/>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_ins_del_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<ins cite=\"http://x/\" datetime=\"2026-07-23\">added</ins>",
+            "<del cite=\"http://x/\" datetime=\"2026-07-23\">removed</del>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_ins_del_attribute_completion() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p><ins cite=\"http://x/\" datetime=\"2026-07-23\">a</ins>\
+             <del cite=\"http://x/\" datetime=\"2026-07-23\">r</del></p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
+
+    // #33 slice 3: media/object/remaining-forms attribute completion.
+
+    #[test]
+    fn xhtml_grammar_accepts_audio_video_source_completion() {
+        let xml = xhtml_doc(concat!(
+            "<audio muted=\"muted\" crossorigin=\"anonymous\">",
+            "<source src=\"a.mp3\" type=\"audio/mpeg\"/></audio>",
+            "<video preload=\"auto\" muted=\"muted\" crossorigin=\"anonymous\" ",
+            "playsinline=\"playsinline\">",
+            "<source src=\"a.mp4\" width=\"640\" height=\"480\"/></video>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_object_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<object data=\"x.svg\" type=\"image/svg+xml\" usemap=\"#m\" ",
+            "name=\"o\" form=\"f\"></object>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_remaining_forms_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<fieldset name=\"fs\"><legend>L</legend></fieldset>",
+            "<output for=\"x\" name=\"out\"></output>",
+            "<select><optgroup label=\"g\" disabled=\"disabled\">",
+            "<option label=\"o\">a</option></optgroup></select>",
+            "<meter value=\"5\" min=\"0\" max=\"10\" low=\"2\" high=\"8\" optimum=\"5\">5</meter>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
     }
 }

@@ -66,7 +66,10 @@
           <choice>
             <ref name="metaEl"/>
             <ref name="linkEl"/>
-            <element name="style"><ref name="globalAttrsCore"/><text/></element>
+            <element name="style"><ref name="globalAttrsCore"/>
+              <optional><attribute name="type"><data type="string"/></attribute></optional>
+              <text/>
+            </element>
             <element name="base">
               <ref name="globalAttrsCore"/>
               <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
@@ -93,17 +96,68 @@
        usage (e.g. RDFa attributes on <link>/<meta> in <body>), so these are
        shared with phrasingChoiceNoTime, not head-only. -->
   <define name="metaEl">
-    <element name="meta"><ref name="globalAttrsCore"/></element>
+    <element name="meta"><ref name="globalAttrsCore"/>
+      <!-- #33: found by the corpus fallout of excepting `name` from the
+           wildcard for input's own rules - <meta name="viewport"
+           content="..."> was relying entirely on the wildcard for `name`
+           (`content` is already global, added in #34 slice C's RDFA set,
+           and already granted here via globalAttrsCore). -->
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <!-- #36: found by the cutover itself - <meta charset="utf-8"> (the
+           single most common `<meta>` shape in real EPUB 3 documents) was
+           entirely wildcard-covered and had no explicit rule anywhere,
+           missed by every prior slice's recon. -->
+      <optional><attribute name="charset"><data type="string"/></attribute></optional>
+    </element>
   </define>
   <define name="linkEl">
     <element name="link">
       <ref name="globalAttrsCore"/>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+      <!-- #33: found by the unit-test/corpus fallout of excepting `type`
+           from the wildcard for input/button/a/script's own rules -
+           <link type="text/css"> (very common, e.g. stylesheet links) was
+           relying entirely on the wildcard and had no explicit rule of
+           its own. -->
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <!-- #33: found by the corpus fallout of excepting `sizes` from the
+           wildcard for img/source's own rules - <link rel="icon"
+           sizes="..."> was relying entirely on the wildcard. -->
+      <optional><attribute name="sizes"><data type="string"/></attribute></optional>
     </element>
   </define>
 
   <define name="bodyEl">
-    <element name="body"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+    <element name="body"><ref name="globalAttrs"/><ref name="bodyOnlyEvents"/><ref name="flowContent"/></element>
+  </define>
+
+  <!-- #36 cutover: the <body>-only window/document lifecycle events
+       (mod/html5/meta.rnc, body.attrs.on*). #34 slice B deferred these -
+       scoping them to <body> only while the wildcard was still active
+       would have excluded them from anyOtherAttr's except-list (global,
+       not per-element) and made them wrongly rejected on every *other*
+       element pre-cutover. Now that the wildcard is gone entirely, that
+       risk doesn't exist - these just need their own rule like everything
+       else, and this is the one family that was deliberately left with
+       NO rule at all until now (everything else got a permissive
+       placeholder somewhere; this one had nowhere to go before). -->
+  <define name="bodyOnlyEvents">
+    <optional><attribute name="onafterprint"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforeprint"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforeunload"><data type="string"/></attribute></optional>
+    <optional><attribute name="onhashchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onlanguagechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmessage"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmessageerror"><data type="string"/></attribute></optional>
+    <optional><attribute name="onoffline"><data type="string"/></attribute></optional>
+    <optional><attribute name="ononline"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpagehide"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpageshow"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpopstate"><data type="string"/></attribute></optional>
+    <optional><attribute name="onrejectionhandled"><data type="string"/></attribute></optional>
+    <optional><attribute name="onstorage"><data type="string"/></attribute></optional>
+    <optional><attribute name="onunhandledrejection"><data type="string"/></attribute></optional>
+    <optional><attribute name="onunload"><data type="string"/></attribute></optional>
   </define>
 
   <!-- ============ global attributes ============ -->
@@ -136,7 +190,369 @@
     <optional><attribute name="accesskey"><data type="token"/></attribute></optional>
     <optional><attribute name="contenteditable"><data type="token"/></attribute></optional>
     <optional><attribute name="spellcheck"><data type="token"/></attribute></optional>
-    <ref name="anyOtherAttr"/>
+
+    <!-- HTML5 microdata (epubcheck schema/30 mod/html5/microdata.rnc).
+         Kept value-permissive (token/anyURI/NMTOKEN-list, not a strict
+         microdata-conformance grammar) since #34's scope is attribute
+         *names*, not full value-level conformance - see issue #31/#34. -->
+    <optional><attribute name="itemscope"><data type="token"/></attribute></optional>
+    <optional><attribute name="itemid"><data type="anyURI"/></attribute></optional>
+    <optional>
+      <attribute name="itemref"><list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list></attribute>
+    </optional>
+    <optional>
+      <!-- token, not NMTOKEN: HTML5 microdata explicitly allows an itemprop
+           value to be an absolute URL (e.g. "http://example.com/color"),
+           which contains "/" - not a legal NMTOKEN character. Confirmed
+           against epubcheck's own corpus fixture (06-content-document/
+           files/microdata-valid.xhtml, which uses exactly this shape). -->
+      <attribute name="itemprop"><list><zeroOrMore><data type="token"/></zeroOrMore></list></attribute>
+    </optional>
+    <optional>
+      <attribute name="itemtype"><list><zeroOrMore><data type="anyURI"/></zeroOrMore></list></attribute>
+    </optional>
+
+    <!-- HTML5 web components (mod/html5/web-components.rnc). epubcheck's
+         schema does not define "part" at all - not added here. -->
+    <optional><attribute name="is"><data type="token"/></attribute></optional>
+    <optional><attribute name="slot"><data type="string"/></attribute></optional>
+
+    <!-- RDFA's bare `prefix` (mod/html5/rdfa.rnc, via epubcheck's
+         epub-xhtml-inc.rnc - a deviation from stock html5-rnc). Pulled
+         forward from #34 slice C (the fuller RDFA global set, deferred
+         there pending a collision check against existing per-element
+         rel/content/type/etc. definitions) because epubcheck's own corpus
+         fixture microdata-valid.xhtml uses it on <html> and real books
+         combine RDFA prefixes with microdata; `prefix` itself has no
+         collision with any existing attribute in this grammar. Distinct
+         from the namespaced `epub:prefix` (schema/30/mod/epub-prefix-
+         attr.rnc), which is separate, HTML-only-on-<html>, and not yet
+         added (#35 territory - epub: namespaced attribute family). -->
+    <optional><attribute name="prefix"><data type="string"/></attribute></optional>
+
+    <!-- #34 slice C: the rest of RDFA 1.1's global attribute set
+         (mod/html5/rdfa.rnc, via epubcheck's epub-xhtml-inc.rnc). Checked
+         each name against the existing grammar first (grep for
+         `name="X"` across this file) - all nine are unclaimed by any
+         per-element definition, so no collision. Value-permissive
+         (string, not a real CURIE/SafeCURIE/term-list grammar) for the
+         same name-only-scope reason as the rest of #34.
+
+         `rel` was originally left out of this list (slice C) because
+         `<a>`/`<area>` already had their own explicit `rel` definitions,
+         and a second global one would have collided (RNG attribute
+         uniqueness). #33 slice 3 needed to except `rel` from the wildcard
+         anyway (to unambiguously grant it on <a>/<area>/<link>, all of
+         which use it), and since every one of those per-element `rel`
+         definitions was already the exact same permissive
+         `<data type="string"/>` as this global one would be, the
+         resolution was to remove the redundant per-element copies (aEl,
+         aEl-epub2, area) and grant `rel` here instead - one definition,
+         valid everywhere, matching real epubcheck (RDFA grants `rel`
+         globally too, not just on <a>). -->
+    <optional><attribute name="about"><data type="string"/></attribute></optional>
+    <optional><attribute name="property"><data type="string"/></attribute></optional>
+    <optional><attribute name="typeof"><data type="string"/></attribute></optional>
+    <optional><attribute name="vocab"><data type="string"/></attribute></optional>
+    <optional><attribute name="content"><data type="string"/></attribute></optional>
+    <optional><attribute name="datatype"><data type="string"/></attribute></optional>
+    <optional><attribute name="resource"><data type="string"/></attribute></optional>
+    <optional><attribute name="rel"><data type="string"/></attribute></optional>
+    <optional><attribute name="rev"><data type="string"/></attribute></optional>
+    <optional><attribute name="inlist"><data type="string"/></attribute></optional>
+
+    <!-- #35: the rest of xml:*/epub:* (data.rnc-adjacent, issue #35's own
+         enumerated scope - "xml:* (xml:lang, xml:base, xml:space)",
+         "epub:* (epub:type, epub:prefix, epub:switch/trigger)"; epub:type/
+         epub:trigger already existed, epub:switch is an element trio, not
+         an attribute, already handled). Same except-list pattern as
+         xml:lang/epub:type/epub:trigger (RELAX NG's <anyName> matches
+         across namespaces regardless of the wildcard's `ns=""` - see #38 -
+         so a namespaced name still needs excepting to avoid a duplicate-
+         attribute conflict with its own explicit rule here). -->
+    <optional><attribute name="xml:base"><data type="anyURI"/></attribute></optional>
+    <optional><attribute name="xml:space"><data type="token"/></attribute></optional>
+    <!-- Namespaced `epub:prefix` (schema/30/mod/epub-prefix-attr.rnc,
+         epub.prefix.attr.ns) - distinct from the bare `prefix` added in
+         slice A (RDFA's, superseded-by/coexisting-with this one).
+         epubcheck only wires this onto <html>, but keeping it here in
+         globalAttrsCore (rather than a one-off on htmlEl) matches how
+         every other #34/#35 addition has been handled - see the epic
+         plan's note on EPUB 2 scoping being deferred to #36 either way. -->
+    <optional><attribute name="epub:prefix"><data type="string"/></attribute></optional>
+
+    <!-- HTML5 interaction/editing globals (mod/html5/applications.rnc). -->
+    <optional><attribute name="draggable"><data type="token"/></attribute></optional>
+    <optional><attribute name="inputmode"><data type="token"/></attribute></optional>
+    <optional><attribute name="enterkeyhint"><data type="token"/></attribute></optional>
+    <optional><attribute name="autocapitalize"><data type="token"/></attribute></optional>
+    <optional><attribute name="popover"><data type="token"/></attribute></optional>
+
+    <!-- Core-scripting non-event globals (mod/html5/common.rnc /
+         core-scripting.rnc). -->
+    <optional><attribute name="autofocus"><data type="token"/></attribute></optional>
+    <optional><attribute name="nonce"><data type="string"/></attribute></optional>
+
+    <!-- #34 slice B: the generic on* event-handler set (mod/html5/
+         core-scripting.rnc, common.attrs.scripting - folded into every
+         element via common.attrs.other, so global here too). Value-
+         permissive (string, not syntax-checked as ECMAScript - epubcheck's
+         own schema doesn't check it either, see epubcheck.patch notes).
+         NOTE: filed as its own issue (#37), not fixed here - has_script
+         (OPF-014/015 "scripted" detection, src/opf.rs) currently keys off
+         any <input>/<button>/<select>/<textarea> element regardless of
+         attributes, and does not look at on* at all. Adding these names
+         to the grammar is independent of that detection bug. -->
+    <optional><attribute name="onauxclick"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforeinput"><data type="string"/></attribute></optional>
+    <optional><attribute name="onbeforematch"><data type="string"/></attribute></optional>
+    <optional><attribute name="onblur"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncancel"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncanplay"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncanplaythrough"><data type="string"/></attribute></optional>
+    <optional><attribute name="onchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onclick"><data type="string"/></attribute></optional>
+    <optional><attribute name="onclose"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncontextlost"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncontextmenu"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncontextrestored"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncopy"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncuechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="oncut"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondblclick"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondrag"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragend"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragenter"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragleave"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragover"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondragstart"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondrop"><data type="string"/></attribute></optional>
+    <optional><attribute name="ondurationchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onemptied"><data type="string"/></attribute></optional>
+    <optional><attribute name="onended"><data type="string"/></attribute></optional>
+    <optional><attribute name="onerror"><data type="string"/></attribute></optional>
+    <optional><attribute name="onfocus"><data type="string"/></attribute></optional>
+    <optional><attribute name="onformdata"><data type="string"/></attribute></optional>
+    <optional><attribute name="oninput"><data type="string"/></attribute></optional>
+    <optional><attribute name="oninvalid"><data type="string"/></attribute></optional>
+    <optional><attribute name="onkeydown"><data type="string"/></attribute></optional>
+    <optional><attribute name="onkeypress"><data type="string"/></attribute></optional>
+    <optional><attribute name="onkeyup"><data type="string"/></attribute></optional>
+    <optional><attribute name="onload"><data type="string"/></attribute></optional>
+    <optional><attribute name="onloadeddata"><data type="string"/></attribute></optional>
+    <optional><attribute name="onloadedmetadata"><data type="string"/></attribute></optional>
+    <optional><attribute name="onloadstart"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmousedown"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseenter"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseleave"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmousemove"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseout"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseover"><data type="string"/></attribute></optional>
+    <optional><attribute name="onmouseup"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpaste"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpause"><data type="string"/></attribute></optional>
+    <optional><attribute name="onplay"><data type="string"/></attribute></optional>
+    <optional><attribute name="onplaying"><data type="string"/></attribute></optional>
+    <optional><attribute name="onprogress"><data type="string"/></attribute></optional>
+    <optional><attribute name="onratechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onreset"><data type="string"/></attribute></optional>
+    <optional><attribute name="onresize"><data type="string"/></attribute></optional>
+    <optional><attribute name="onscroll"><data type="string"/></attribute></optional>
+    <optional><attribute name="onscrollend"><data type="string"/></attribute></optional>
+    <optional><attribute name="onsecuritypolicyviolation"><data type="string"/></attribute></optional>
+    <optional><attribute name="onseeked"><data type="string"/></attribute></optional>
+    <optional><attribute name="onseeking"><data type="string"/></attribute></optional>
+    <optional><attribute name="onselect"><data type="string"/></attribute></optional>
+    <optional><attribute name="onslotchange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onstalled"><data type="string"/></attribute></optional>
+    <optional><attribute name="onsubmit"><data type="string"/></attribute></optional>
+    <optional><attribute name="onsuspend"><data type="string"/></attribute></optional>
+    <optional><attribute name="ontimeupdate"><data type="string"/></attribute></optional>
+    <optional><attribute name="ontoggle"><data type="string"/></attribute></optional>
+    <optional><attribute name="onvolumechange"><data type="string"/></attribute></optional>
+    <optional><attribute name="onwaiting"><data type="string"/></attribute></optional>
+    <optional><attribute name="onwheel"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerover"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerenter"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerdown"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointermove"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerrawupdate"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerup"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointercancel"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerout"><data type="string"/></attribute></optional>
+    <optional><attribute name="onpointerleave"><data type="string"/></attribute></optional>
+    <optional><attribute name="ongotpointercapture"><data type="string"/></attribute></optional>
+    <optional><attribute name="onlostpointercapture"><data type="string"/></attribute></optional>
+
+    <!-- WAI-ARIA 1.2 global states/properties (mod/html5/aria.rnc) plus
+         `role` itself. Names only, value-permissive: epubcheck's schema
+         assembles `role` as a closed per-element enum of ARIA/DPUB-ARIA
+         role tokens, and several aria-* values have real enum/idref
+         constraints - both are real value-level work out of #34's scope
+         ("role token-value validation can be a follow-up", issue #34). -->
+    <optional><attribute name="role"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-busy"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-current"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-describedby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-details"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-disabled"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-errormessage"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-flowto"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-haspopup"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-hidden"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-invalid"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-keyshortcuts"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-label"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-labelledby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-live"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-owns"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-relevant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
+
+    <!-- #36: the rest of ARIA 1.2's states/properties - #34 slice A only
+           added the *global* ones (per-role-scoped ones were out of scope
+           there). Real epubcheck corpus fixture edupub-heading-aria-role-
+           valid.xhtml uses aria-level outside any role-pairing machinery
+           we implement, so - same as everywhere else in this epic - kept
+           as simple permissive globals rather than building real
+           role/attribute-pairing validation. -->
+    <optional><attribute name="aria-checked"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-expanded"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-pressed"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-selected"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-activedescendant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-autocomplete"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colcount"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colindex"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-level"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-modal"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-multiline"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-multiselectable"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-orientation"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-placeholder"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-posinset"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-setsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-readonly"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-required"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowcount"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowindex"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-sort"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuemax"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuemin"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuenow"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuetext"><data type="string"/></attribute></optional>
+
+    <!-- #36: found by the cutover - <meta http-equiv="..." content="...">
+         is one of the two most common <meta> shapes in real EPUB 3
+         documents (the other, `name`, was already added in #33) and had
+         no explicit rule anywhere; confirmed against epubcheck's own
+         corpus fixture http-equiv-valid.xhtml. Kept here rather than on
+         metaEl specifically since http-equiv is meta-only in practice but
+         this mirrors how every other #36-discovered gap was fixed. -->
+    <optional><attribute name="http-equiv"><data type="string"/></attribute></optional>
+
+    <!-- #36: ITS 2.0 (Internationalization Tag Set) attributes. Confirmed
+         needed against epubcheck's own corpus fixture attrs-its-valid.xhtml
+         (its-locale-filter-list/its-term used on <p>/<span>). The full
+         name list is only formally enumerated in epubcheck's schema as
+         part of <embed>'s own element-specific wildcard
+         (mod/html5/embed.rnc, embed.attrs.other, itself marked
+         "# REVISIT common.attrs" by epubcheck's own authors) - not
+         actually global there - yet the corpus fixture proves epubcheck
+         accepts them elsewhere too (some other, non-RNG validation path
+         we can't see from the vendored schema files alone). Rather than
+         treat `its-*` as a genuine open-ended suppression like `data-*`
+         (which would accept any made-up its-nonsense name), enumerated
+         the real finite list epubcheck's own schema names - more precise,
+         and this family is small enough that it's cheap to get right. -->
+    <optional><attribute name="its-loc-note"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-note-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-note-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-term-info-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-term"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-term-confidence"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-within-text"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-domain-mapping"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-confidence"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-class-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-ident"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-ident-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-ta-source"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-locale-filter-list"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-locale-filter-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-person"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-person-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-org"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-org-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-tool"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-tool-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-person"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-person-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-org"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-org-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-tool"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-rev-tool-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-prov-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-provenance-records-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issues-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-comment"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-severity"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-profile-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-issue-enabled"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-score"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-vote"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-score-threshold"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-vote-threshold"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-loc-quality-rating-profile-ref"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-mt-confidence"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-allowed-characters"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-storage-size"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-storage-encoding"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-line-break-type"><data type="string"/></attribute></optional>
+    <optional><attribute name="its-annotators-ref"><data type="string"/></attribute></optional>
+
+    <!-- #36: any attribute in a genuinely foreign (non-empty) namespace,
+         except the ones already given their own explicit rule above/
+         elsewhere. Confirmed needed, not a hypothetical: epubcheck's own
+         corpus fixture attrs-custom-ns-valid.xhtml has
+         `<body custom:attribute="allowed" xmlns:custom="http://example.org">`
+         - a wholly made-up namespace and attribute name, and it's a
+         should-be-VALID fixture. This also naturally covers `ssml:ph`/
+         `ssml:alphabet` (proven needed by ssml-valid.xhtml), which had no
+         explicit rule of their own despite #34's recon noting they were
+         "already global" in epubcheck's real schema - that note described
+         epubcheck's structure, but nothing in this epic had actually
+         implemented it yet. Uses the engine's existing NsName machinery
+         (confirmed correctly threaded, unlike anyName's ns attribute -
+         see #38) rather than any new engine work: `<anyName>` matches
+         every namespace by RELAX NG's real semantics, and excepting
+         `<nsName ns="">` (i.e. "no namespace") plus every specific
+         namespaced name already granted elsewhere yields exactly "any
+         OTHER namespace." A malformed/impersonated reserved namespace
+         (one that resolves to a w3.org/idpf.org host but isn't a real
+         known one) is still caught separately by HTM-054 in htm.rs, which
+         runs independently of this grammar. -->
+    <zeroOrMore>
+      <attribute>
+        <anyName>
+          <except>
+            <nsName ns=""/>
+            <name>xml:lang</name>
+            <name>xml:base</name>
+            <name>xml:space</name>
+            <name>epub:type</name>
+            <name>epub:trigger</name>
+            <name>epub:prefix</name>
+          </except>
+        </anyName>
+      </attribute>
+    </zeroOrMore>
   </define>
 
   <define name="globalAttrs">
@@ -149,39 +565,23 @@
     <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
   </define>
 
-  <!-- Any attribute other than the standard globals/element-specifics above,
-       explicitly excluding: (a) known-obsolete/removed attribute names, and
-       (b) the handful of names we give a real value-level constraint to
-       elsewhere (so this permissive fallback can't silently bypass them —
-       RELAX NG's choice-based attribute matching means an unconstrained
-       catch-all would otherwise make any co-existing strict pattern a no-op).
-       This is how obsolete-attribute errors are caught without an exhaustive
-       allow-list, since RELAX NG name classes can't express prefix wildcards
-       like "any data-* attribute". -->
-  <define name="anyOtherAttr">
-    <zeroOrMore>
-      <attribute>
-        <anyName ns="">
-          <except>
-            <name>typemustmatch</name>
-            <name>contextmenu</name>
-            <name>dropzone</name>
-            <name>pubdate</name>
-            <name>seamless</name>
-            <name>aria-describedat</name>
-            <name>dir</name>
-            <name>translate</name>
-            <name>lang</name>
-            <name>xml:lang</name>
-            <name>epub:type</name>
-            <name>epub:trigger</name>
-            <name>border</name>
-          </except>
-        </anyName>
-      </attribute>
-    </zeroOrMore>
-  </define>
 
+  <!-- #36 cutover (issue #31 epic): the permissive `anyOtherAttr` wildcard
+       that used to sit here - matching any unnamespaced attribute name
+       except a curated denylist - is gone. Every element's attribute
+       allowlist above is now closed: an unknown or mistyped attribute
+       name (e.g. `<p fake="fake" clas="header">`) is rejected as RSC-005,
+       matching epubcheck, rather than silently accepted. Getting here was
+       staged across issues #33/#34/#35 (built and corpus-verified behind
+       the still-present wildcard first, each addition verdict-neutral on
+       its own), with #39 tracking a real engine-level risk the staging
+       surfaced along the way (unexcepted per-element attributes caused
+       genuine, exponential-time grammar ambiguity - moot now that the
+       wildcard driving that ambiguity is gone, but worth knowing about if
+       this file's structure changes again). `data-*` (open-ended, no
+       RELAX NG name class can express a prefix wildcard) is handled
+       outside this grammar entirely - see `htm::is_data_attribute_name`
+       and its call site in `opf.rs`'s RSC-005 emission loop. -->
   <!-- ============ content-model pools (permissive on order/count) ============ -->
 
   <define name="phrasingContent">
@@ -237,8 +637,18 @@
       <element name="bdo"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
       <element name="wbr"><ref name="globalAttrs"/></element>
       <element name="br"><ref name="globalAttrs"/></element>
-      <element name="ins"><ref name="globalAttrs"/><ref name="flowContent"/></element>
-      <element name="del"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <!-- #33: ins/del.attrs (revision.rnc) - previously zero explicit
+           attributes on either, entirely wildcard-covered. -->
+      <element name="ins"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
+      <element name="del"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
       <ref name="imgEl"/>
       <ref name="audioEl"/>
       <ref name="videoEl"/>
@@ -246,7 +656,11 @@
       <ref name="iframeEl"/>
       <ref name="embedEl"/>
       <ref name="objectEl"/>
-      <element name="canvas"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="canvas"><ref name="globalAttrs"/>
+        <optional><attribute name="width"><data type="string"/></attribute></optional>
+        <optional><attribute name="height"><data type="string"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
       <ref name="svgEl"/>
       <ref name="mathEl"/>
       <ref name="mapEl"/>
@@ -265,6 +679,8 @@
       <element name="fieldset"><ref name="globalAttrs"/>
         <optional><attribute name="disabled"><data type="token"/></attribute></optional>
         <optional><attribute name="form"><data type="string"/></attribute></optional>
+        <!-- #33: common-form.attrs (web-forms2.rnc). -->
+        <optional><attribute name="name"><data type="string"/></attribute></optional>
         <interleave>
           <optional><element name="legend"><ref name="globalAttrs"/><ref name="phrasingContent"/></element></optional>
           <ref name="flowContent"/>
@@ -279,6 +695,10 @@
         <optional><attribute name="value"><data type="decimal"/></attribute></optional>
         <optional><attribute name="min"><data type="decimal"/></attribute></optional>
         <optional><attribute name="max"><data type="decimal"/></attribute></optional>
+        <!-- #33: meter.attrs completion (data.rnc). -->
+        <optional><attribute name="low"><data type="decimal"/></attribute></optional>
+        <optional><attribute name="high"><data type="decimal"/></attribute></optional>
+        <optional><attribute name="optimum"><data type="decimal"/></attribute></optional>
         <ref name="phrasingContent"/>
       </element>
     </choice>
@@ -302,11 +722,27 @@
       <ref name="phrasingContent"/>
     </element>
   </define>
+  <!-- #33 (part of the #31 attribute-allowlist epic): forms vocabulary
+       completion against epubcheck's mod/html5/web-forms.rnc/web-forms2.rnc
+       (button.attrs/button.submit.attrs etc, input.*.attrs per type=
+       variant, select/textarea). Value-permissive (string/token, not the
+       exact per-type-variant HTML5 grammar) - same name-only scope as the
+       rest of #33/#34/#35. `autofocus` already exists globally
+       (globalAttrsCore, #34 slice A) - not repeated per-element here. -->
   <define name="buttonEl">
     <element name="button"><ref name="globalAttrs"/>
       <optional><attribute name="type"><data type="token"/></attribute></optional>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <optional><attribute name="formaction"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="formmethod"><data type="token"/></attribute></optional>
+      <optional><attribute name="formnovalidate"><data type="token"/></attribute></optional>
+      <optional><attribute name="formtarget"><data type="token"/></attribute></optional>
+      <optional><attribute name="formenctype"><data type="token"/></attribute></optional>
+      <optional><attribute name="popovertarget"><data type="string"/></attribute></optional>
+      <optional><attribute name="popovertargetaction"><data type="token"/></attribute></optional>
       <ref name="phrasingContent"/>
     </element>
   </define>
@@ -315,6 +751,8 @@
       <optional><attribute name="value"><data type="string"/></attribute></optional>
       <optional><attribute name="selected"><data type="token"/></attribute></optional>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <!-- #33: option.attrs completion (web-forms.rnc). -->
+      <optional><attribute name="label"><data type="string"/></attribute></optional>
       <text/>
     </element>
   </define>
@@ -323,11 +761,17 @@
       <optional><attribute name="multiple"><data type="token"/></attribute></optional>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <optional><attribute name="required"><data type="token"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="size"><data type="string"/></attribute></optional>
+      <optional><attribute name="autocomplete"><data type="string"/></attribute></optional>
       <zeroOrMore>
         <choice>
           <ref name="optionEl"/>
           <element name="optgroup"><ref name="globalAttrs"/>
             <optional><attribute name="label"><data type="string"/></attribute></optional>
+            <!-- #33: optgroup.attrs completion (web-forms.rnc). -->
+            <optional><attribute name="disabled"><data type="token"/></attribute></optional>
             <zeroOrMore><ref name="optionEl"/></zeroOrMore>
           </element>
         </choice>
@@ -338,6 +782,17 @@
     <element name="textarea"><ref name="globalAttrs"/>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <optional><attribute name="required"><data type="token"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="rows"><data type="string"/></attribute></optional>
+      <optional><attribute name="cols"><data type="string"/></attribute></optional>
+      <optional><attribute name="wrap"><data type="token"/></attribute></optional>
+      <optional><attribute name="placeholder"><data type="string"/></attribute></optional>
+      <optional><attribute name="maxlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="minlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="readonly"><data type="token"/></attribute></optional>
+      <optional><attribute name="autocomplete"><data type="string"/></attribute></optional>
+      <optional><attribute name="dirname"><data type="string"/></attribute></optional>
       <text/>
     </element>
   </define>
@@ -350,6 +805,8 @@
     <element name="output"><ref name="globalAttrs"/>
       <optional><attribute name="for"><data type="string"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <!-- #33: common-form.attrs (web-forms2.rnc). -->
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
       <ref name="phrasingContent"/>
     </element>
   </define>
@@ -363,6 +820,29 @@
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="placeholder"><data type="string"/></attribute></optional>
       <optional><attribute name="checked"><data type="token"/></attribute></optional>
+      <optional><attribute name="required"><data type="token"/></attribute></optional>
+      <optional><attribute name="min"><data type="string"/></attribute></optional>
+      <optional><attribute name="max"><data type="string"/></attribute></optional>
+      <optional><attribute name="step"><data type="string"/></attribute></optional>
+      <optional><attribute name="pattern"><data type="string"/></attribute></optional>
+      <optional><attribute name="multiple"><data type="token"/></attribute></optional>
+      <optional><attribute name="accept"><data type="string"/></attribute></optional>
+      <optional><attribute name="autocomplete"><data type="string"/></attribute></optional>
+      <optional><attribute name="size"><data type="string"/></attribute></optional>
+      <optional><attribute name="maxlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="minlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="readonly"><data type="token"/></attribute></optional>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="alt"><data type="string"/></attribute></optional>
+      <optional><attribute name="dirname"><data type="string"/></attribute></optional>
+      <optional><attribute name="capture"><data type="token"/></attribute></optional>
+      <optional><attribute name="height"><data type="string"/></attribute></optional>
+      <optional><attribute name="width"><data type="string"/></attribute></optional>
+      <optional><attribute name="formaction"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="formmethod"><data type="token"/></attribute></optional>
+      <optional><attribute name="formnovalidate"><data type="token"/></attribute></optional>
+      <optional><attribute name="formtarget"><data type="token"/></attribute></optional>
+      <optional><attribute name="formenctype"><data type="token"/></attribute></optional>
     </element>
   </define>
 
@@ -379,6 +859,13 @@
             <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
             <optional><attribute name="alt"><data type="string"/></attribute></optional>
             <optional><attribute name="target"><data type="token"/></attribute></optional>
+            <!-- #33: area.attrs (embed.rnc). NOT referrerpolicy - confirmed
+                 absent from epubcheck's own area.attrs (only phrase.rnc's
+                 `a` gets it; a concrete case of epubcheck's schema
+                 diverging from the plain HTML spec, per this epic's own
+                 method note - mirror epubcheck, not the spec). -->
+            <optional><attribute name="download"><data type="string"/></attribute></optional>
+            <optional><attribute name="ping"><data type="string"/></attribute></optional>
           </element>
         </zeroOrMore>
         <ref name="flowContent"/>
@@ -394,13 +881,20 @@
     </element>
   </define>
 
+  <!-- #33: a.attrs completion against epubcheck's mod/html5/phrase.rnc.
+       `ping`/`referrerpolicy` are gated `v5only` in epubcheck's own
+       schema (EPUB 3 only) - not added to aEl-epub2 below. `download`/
+       `hreflang` carry no such gate, added to both. -->
   <define name="aEl">
     <element name="a">
       <ref name="globalAttrs"/>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="target"><data type="token"/></attribute></optional>
-      <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="download"><data type="string"/></attribute></optional>
+      <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
+      <optional><attribute name="ping"><data type="string"/></attribute></optional>
+      <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
       <ref name="phrasingContent"/>
     </element>
   </define>
@@ -430,13 +924,30 @@
       <optional><attribute name="srcset"><data type="string"/></attribute></optional>
       <optional><attribute name="sizes"><data type="string"/></attribute></optional>
       <optional><attribute name="usemap"><data type="string"/></attribute></optional>
+      <!-- #33: img.attrs completion (embed.rnc). -->
+      <optional><attribute name="loading"><data type="token"/></attribute></optional>
+      <optional><attribute name="decoding"><data type="token"/></attribute></optional>
+      <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
+      <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
+      <optional><attribute name="ismap"><data type="token"/></attribute></optional>
     </element>
   </define>
 
   <!-- ============ tabular + sectioning + grouping (flow-only) ============ -->
 
+  <!-- #33: `value` on <li> (epubcheck corpus fixture li-with-value-attr-
+       valid.xhtml, from w3c/epubcheck#248) and `type` on <ol> (the
+       "1"/"a"/"A"/"i"/"I" list-style override) - already covered by the
+       forms except-list additions above (`value` was already excepted
+       for input/button) plus one new exception for `type`... actually
+       `type` was already excepted too (input/button/a/script/link/style),
+       so both are just new explicit grants here, no except-list change
+       needed. -->
   <define name="liEl">
-    <element name="li"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+    <element name="li"><ref name="globalAttrs"/>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <ref name="flowContent"/>
+    </element>
   </define>
 
   <define name="olEl">
@@ -444,6 +955,7 @@
       <ref name="globalAttrs"/>
       <optional><attribute name="start"><data type="integer"/></attribute></optional>
       <optional><attribute name="reversed"><data type="token"/></attribute></optional>
+      <optional><attribute name="type"><data type="token"/></attribute></optional>
       <zeroOrMore><ref name="liEl"/></zeroOrMore>
     </element>
   </define>
@@ -542,8 +1054,7 @@
   <define name="tableEl">
     <element name="table">
       <ref name="globalAttrs"/>
-      <!-- HTML5's obsolete-but-conforming `border` values are only "" or "1";
-           excluded from anyOtherAttr above so this is the only legal path. -->
+      <!-- HTML5's obsolete-but-conforming `border` values are only "" or "1". -->
       <optional>
         <attribute name="border">
           <choice><value type="token"></value><value>1</value></choice>
@@ -580,6 +1091,10 @@
       <optional><attribute name="srcset"><data type="string"/></attribute></optional>
       <optional><attribute name="sizes"><data type="string"/></attribute></optional>
       <optional><attribute name="media"><data type="string"/></attribute></optional>
+      <!-- #33: source.picture.attrs (media.rnc) - <picture><source> also
+           carries width/height. -->
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
     </element>
   </define>
 
@@ -602,6 +1117,9 @@
       <optional><attribute name="autoplay"><data type="token"/></attribute></optional>
       <optional><attribute name="loop"><data type="token"/></attribute></optional>
       <optional><attribute name="preload"><data type="token"/></attribute></optional>
+      <!-- #33: media.attrs completion (media.rnc). -->
+      <optional><attribute name="muted"><data type="token"/></attribute></optional>
+      <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
       <interleave>
         <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
@@ -620,6 +1138,11 @@
       <optional><attribute name="loop"><data type="token"/></attribute></optional>
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <!-- #33: media.attrs completion (media.rnc). -->
+      <optional><attribute name="preload"><data type="token"/></attribute></optional>
+      <optional><attribute name="muted"><data type="token"/></attribute></optional>
+      <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
+      <optional><attribute name="playsinline"><data type="token"/></attribute></optional>
       <interleave>
         <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
@@ -643,6 +1166,9 @@
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="title"><data type="string"/></attribute></optional>
+      <!-- #33: found by the corpus fallout of excepting `name` from the
+           wildcard for input/select/textarea/button's own rules. -->
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
     </element>
   </define>
 
@@ -671,6 +1197,10 @@
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <!-- #33: object.attrs completion (embed.rnc). -->
+      <optional><attribute name="usemap"><data type="string"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="form"><data type="string"/></attribute></optional>
       <interleave>
         <zeroOrMore><ref name="paramEl"/></zeroOrMore>
         <ref name="flowContent"/>
@@ -820,7 +1350,7 @@
        directly under it are content-model errors (#13). This is *not*
        HTML5, where the same is valid flow content, so it is EPUB 2 only. -->
   <define name="bodyEl-epub2">
-    <element name="body"><ref name="globalAttrs"/><ref name="epub2Block"/></element>
+    <element name="body"><ref name="globalAttrs"/><ref name="bodyOnlyEvents"/><ref name="epub2Block"/></element>
   </define>
 
   <!-- Three content pools, the XHTML 1.1 block/inline distinction (#13):
@@ -924,8 +1454,16 @@
     <choice>
       <ref name="scriptEl"/>
       <element name="noscript"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
-      <element name="del"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
-      <element name="ins"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="del"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="epub2Flow"/>
+      </element>
+      <element name="ins"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="epub2Flow"/>
+      </element>
       <ref name="svgEl"/>
       <ref name="mathEl"/>
     </choice>
@@ -935,8 +1473,9 @@
     <element name="a">
       <ref name="globalAttrs"/>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
-      <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="download"><data type="string"/></attribute></optional>
+      <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
       <ref name="epub2Inline"/>
     </element>
   </define>
@@ -959,6 +1498,7 @@
     <element name="ol">
       <ref name="globalAttrs"/>
       <optional><attribute name="start"><data type="integer"/></attribute></optional>
+      <optional><attribute name="type"><data type="token"/></attribute></optional>
       <zeroOrMore><ref name="liEl-epub2"/></zeroOrMore>
     </element>
   </define>
@@ -968,7 +1508,10 @@
   </define>
 
   <define name="liEl-epub2">
-    <element name="li"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+    <element name="li"><ref name="globalAttrs"/>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <ref name="epub2Flow"/>
+    </element>
   </define>
 
   <define name="dlEl-epub2">

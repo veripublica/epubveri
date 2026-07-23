@@ -468,7 +468,24 @@ impl<'a> Env<'a> {
                     AttributeFault::NotAllowed
                 };
                 blames.push(Blame::Attribute(node, att, fault));
-                return cur;
+                // Recover and keep going, same "report and skip" shape as
+                // `children_deriv`'s element-name-mismatch handling: revert
+                // to the state entering this attribute (as if the bad one
+                // were never there) so the *rest* of this element's
+                // attributes, content, and children still get checked.
+                // Before #36 removed the permissive wildcard, an element
+                // could have at most one blamed attribute in practice (an
+                // unknown name was always silently accepted, so only a
+                // genuinely invalid *value* on an explicitly-defined
+                // attribute ever reached this branch, and real documents
+                // rarely repeat that on the same element) - #36 is what
+                // makes multiple simultaneous unknown attributes on one
+                // element a real, common case (`<p fake="fake"
+                // clas="header">`, #31's own worked example), so bailing
+                // out after the first was a latent gap this is the first
+                // real trigger for.
+                cur = prev;
+                continue;
             }
         }
         cur = self.start_tag_close_deriv(&cur);

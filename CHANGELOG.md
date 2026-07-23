@@ -8,6 +8,67 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.6.0] - 2026-07-23
+
+Unknown and mistyped XHTML attributes are now rejected (#31). **This changes
+verdicts, broadly**: an attribute name that isn't valid on its element — a
+made-up one (`fake`) or a typo of a real one (`clas` for `class`) — is now
+reported invalid (`RSC-005`), matching epubcheck, where every earlier release
+accepted it silently. `<p fake="fake" clas="header">` draws two `RSC-005`
+errors, one per attribute. This was reported as a production blocker by Doitsu
+on the MobileRead forum (#110): a validator has to reliably reject invalid
+attributes, not just a hand-picked obsolete set (the narrower thing 0.5.17
+did). Unknown *elements* were already rejected; this closes the same gap for
+attributes. The epubcheck corpus is unchanged (verdict-neutral there — its
+fixtures are all valid attributes), but real books with an attribute typo will
+newly fail, which is the point.
+
+### Added
+
+- **A complete, closed per-element attribute allowlist for XHTML content
+  documents.** The grammar previously leaned on a permissive wildcard that
+  accepted any attribute name outside a small denylist; that wildcard is gone.
+  Every element now carries its real HTML5 attribute set, mirrored from
+  epubcheck's own schema (facts/spec data, not copyrightable expression — the
+  same clean-room stance as the rest of `schemas/`; our message wording stays
+  ours). This spans the global attributes (HTML5 globals, the full WAI-ARIA
+  1.2 state/property set, RDFa 1.1, microdata, the `on*` event-handler set,
+  web-components `is`/`slot`), every element's own attributes (forms, media,
+  tables, hyperlinks, lists, object/embed, `ins`/`del`, and the rest), and the
+  namespaced families (`xml:*`, `epub:*`).
+- **Arbitrary foreign-namespaced attributes are accepted** (e.g. a
+  `custom:attribute` in a document-declared namespace), matching epubcheck —
+  via a general rule for "any attribute in a non-empty namespace except the
+  ones with their own rule", not a fixed name list. This also covers
+  `ssml:ph`/`ssml:alphabet`.
+- **`data-*` attributes** are accepted without a per-name rule (RELAX NG name
+  classes can't express a `data-` prefix wildcard); a *malformed* `data-*`
+  name is still reported by `HTM-061`, unchanged.
+
+### Fixed
+
+- **All offending attributes on an element are now reported, not just the
+  first.** The content-model validator blamed the first bad attribute and
+  stopped; it now recovers and checks the rest, so `<p fake="fake"
+  clas="header">` reports both. (Invisible before this release — with the old
+  wildcard, an element could realistically have at most one blamed attribute.)
+- **A pathological validation slowdown** that the allowlist work surfaced:
+  an attribute matchable by *both* an element's own rule and the old wildcard
+  was genuine grammar ambiguity, which the derivative validator explored as
+  separate branches per attribute — `O(2ⁿ)` in the number of such attributes
+  on one element. Removing the wildcard eliminates the ambiguity entirely;
+  validation is linear again.
+
+### Notes
+
+- **EPUB 2 and EPUB 3 both.** The same cutover applies to the XHTML 1.1 and
+  HTML5 content models.
+- Some attribute *values* are validated permissively (name-level, not the
+  exact HTML5 value grammar) — e.g. `role` accepts any token rather than the
+  closed ARIA/DPUB-ARIA role vocabulary, and the ARIA `aria-*` values aren't
+  range-checked. Rejecting unknown *names* was the goal here; tighter
+  per-value validation is future work.
+
 ## [0.5.18] - 2026-07-20
 
 ### Fixed

@@ -1091,6 +1091,21 @@ fn is_valid_data_attr_suffix(rest: &str) -> bool {
     !rest.is_empty() && !rest.starts_with('-') && !rest.chars().any(|c| c.is_ascii_uppercase())
 }
 
+/// Whether an unnamespaced attribute name has the `data-*` shape (#35, part
+/// of the #31 attribute-allowlist epic). `data-*` is genuinely open-ended -
+/// any suffix is a legal custom-data attribute - so RELAX NG's name classes
+/// can't enumerate it (no prefix wildcard exists in the grammar). Used to
+/// suppress an RSC-005 "attribute not allowed" finding the content-model
+/// schema would otherwise produce once #36 removes the permissive wildcard
+/// that grants it today; a *malformed* `data-*` name (caught by
+/// `is_valid_data_attr_suffix` above) is left to `HTM-061`, which already
+/// reports it more precisely - this check is deliberately name-shape-only,
+/// not also re-validating the suffix, so the two checks don't double-report
+/// the same malformed attribute.
+pub(crate) fn is_data_attribute_name(name: &str) -> bool {
+    name.starts_with("data-")
+}
+
 /// The HTML5 `<time datetime>` microsyntax - reverse-engineered directly
 /// from the real corpus's exhaustive valid/invalid fixture pairs (not from
 /// memory of the spec text), since several of its rules are non-obvious:
@@ -1724,6 +1739,20 @@ mod tests {
             <div data-ok=""/>
         </body></html>"#;
         assert_eq!(run_dom(xhtml), vec![HTM_061, HTM_061, HTM_061]);
+    }
+
+    #[test]
+    fn data_attribute_name_shape() {
+        // #35: name-shape-only, deliberately not re-validating the suffix
+        // (a malformed one is HTM-061's job, see invalid_data_attrs above
+        // and is_data_attribute_name's own doc comment).
+        assert!(is_data_attribute_name("data-foo"));
+        assert!(is_data_attribute_name("data-x-y-z"));
+        assert!(is_data_attribute_name("data-ERR")); // shape matches; HTM-061 catches the case
+        assert!(is_data_attribute_name("data-")); // shape matches; HTM-061 catches the emptiness
+        assert!(!is_data_attribute_name("data"));
+        assert!(!is_data_attribute_name("aria-label"));
+        assert!(!is_data_attribute_name(""));
     }
 
     #[test]

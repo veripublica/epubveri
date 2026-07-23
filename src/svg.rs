@@ -422,7 +422,17 @@ pub(crate) fn check_foreign_object(
     };
     if !crate::rng::validate_node(&crate::rng::xhtml_grammar(), doc.root_element()) {
         // Genuine catch-all, same caveat as opf.rs's RNG-backed checks:
-        // the grammar doesn't expose which rule failed.
+        // the grammar doesn't expose which rule failed. This now also
+        // covers `href` on a non-a/area/link/base host - #33 excepted
+        // `href` from the wildcard (needed for a/area's own explicit
+        // rules to be unambiguous, see #39), so the grammar itself rejects
+        // it anywhere else. A separate `check_href_attribute` pass used to
+        // be the only thing catching this inside foreignObject; running
+        // both now double-reports the exact same defect (caught by
+        // foreign_object_rejects_invalid_attribute expecting a single
+        // RSC-005) - removed here, kept in check_title_content above,
+        // which doesn't re-validate against the grammar and still needs
+        // its own check.
         report.push_node(
             RSC_005,
             Severity::Error,
@@ -432,13 +442,6 @@ pub(crate) fn check_foreign_object(
             "svg.foreign_object.schema_violation",
             Vec::new(),
         );
-    }
-    for n in fo
-        .descendants()
-        .skip(1)
-        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(XHTML_NS))
-    {
-        check_href_attribute(n, path, report);
     }
 }
 
