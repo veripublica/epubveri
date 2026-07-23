@@ -616,6 +616,25 @@
             <name>wrap</name>
             <name>popovertarget</name>
             <name>popovertargetaction</name>
+            <!-- #33 slice 2: a/area/img/ins/del.attrs completion. Applying
+                 #39's lesson proactively - every per-element attribute
+                 this slice touches (old or new) gets excepted, not just
+                 the newly-added names, to avoid reintroducing the
+                 exponential-ambiguity bug found in slice 1. -->
+            <name>href</name>
+            <name>target</name>
+            <name>download</name>
+            <name>hreflang</name>
+            <name>ping</name>
+            <name>referrerpolicy</name>
+            <name>shape</name>
+            <name>coords</name>
+            <name>loading</name>
+            <name>decoding</name>
+            <name>crossorigin</name>
+            <name>ismap</name>
+            <name>cite</name>
+            <name>datetime</name>
           </except>
         </anyName>
       </attribute>
@@ -677,8 +696,18 @@
       <element name="bdo"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
       <element name="wbr"><ref name="globalAttrs"/></element>
       <element name="br"><ref name="globalAttrs"/></element>
-      <element name="ins"><ref name="globalAttrs"/><ref name="flowContent"/></element>
-      <element name="del"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <!-- #33: ins/del.attrs (revision.rnc) - previously zero explicit
+           attributes on either, entirely wildcard-covered. -->
+      <element name="ins"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
+      <element name="del"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
       <ref name="imgEl"/>
       <ref name="audioEl"/>
       <ref name="videoEl"/>
@@ -877,6 +906,14 @@
             <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
             <optional><attribute name="alt"><data type="string"/></attribute></optional>
             <optional><attribute name="target"><data type="token"/></attribute></optional>
+            <!-- #33: area.attrs (embed.rnc). NOT referrerpolicy - confirmed
+                 absent from epubcheck's own area.attrs (only phrase.rnc's
+                 `a` gets it; a concrete case of epubcheck's schema
+                 diverging from the plain HTML spec, per this epic's own
+                 method note - mirror epubcheck, not the spec). -->
+            <optional><attribute name="download"><data type="string"/></attribute></optional>
+            <optional><attribute name="rel"><data type="string"/></attribute></optional>
+            <optional><attribute name="ping"><data type="string"/></attribute></optional>
           </element>
         </zeroOrMore>
         <ref name="flowContent"/>
@@ -892,6 +929,10 @@
     </element>
   </define>
 
+  <!-- #33: a.attrs completion against epubcheck's mod/html5/phrase.rnc.
+       `ping`/`referrerpolicy` are gated `v5only` in epubcheck's own
+       schema (EPUB 3 only) - not added to aEl-epub2 below. `download`/
+       `hreflang` carry no such gate, added to both. -->
   <define name="aEl">
     <element name="a">
       <ref name="globalAttrs"/>
@@ -899,6 +940,10 @@
       <optional><attribute name="target"><data type="token"/></attribute></optional>
       <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="download"><data type="string"/></attribute></optional>
+      <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
+      <optional><attribute name="ping"><data type="string"/></attribute></optional>
+      <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
       <ref name="phrasingContent"/>
     </element>
   </define>
@@ -928,6 +973,12 @@
       <optional><attribute name="srcset"><data type="string"/></attribute></optional>
       <optional><attribute name="sizes"><data type="string"/></attribute></optional>
       <optional><attribute name="usemap"><data type="string"/></attribute></optional>
+      <!-- #33: img.attrs completion (embed.rnc). -->
+      <optional><attribute name="loading"><data type="token"/></attribute></optional>
+      <optional><attribute name="decoding"><data type="token"/></attribute></optional>
+      <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
+      <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
+      <optional><attribute name="ismap"><data type="token"/></attribute></optional>
     </element>
   </define>
 
@@ -1437,8 +1488,16 @@
     <choice>
       <ref name="scriptEl"/>
       <element name="noscript"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
-      <element name="del"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
-      <element name="ins"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="del"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="epub2Flow"/>
+      </element>
+      <element name="ins"><ref name="globalAttrs"/>
+        <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
+        <optional><attribute name="datetime"><data type="string"/></attribute></optional>
+        <ref name="epub2Flow"/>
+      </element>
       <ref name="svgEl"/>
       <ref name="mathEl"/>
     </choice>
@@ -1450,6 +1509,8 @@
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="download"><data type="string"/></attribute></optional>
+      <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
       <ref name="epub2Inline"/>
     </element>
   </define>

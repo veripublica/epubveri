@@ -928,4 +928,61 @@ mod tests {
         ));
         assert!(ok(&xhtml_grammar(), &xml));
     }
+
+    // #33 slice 2: a/area/img/ins/del attribute completion.
+
+    #[test]
+    fn xhtml_grammar_accepts_a_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<a href=\"x\" download=\"file.pdf\" hreflang=\"en\" ping=\"http://x/\" ",
+            "referrerpolicy=\"no-referrer\">link</a>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_a_download_and_hreflang_not_ping() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p><a href=\"x\" download=\"f\" hreflang=\"en\">link</a></p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_area_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<map name=\"m\"><area shape=\"rect\" coords=\"0,0,10,10\" href=\"x\" ",
+            "alt=\"a\" download=\"f\" rel=\"nofollow\" ping=\"http://x/\"/></map>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_img_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<img src=\"x.png\" alt=\"\" loading=\"lazy\" decoding=\"async\" ",
+            "crossorigin=\"anonymous\" referrerpolicy=\"no-referrer\" ismap=\"ismap\"/>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_ins_del_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<ins cite=\"http://x/\" datetime=\"2026-07-23\">added</ins>",
+            "<del cite=\"http://x/\" datetime=\"2026-07-23\">removed</del>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_ins_del_attribute_completion() {
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p><ins cite=\"http://x/\" datetime=\"2026-07-23\">a</ins>\
+             <del cite=\"http://x/\" datetime=\"2026-07-23\">r</del></p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
 }
