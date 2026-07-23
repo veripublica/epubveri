@@ -3613,6 +3613,26 @@ pub fn check(
         {
             let rule = "opf.content_document.schema_violation";
             for blame in crate::rng::validate_node_report(&xhtml_grammar, d.root_element()) {
+                // #35 (part of the #31 attribute-allowlist epic): data-* is
+                // an open-ended attribute-name family RELAX NG can't
+                // express as a name class, so it has no explicit grammar
+                // rule and (once #36 removes the still-present permissive
+                // wildcard) would otherwise blame it "not allowed" here.
+                // Suppressed at the report level instead - a malformed
+                // data-* name is separately and more precisely caught by
+                // HTM-061 in htm.rs, so this deliberately doesn't
+                // re-validate the suffix (see is_data_attribute_name's own
+                // doc comment). Currently unreachable in practice (the
+                // wildcard already accepts data-* names, so the grammar
+                // never blames them not-allowed to begin with) - built now
+                // so the mechanism exists and is tested ahead of #36.
+                if let crate::rng::Blame::Attribute(_, a, crate::rng::AttributeFault::NotAllowed) =
+                    &blame
+                    && a.namespace().is_none()
+                    && crate::htm::is_data_attribute_name(a.name())
+                {
+                    continue;
+                }
                 let (text, params) = blame.describe();
                 match blame.attribute() {
                     Some(a) => report.push_node_attr(

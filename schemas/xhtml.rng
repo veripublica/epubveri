@@ -219,6 +219,26 @@
     <optional><attribute name="rev"><data type="string"/></attribute></optional>
     <optional><attribute name="inlist"><data type="string"/></attribute></optional>
 
+    <!-- #35: the rest of xml:*/epub:* (data.rnc-adjacent, issue #35's own
+         enumerated scope - "xml:* (xml:lang, xml:base, xml:space)",
+         "epub:* (epub:type, epub:prefix, epub:switch/trigger)"; epub:type/
+         epub:trigger already existed, epub:switch is an element trio, not
+         an attribute, already handled). Same except-list pattern as
+         xml:lang/epub:type/epub:trigger (RELAX NG's <anyName> matches
+         across namespaces regardless of the wildcard's `ns=""` - see #38 -
+         so a namespaced name still needs excepting to avoid a duplicate-
+         attribute conflict with its own explicit rule here). -->
+    <optional><attribute name="xml:base"><data type="anyURI"/></attribute></optional>
+    <optional><attribute name="xml:space"><data type="token"/></attribute></optional>
+    <!-- Namespaced `epub:prefix` (schema/30/mod/epub-prefix-attr.rnc,
+         epub.prefix.attr.ns) - distinct from the bare `prefix` added in
+         slice A (RDFA's, superseded-by/coexisting-with this one).
+         epubcheck only wires this onto <html>, but keeping it here in
+         globalAttrsCore (rather than a one-off on htmlEl) matches how
+         every other #34/#35 addition has been handled - see the epic
+         plan's note on EPUB 2 scoping being deferred to #36 either way. -->
+    <optional><attribute name="epub:prefix"><data type="string"/></attribute></optional>
+
     <!-- HTML5 interaction/editing globals (mod/html5/applications.rnc). -->
     <optional><attribute name="draggable"><data type="token"/></attribute></optional>
     <optional><attribute name="inputmode"><data type="token"/></attribute></optional>
@@ -413,6 +433,10 @@
             <name>resource</name>
             <name>rev</name>
             <name>inlist</name>
+            <!-- #35: xml:base/xml:space/epub:prefix. -->
+            <name>xml:base</name>
+            <name>xml:space</name>
+            <name>epub:prefix</name>
             <name>draggable</name>
             <name>inputmode</name>
             <name>enterkeyhint</name>

@@ -861,4 +861,25 @@ mod tests {
         ));
         assert!(ok(&xhtml_grammar(), &xml));
     }
+
+    // #35: xml:*/epub:* namespaced attribute families.
+
+    #[test]
+    fn xhtml_grammar_accepts_xml_base_and_space() {
+        let xml = xhtml_doc(concat!(
+            "<blockquote xml:base=\"http://example.com/\" xml:space=\"preserve\">",
+            "  quoted   text  ",
+            "</blockquote>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_epub_prefix_on_html() {
+        let xml = "<html ".to_string()
+            + XHTML_NS_DECLS
+            + " epub:prefix=\"myvocab: http://example.com/vocab#\">\
+               <head><title>T</title></head><body/></html>";
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
 }
