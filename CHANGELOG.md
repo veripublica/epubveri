@@ -8,6 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.1] - 2026-07-24
+
+### Fixed
+
+- **`file:` URLs in a standalone SVG's stylesheet forms are now flagged
+  (`RSC-030`).** `file:` URLs were already rejected in CSS `url()`/`@import`
+  and in XHTML content-document `href`/`src`, but a standalone SVG content
+  document scans its own stylesheet forms — the `<?xml-stylesheet?>` PI, an
+  inline `<style>`'s `@import`, and a `<link rel="stylesheet">` — and those
+  were only checked for *remote* URLs (`RSC-006`), never `file:`. **Verdict-
+  affecting on that specific input**: an SVG that slipped a `file:` stylesheet
+  reference through is now correctly reported invalid, matching epubcheck.
+  (Corpus exact-ID recall 599 → 600/607.)
+
 ## [0.7.0] - 2026-07-24
 
 Follow-ups to the 0.6.0 attribute-allowlist work. Two of them change
