@@ -850,11 +850,13 @@ mod tests {
     }
 
     #[test]
-    fn xhtml_grammar_still_accepts_rel_anywhere() {
-        // `rel` was deliberately NOT added as a new global (collides with
-        // <a>'s existing explicit definition) - this locks in that it's
-        // still accepted both on <a> (its own rule) and elsewhere (still
-        // wildcard-covered), unchanged by slice C.
+    fn xhtml_grammar_accepts_rel_anywhere() {
+        // `rel` is now a genuine global (RDFA, #33 slice 3 - see the
+        // comment above its definition in schemas/xhtml.rng for why it
+        // moved from a per-element <a>/<area> attribute to one shared
+        // global one). Accepted both on <a> and on a plain element,
+        // matching real epubcheck (RDFA grants `rel` everywhere, not just
+        // on <a>).
         let xml = xhtml_doc(concat!(
             "<a href=\"x\" rel=\"nofollow\">x</a>",
             "<span rel=\"license\">y</span>"
@@ -984,5 +986,40 @@ mod tests {
              <del cite=\"http://x/\" datetime=\"2026-07-23\">r</del></p></body></html>"
         );
         assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
+
+    // #33 slice 3: media/object/remaining-forms attribute completion.
+
+    #[test]
+    fn xhtml_grammar_accepts_audio_video_source_completion() {
+        let xml = xhtml_doc(concat!(
+            "<audio muted=\"muted\" crossorigin=\"anonymous\">",
+            "<source src=\"a.mp3\" type=\"audio/mpeg\"/></audio>",
+            "<video preload=\"auto\" muted=\"muted\" crossorigin=\"anonymous\" ",
+            "playsinline=\"playsinline\">",
+            "<source src=\"a.mp4\" width=\"640\" height=\"480\"/></video>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_object_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<object data=\"x.svg\" type=\"image/svg+xml\" usemap=\"#m\" ",
+            "name=\"o\" form=\"f\"></object>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_remaining_forms_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<fieldset name=\"fs\"><legend>L</legend></fieldset>",
+            "<output for=\"x\" name=\"out\"></output>",
+            "<select><optgroup label=\"g\" disabled=\"disabled\">",
+            "<option label=\"o\">a</option></optgroup></select>",
+            "<meter value=\"5\" min=\"0\" max=\"10\" low=\"2\" high=\"8\" optimum=\"5\">5</meter>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
     }
 }

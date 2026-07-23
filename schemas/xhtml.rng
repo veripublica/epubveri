@@ -115,6 +115,10 @@
            relying entirely on the wildcard and had no explicit rule of
            its own. -->
       <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <!-- #33: found by the corpus fallout of excepting `sizes` from the
+           wildcard for img/source's own rules - <link rel="icon"
+           sizes="..."> was relying entirely on the wildcard. -->
+      <optional><attribute name="sizes"><data type="string"/></attribute></optional>
     </element>
   </define>
 
@@ -214,17 +218,18 @@
          (string, not a real CURIE/SafeCURIE/term-list grammar) for the
          same name-only-scope reason as the rest of #34.
 
-         `rel` is the one RDFA global name deliberately NOT added here:
-         `<a>` (both EPUB 3's aEl and EPUB 2's aEl-epub2) already has its
-         own explicit `rel` definition, already value-permissive
-         (`<data type="string"/>`), so a second global one would collide
-         (RNG attribute uniqueness) on <a> specifically. Elsewhere `rel`
-         stays exactly as before - purely wildcard-covered - since
-         excluding it from anyOtherAttr's except-list without granting it
-         everywhere it's actually used would repeat slice B's
-         body-only-events regression (a name excluded from the global
-         wildcard but only re-granted on some elements becomes wrongly
-         rejected on the rest). -->
+         `rel` was originally left out of this list (slice C) because
+         `<a>`/`<area>` already had their own explicit `rel` definitions,
+         and a second global one would have collided (RNG attribute
+         uniqueness). #33 slice 3 needed to except `rel` from the wildcard
+         anyway (to unambiguously grant it on <a>/<area>/<link>, all of
+         which use it), and since every one of those per-element `rel`
+         definitions was already the exact same permissive
+         `<data type="string"/>` as this global one would be, the
+         resolution was to remove the redundant per-element copies (aEl,
+         aEl-epub2, area) and grant `rel` here instead - one definition,
+         valid everywhere, matching real epubcheck (RDFA grants `rel`
+         globally too, not just on <a>). -->
     <optional><attribute name="about"><data type="string"/></attribute></optional>
     <optional><attribute name="property"><data type="string"/></attribute></optional>
     <optional><attribute name="typeof"><data type="string"/></attribute></optional>
@@ -232,6 +237,7 @@
     <optional><attribute name="content"><data type="string"/></attribute></optional>
     <optional><attribute name="datatype"><data type="string"/></attribute></optional>
     <optional><attribute name="resource"><data type="string"/></attribute></optional>
+    <optional><attribute name="rel"><data type="string"/></attribute></optional>
     <optional><attribute name="rev"><data type="string"/></attribute></optional>
     <optional><attribute name="inlist"><data type="string"/></attribute></optional>
 
@@ -635,6 +641,46 @@
             <name>ismap</name>
             <name>cite</name>
             <name>datetime</name>
+            <!-- #33 slice 3: media/tables/object/remaining-forms
+                 completion, both newly-added and pre-existing
+                 element-specific names (applying #39's lesson to close
+                 out the latent instances a broader recon turned up, not
+                 just the ones this slice's own new additions touch). -->
+            <name>muted</name>
+            <name>preload</name>
+            <name>playsinline</name>
+            <name>low</name>
+            <name>high</name>
+            <name>optimum</name>
+            <name>usemap</name>
+            <name>label</name>
+            <name>controls</name>
+            <name>autoplay</name>
+            <name>loop</name>
+            <name>poster</name>
+            <name>kind</name>
+            <name>srclang</name>
+            <name>default</name>
+            <name>media</name>
+            <name>srcset</name>
+            <name>sizes</name>
+            <name>colspan</name>
+            <name>rowspan</name>
+            <name>headers</name>
+            <name>scope</name>
+            <name>span</name>
+            <name>data</name>
+            <name>for</name>
+            <name>selected</name>
+            <name>action</name>
+            <name>method</name>
+            <name>enctype</name>
+            <name>open</name>
+            <name>start</name>
+            <name>reversed</name>
+            <name>rel</name>
+            <name>required-namespace</name>
+            <name>required-version</name>
           </except>
         </anyName>
       </attribute>
@@ -738,6 +784,8 @@
       <element name="fieldset"><ref name="globalAttrs"/>
         <optional><attribute name="disabled"><data type="token"/></attribute></optional>
         <optional><attribute name="form"><data type="string"/></attribute></optional>
+        <!-- #33: common-form.attrs (web-forms2.rnc). -->
+        <optional><attribute name="name"><data type="string"/></attribute></optional>
         <interleave>
           <optional><element name="legend"><ref name="globalAttrs"/><ref name="phrasingContent"/></element></optional>
           <ref name="flowContent"/>
@@ -752,6 +800,10 @@
         <optional><attribute name="value"><data type="decimal"/></attribute></optional>
         <optional><attribute name="min"><data type="decimal"/></attribute></optional>
         <optional><attribute name="max"><data type="decimal"/></attribute></optional>
+        <!-- #33: meter.attrs completion (data.rnc). -->
+        <optional><attribute name="low"><data type="decimal"/></attribute></optional>
+        <optional><attribute name="high"><data type="decimal"/></attribute></optional>
+        <optional><attribute name="optimum"><data type="decimal"/></attribute></optional>
         <ref name="phrasingContent"/>
       </element>
     </choice>
@@ -804,6 +856,8 @@
       <optional><attribute name="value"><data type="string"/></attribute></optional>
       <optional><attribute name="selected"><data type="token"/></attribute></optional>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <!-- #33: option.attrs completion (web-forms.rnc). -->
+      <optional><attribute name="label"><data type="string"/></attribute></optional>
       <text/>
     </element>
   </define>
@@ -821,6 +875,8 @@
           <ref name="optionEl"/>
           <element name="optgroup"><ref name="globalAttrs"/>
             <optional><attribute name="label"><data type="string"/></attribute></optional>
+            <!-- #33: optgroup.attrs completion (web-forms.rnc). -->
+            <optional><attribute name="disabled"><data type="token"/></attribute></optional>
             <zeroOrMore><ref name="optionEl"/></zeroOrMore>
           </element>
         </choice>
@@ -854,6 +910,8 @@
     <element name="output"><ref name="globalAttrs"/>
       <optional><attribute name="for"><data type="string"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <!-- #33: common-form.attrs (web-forms2.rnc). -->
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
       <ref name="phrasingContent"/>
     </element>
   </define>
@@ -912,7 +970,6 @@
                  diverging from the plain HTML spec, per this epic's own
                  method note - mirror epubcheck, not the spec). -->
             <optional><attribute name="download"><data type="string"/></attribute></optional>
-            <optional><attribute name="rel"><data type="string"/></attribute></optional>
             <optional><attribute name="ping"><data type="string"/></attribute></optional>
           </element>
         </zeroOrMore>
@@ -938,7 +995,6 @@
       <ref name="globalAttrs"/>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="target"><data type="token"/></attribute></optional>
-      <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <optional><attribute name="download"><data type="string"/></attribute></optional>
       <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
@@ -1141,6 +1197,10 @@
       <optional><attribute name="srcset"><data type="string"/></attribute></optional>
       <optional><attribute name="sizes"><data type="string"/></attribute></optional>
       <optional><attribute name="media"><data type="string"/></attribute></optional>
+      <!-- #33: source.picture.attrs (media.rnc) - <picture><source> also
+           carries width/height. -->
+      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
     </element>
   </define>
 
@@ -1163,6 +1223,9 @@
       <optional><attribute name="autoplay"><data type="token"/></attribute></optional>
       <optional><attribute name="loop"><data type="token"/></attribute></optional>
       <optional><attribute name="preload"><data type="token"/></attribute></optional>
+      <!-- #33: media.attrs completion (media.rnc). -->
+      <optional><attribute name="muted"><data type="token"/></attribute></optional>
+      <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
       <interleave>
         <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
@@ -1181,6 +1244,11 @@
       <optional><attribute name="loop"><data type="token"/></attribute></optional>
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <!-- #33: media.attrs completion (media.rnc). -->
+      <optional><attribute name="preload"><data type="token"/></attribute></optional>
+      <optional><attribute name="muted"><data type="token"/></attribute></optional>
+      <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
+      <optional><attribute name="playsinline"><data type="token"/></attribute></optional>
       <interleave>
         <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
@@ -1235,6 +1303,10 @@
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <!-- #33: object.attrs completion (embed.rnc). -->
+      <optional><attribute name="usemap"><data type="string"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="form"><data type="string"/></attribute></optional>
       <interleave>
         <zeroOrMore><ref name="paramEl"/></zeroOrMore>
         <ref name="flowContent"/>
@@ -1507,7 +1579,6 @@
     <element name="a">
       <ref name="globalAttrs"/>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
-      <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <optional><attribute name="download"><data type="string"/></attribute></optional>
       <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
