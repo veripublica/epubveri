@@ -145,6 +145,14 @@ pub(crate) fn is_remote_url(href: &str) -> bool {
     href.starts_with("http://") || href.starts_with("https://")
 }
 
+/// A `file:` URL, which EPUB never allows (RSC-030). epubcheck's rule is
+/// exactly `startsWith("file:")` on the raw reference string; matched
+/// case-sensitively for parity (a `FILE:` URL is valid per RFC but rare,
+/// and epubcheck misses it too).
+pub(crate) fn is_file_url(href: &str) -> bool {
+    href.trim_start().starts_with("file:")
+}
+
 /// Strip a `#fragment` from a remote URL before comparing it against the
 /// manifest's own declared hrefs - a remote resource can legitimately be
 /// referenced with a fragment (e.g. an SVG font glyph, `https://x/y#g`)
@@ -5644,17 +5652,34 @@ pub fn check(
             if let Some(p) = pi.pi()
                 && p.target == "xml-stylesheet"
                 && let Some(href) = p.value.and_then(extract_pi_href)
-                && is_remote_url(&href)
             {
-                report.push_node(
-                    RSC_006,
-                    Severity::Error,
-                    format!("remote stylesheet '{href}' is not allowed"),
-                    doc_path.clone(),
-                    pi,
-                    "opf.content_document.remote_stylesheet_pi",
-                    vec![href.clone()],
-                );
+                if is_remote_url(&href) {
+                    report.push_node(
+                        RSC_006,
+                        Severity::Error,
+                        format!("remote stylesheet '{href}' is not allowed"),
+                        doc_path.clone(),
+                        pi,
+                        "opf.content_document.remote_stylesheet_pi",
+                        vec![href.clone()],
+                    );
+                }
+                // RSC-030: a file: URL is never allowed. The SVG pass
+                // scans these stylesheet forms itself (they don't go
+                // through the XHTML href walk or the CSS url() pass, both
+                // of which already flag file: URLs), so the check has to
+                // be repeated here.
+                if is_file_url(&href) {
+                    report.push_node(
+                        RSC_030,
+                        Severity::Error,
+                        format!("'{href}' is a file URL, which is not allowed"),
+                        doc_path.clone(),
+                        pi,
+                        "opf.content_document.file_url_stylesheet_pi",
+                        vec![href.clone()],
+                    );
+                }
             }
         }
         for n in d.descendants().filter(|n| n.is_element()) {
@@ -5677,6 +5702,17 @@ pub fn check(
                             vec![import_url.clone()],
                         );
                     }
+                    if is_file_url(&import_url) {
+                        report.push_node(
+                            RSC_030,
+                            Severity::Error,
+                            format!("'{import_url}' is a file URL, which is not allowed"),
+                            doc_path.clone(),
+                            n,
+                            "opf.content_document.file_url_stylesheet_import",
+                            vec![import_url.clone()],
+                        );
+                    }
                 }
             }
             if n.tag_name().name() == "link"
@@ -5685,17 +5721,29 @@ pub fn check(
                         .any(|t| t.eq_ignore_ascii_case("stylesheet"))
                 })
                 && let Some(href) = n.attr_no_ns("href")
-                && is_remote_url(href)
             {
-                report.push_node(
-                    RSC_006,
-                    Severity::Error,
-                    format!("remote stylesheet '{href}' is not allowed"),
-                    doc_path.clone(),
-                    n,
-                    "opf.content_document.remote_stylesheet_link",
-                    vec![href.to_string()],
-                );
+                if is_remote_url(href) {
+                    report.push_node(
+                        RSC_006,
+                        Severity::Error,
+                        format!("remote stylesheet '{href}' is not allowed"),
+                        doc_path.clone(),
+                        n,
+                        "opf.content_document.remote_stylesheet_link",
+                        vec![href.to_string()],
+                    );
+                }
+                if is_file_url(href) {
+                    report.push_node(
+                        RSC_030,
+                        Severity::Error,
+                        format!("'{href}' is a file URL, which is not allowed"),
+                        doc_path.clone(),
+                        n,
+                        "opf.content_document.file_url_stylesheet_link",
+                        vec![href.to_string()],
+                    );
+                }
             }
         }
     }
@@ -8497,6 +8545,97 @@ mod tests {
                 r#"<section epub:type="index"><h1>Idx</h1></section>"#
             )),
             "a declared index with no index-entry-list must still be flagged"
+        );
+    }
+
+    /// A minimal EPUB whose sole spine item is a standalone SVG content
+    /// document carrying `svg_body`, for the SVG-content-doc checks (RSC-006
+    /// remote / RSC-030 file: stylesheet forms).
+    fn epub_with_svg_spine(svg_body: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.svg" media-type="image/svg+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.svg">Ch1</a></li></ol></nav></body></html>"#;
+        let svg = format!("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n{svg_body}");
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.svg", svg.as_str()),
+                ("OEBPS/nav.xhtml", NAV),
+            ] {
+                zip.start_file(name, o).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    #[test]
+    fn file_url_in_svg_stylesheet_forms_is_rsc_030() {
+        // #8 corpus miss (file-url-in-svg-content-error.svg): a file: URL in
+        // a standalone SVG's xml-stylesheet PI and its inline <style>
+        // @import. These forms are scanned by the SVG content-doc pass
+        // itself (not the XHTML href walk or the CSS url() pass, both of
+        // which already flag file: URLs), so the check lives there too.
+        let svg = r#"<?xml-stylesheet type="text/css" href="file:example"?>
+<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+<title>t</title><style type="text/css">@import url(file:example);</style>
+<rect x="0" y="0" width="5" height="5"/></svg>"#;
+        let report = crate::validate_bytes(epub_with_svg_spine(svg));
+        let rsc030: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_030)
+            .collect();
+        assert_eq!(
+            rsc030.len(),
+            2,
+            "both the PI href and the @import file: URL must draw RSC-030; got: {:?}",
+            report.messages
+        );
+        assert!(!report.is_valid());
+    }
+
+    #[test]
+    fn valid_svg_stylesheet_forms_stay_clean() {
+        // The negative control: a local stylesheet reference in the same
+        // forms is fine (no RSC-030, no RSC-006).
+        let svg = r#"<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg">
+<title>t</title><rect x="0" y="0" width="5" height="5"/></svg>"#;
+        let report = crate::validate_bytes(epub_with_svg_spine(svg));
+        assert!(
+            !report.messages.iter().any(|m| m.id == crate::ids::RSC_030),
+            "a clean SVG must not draw RSC-030: {:?}",
+            report.messages
         );
     }
 }
