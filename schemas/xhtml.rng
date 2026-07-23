@@ -66,7 +66,10 @@
           <choice>
             <ref name="metaEl"/>
             <ref name="linkEl"/>
-            <element name="style"><ref name="globalAttrsCore"/><text/></element>
+            <element name="style"><ref name="globalAttrsCore"/>
+              <optional><attribute name="type"><data type="string"/></attribute></optional>
+              <text/>
+            </element>
             <element name="base">
               <ref name="globalAttrsCore"/>
               <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
@@ -93,12 +96,25 @@
        usage (e.g. RDFa attributes on <link>/<meta> in <body>), so these are
        shared with phrasingChoiceNoTime, not head-only. -->
   <define name="metaEl">
-    <element name="meta"><ref name="globalAttrsCore"/></element>
+    <element name="meta"><ref name="globalAttrsCore"/>
+      <!-- #33: found by the corpus fallout of excepting `name` from the
+           wildcard for input's own rules - <meta name="viewport"
+           content="..."> was relying entirely on the wildcard for `name`
+           (`content` is already global, added in #34 slice C's RDFA set,
+           and already granted here via globalAttrsCore). -->
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+    </element>
   </define>
   <define name="linkEl">
     <element name="link">
       <ref name="globalAttrsCore"/>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+      <!-- #33: found by the unit-test/corpus fallout of excepting `type`
+           from the wildcard for input/button/a/script's own rules -
+           <link type="text/css"> (very common, e.g. stylesheet links) was
+           relying entirely on the wildcard and had no explicit rule of
+           its own. -->
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
     </element>
   </define>
 
@@ -546,6 +562,60 @@
             <name>onpointerleave</name>
             <name>ongotpointercapture</name>
             <name>onlostpointercapture</name>
+            <!-- #33: forms vocabulary (input/select/textarea/button), both
+                 newly-added and pre-existing element-specific names. NOT
+                 just tidiness - a name matchable by both an element's own
+                 rule AND this wildcard is genuine grammar ambiguity, and
+                 the derivative validator explores both alternatives at
+                 every such attribute, compounding per attribute (2^n).
+                 Confirmed empirically (see the bisect_* scratch timing
+                 tests in src/rng/mod.rs, temporary, to be removed): with
+                 the wildcard's ~140-name except-list, an unexcepted
+                 element with ~15 ambiguous attributes present took ~8s to
+                 validate; <input>'s full ~29-attribute completion made it
+                 effectively hang (tens of minutes). Excepting these names
+                 restores determinism (each attribute matches exactly one
+                 alternative) and linear time. Some of these (name, value,
+                 type, size, form, ...) are legitimately used on other
+                 elements too via this same wildcard - verified via the
+                 full corpus run, not just by inspection, same discipline
+                 as every other slice in this epic. -->
+            <name>type</name>
+            <name>name</name>
+            <name>value</name>
+            <name>list</name>
+            <name>form</name>
+            <name>disabled</name>
+            <name>placeholder</name>
+            <name>checked</name>
+            <name>required</name>
+            <name>min</name>
+            <name>max</name>
+            <name>step</name>
+            <name>pattern</name>
+            <name>multiple</name>
+            <name>accept</name>
+            <name>autocomplete</name>
+            <name>size</name>
+            <name>maxlength</name>
+            <name>minlength</name>
+            <name>readonly</name>
+            <name>src</name>
+            <name>alt</name>
+            <name>dirname</name>
+            <name>capture</name>
+            <name>height</name>
+            <name>width</name>
+            <name>formaction</name>
+            <name>formmethod</name>
+            <name>formnovalidate</name>
+            <name>formtarget</name>
+            <name>formenctype</name>
+            <name>rows</name>
+            <name>cols</name>
+            <name>wrap</name>
+            <name>popovertarget</name>
+            <name>popovertargetaction</name>
           </except>
         </anyName>
       </attribute>
@@ -616,7 +686,11 @@
       <ref name="iframeEl"/>
       <ref name="embedEl"/>
       <ref name="objectEl"/>
-      <element name="canvas"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <element name="canvas"><ref name="globalAttrs"/>
+        <optional><attribute name="width"><data type="string"/></attribute></optional>
+        <optional><attribute name="height"><data type="string"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
       <ref name="svgEl"/>
       <ref name="mathEl"/>
       <ref name="mapEl"/>
@@ -672,11 +746,27 @@
       <ref name="phrasingContent"/>
     </element>
   </define>
+  <!-- #33 (part of the #31 attribute-allowlist epic): forms vocabulary
+       completion against epubcheck's mod/html5/web-forms.rnc/web-forms2.rnc
+       (button.attrs/button.submit.attrs etc, input.*.attrs per type=
+       variant, select/textarea). Value-permissive (string/token, not the
+       exact per-type-variant HTML5 grammar) - same name-only scope as the
+       rest of #33/#34/#35. `autofocus` already exists globally
+       (globalAttrsCore, #34 slice A) - not repeated per-element here. -->
   <define name="buttonEl">
     <element name="button"><ref name="globalAttrs"/>
       <optional><attribute name="type"><data type="token"/></attribute></optional>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <optional><attribute name="formaction"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="formmethod"><data type="token"/></attribute></optional>
+      <optional><attribute name="formnovalidate"><data type="token"/></attribute></optional>
+      <optional><attribute name="formtarget"><data type="token"/></attribute></optional>
+      <optional><attribute name="formenctype"><data type="token"/></attribute></optional>
+      <optional><attribute name="popovertarget"><data type="string"/></attribute></optional>
+      <optional><attribute name="popovertargetaction"><data type="token"/></attribute></optional>
       <ref name="phrasingContent"/>
     </element>
   </define>
@@ -693,6 +783,10 @@
       <optional><attribute name="multiple"><data type="token"/></attribute></optional>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <optional><attribute name="required"><data type="token"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="size"><data type="string"/></attribute></optional>
+      <optional><attribute name="autocomplete"><data type="string"/></attribute></optional>
       <zeroOrMore>
         <choice>
           <ref name="optionEl"/>
@@ -708,6 +802,17 @@
     <element name="textarea"><ref name="globalAttrs"/>
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
+      <optional><attribute name="required"><data type="token"/></attribute></optional>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="rows"><data type="string"/></attribute></optional>
+      <optional><attribute name="cols"><data type="string"/></attribute></optional>
+      <optional><attribute name="wrap"><data type="token"/></attribute></optional>
+      <optional><attribute name="placeholder"><data type="string"/></attribute></optional>
+      <optional><attribute name="maxlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="minlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="readonly"><data type="token"/></attribute></optional>
+      <optional><attribute name="autocomplete"><data type="string"/></attribute></optional>
+      <optional><attribute name="dirname"><data type="string"/></attribute></optional>
       <text/>
     </element>
   </define>
@@ -733,6 +838,29 @@
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <optional><attribute name="placeholder"><data type="string"/></attribute></optional>
       <optional><attribute name="checked"><data type="token"/></attribute></optional>
+      <optional><attribute name="required"><data type="token"/></attribute></optional>
+      <optional><attribute name="min"><data type="string"/></attribute></optional>
+      <optional><attribute name="max"><data type="string"/></attribute></optional>
+      <optional><attribute name="step"><data type="string"/></attribute></optional>
+      <optional><attribute name="pattern"><data type="string"/></attribute></optional>
+      <optional><attribute name="multiple"><data type="token"/></attribute></optional>
+      <optional><attribute name="accept"><data type="string"/></attribute></optional>
+      <optional><attribute name="autocomplete"><data type="string"/></attribute></optional>
+      <optional><attribute name="size"><data type="string"/></attribute></optional>
+      <optional><attribute name="maxlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="minlength"><data type="string"/></attribute></optional>
+      <optional><attribute name="readonly"><data type="token"/></attribute></optional>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="alt"><data type="string"/></attribute></optional>
+      <optional><attribute name="dirname"><data type="string"/></attribute></optional>
+      <optional><attribute name="capture"><data type="token"/></attribute></optional>
+      <optional><attribute name="height"><data type="string"/></attribute></optional>
+      <optional><attribute name="width"><data type="string"/></attribute></optional>
+      <optional><attribute name="formaction"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="formmethod"><data type="token"/></attribute></optional>
+      <optional><attribute name="formnovalidate"><data type="token"/></attribute></optional>
+      <optional><attribute name="formtarget"><data type="token"/></attribute></optional>
+      <optional><attribute name="formenctype"><data type="token"/></attribute></optional>
     </element>
   </define>
 
@@ -805,8 +933,19 @@
 
   <!-- ============ tabular + sectioning + grouping (flow-only) ============ -->
 
+  <!-- #33: `value` on <li> (epubcheck corpus fixture li-with-value-attr-
+       valid.xhtml, from w3c/epubcheck#248) and `type` on <ol> (the
+       "1"/"a"/"A"/"i"/"I" list-style override) - already covered by the
+       forms except-list additions above (`value` was already excepted
+       for input/button) plus one new exception for `type`... actually
+       `type` was already excepted too (input/button/a/script/link/style),
+       so both are just new explicit grants here, no except-list change
+       needed. -->
   <define name="liEl">
-    <element name="li"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+    <element name="li"><ref name="globalAttrs"/>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <ref name="flowContent"/>
+    </element>
   </define>
 
   <define name="olEl">
@@ -814,6 +953,7 @@
       <ref name="globalAttrs"/>
       <optional><attribute name="start"><data type="integer"/></attribute></optional>
       <optional><attribute name="reversed"><data type="token"/></attribute></optional>
+      <optional><attribute name="type"><data type="token"/></attribute></optional>
       <zeroOrMore><ref name="liEl"/></zeroOrMore>
     </element>
   </define>
@@ -1013,6 +1153,9 @@
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="title"><data type="string"/></attribute></optional>
+      <!-- #33: found by the corpus fallout of excepting `name` from the
+           wildcard for input/select/textarea/button's own rules. -->
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
     </element>
   </define>
 
@@ -1329,6 +1472,7 @@
     <element name="ol">
       <ref name="globalAttrs"/>
       <optional><attribute name="start"><data type="integer"/></attribute></optional>
+      <optional><attribute name="type"><data type="token"/></attribute></optional>
       <zeroOrMore><ref name="liEl-epub2"/></zeroOrMore>
     </element>
   </define>
@@ -1338,7 +1482,10 @@
   </define>
 
   <define name="liEl-epub2">
-    <element name="li"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+    <element name="li"><ref name="globalAttrs"/>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <ref name="epub2Flow"/>
+    </element>
   </define>
 
   <define name="dlEl-epub2">

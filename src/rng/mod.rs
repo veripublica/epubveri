@@ -882,4 +882,50 @@ mod tests {
                <head><title>T</title></head><body/></html>";
         assert!(ok(&xhtml_grammar(), &xml));
     }
+
+    // #33: forms vocabulary completion (input/select/textarea/button),
+    // against real gaps found auditing epubcheck's web-forms(2).rnc.
+
+    #[test]
+    fn xhtml_grammar_accepts_input_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<input type=\"text\" required=\"required\" min=\"1\" max=\"10\" step=\"1\" ",
+            "pattern=\"[0-9]+\" multiple=\"multiple\" accept=\"image/*\" autocomplete=\"off\" ",
+            "size=\"20\" maxlength=\"50\" minlength=\"1\" readonly=\"readonly\" ",
+            "src=\"x.png\" alt=\"x\" dirname=\"x.dir\" capture=\"user\" height=\"20\" ",
+            "width=\"20\" formaction=\"x\" formmethod=\"post\" formnovalidate=\"formnovalidate\" ",
+            "formtarget=\"_blank\" formenctype=\"multipart/form-data\"/>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_select_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<select required=\"required\" name=\"x\" size=\"3\" autocomplete=\"off\">",
+            "<option>a</option></select>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_textarea_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<textarea required=\"required\" name=\"x\" rows=\"4\" cols=\"40\" wrap=\"soft\" ",
+            "placeholder=\"p\" maxlength=\"200\" minlength=\"0\" readonly=\"readonly\" ",
+            "autocomplete=\"off\" dirname=\"x.dir\"></textarea>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_button_attribute_completion() {
+        let xml = xhtml_doc(concat!(
+            "<button name=\"x\" value=\"v\" formaction=\"x\" formmethod=\"post\" ",
+            "formnovalidate=\"formnovalidate\" formtarget=\"_blank\" ",
+            "formenctype=\"multipart/form-data\" popovertarget=\"x\" ",
+            "popovertargetaction=\"toggle\">go</button>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
 }
