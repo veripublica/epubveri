@@ -1075,4 +1075,30 @@ mod tests {
         );
         assert!(!ok(&xhtml_grammar_epub2(), &search));
     }
+
+    #[test]
+    fn heavily_attributed_element_validates_fast() {
+        // #39 regression guard: the exponential-time att_deriv path was
+        // driven by an attribute matchable by *both* an element's own rule
+        // and the old permissive wildcard (genuine grammar ambiguity). The
+        // wildcard is gone (#36), so every attribute now matches exactly one
+        // rule and there is no ambiguity to explore. An element carrying a
+        // large simultaneous attribute set - which used to hang for tens of
+        // minutes - must validate essentially instantly; if the exponential
+        // path ever came back, this test would hang and fail in CI.
+        let xml = xhtml_doc(concat!(
+            "<input type=\"text\" name=\"n\" value=\"v\" required=\"required\" ",
+            "min=\"1\" max=\"9\" step=\"1\" pattern=\"[0-9]+\" multiple=\"multiple\" ",
+            "accept=\"*\" autocomplete=\"off\" size=\"5\" maxlength=\"9\" minlength=\"1\" ",
+            "readonly=\"readonly\" src=\"x\" alt=\"a\" dirname=\"d\" capture=\"user\" ",
+            "height=\"1\" width=\"1\" formaction=\"x\" formmethod=\"post\" ",
+            "formnovalidate=\"formnovalidate\" formtarget=\"_blank\" ",
+            "id=\"i\" class=\"c\" title=\"t\" lang=\"en\" dir=\"ltr\" role=\"textbox\" ",
+            "aria-label=\"x\" onclick=\"f()\"/>"
+        ));
+        // (data-* is deliberately grammar-invalid - it's accepted at the
+        // report level in opf.rs, not by the grammar - so it's left out of
+        // this pure-grammar check.)
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
 }

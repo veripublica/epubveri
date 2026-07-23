@@ -376,4 +376,48 @@ mod tests {
         );
         assert!(!validate_xml(&g, "<section><x/></section>").unwrap());
     }
+
+    // #38: `<anyName>` matches names in ANY namespace - per the RELAX NG
+    // spec the `ns` attribute is meaningless on `<anyName>` and is
+    // correctly ignored. The spec-correct construct for "any unnamespaced
+    // name" is `<nsName ns="">`. The removed `anyOtherAttr` wildcard used to
+    // conflate these (it wrote `<anyName ns="">` expecting a restriction
+    // RELAX NG doesn't give); the current grammar's foreign-namespace rule
+    // relies on the real distinction (`<anyName>` minus `<nsName ns="">` =
+    // "any other namespace"). This locks that in.
+    const ANYNAME_RNG: &str = concat!(
+        "<element name=\"e\" xmlns=\"http://relaxng.org/ns/structure/1.0\">",
+        "<attribute><anyName/></attribute></element>"
+    );
+    const NSNAME_EMPTY_RNG: &str = concat!(
+        "<element name=\"e\" xmlns=\"http://relaxng.org/ns/structure/1.0\">",
+        "<attribute><nsName ns=\"\"/></attribute></element>"
+    );
+
+    #[test]
+    fn any_name_matches_across_namespaces_but_nsname_empty_does_not() {
+        let any = load(ANYNAME_RNG).unwrap();
+        assert!(
+            validate_xml(&any, "<e a=\"x\"/>").unwrap(),
+            "anyName accepts an unnamespaced attribute"
+        );
+        assert!(
+            validate_xml(&any, "<e xmlns:foo=\"http://example.org\" foo:bar=\"x\"/>").unwrap(),
+            "anyName accepts a namespaced attribute too (matches any namespace)"
+        );
+
+        let ns_empty = load(NSNAME_EMPTY_RNG).unwrap();
+        assert!(
+            validate_xml(&ns_empty, "<e a=\"x\"/>").unwrap(),
+            "nsName ns=\"\" accepts an unnamespaced attribute"
+        );
+        assert!(
+            !validate_xml(
+                &ns_empty,
+                "<e xmlns:foo=\"http://example.org\" foo:bar=\"x\"/>"
+            )
+            .unwrap(),
+            "nsName ns=\"\" rejects a namespaced attribute - the distinction #38 is about"
+        );
+    }
 }
