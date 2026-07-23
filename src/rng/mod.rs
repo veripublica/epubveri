@@ -710,4 +710,90 @@ mod tests {
                <meta epub:type=\"toc\" charset=\"utf-8\"/></head><body/></html>";
         assert!(!ok(&xhtml_grammar(), &xml));
     }
+
+    // #34 slice A: newly-enumerated global attribute names. Still
+    // wildcard-covered today (verdict-neutral by construction, so a bad
+    // value can't be asserted rejected yet - only that a real-shape value
+    // is accepted, same as before).
+
+    #[test]
+    fn xhtml_grammar_accepts_microdata_attributes() {
+        let xml = xhtml_doc(concat!(
+            "<div itemscope=\"itemscope\" itemtype=\"https://schema.org/Book\" ",
+            "itemid=\"urn:isbn:0000\"><p itemprop=\"name\">T</p></div>",
+            "<div itemref=\"a b\"></div>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_url_shaped_itemprop() {
+        // HTML5 microdata allows an itemprop value to be an absolute URL,
+        // not just a plain token (epubcheck corpus fixture
+        // microdata-valid.xhtml: itemprop="http://example.com/color" and
+        // itemprop="name http://example.com/fn" - a mixed list). This
+        // regressed once already (NMTOKEN rejected the "/"), see the
+        // itemprop definition's comment in schemas/xhtml.rng.
+        let xml = xhtml_doc(concat!(
+            "<p itemprop=\"http://example.com/color\">black</p>",
+            "<h1 itemprop=\"name http://example.com/fn\">Hedral</h1>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_rdfa_prefix_on_html() {
+        // Pulled forward from #34 slice C - see the `prefix` definition's
+        // comment in schemas/xhtml.rng. Matches epubcheck corpus fixture
+        // microdata-valid.xhtml, which combines RDFA `prefix` with
+        // microdata attributes on the same document.
+        let xml = "<html ".to_string()
+            + XHTML_NS_DECLS
+            + " prefix=\"foaf: http://xmlns.com/foaf/0.1/\">\
+               <head><title>T</title></head><body/></html>";
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_web_component_attributes() {
+        let xml = xhtml_doc("<p is=\"x-highlight\" slot=\"body\">hi</p>");
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_interaction_editing_attributes() {
+        let xml = xhtml_doc(concat!(
+            "<p draggable=\"true\" inputmode=\"numeric\" enterkeyhint=\"go\" ",
+            "autocapitalize=\"words\" popover=\"auto\">hi</p>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_autofocus_and_nonce() {
+        let xml = xhtml_doc("<p autofocus=\"autofocus\" nonce=\"abc123\">hi</p>");
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_accepts_role_and_aria_globals() {
+        let xml = xhtml_doc(concat!(
+            "<p role=\"note\" aria-label=\"x\" aria-hidden=\"true\" ",
+            "aria-describedby=\"y\" aria-live=\"polite\">hi</p>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_accepts_role_and_aria_globals() {
+        // globalAttrsCore is shared with the EPUB 2 grammar; #34 doesn't
+        // decide EPUB 2/XHTML 1.1 correctness for these HTML5-only
+        // families (tracked separately for the #36 cutover), but pre-#36
+        // behavior must stay identical to the wildcard's on both grammars.
+        let xml = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><p role=\"note\" aria-label=\"x\">hi</p></body></html>"
+        );
+        assert!(ok(&xhtml_grammar_epub2(), &xml));
+    }
 }

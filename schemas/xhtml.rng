@@ -136,6 +136,88 @@
     <optional><attribute name="accesskey"><data type="token"/></attribute></optional>
     <optional><attribute name="contenteditable"><data type="token"/></attribute></optional>
     <optional><attribute name="spellcheck"><data type="token"/></attribute></optional>
+
+    <!-- HTML5 microdata (epubcheck schema/30 mod/html5/microdata.rnc).
+         Kept value-permissive (token/anyURI/NMTOKEN-list, not a strict
+         microdata-conformance grammar) since #34's scope is attribute
+         *names*, not full value-level conformance - see issue #31/#34. -->
+    <optional><attribute name="itemscope"><data type="token"/></attribute></optional>
+    <optional><attribute name="itemid"><data type="anyURI"/></attribute></optional>
+    <optional>
+      <attribute name="itemref"><list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list></attribute>
+    </optional>
+    <optional>
+      <!-- token, not NMTOKEN: HTML5 microdata explicitly allows an itemprop
+           value to be an absolute URL (e.g. "http://example.com/color"),
+           which contains "/" - not a legal NMTOKEN character. Confirmed
+           against epubcheck's own corpus fixture (06-content-document/
+           files/microdata-valid.xhtml, which uses exactly this shape). -->
+      <attribute name="itemprop"><list><zeroOrMore><data type="token"/></zeroOrMore></list></attribute>
+    </optional>
+    <optional>
+      <attribute name="itemtype"><list><zeroOrMore><data type="anyURI"/></zeroOrMore></list></attribute>
+    </optional>
+
+    <!-- HTML5 web components (mod/html5/web-components.rnc). epubcheck's
+         schema does not define "part" at all - not added here. -->
+    <optional><attribute name="is"><data type="token"/></attribute></optional>
+    <optional><attribute name="slot"><data type="string"/></attribute></optional>
+
+    <!-- RDFA's bare `prefix` (mod/html5/rdfa.rnc, via epubcheck's
+         epub-xhtml-inc.rnc - a deviation from stock html5-rnc). Pulled
+         forward from #34 slice C (the fuller RDFA global set, deferred
+         there pending a collision check against existing per-element
+         rel/content/type/etc. definitions) because epubcheck's own corpus
+         fixture microdata-valid.xhtml uses it on <html> and real books
+         combine RDFA prefixes with microdata; `prefix` itself has no
+         collision with any existing attribute in this grammar. Distinct
+         from the namespaced `epub:prefix` (schema/30/mod/epub-prefix-
+         attr.rnc), which is separate, HTML-only-on-<html>, and not yet
+         added (#35 territory - epub: namespaced attribute family). -->
+    <optional><attribute name="prefix"><data type="string"/></attribute></optional>
+
+    <!-- HTML5 interaction/editing globals (mod/html5/applications.rnc). -->
+    <optional><attribute name="draggable"><data type="token"/></attribute></optional>
+    <optional><attribute name="inputmode"><data type="token"/></attribute></optional>
+    <optional><attribute name="enterkeyhint"><data type="token"/></attribute></optional>
+    <optional><attribute name="autocapitalize"><data type="token"/></attribute></optional>
+    <optional><attribute name="popover"><data type="token"/></attribute></optional>
+
+    <!-- Core-scripting non-event globals (mod/html5/common.rnc /
+         core-scripting.rnc). The on* event-handler set is a separate,
+         later addition (#34 slice B) pending a scripted-content-detection
+         review - see docs/PROGRESS_LOG.md / issue #34. -->
+    <optional><attribute name="autofocus"><data type="token"/></attribute></optional>
+    <optional><attribute name="nonce"><data type="string"/></attribute></optional>
+
+    <!-- WAI-ARIA 1.2 global states/properties (mod/html5/aria.rnc) plus
+         `role` itself. Names only, value-permissive: epubcheck's schema
+         assembles `role` as a closed per-element enum of ARIA/DPUB-ARIA
+         role tokens, and several aria-* values have real enum/idref
+         constraints - both are real value-level work out of #34's scope
+         ("role token-value validation can be a follow-up", issue #34). -->
+    <optional><attribute name="role"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-busy"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-current"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-describedby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-details"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-disabled"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-errormessage"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-flowto"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-haspopup"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-hidden"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-invalid"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-keyshortcuts"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-label"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-labelledby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-live"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-owns"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-relevant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
+
     <ref name="anyOtherAttr"/>
   </define>
 
@@ -176,6 +258,46 @@
             <name>epub:type</name>
             <name>epub:trigger</name>
             <name>border</name>
+            <!-- #34 slice A: names given a real (if permissive) definition
+                 in globalAttrsCore above, so the wildcard must not also
+                 match them (RELAX NG requires disjoint attribute name
+                 classes within a group). -->
+            <name>itemscope</name>
+            <name>itemid</name>
+            <name>itemref</name>
+            <name>itemprop</name>
+            <name>itemtype</name>
+            <name>is</name>
+            <name>slot</name>
+            <name>prefix</name>
+            <name>draggable</name>
+            <name>inputmode</name>
+            <name>enterkeyhint</name>
+            <name>autocapitalize</name>
+            <name>popover</name>
+            <name>autofocus</name>
+            <name>nonce</name>
+            <name>role</name>
+            <name>aria-atomic</name>
+            <name>aria-busy</name>
+            <name>aria-controls</name>
+            <name>aria-current</name>
+            <name>aria-describedby</name>
+            <name>aria-details</name>
+            <name>aria-disabled</name>
+            <name>aria-errormessage</name>
+            <name>aria-flowto</name>
+            <name>aria-haspopup</name>
+            <name>aria-hidden</name>
+            <name>aria-invalid</name>
+            <name>aria-keyshortcuts</name>
+            <name>aria-label</name>
+            <name>aria-labelledby</name>
+            <name>aria-live</name>
+            <name>aria-owns</name>
+            <name>aria-relevant</name>
+            <name>aria-roledescription</name>
+            <name>aria-description</name>
           </except>
         </anyName>
       </attribute>
