@@ -1290,6 +1290,16 @@
       <element name="article"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       <element name="aside"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       <element name="main"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <!-- #40: HTML5-only flow elements epubcheck accepts but the grammar
+           was missing entirely (not an attribute gap - whole elements).
+           `dialog` (applications.rnc: flow content + `open?`); `search`
+           (structural.rnc: flow content, globals only). EPUB 3 only -
+           XHTML 1.1 predates both, so not in the EPUB 2 pool. -->
+      <element name="dialog"><ref name="globalAttrs"/>
+        <optional><attribute name="open"><data type="token"/></attribute></optional>
+        <ref name="flowContent"/>
+      </element>
+      <element name="search"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       <ref name="navEl"/>
       <element name="header"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       <element name="footer"><ref name="globalAttrs"/><ref name="flowContent"/></element>

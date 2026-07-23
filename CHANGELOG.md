@@ -8,6 +8,45 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.0] - 2026-07-24
+
+Follow-ups to the 0.6.0 attribute-allowlist work. Two of them change
+verdicts (see each entry), which is why this is a minor bump.
+
+### Fixed
+
+- **Scripted-content detection (`OPF-014`/`OPF-015`) now keys off the right
+  things.** `has_script` — the flag behind the "scripted" content-property
+  checks — used to be set by the mere presence of any `<input>`/`<button>`/
+  `<select>`/`<textarea>` element, and never looked at `on*` event-handler
+  attributes. So `<input required>` wrongly reported `OPF-014` while
+  `<span onclick="…">` did not. It now matches epubcheck: a document is
+  scripted when it has a `<form>` element, javascript (a `<script>`), or any
+  `on*` event-handler attribute — not the bare presence of a form control.
+  **This changes verdicts**: a book whose only "scripting" was a form control
+  is no longer treated as scripted (so a declared-but-otherwise-unused
+  `scripted` property now draws `OPF-015`, and an undeclared one no longer
+  draws `OPF-014`), while a book that scripts only through `on*` handlers is
+  now correctly detected. (#37, found during the 0.6.0 epic.)
+
+### Added
+
+- **`<dialog>` and `<search>`** are now recognized (EPUB 3). Both are HTML5
+  flow-content elements epubcheck accepts but the grammar was missing
+  entirely — `dialog` (with `open`) and `search`. **This changes verdicts**:
+  a document using either was reported invalid before and is now accepted.
+  EPUB 3 only; XHTML 1.1 (EPUB 2) predates both, so they stay rejected there.
+  (#40.)
+
+### Internal
+
+- Regression-guard tests for two engine properties that 0.6.0's cutover
+  settled but left untested: `<anyName>` matches names in any namespace while
+  `<nsName ns="">` matches only unnamespaced ones (#38, spec-correct — not a
+  bug), and a heavily-attributed element validates in constant time now that
+  removing the permissive wildcard eliminated the attribute-matching
+  ambiguity that used to make it exponential (#39). No behavior change.
+
 ## [0.6.0] - 2026-07-23
 
 Unknown and mistyped XHTML attributes are now rejected (#31). **This changes

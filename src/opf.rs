@@ -5006,10 +5006,22 @@ pub fn check(
                     has_script = true;
                 }
             }
-            if matches!(
-                node.tag_name().name(),
-                "input" | "button" | "select" | "textarea"
-            ) {
+            // Scripted content (OPF-014/015): epubcheck (OPSHandler30) marks
+            // a document scripted when it has javascript (the <script> case
+            // above), a <form> element, or any on* event-handler attribute -
+            // NOT the mere presence of a form control like <input>/<button>.
+            // The old code had it backwards on both counts (any form control
+            // triggered it; on* attributes never did), so <input required>
+            // wrongly reported OPF-014 while <span onclick="…"> did not (#37).
+            // "any unnamespaced name starting with on" is the HTML5 event-
+            // handler rule; on a valid document (all this check cares about)
+            // every such attribute is a real handler, and the grammar now
+            // rejects any non-handler on*-named attribute anyway (#31/#36).
+            if node.tag_name().name() == "form"
+                || node
+                    .attributes()
+                    .any(|a| a.namespace().is_none() && a.name().starts_with("on"))
+            {
                 has_script = true;
             }
             if node.tag_name().name() == "svg"
@@ -7493,6 +7505,46 @@ mod tests {
         assert_eq!(hit.id, crate::ids::OPF_018B, "scripted -> OPF-018b");
         assert_eq!(hit.severity, crate::report::Severity::Usage);
         assert!(report.is_valid(), "usage does not invalidate");
+    }
+
+    // #37: scripted-content detection (OPF-014/015). epubcheck (OPSHandler30)
+    // marks a document scripted on a <form> element, javascript, or any on*
+    // event-handler attribute - NOT the bare presence of a form control.
+
+    /// A document that declares no `scripted` property draws OPF-014 iff it
+    /// is detected as scripted, so this is a direct probe of the detection.
+    fn is_detected_scripted(body: &str) -> bool {
+        crate::validate_bytes(epub_declaring_props("", body))
+            .messages
+            .iter()
+            .any(|m| m.id == crate::ids::OPF_014 && m.text.contains("scripted"))
+    }
+
+    #[test]
+    fn form_element_is_scripted() {
+        assert!(is_detected_scripted("<form></form>"));
+    }
+
+    #[test]
+    fn on_handler_attribute_is_scripted() {
+        assert!(is_detected_scripted("<p onclick=\"f()\">x</p>"));
+        assert!(is_detected_scripted("<p onpointerdown=\"f()\">x</p>"));
+    }
+
+    #[test]
+    fn form_control_alone_is_not_scripted() {
+        // The #37 fix: a form control with no <form>/on* is NOT scripted
+        // (epubcheck triggers on <form>, not the controls). This used to
+        // wrongly draw OPF-014.
+        assert!(!is_detected_scripted(
+            "<p><input required=\"required\"/></p>"
+        ));
+        assert!(!is_detected_scripted(
+            "<p><button type=\"button\">b</button></p>"
+        ));
+        assert!(!is_detected_scripted(
+            "<p><textarea></textarea><select><option>a</option></select></p>"
+        ));
     }
 
     fn epub_with_ch1(ch1: &str) -> Vec<u8> {

@@ -1047,4 +1047,58 @@ mod tests {
         ));
         assert!(ok(&xhtml_grammar(), &xml));
     }
+
+    // #40: <dialog> and <search> - HTML5-only elements the grammar was
+    // missing entirely.
+
+    #[test]
+    fn xhtml_grammar_accepts_dialog_and_search() {
+        let xml = xhtml_doc(concat!(
+            "<dialog open=\"open\"><p>hi</p></dialog>",
+            "<search><p>find</p></search>"
+        ));
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    #[test]
+    fn xhtml_grammar_epub2_rejects_dialog_and_search() {
+        // HTML5-only - XHTML 1.1 (EPUB 2) predates both, so they must stay
+        // rejected there, same as <section>/<nav>/etc.
+        let dialog = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><dialog><p>hi</p></dialog></body></html>"
+        );
+        assert!(!ok(&xhtml_grammar_epub2(), &dialog));
+        let search = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body><search><p>find</p></search></body></html>"
+        );
+        assert!(!ok(&xhtml_grammar_epub2(), &search));
+    }
+
+    #[test]
+    fn heavily_attributed_element_validates_fast() {
+        // #39 regression guard: the exponential-time att_deriv path was
+        // driven by an attribute matchable by *both* an element's own rule
+        // and the old permissive wildcard (genuine grammar ambiguity). The
+        // wildcard is gone (#36), so every attribute now matches exactly one
+        // rule and there is no ambiguity to explore. An element carrying a
+        // large simultaneous attribute set - which used to hang for tens of
+        // minutes - must validate essentially instantly; if the exponential
+        // path ever came back, this test would hang and fail in CI.
+        let xml = xhtml_doc(concat!(
+            "<input type=\"text\" name=\"n\" value=\"v\" required=\"required\" ",
+            "min=\"1\" max=\"9\" step=\"1\" pattern=\"[0-9]+\" multiple=\"multiple\" ",
+            "accept=\"*\" autocomplete=\"off\" size=\"5\" maxlength=\"9\" minlength=\"1\" ",
+            "readonly=\"readonly\" src=\"x\" alt=\"a\" dirname=\"d\" capture=\"user\" ",
+            "height=\"1\" width=\"1\" formaction=\"x\" formmethod=\"post\" ",
+            "formnovalidate=\"formnovalidate\" formtarget=\"_blank\" ",
+            "id=\"i\" class=\"c\" title=\"t\" lang=\"en\" dir=\"ltr\" role=\"textbox\" ",
+            "aria-label=\"x\" onclick=\"f()\"/>"
+        ));
+        // (data-* is deliberately grammar-invalid - it's accepted at the
+        // report level in opf.rs, not by the grammar - so it's left out of
+        // this pure-grammar check.)
+        assert!(ok(&xhtml_grammar(), &xml));
+    }
 }
