@@ -641,6 +641,15 @@
             <name>ismap</name>
             <name>cite</name>
             <name>datetime</name>
+            <name>id</name>
+            <name>class</name>
+            <name>style</name>
+            <name>title</name>
+            <name>tabindex</name>
+            <name>hidden</name>
+            <name>accesskey</name>
+            <name>contenteditable</name>
+            <name>spellcheck</name>
             <!-- #33 slice 3: media/tables/object/remaining-forms
                  completion, both newly-added and pre-existing
                  element-specific names (applying #39's lesson to close
