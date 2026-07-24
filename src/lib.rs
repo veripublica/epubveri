@@ -198,6 +198,16 @@ mod tests {
     /// is declared by the DTD it references), a `&nbsp;` in the text, and an
     /// `id` the NCX points at. Sigil writes exactly this by default.
     fn epub2_with_dtd_entities(title: &str) -> Vec<u8> {
+        epub2_with_body(title, "")
+    }
+
+    /// The same book with extra markup appended to the body - for checks
+    /// about the content document's own contents rather than its encoding.
+    fn epub2_with_link(extra_body: &str) -> Vec<u8> {
+        epub2_with_body("C1", extra_body)
+    }
+
+    fn epub2_with_body(title: &str, extra_body: &str) -> Vec<u8> {
         let mut buf = Vec::new();
         {
             let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
@@ -254,6 +264,7 @@ mod tests {
 <head><title>{title}</title></head>\n\
 <body>\n\
 <h1 class=\"MsoNormal\" id=\"sigil_toc_id_3\">Chapter&nbsp;One</h1>\n\
+{extra_body}\n\
 </body>\n\
 </html>\n"
             );
@@ -268,6 +279,30 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// HTM-045 (#56): an empty `href` resolves to the containing document.
+    /// That is legal - so this is a usage hint, and must not turn into a
+    /// broken-reference error. The paired assertion is the point: RSC-007
+    /// firing here would mean we had started treating "" as a missing file.
+    #[test]
+    fn empty_href_is_a_usage_hint_not_a_broken_reference() {
+        let report = crate::validate_bytes(epub2_with_link("<p><a href=\"\">self</a></p>"));
+        assert!(
+            report.messages.iter().any(|m| m.id == crate::ids::HTM_045),
+            "an empty href should draw HTM-045; got {:?}",
+            report.messages.iter().map(|m| &m.id).collect::<Vec<_>>()
+        );
+        assert!(
+            !report.messages.iter().any(|m| m.id == crate::ids::RSC_007),
+            "an empty href is a self-reference, not a missing resource"
+        );
+        // A real relative link stays silent.
+        let ok = crate::validate_bytes(epub2_with_link("<p><a href=\"#sigil_toc_id_3\">x</a></p>"));
+        assert!(
+            !ok.messages.iter().any(|m| m.id == crate::ids::HTM_045),
+            "a resolvable href must not draw HTM-045"
+        );
     }
 
     /// Issue #23, the half that invents findings. The NCX fragment

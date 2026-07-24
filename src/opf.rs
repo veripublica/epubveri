@@ -4482,10 +4482,22 @@ pub fn check(
                 // resolution needs to run on exactly those hrefs, so only
                 // bail out here for a genuinely remote/data/mailto/tel
                 // href (empty hrefs have no fragment to check either).
-                if !href.starts_with('#') && is_external(href) {
+                // HTM-045 (#56): an empty href resolves to the document
+                // itself. That is legal, so epubcheck only hints - but it is
+                // almost never what the author meant. Checked ahead of the
+                // `is_external` bail-out below, which counts an empty href as
+                // external (nothing to resolve) and would skip past this.
+                if href.trim().is_empty() {
+                    report.push_at_pos(
+                        HTM_045,
+                        Severity::Usage,
+                        "the empty \"href\" points this document at itself",
+                        path.clone(),
+                        Position::of(a),
+                    );
                     continue;
                 }
-                if href.trim().is_empty() {
+                if !href.starts_with('#') && is_external(href) {
                     continue;
                 }
                 if remote_base {

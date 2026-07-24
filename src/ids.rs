@@ -193,6 +193,7 @@ pub const NCX_004: &str = "NCX-004"; // dtb:uid has leading or trailing whitespa
 pub const NCX_006: &str = "NCX-006"; // an empty docTitle/navLabel text element
 
 // --- Fixed-layout viewport/viewBox ---
+pub const HTM_045: &str = "HTM-045"; // an empty href="" points the document at itself (usage)
 pub const HTM_046: &str = "HTM-046"; // fixed-layout XHTML doc has no viewport meta
 pub const HTM_047: &str = "HTM-047"; // viewport content has a blank value after '='
 pub const HTM_048: &str = "HTM-048"; // fixed-layout SVG doc's root <svg> has no viewBox
