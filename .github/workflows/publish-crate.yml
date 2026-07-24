@@ -28,6 +28,17 @@ on:
       tag:
         description: "Existing tag to publish (e.g. v0.7.6)"
         required: true
+      # The trusted-publishing link lives in crates.io's settings, which are
+      # only visible to the crate owner - there is no way to check from here
+      # that it is configured correctly, and the natural test (publish
+      # something) costs a version number that can never be reused. So: run
+      # the OIDC exchange, prove a token comes back, publish nothing. Worth
+      # running after the initial setup, and after anything that could break
+      # the link - renaming this file, moving the repo, changing the owner.
+      verify_only:
+        description: "Only check that crates.io auth works; publish nothing"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -88,19 +99,31 @@ jobs:
       # on the branch push, but a tag can point anywhere, so re-prove it here
       # against the exact commit being published.
       - name: Test (workspace)
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.skip == 'false' && !inputs.verify_only
         run: cargo test --workspace --locked
 
+      # Runs for a real publish, and on demand for a verify-only check. (On a
+      # tag push `inputs` is null, so the second clause is simply falsy.)
       - name: Authenticate with crates.io
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.skip == 'false' || inputs.verify_only
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Report auth result (verify-only)
+        if: inputs.verify_only
+        run: |
+          if [ -n "${{ steps.auth.outputs.token }}" ]; then
+            echo "::notice::Trusted publishing works - crates.io issued a token. Nothing was published."
+          else
+            echo "::error::No token returned; the crates.io trusted-publishing link is not working."
+            exit 1
+          fi
 
       # `cargo publish` re-verifies by building the packaged tarball, which
       # also catches the classic "works locally, missing from the package"
       # failure before the upload happens.
       - name: Publish
-        if: steps.check.outputs.skip == 'false'
+        if: steps.check.outputs.skip == 'false' && !inputs.verify_only
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: cargo publish --locked
