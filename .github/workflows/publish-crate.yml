@@ -1,0 +1,106 @@
+name: Publish to crates.io
+
+# Publishes the `epubveri` crate when a `v*` tag is pushed - the same trigger
+# that already builds the release binaries, so one `git push origin vX.Y.Z`
+# now does the whole release.
+#
+# AUTHENTICATION - trusted publishing (OIDC), no stored token. crates.io
+# hands out a short-lived token in exchange for a GitHub-signed claim about
+# *which repo and which workflow file* is asking; the action's post step
+# revokes it when the job ends. That means no long-lived CARGO_REGISTRY_TOKEN
+# sitting in the repo secrets to leak, and a token that is useless anywhere
+# but this workflow.
+#
+# ONE-TIME SETUP (owner, on crates.io): crates.io -> epubveri -> Settings ->
+# Trusted Publishing -> Add, with repository `veripublica/epubveri` and
+# workflow `publish-crate.yml`. Until that exists the auth step fails and
+# nothing is published. Renaming this file breaks the trust link - re-point
+# the crates.io entry at the new name if it is ever renamed.
+#
+# Publishing is IRREVERSIBLE: a version number, once used, can never be
+# reused (only yanked). So the job refuses to publish unless the tag and the
+# manifests agree, and the tests pass, before it uploads anything.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (e.g. v0.7.6)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for the OIDC claim the auth action exchanges for a token.
+      id-token: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      # Guard 1: the tag is the source of truth for the release, but
+      # `cargo publish` reads the version out of Cargo.toml. If they disagree,
+      # tagging v0.7.6 would happily publish 0.7.5 - burning a version number
+      # on the wrong code, unfixably. epubveri-wasm tracks the same version
+      # (documented in CHANGELOG.md), so it is checked here too: it is not
+      # published to crates.io, but a mismatch means the npm package built
+      # from this tag would carry the wrong version.
+      - name: Verify tag matches the manifests
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          want="${tag#v}"
+          got=$(cargo metadata --no-deps --format-version 1 \
+                | python3 -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='epubveri'))")
+          wasm=$(cargo metadata --no-deps --format-version 1 \
+                | python3 -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='epubveri-wasm'))")
+          echo "tag=$want  Cargo.toml=$got  epubveri-wasm=$wasm"
+          [ "$want" = "$got" ]  || { echo "::error::tag $tag does not match Cargo.toml version $got"; exit 1; }
+          [ "$want" = "$wasm" ] || { echo "::error::tag $tag does not match epubveri-wasm version $wasm"; exit 1; }
+
+      # Guard 2: make a re-run harmless. A `workflow_dispatch` backfill, or a
+      # tag pushed twice, would otherwise fail on an "already uploaded" error
+      # that looks like a broken release rather than a no-op.
+      - name: Skip if this version is already on crates.io
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          ver="${tag#v}"
+          if curl -sf -H "User-Agent: epubveri-release (github.com/veripublica/epubveri)" \
+               "https://crates.io/api/v1/crates/epubveri/$ver" > /dev/null; then
+            echo "::notice::epubveri $ver is already published; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Guard 3: never publish code that does not pass its own tests. CI runs
+      # on the branch push, but a tag can point anywhere, so re-prove it here
+      # against the exact commit being published.
+      - name: Test (workspace)
+        if: steps.check.outputs.skip == 'false'
+        run: cargo test --workspace --locked
+
+      - name: Authenticate with crates.io
+        if: steps.check.outputs.skip == 'false'
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      # `cargo publish` re-verifies by building the packaged tarball, which
+      # also catches the classic "works locally, missing from the package"
+      # failure before the upload happens.
+      - name: Publish
+        if: steps.check.outputs.skip == 'false'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
