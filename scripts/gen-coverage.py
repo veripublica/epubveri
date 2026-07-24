@@ -123,12 +123,11 @@ ANN = {
     "CSS-006": (None, "`position: fixed` (USAGE) - matches epubcheck's "
         "first-value-component == \"fixed\" test."),
     "CSS-008": ("partial",
-        "We surface the CSS syntax errors we can derive from styloria's parse "
-        "tree - bad-string/bad-url tokens and malformed declaration shapes. "
-        "styloria's parser is error-recovering and doesn't yet expose the "
-        "errors it recovers from (unterminated blocks, dropped rules, …), so "
-        "the full parser-error surface epubcheck's CSS-008 covers isn't "
-        "reachable yet. Tracked upstream: veripublica/styloria#1."),
+        "Covers bad-string/bad-url tokens and unterminated rules/blocks (via "
+        "styloria 0.4's `syntax_errors`), plus in-block malformed declaration "
+        "shapes. Still a subset of epubcheck's full CSS-parser error surface - "
+        "styloria's parser is error-recovering, so it accepts some constructs "
+        "epubcheck rejects (a bad selector, an invalid at-rule prelude)."),
 }
 
 # Families whose per-ID full/partial/notes have been reviewed by hand. The

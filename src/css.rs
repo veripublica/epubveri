@@ -2,9 +2,14 @@
 //! `github.com/veripublica/styloria` — a pure-Rust CSS3 tokenizer/core-
 //! grammar parser/serializer with no selector or property-value grammar
 //! yet):
-//! - `CSS-008`: any `BadString`/`BadUrl` token anywhere in the stylesheet
-//!   (styloria's tokenizer never hard-fails, so these tokens are the
-//!   signal that *something* was malformed).
+//! - `CSS-008`: the syntax errors styloria's error-recovering parser
+//!   recovered from — bad string/url tokens and unterminated rules/blocks,
+//!   surfaced by styloria 0.4's `syntax_errors` — plus in-block malformed
+//!   declaration *shapes* (an `ident` with no `:`), which the parser leaves
+//!   as raw component values, so `check_declaration_shapes_spanned` splits
+//!   and flags those itself. Still a subset of every malformation
+//!   epubcheck's own CSS parser reports (a recovering parser accepts some
+//!   constructs epubcheck rejects).
 //! - `CSS-019`/`CSS-002`: an empty `@font-face` declaration block, or one
 //!   whose `src` is an empty `url()`.
 //! - A generic `url()` resource-resolution pass (covers `@import`,
@@ -169,7 +174,7 @@ pub(crate) fn check(
     // line:column of the offending token (via `Position::of_offset`, the
     // same byte-offset→line:col helper the rest of epubveri uses, so CSS
     // positions count columns in chars just like every other finding).
-    let sheet = spanned::parse_stylesheet(css);
+    let (sheet, syntax_errs) = spanned::parse_stylesheet_with_errors(css);
 
     // Encoding checks only make sense for a standalone CSS file - see
     // `CssOrigin::File`, which is why the bytes live there rather than
@@ -200,14 +205,11 @@ pub(crate) fn check(
     }
 
     // Each collected item keeps the span of the token that produced it, so
-    // the deferred CSS-008 / RSC-00x findings below can report its position.
-    let mut bad_spans: Vec<Span> = Vec::new();
+    // the deferred RSC-00x findings below can report its position.
     let mut urls: Vec<Spanned<String>> = Vec::new();
     for rule in &sheet.rules {
         match &rule.node {
             spanned::Rule::Qualified(q) => {
-                collect_bad_spans(&q.prelude, &mut bad_spans);
-                collect_bad_spans(&q.block.node.values, &mut bad_spans);
                 collect_urls_spanned(&q.prelude, &mut urls);
                 collect_urls_spanned(&q.block.node.values, &mut urls);
                 check_declaration_shapes_spanned(
@@ -219,10 +221,8 @@ pub(crate) fn check(
                 );
             }
             spanned::Rule::At(a) => {
-                collect_bad_spans(&a.prelude, &mut bad_spans);
                 collect_urls_spanned(&a.prelude, &mut urls);
                 if let Some(block) = &a.block {
-                    collect_bad_spans(&block.node.values, &mut bad_spans);
                     if a.name.eq_ignore_ascii_case("font-face") {
                         check_font_face_spanned(
                             &block.node.values,
@@ -272,14 +272,30 @@ pub(crate) fn check(
         }
     }
 
-    for span in bad_spans {
+    // CSS-008: the syntax errors styloria's (error-recovering) parser
+    // recovered from - bad string/url tokens, and unterminated rules/blocks -
+    // now surfaced by styloria 0.4's `syntax_errors` rather than re-derived
+    // here. In-block malformed declaration *shapes* aren't in this set (a
+    // rule block is parsed as raw component values; the declaration split
+    // happens in `check_declaration_shapes_spanned` below, which still emits
+    // its own CSS-008 for those).
+    for e in &syntax_errs {
+        let slug = match e.kind {
+            spanned::SyntaxErrorKind::BadString | spanned::SyntaxErrorKind::BadUrl => {
+                "css.stylesheet.bad_token"
+            }
+            spanned::SyntaxErrorKind::UnterminatedRule
+            | spanned::SyntaxErrorKind::UnterminatedBlock => "css.stylesheet.unterminated",
+            spanned::SyntaxErrorKind::MalformedDeclaration
+            | spanned::SyntaxErrorKind::UnexpectedToken => "css.stylesheet.malformed",
+        };
         report.push_full(
             CSS_008,
             Severity::Error,
             "CSS syntax error",
             css_path,
-            origin.position(css, span.start),
-            "css.stylesheet.bad_token",
+            origin.position(css, e.span.start),
+            slug,
             Vec::new(),
         );
     }
@@ -746,20 +762,6 @@ fn import_target(prelude: &[ComponentValue]) -> Option<String> {
     })
 }
 
-/// Collect the span of every `BadString`/`BadUrl` token in the tree (the
-/// span-carrying twin of the old bad-token *count*), so each CSS-008 can
-/// report the exact position of the malformed token.
-fn collect_bad_spans(values: &[Spanned<spanned::ComponentValue>], out: &mut Vec<Span>) {
-    for v in values {
-        match &v.node {
-            spanned::ComponentValue::Token(Token::BadString | Token::BadUrl) => out.push(v.span),
-            spanned::ComponentValue::Function { args, .. } => collect_bad_spans(args, out),
-            spanned::ComponentValue::Block(b) => collect_bad_spans(&b.values, out),
-            _ => {}
-        }
-    }
-}
-
 /// Span-carrying twin of [`collect_urls`]: each collected `url()` target
 /// keeps the span of the `url(...)` token/function it came from, so the
 /// deferred RSC-00x resource findings can report its position. The whole
@@ -1105,6 +1107,13 @@ mod tests {
     fn unicode_bidi_property_flagged() {
         let findings = run("body { unicode-bidi: bidi-override; }", &empty_index());
         assert!(findings.contains(&CSS_001));
+    }
+
+    #[test]
+    fn unterminated_block_and_bad_token_are_css008() {
+        // styloria 0.4 surfaces both; each maps to CSS-008.
+        assert!(run("a { color: red", &empty_index()).contains(&CSS_008)); // unterminated block
+        assert!(run("a { content: \"oops\n }", &empty_index()).contains(&CSS_008)); // bad string
     }
 
     #[test]

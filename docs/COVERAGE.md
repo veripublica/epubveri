@@ -268,7 +268,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | CSS-005 | Conflicting alternate style tags found: %1$s. | Y | Y | a stylesheet link's class conflicts between alt style tags (usage) |
 | CSS-006 | CSS selector specifies fixed position. | Y | Y | `position: fixed` (USAGE) - matches epubcheck's first-value-component == "fixed" test. |
 | CSS-007 | Font-face reference "%1$s" refers to non-standard font type "%2$s". | Y | Y | a @font-face src names a non-Core-Media-Type font (info) |
-| CSS-008 | An error occurred while parsing the CSS: %1$s. | Y | ~ | We surface the CSS syntax errors we can derive from styloria's parse tree - bad-string/bad-url tokens and malformed declaration shapes. styloria's parser is error-recovering and doesn't yet expose the errors it recovers from (unterminated blocks, dropped rules, …), so the full parser-error surface epubcheck's CSS-008 covers isn't reachable yet. Tracked upstream: veripublica/styloria#1. |
+| CSS-008 | An error occurred while parsing the CSS: %1$s. | Y | ~ | Covers bad-string/bad-url tokens and unterminated rules/blocks (via styloria 0.4's `syntax_errors`), plus in-block malformed declaration shapes. Still a subset of epubcheck's full CSS-parser error surface - styloria's parser is error-recovering, so it accepts some constructs epubcheck rejects (a bad selector, an invalid at-rule prelude). |
 | CSS-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-010 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-011 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
