@@ -8,6 +8,21 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.2] - 2026-07-24
+
+### Fixed
+
+- **A space in a URL's path or query is no longer reported as `RSC-020`.** A
+  trailing space in a content-document `<a href>` query — e.g.
+  `https://www.youtube.com/watch?v=…XFc. ` — was wrongly reported as a hard
+  error while epubcheck stayed silent. EPUB references the WHATWG URL
+  Standard, whose parser strips leading/trailing spaces and percent-encodes
+  an interior path/query space, so such a URL is a *valid URL string* in
+  practice; epubcheck's own fixtures accept it. A space in the **host** (which
+  genuinely can't be parsed, e.g. `www.example .com`) is still an error, as is
+  a space in a manifest item's local file path. (Reported by patrik on the
+  MobileRead forum.)
+
 ## [0.7.1] - 2026-07-24
 
 ### Fixed
