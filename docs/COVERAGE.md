@@ -19,9 +19,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 17 | 1 | 7 | 0 | 25 | 18/25 | reviewed |
-| OPF | 71 | 1 | 11 | 12 | 83 | 72/83 | reviewed |
-| RSC | 27 | 2 | 1 | 3 | 30 | 29/30 | reviewed |
-| HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
+| OPF | 71 | 1 | 9 | 14 | 81 | 72/81 | reviewed |
+| RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
+| HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 10 | 0 | 0 | 1 | 10 | 10/10 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **176** | **5** | **20** | **97** | **201** | **181/201** | |
+| **All** | **177** | **5** | **16** | **100** | **198** | **182/198** | |
 
-**epubveri implements 181 of 201 live epubcheck checks (~90%)** — 176 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 182 of 198 live epubcheck checks (~92%)** — 177 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -80,7 +80,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-010 | Error resolving reference: "%1$s". | Y | x | Not emitted; reference resolution is covered under RSC-007/RSC-012. |
-| OPF-011 | itemref can’t have both page-spread-right and page-spread-left properties. | Y | x | itemref can't be both page-spread-left & -right - small discrete gap. |
+| OPF-011 | itemref can’t have both page-spread-right and page-spread-left properties. | Y | ⊘ | Dead ID - commented out in epubcheck's OPFHandler30 ("Checked with Schematron"), which reports the page-spread-left/-right conflict as RSC-005. We emit that same RSC-005, and epubcheck's own test expects it (verified #51). |
 | OPF-012 | Item property "%1$s" is not defined for media type "%2$s". | Y | Y | Data Navigation Document isn't application/xhtml+xml |
 | OPF-013 | Resource "%1$s" is declared with MIME type "%2$s" in content, but has MIME type "%3$s" ... | Y | Y | a declared type attribute doesn't match the resource's actual media-type |
 | OPF-014 | The property "%1$s" should be declared in the OPF file. | Y | Y | a content property (remote-resources/scripted/svg) is used but not declared |
@@ -90,7 +90,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-018 | The "remote-resources" property was declared in the Package Document, but no reference ... | Y | Y | a content property is declared but not needed (warning variant) |
 | OPF-019 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-020 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-021 | Use of non-registered URI scheme type in href: "%1$s". | Y | x | Non-registered URI scheme in an OPF href - we have HTM-025 for content docs, but not OPF-021 for OPF hrefs. |
+| OPF-021 | Use of non-registered URI scheme type in href: "%1$s". | Y | x | Unregistered URI scheme in a *DTBook* content document's `<a href external="true">` (its only call site is DTBookHandler, not the OPF). We accept `application/x-dtbook+xml` as a content type but don't validate DTBook, so this is gated behind that - see #52. |
 | OPF-025 | Property value list "%1$s" is not allowed, only one value must be specified. | Y | Y | an attribute value must be a single token, not a list |
 | OPF-026 | Found malformed property value: "%1$s". | Y | Y | a meta property name is not well-formed |
 | OPF-027 | Undefined property: "%1$s". | Y | Y | an unknown/unprefixed value is used for a known-vocabulary attribute |
@@ -102,7 +102,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-033 | The spine contains no linear resources. | Y | Y | the spine contains no linear resources |
 | OPF-034 | The spine contains multiple references to the manifest item with id "%1$s". | Y | Y | the spine references the same manifest item more than once |
 | OPF-035 | Media type "text/html" is not appropriate for XHTML/OPS. | Y | Y | a manifest item declares an HTML media-type instead of XHTML (warning) |
-| OPF-036 | Video type "%1$s" might not be supported by reading systems | Y | x | Video-codec-support usage note - not implemented. |
+| OPF-036 | Video type "%1$s" might not be supported by reading systems | Y | ⊘ | Dead ID - the video-codec-support note exists only in MessageId/DefaultSeverities and the translation bundles; nothing in epubcheck's source emits it and no test expects it (verified #53). |
 | OPF-037 | Found deprecated media-type "%1$s". | Y | Y | a manifest item uses the deprecated OEB 1.x CSS media-type (warning) |
 | OPF-038 | Media type "%1$s" is not appropriate for an OEBPS 1.2 context; Use "text/x-oeb1-documen... | Y | Y | a manifest item uses a legacy OEBPS 1.2 CSS media-type (warning) |
 | OPF-039 | Media-type "%1$s" is not appropriate in an OEBPS 1.2 context. Use "text/x-oeb1-css" ins... | Y | Y | a manifest item uses a legacy OEBPS 1.2 HTML media-type (warning) |
@@ -193,7 +193,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-021 | A Search Key Map Document must point to Content Documents ("%1$s" was not found in the ... | Y | Y | a search-key-group href targets an incompatible resource type |
 | RSC-022 | Cannot check image details (requires Java version 7 or higher). | Y | ⊘ | Not a validation check - epubcheck reporting its own Java-runtime limitation. N/A for epubveri (we check image details via PKG-021/022). |
 | RSC-023 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
-| RSC-024 | Informative parsing warning: %1$s | Y | x | Generic passthrough of raw XML-parser warnings (usage); we surface real parse errors under RSC-016. Minor gap. |
+| RSC-024 | Informative parsing warning: %1$s | Y | ⊘ | Not a distinct check - it is the non-normative half of a pair (`normative ? RSC_017 : RSC_024`, alongside RSC-005/RSC-025). epubcheck downgrades to it for validations it runs advisorily; we have no non-normative mode, so it mirrors internal plumbing rather than catching anything in a book (verified #57). |
 | RSC-025 | Informative parsing error: %1$s | Y | Y | SVG content-model violation (usage) |
 | RSC-026 | URL "%1$s" leaks outside the container (it is not a valid-relative-ocf-URL-with-fragmen... | Y | Y | a URL is path-absolute or escapes the container root |
 | RSC-027 | XML document is encoded in UTF-16. It should be encoded in UTF-8 instead. | Y | Y | the OPF/content document is UTF-16 encoded (warning) |
@@ -240,7 +240,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM-036 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-038 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-044 | Namespace uri "%1$s" was included but not used. | Y | ⊘ | Dead ID - epubcheck never emits it anywhere in its source. Not a live check. |
-| HTM-045 | Encountered empty href. | Y | x | Empty `href=""` self-reference hint (USAGE). Small discrete gap - epubveri doesn't emit it. |
+| HTM-045 | Encountered empty href. | Y | Y | An empty `href=""` resolves to the document itself - legal, so a usage hint rather than an error (#56). |
 | HTM-046 | Fixed layout document has no "viewport" meta element. | Y | Y | fixed-layout XHTML doc has no viewport meta |
 | HTM-047 | Viewport metadata "%1$s" has a syntax error | Y | Y | viewport content has a blank value after '=' |
 | HTM-048 | SVG Fixed-Layout Documents must have a "viewBox" attribute (on the outermost "svg" elem... | Y | Y | fixed-layout SVG doc's root <svg> has no viewBox |

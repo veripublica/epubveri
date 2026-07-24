@@ -76,14 +76,20 @@ ANN = {
     "OPF-047": (None, "Legacy OEBPS 1.2 backwards-compat syntax - deliberately "
         "out of scope (pre-EPUB format)."),
     "OPF-064": (None, "Informational profile-selection message - not emitted."),
-    "OPF-036": (None, "Video-codec-support usage note - not implemented."),
+    "OPF-036": ("na", "Dead ID - the video-codec-support note exists only in "
+        "MessageId/DefaultSeverities and the translation bundles; nothing in "
+        "epubcheck's source emits it and no test expects it (verified #53)."),
     "OPF-005": (None, "Prefix-URI-doesn't-exist - not done (we do prefix "
         "syntax OPF-004 + undeclared prefix OPF-028)."),
     "OPF-006": (None, "Prefix-URI-not-a-valid-URI - not done (same family)."),
-    "OPF-011": (None, "itemref can't be both page-spread-left & -right - small "
-        "discrete gap."),
-    "OPF-021": (None, "Non-registered URI scheme in an OPF href - we have "
-        "HTM-025 for content docs, but not OPF-021 for OPF hrefs."),
+    "OPF-011": ("na", "Dead ID - commented out in epubcheck's OPFHandler30 "
+        "(\"Checked with Schematron\"), which reports the page-spread-left/"
+        "-right conflict as RSC-005. We emit that same RSC-005, and "
+        "epubcheck's own test expects it (verified #51)."),
+    "OPF-021": (None, "Unregistered URI scheme in a *DTBook* content document's "
+        "`<a href external=\"true\">` (its only call site is DTBookHandler, not "
+        "the OPF). We accept `application/x-dtbook+xml` as a content type but "
+        "don't validate DTBook, so this is gated behind that - see #52."),
     "OPF-067": (None, "Resource listed as both a `<link>` and a manifest item "
         "- small discrete gap."),
     # --- RSC (partials confirmed earlier) ---
@@ -102,8 +108,11 @@ ANN = {
     "RSC-022": ("na", "Not a validation check - epubcheck reporting its own "
         "Java-runtime limitation. N/A for epubveri (we check image details "
         "via PKG-021/022)."),
-    "RSC-024": (None, "Generic passthrough of raw XML-parser warnings (usage); "
-        "we surface real parse errors under RSC-016. Minor gap."),
+    "RSC-024": ("na", "Not a distinct check - it is the non-normative half of "
+        "a pair (`normative ? RSC_017 : RSC_024`, alongside RSC-005/RSC-025). "
+        "epubcheck downgrades to it for validations it runs advisorily; we "
+        "have no non-normative mode, so it mirrors internal plumbing rather "
+        "than catching anything in a book (verified #57)."),
     # --- HTM (reviewed) ---
     "HTM-002": ("na", "Dead ID - epubcheck defines a severity for it but never "
         "emits it anywhere in its source. Not a live check."),
@@ -115,8 +124,8 @@ ANN = {
         "(fatal). The defect is covered; the ID itself is effectively dead."),
     "HTM-044": ("na", "Dead ID - epubcheck never emits it anywhere in its "
         "source. Not a live check."),
-    "HTM-045": (None, "Empty `href=\"\"` self-reference hint (USAGE). Small "
-        "discrete gap - epubveri doesn't emit it."),
+    "HTM-045": (None, "An empty `href=\"\"` resolves to the document itself - "
+        "legal, so a usage hint rather than an error (#56)."),
     # --- CSS (reviewed) ---
     "CSS-001": (None, "epubcheck flags exactly `direction`/`unicode-bidi` "
         "(EPUB 3 only) - we match it."),
