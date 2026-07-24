@@ -758,19 +758,28 @@ const DC_ELEMENTS_NS: &str = "http://purl.org/dc/elements/1.1/";
 /// (rather than dropping it), so a later "is this prefix declared" check
 /// doesn't cascade into a spurious second finding for a name that IS
 /// present, just syntactically malformed.
-fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize) {
+fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize, Option<String>) {
     let tokens: Vec<&str> = value.split_whitespace().collect();
     let mut pairs = HashMap::new();
     let mut errors = 0;
+    // A trailing `name:` with no URI after it - OPF-005 rather than OPF-004.
+    // epubcheck's parser ends in its URI state there, and URI is not one of
+    // its FINAL_STATES, so it reports "URI for prefix doesn't exist" *instead
+    // of* a syntax error, not in addition to one.
+    let mut dangling = None;
     let mut i = 0;
     while i < tokens.len() {
         let tok = tokens[i];
         if let Some(name) = tok.strip_suffix(':') {
-            if !name.is_empty() && i + 1 < tokens.len() {
+            if name.is_empty() {
+                // A bare ":" names no prefix at all - a syntax error.
+                errors += 1;
+                i += 1;
+            } else if i + 1 < tokens.len() {
                 pairs.insert(name.to_string(), tokens[i + 1].to_string());
                 i += 2;
             } else {
-                errors += 1;
+                dangling = Some(name.to_string());
                 i += 1;
             }
         } else if i + 1 < tokens.len() && tokens[i + 1] == ":" {
@@ -790,7 +799,28 @@ fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize) {
             i += 1;
         }
     }
-    (pairs, errors)
+    (pairs, errors, dangling)
+}
+
+/// Whether a prefix declaration's URI half would fail to parse as a URI -
+/// OPF-006. epubcheck's test is Java's `new URI(...)`, which rejects
+/// characters outside the unreserved/reserved/escaped sets; whitespace can't
+/// reach here (the value is split on it), so what remains is this small set
+/// of illegal characters plus malformed percent-escapes. Deliberately
+/// conservative: being stricter than Java's parser would invent errors on
+/// URIs epubcheck accepts.
+fn is_unparseable_uri(uri: &str) -> bool {
+    const ILLEGAL: &[char] = &['<', '>', '"', '{', '}', '|', '\\', '^', '`'];
+    if uri.chars().any(|c| ILLEGAL.contains(&c) || c.is_control()) {
+        return true;
+    }
+    let bytes = uri.as_bytes();
+    bytes.iter().enumerate().any(|(i, b)| {
+        *b == b'%'
+            && !(i + 2 < bytes.len()
+                && bytes[i + 1].is_ascii_hexdigit()
+                && bytes[i + 2].is_ascii_hexdigit())
+    })
 }
 
 /// The MARC relator codes epubcheck accepts for `opf:role` (273 of
@@ -837,7 +867,7 @@ fn check_prefix_declaration(
     node: roxmltree::Node,
     report: &mut Report,
 ) -> HashMap<String, String> {
-    let (pairs, syntax_errors) = parse_prefix_value(prefix_attr.value());
+    let (pairs, syntax_errors, dangling) = parse_prefix_value(prefix_attr.value());
     for _ in 0..syntax_errors {
         report.push_at_pos(
             OPF_004,
@@ -846,6 +876,28 @@ fn check_prefix_declaration(
             path,
             Position::of(node),
         );
+    }
+    // OPF-005 (#50): the value ends with a prefix that has no URI after it.
+    if let Some(name) = &dangling {
+        report.push_at_pos(
+            OPF_005,
+            Severity::Error,
+            format!("no URI was declared for the prefix \"{name}\""),
+            path,
+            Position::of(node),
+        );
+    }
+    // OPF-006 (#50): the URI half doesn't parse as a URI.
+    for (name, uri) in &pairs {
+        if is_unparseable_uri(uri) {
+            report.push_at_pos(
+                OPF_006,
+                Severity::Error,
+                format!("the URI declared for the prefix \"{name}\" is not a valid URI"),
+                path,
+                Position::of(node),
+            );
+        }
     }
     for (name, uri) in &pairs {
         if name == "_" {
@@ -8504,6 +8556,61 @@ mod tests {
             "must carry the source element path"
         );
         assert_eq!(m.rule, Some("opf.spine.hyperlinked_not_in_spine"));
+    }
+
+    /// OPF-005 (#50): a prefix declaration ending in a name with no URI.
+    /// epubcheck reports this *instead of* a syntax error, not alongside one -
+    /// its parser ends in the URI state, which is not one of its FINAL_STATES,
+    /// so the OPF-004 branch never runs. Getting that wrong would double-report
+    /// the same defect.
+    #[test]
+    fn prefix_declaration_missing_its_uri() {
+        let (pairs, errors, dangling) =
+            super::parse_prefix_value("foaf: http://xmlns.com/foaf/ x:");
+        assert_eq!(dangling.as_deref(), Some("x"), "the trailing prefix");
+        assert_eq!(
+            errors, 0,
+            "OPF-005 replaces the syntax error, it doesn't add"
+        );
+        assert_eq!(
+            pairs.get("foaf").map(String::as_str),
+            Some("http://xmlns.com/foaf/")
+        );
+
+        // A bare ":" names no prefix, so it stays an ordinary syntax error.
+        let (_, errors, dangling) = super::parse_prefix_value("http://example.org :");
+        assert!(dangling.is_none(), "a bare colon declares no prefix");
+        assert!(errors > 0);
+
+        // A well-formed declaration produces neither.
+        let (_, errors, dangling) = super::parse_prefix_value("foaf: http://xmlns.com/foaf/");
+        assert_eq!((errors, dangling), (0, None));
+    }
+
+    /// OPF-006 (#50): the URI half has to parse as a URI. Deliberately
+    /// conservative - epubcheck's test is Java's `new URI(...)`, and being
+    /// stricter than that would invent errors on URIs it accepts.
+    #[test]
+    fn prefix_declaration_uri_validity() {
+        for ok in [
+            "http://xmlns.com/foaf/spec/",
+            "http://example.org/vocab#",
+            "https://example.org/a%20b",
+            "urn:uuid:12345678-1234-1234-1234-123456789abc",
+            "http://example.org/~user/(x)",
+        ] {
+            assert!(!super::is_unparseable_uri(ok), "{ok} is a valid URI");
+        }
+        for bad in [
+            "http://example.org/<x>",
+            "http://example.org/{x}",
+            "http://example.org/a|b",
+            "http://example.org/a\\b",
+            "http://example.org/a%zz",
+            "http://example.org/a%",
+        ] {
+            assert!(super::is_unparseable_uri(bad), "{bad} should not parse");
+        }
     }
 
     /// OPF-052 (#54): `opf:role` must be a real MARC relator code. The shape

@@ -78,9 +78,12 @@ ANN = {
     "OPF-036": ("na", "Dead ID - the video-codec-support note exists only in "
         "MessageId/DefaultSeverities and the translation bundles; nothing in "
         "epubcheck's source emits it and no test expects it (verified #53)."),
-    "OPF-005": (None, "Prefix-URI-doesn't-exist - not done (we do prefix "
-        "syntax OPF-004 + undeclared prefix OPF-028)."),
-    "OPF-006": (None, "Prefix-URI-not-a-valid-URI - not done (same family)."),
+    "OPF-005": (None, "A prefix declaration ending in a name with no URI. "
+        "Reported instead of the OPF-004 syntax error, as epubcheck does - "
+        "its parser ends in a non-final URI state there (#50)."),
+    "OPF-006": (None, "A prefix declaration whose URI half doesn't parse. "
+        "Conservative, matching Java's `new URI(...)`: illegal characters and "
+        "malformed percent-escapes only (#50)."),
     "OPF-011": ("na", "Dead ID - commented out in epubcheck's OPFHandler30 "
         "(\"Checked with Schematron\"), which reports the page-spread-left/"
         "-right conflict as RSC-005. We emit that same RSC-005, and "

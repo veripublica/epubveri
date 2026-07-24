@@ -19,7 +19,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 19 | 1 | 5 | 0 | 25 | 20/25 | reviewed |
-| OPF | 73 | 0 | 8 | 14 | 81 | 73/81 | reviewed |
+| OPF | 75 | 0 | 6 | 14 | 81 | 75/81 | reviewed |
 | RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **181** | **4** | **13** | **100** | **198** | **185/198** | |
+| **All** | **183** | **4** | **11** | **100** | **198** | **187/198** | |
 
-**epubveri implements 185 of 198 live epubcheck checks (~93%)** — 181 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 187 of 198 live epubcheck checks (~94%)** — 183 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -74,8 +74,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-002 | The OPF file "%1$s" was not found in the EPUB. | Y | Y | the OPF file was not found in the EPUB |
 | OPF-003 | Item "%1$s" exists in the EPUB, but is not declared in the OPF manifest. | Y | Y | a container resource isn't listed in the manifest (usage) |
 | OPF-004 | Invalid prefix declaration: leading or trailing whitespace is not allowed. | Y | Y | the prefix attribute value has a syntax error |
-| OPF-005 | Invalid prefix declaration: URI for prefix "%1$s" doesn’t exist. | Y | x | Prefix-URI-doesn't-exist - not done (we do prefix syntax OPF-004 + undeclared prefix OPF-028). |
-| OPF-006 | Invalid prefix declaration: URI "%1$s" is not a valid URI. | Y | x | Prefix-URI-not-a-valid-URI - not done (same family). |
+| OPF-005 | Invalid prefix declaration: URI for prefix "%1$s" doesn’t exist. | Y | Y | A prefix declaration ending in a name with no URI. Reported instead of the OPF-004 syntax error, as epubcheck does - its parser ends in a non-final URI state there (#50). |
+| OPF-006 | Invalid prefix declaration: URI "%1$s" is not a valid URI. | Y | Y | A prefix declaration whose URI half doesn't parse. Conservative, matching Java's `new URI(...)`: illegal characters and malformed percent-escapes only (#50). |
 | OPF-007 | Re-declaration of reserved prefix "%1$s". | Y | Y | a reserved vocabulary prefix is redeclared |
 | OPF-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |

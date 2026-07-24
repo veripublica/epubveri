@@ -77,6 +77,8 @@ pub const RSC_033: &str = "RSC-033"; // a local reference has a URL query string
 pub const RSC_026: &str = "RSC-026"; // a URL is path-absolute or escapes the container root
 
 // --- OPF package document (dedicated codes, used verbatim) ---
+pub const OPF_005: &str = "OPF-005"; // a prefix declaration has no URI after the prefix name
+pub const OPF_006: &str = "OPF-006"; // a prefix declaration's URI is not a valid URI
 pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared
 pub const OPF_001: &str = "OPF-001"; // error parsing the EPUB version
 pub const OPF_002: &str = "OPF-002"; // the OPF file was not found in the EPUB
