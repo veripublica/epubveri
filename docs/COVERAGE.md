@@ -6,9 +6,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 - The ID universe is epubcheck's own `MessageId.java` (epubveri adopted epubcheck's ID scheme, so almost every ID here is epubcheck's — the signal is the *epubveri* column).
 
-- **Coverage is over the _live_ denominator** = epubcheck's total minus the IDs epubcheck **suppresses** by default (84 of 298 are disabled in epubcheck itself; not implementing those is not a gap). A raw "X of 298" would badly understate real coverage.
+- **Coverage is over the _live_ denominator** = epubcheck's total minus every ID that isn't a live *content-validation* check: the ones epubcheck **suppresses** by default, plus its runtime/tooling/meta messages (⊘ below). Not implementing those is not a gap - each such row carries a note saying why it's out of scope, so the exclusions read as deliberate, not as oversights. A raw "X of 298" would badly understate real coverage.
 
-- Status: **Y** full · **~** partial (epubcheck flags cases we don't — see the note) · **x** not implemented · **⊘** not a live check (epubcheck-suppressed, or an epubcheck runtime message).
+- Status: **Y** full · **~** partial (epubcheck flags cases we don't — see the note) · **x** not implemented (a real gap) · **⊘** not a live content check — epubcheck-suppressed, a dead ID, or an epubcheck runtime/tooling/meta message; **the row's note says which**.
 
 - **Review status.** Families marked *reviewed* below have had each ID's full/partial status checked against the source by hand. The rest are *first-pass*: **x**/**⊘** are reliable (derived from the code + epubcheck's severities), but a **Y** there means only "epubveri has this ID" and hasn't yet been checked for partialness — treat those as provisional.
 
@@ -26,13 +26,13 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | MED | 14 | 1 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 5 | 0 | 5 | 1 | 10 | 5/10 | reviewed |
 | NCX | 3 | 0 | 0 | 3 | 3 | 3/3 | reviewed |
-| ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | first-pass |
-| SCP | 0 | 0 | 0 | 10 | 0 | — | first-pass |
-| CHK | 0 | 0 | 8 | 0 | 8 | 0/8 | first-pass |
-| INF | 0 | 0 | 1 | 0 | 1 | 0/1 | first-pass |
-| **All** | **169** | **6** | **35** | **88** | **210** | **175/210** | |
+| ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | reviewed |
+| SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
+| CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
+| INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
+| **All** | **169** | **6** | **26** | **97** | **201** | **175/201** | |
 
-**epubveri implements 175 of 210 live epubcheck checks (~83%)** — 169 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 175 of 201 live epubcheck checks (~87%)** — 169 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -338,7 +338,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | NCX-005 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NCX-006 | Empty "text" label in the NCX document | Y | Y | an empty docTitle/navLabel text element |
 
-### ACC  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### ACC  _(reviewed)_
+
+> **Scope:** epubcheck defines many ACC IDs but SUPPRESSES all but two by default; epubveri implements both live ones.
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
@@ -360,7 +362,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ACC-016 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | ACC-017 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 
-### SCP  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### SCP  _(reviewed)_
+
+> **Scope:** All scripting-check IDs are SUPPRESSED by default in epubcheck (no live check), so there is nothing here to implement.
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
@@ -375,24 +379,28 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | SCP-010 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 
-### CHK  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### CHK  _(reviewed)_
+
+> **Scope:** Every CHK ID is an epubcheck CLI/tooling message about its custom message-overrides file - not EPUB content validation. N/A for an embeddable library, not a gap.
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| CHK-001 | The custom message overrides file was not found. | Y | x | Internal checker/tooling messages - not applicable/implemented. |
-| CHK-002 | Unrecognized custom message id %1$s encountered in message overrides file "%2$s". | Y | x | Internal checker/tooling messages - not applicable/implemented. |
-| CHK-003 | Unrecognized custom message severity "%1$s" encountered in message overrides file "%2$s". | Y | x | Internal checker/tooling messages - not applicable/implemented. |
-| CHK-004 | The custom message contains too many parameters in message overrides file "%1$s". | Y | x | Internal checker/tooling messages - not applicable/implemented. |
-| CHK-005 | The custom suggestion contains too many parameters in message overrides file "%1$s". | Y | x | Internal checker/tooling messages - not applicable/implemented. |
-| CHK-006 | Unable to parse the custom format parameter in message overrides file "%1$s". | Y | x | Internal checker/tooling messages - not applicable/implemented. |
-| CHK-007 | Error encountered while processing custom message file "%1$s": "%2$s". | Y | x | Internal checker/tooling messages - not applicable/implemented. |
-| CHK-008 | Error encountered while processing an item "%1$s"; skip other checks for the item. | Y | x | Internal checker/tooling messages - not applicable/implemented. |
+| CHK-001 | The custom message overrides file was not found. | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
+| CHK-002 | Unrecognized custom message id %1$s encountered in message overrides file "%2$s". | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
+| CHK-003 | Unrecognized custom message severity "%1$s" encountered in message overrides file "%2$s". | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
+| CHK-004 | The custom message contains too many parameters in message overrides file "%1$s". | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
+| CHK-005 | The custom suggestion contains too many parameters in message overrides file "%1$s". | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
+| CHK-006 | Unable to parse the custom format parameter in message overrides file "%1$s". | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
+| CHK-007 | Error encountered while processing custom message file "%1$s": "%2$s". | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
+| CHK-008 | Error encountered while processing an item "%1$s"; skip other checks for the item. | Y | ⊘ | epubcheck CLI/tooling message about its *custom message-overrides file* (a file that renames/re-severities messages) - not EPUB content validation. epubveri is an embeddable library with no such config file, so this can never apply. |
 
-### INF  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### INF  _(reviewed)_
+
+> **Scope:** epubcheck meta-messages about the review status of epubcheck's own rules - not findings about the EPUB. N/A, not a gap.
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| INF-001 | Rule %1$s is under review and its severity may change in a future release. See the disc... | Y | x | Not implemented. |
+| INF-001 | Rule %1$s is under review and its severity may change in a future release. See the disc... | Y | ⊘ | epubcheck meta-message flagging that one of *epubcheck's own* rules is under review and its severity may change - a note about the tool, not a finding about the EPUB. Nothing for epubveri to report. |
 
 ## epubveri-owned IDs (not in epubcheck)
 

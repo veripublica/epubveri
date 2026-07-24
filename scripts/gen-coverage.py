@@ -151,14 +151,43 @@ ANN = {
 # Families whose per-ID full/partial/notes have been reviewed by hand. The
 # rest are first-pass: "full" there means "epubveri has the ID", not yet
 # checked for partialness.
-REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS", "MED", "NAV", "NCX"}
+REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS", "MED", "NAV", "NCX",
+            "ACC", "SCP", "CHK", "INF"}
 # whole families / notable gaps described once (applied to every id in the
 # family that epubveri lacks, as a shared note)
 FAMILY_GAP = {
     "SCP": "Scripting checks - not implemented (no SCP family).",
     "ACC": "Accessibility checks - mostly not implemented (only ACC IDs epubveri "
            "has a constant for are covered).",
-    "CHK": "Internal checker/tooling messages - not applicable/implemented.",
+}
+
+# Whole families that are N/A for epubveri - not content validation, so their
+# IDs are excluded from the live denominator (⊘) rather than counted as gaps.
+# Each such ID gets FAMILY_NA_NOTE[fam] unless it has its own ANN note.
+NA_FAMILIES = {"CHK", "INF"}
+FAMILY_NA_NOTE = {
+    "CHK": "epubcheck CLI/tooling message about its *custom message-overrides "
+           "file* (a file that renames/re-severities messages) - not EPUB "
+           "content validation. epubveri is an embeddable library with no such "
+           "config file, so this can never apply.",
+    "INF": "epubcheck meta-message flagging that one of *epubcheck's own* rules "
+           "is under review and its severity may change - a note about the "
+           "tool, not a finding about the EPUB. Nothing for epubveri to report.",
+}
+
+# A one-line scope note printed under a family's detail header, so a reader
+# sees *why* a whole family is absent before scanning the rows - these are
+# deliberate exclusions, not oversights.
+FAMILY_SCOPE = {
+    "SCP": "All scripting-check IDs are SUPPRESSED by default in epubcheck "
+           "(no live check), so there is nothing here to implement.",
+    "CHK": "Every CHK ID is an epubcheck CLI/tooling message about its custom "
+           "message-overrides file - not EPUB content validation. N/A for an "
+           "embeddable library, not a gap.",
+    "INF": "epubcheck meta-messages about the review status of epubcheck's own "
+           "rules - not findings about the EPUB. N/A, not a gap.",
+    "ACC": "epubcheck defines many ACC IDs but SUPPRESSES all but two by "
+           "default; epubveri implements both live ones.",
 }
 
 # --- build rows ---
@@ -180,6 +209,16 @@ for iid in ec_ids:
     have = iid in ev
     ann = ANN.get(iid)
     suppressed = sev.get(iid) == "Suppressed"
+    if fam in NA_FAMILIES and not (ann and ann[0] == "partial"):
+        # A whole-family N/A: an epubcheck tooling / meta message, not content
+        # validation. ⊘ on our side, excluded from the live denominator, with
+        # a note saying why (so it reads as a deliberate exclusion).
+        note = (ann[1] if ann else None) or FAMILY_NA_NOTE.get(fam, "N/A.")
+        rows.setdefault(fam, []).append((iid, desc, "Y", "⊘", note))
+        c = counts.setdefault(fam, [0, 0, 0, 0, 0])
+        c[3] += 1
+        c[4] += 1
+        continue
     if ann and ann[0] == "na":
         # Not a real validation check for epubveri (e.g. an epubcheck
         # runtime-limitation message) - excluded from the live denominator.
@@ -233,12 +272,17 @@ o.append("- The ID universe is epubcheck's own `MessageId.java` "
          "(epubveri adopted epubcheck's ID scheme, so almost every ID here is "
          "epubcheck's — the signal is the *epubveri* column).\n")
 o.append("- **Coverage is over the _live_ denominator** = epubcheck's total "
-         "minus the IDs epubcheck **suppresses** by default (84 of 298 are "
-         "disabled in epubcheck itself; not implementing those is not a gap). "
-         "A raw \"X of 298\" would badly understate real coverage.\n")
+         "minus every ID that isn't a live *content-validation* check: the "
+         "ones epubcheck **suppresses** by default, plus its runtime/tooling/"
+         "meta messages (⊘ below). Not implementing those is not a gap - each "
+         "such row carries a note saying why it's out of scope, so the "
+         "exclusions read as deliberate, not as oversights. A raw \"X of 298\" "
+         "would badly understate real coverage.\n")
 o.append("- Status: **Y** full · **~** partial (epubcheck flags cases we "
-         "don't — see the note) · **x** not implemented · **⊘** not a live "
-         "check (epubcheck-suppressed, or an epubcheck runtime message).\n")
+         "don't — see the note) · **x** not implemented (a real gap) · **⊘** "
+         "not a live content check — epubcheck-suppressed, a dead ID, or an "
+         "epubcheck runtime/tooling/meta message; **the row's note says which**."
+         "\n")
 o.append("- **Review status.** Families marked *reviewed* below have had "
          "each ID's full/partial status checked against the source by hand. "
          "The rest are *first-pass*: **x**/**⊘** are reliable (derived from "
@@ -274,6 +318,8 @@ o.append("## Per-ID detail\n")
 for fam in sorted(rows, key=fam_key):
     rv = "reviewed" if fam in REVIEWED else "first-pass — `Y` = has-the-ID, not yet checked for partialness"
     o.append(f"### {fam}  _({rv})_\n")
+    if fam in FAMILY_SCOPE:
+        o.append(f"> **Scope:** {FAMILY_SCOPE[fam]}\n")
     o.append("| ID | Checks | epubcheck | epubveri | Notes |")
     o.append("|---|---|:---:|:---:|---|")
     for iid, desc, ec, ev_m, note in rows[fam]:
