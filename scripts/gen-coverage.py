@@ -151,7 +151,7 @@ ANN = {
 # Families whose per-ID full/partial/notes have been reviewed by hand. The
 # rest are first-pass: "full" there means "epubveri has the ID", not yet
 # checked for partialness.
-REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS", "MED", "NAV"}
+REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS", "MED", "NAV", "NCX"}
 # whole families / notable gaps described once (applied to every id in the
 # family that epubveri lacks, as a shared note)
 FAMILY_GAP = {

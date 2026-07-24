@@ -25,14 +25,14 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 14 | 1 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 5 | 0 | 5 | 1 | 10 | 5/10 | reviewed |
-| NCX | 2 | 0 | 1 | 3 | 3 | 2/3 | first-pass |
+| NCX | 3 | 0 | 0 | 3 | 3 | 3/3 | reviewed |
 | ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | first-pass |
 | SCP | 0 | 0 | 0 | 10 | 0 | — | first-pass |
 | CHK | 0 | 0 | 8 | 0 | 8 | 0/8 | first-pass |
 | INF | 0 | 0 | 1 | 0 | 1 | 0/1 | first-pass |
-| **All** | **168** | **6** | **36** | **88** | **210** | **174/210** | |
+| **All** | **169** | **6** | **35** | **88** | **210** | **175/210** | |
 
-**epubveri implements 174 of 210 live epubcheck checks (~83%)** — 168 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 175 of 210 live epubcheck checks (~83%)** — 169 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -327,14 +327,14 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | NAV-010 | %1$s" nav must not link to remote resources; found link to "%2$s". | Y | Y | external link in a toc/page-list/landmarks nav |
 | NAV-011 | %1$s" nav must be in reading order; link target "%2$s" is before the previous link’s ta... | Y | Y | toc nav link order doesn't match reading order |
 
-### NCX  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### NCX  _(reviewed)_
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
 | NCX-001 | NCX identifier ("%1$s") does not match OPF identifier ("%2$s"). | Y | Y | dtb:uid doesn't match the package's dc:identifier |
 | NCX-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NCX-003 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
-| NCX-004 | NCX identifier ("dtb:uid" metadata) should not contain leading or trailing whitespace. | Y | x | Not implemented. |
+| NCX-004 | NCX identifier ("dtb:uid" metadata) should not contain leading or trailing whitespace. | Y | Y | dtb:uid has leading or trailing whitespace (usage) |
 | NCX-005 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NCX-006 | Empty "text" label in the NCX document | Y | Y | an empty docTitle/navLabel text element |
 

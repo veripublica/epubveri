@@ -23,19 +23,33 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
                 && n.attr_no_ns("name") == Some("dtb:uid")
         })
         && let Some(content) = meta.attr_no_ns("content")
-        && content.trim() != package_uid.trim()
     {
-        report.push_at_pos(
-            NCX_001,
-            Severity::Error,
-            format!(
-                "dtb:uid '{}' does not match the package's identifier '{}'",
-                content.trim(),
-                package_uid.trim()
-            ),
-            ncx_path,
-            Position::of(meta),
-        );
+        // NCX-004 (usage): the dtb:uid value has leading/trailing whitespace.
+        // epubcheck reports this for both EPUB 2 and EPUB 3 (its #669); it is
+        // independent of whether the (trimmed) value matches the package id.
+        if content != content.trim() {
+            report.push_at_pos(
+                NCX_004,
+                Severity::Usage,
+                "the dtb:uid has leading or trailing whitespace".to_string(),
+                ncx_path,
+                Position::of(meta),
+            );
+        }
+        // NCX-001: the dtb:uid doesn't match the package's identifier.
+        if content.trim() != package_uid.trim() {
+            report.push_at_pos(
+                NCX_001,
+                Severity::Error,
+                format!(
+                    "dtb:uid '{}' does not match the package's identifier '{}'",
+                    content.trim(),
+                    package_uid.trim()
+                ),
+                ncx_path,
+                Position::of(meta),
+            );
+        }
     }
 
     if let Some(doc_title) = root
@@ -373,6 +387,16 @@ mod tests {
     fn uid_mismatch_errors() {
         let findings = run(CLEAN, "something-else");
         assert!(findings.contains(&NCX_001));
+    }
+
+    #[test]
+    fn dtb_uid_whitespace_is_ncx004() {
+        // dtb:uid content with surrounding whitespace draws NCX-004 (usage).
+        // Its trimmed value still matches the package id, so no NCX-001.
+        let ncx = CLEAN.replace("content=\"NOID\"", "content=\" NOID \"");
+        let findings = run(&ncx, "NOID");
+        assert!(findings.contains(&NCX_004));
+        assert!(!findings.contains(&NCX_001));
     }
 
     #[test]

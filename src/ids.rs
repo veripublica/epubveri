@@ -183,6 +183,7 @@ pub const NAV_011: &str = "NAV-011"; // toc nav link order doesn't match reading
 
 // --- NCX (EPUB 2 table of contents) ---
 pub const NCX_001: &str = "NCX-001"; // dtb:uid doesn't match the package's dc:identifier
+pub const NCX_004: &str = "NCX-004"; // dtb:uid has leading or trailing whitespace (usage)
 pub const NCX_006: &str = "NCX-006"; // an empty docTitle/navLabel text element
 
 // --- Fixed-layout viewport/viewBox ---
