@@ -8,7 +8,10 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.7.6] - 2026-07-24
+
+A single fix from a MobileRead bug report. No new checks; EPUB 3 behaviour
+and the epubcheck test-corpus numbers are unchanged.
 
 ### Fixed
 
