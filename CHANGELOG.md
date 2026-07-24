@@ -8,6 +8,30 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.7] - 2026-07-24
+
+**No changes to the validator.** Identical checks, identical behaviour,
+identical results on the epubcheck test corpus. Upgrading from 0.7.6 gains
+nothing on that front; this release exists to exercise the new tag-triggered
+release pipeline, and to correct two packaging details below.
+
+### Changed
+
+- Releases now publish from CI. A `v*` tag builds the binaries and publishes
+  to both crates.io and npm, authenticating by **trusted publishing (OIDC)**
+  rather than stored tokens — nothing long-lived to leak, and nothing typed by
+  hand. Guards run before each irreversible upload: the tag must agree with
+  the manifests, an already-published version is a no-op, and the test suite
+  must pass against the tagged commit.
+- **The npm package now carries a provenance attestation**, generated
+  automatically when publishing from CI, so consumers can verify which commit
+  and workflow produced the `.wasm` they are running.
+- **The npm package no longer reports itself as a dirty build.** 0.7.6 was
+  built on a machine with an unrelated uncommitted file present, so
+  `version()` returned `0.7.6+45ae97a.dirty`; the code was exactly the tagged
+  source, but the suffix said otherwise. CI checks the tag out clean, and the
+  local publish script now refuses to build a release from a dirty tree.
+
 ## [0.7.6] - 2026-07-24
 
 A single fix from a MobileRead bug report. No new checks; EPUB 3 behaviour
