@@ -3111,6 +3111,19 @@ pub fn check(
                                         opf_path,
                                         Position::of(ir),
                                     );
+                                } else if fallback_map.contains_key(idref) {
+                                    // A fallback chain exists but no hop reaches
+                                    // a content document - epubcheck's OPF-044,
+                                    // distinct from OPF-043 (no fallback at all).
+                                    // Same ERROR either way; the ID sharpens the
+                                    // message (#41).
+                                    report.push_at_pos(
+                                        OPF_044,
+                                        Severity::Error,
+                                        format!("spine item idref '{idref}' has non-content media-type '{mt}' whose fallback chain never reaches a content document"),
+                                        opf_path,
+                                        Position::of(ir),
+                                    );
                                 } else {
                                     // Error, not a warning: a spine item the
                                     // reading system cannot render and has no
@@ -3123,7 +3136,7 @@ pub fn check(
                                     report.push_at_pos(
                                         OPF_043,
                                         Severity::Error,
-                                        format!("spine item idref '{idref}' has non-content media-type '{mt}' with no verified fallback"),
+                                        format!("spine item idref '{idref}' has non-content media-type '{mt}' with no fallback"),
                                         opf_path,
                                         Position::of(ir),
                                     );
@@ -7200,6 +7213,108 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// An EPUB 3 with an audio file in the spine (a non-content media type),
+    /// with a configurable `fallback` attribute and optional extra manifest
+    /// items - for the OPF-043 (no fallback) / OPF-044 (fallback chain never
+    /// reaches a content document) split.
+    fn epub_audio_spine(audio_attrs: &str, extra_manifest: &str, extra_files: &[&str]) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="aud" href="a.mp3" media-type="audio/mpeg"{audio_attrs}/>
+    {extra_manifest}
+  </manifest>
+  <spine><itemref idref="ch1"/><itemref idref="aud"/></spine>
+</package>"#
+        );
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>Hi</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            let mut files: Vec<(String, &[u8])> = vec![
+                ("META-INF/container.xml".into(), CONTAINER.as_bytes()),
+                ("OEBPS/content.opf".into(), opf.as_bytes()),
+                ("OEBPS/ch1.xhtml".into(), CH1.as_bytes()),
+                ("OEBPS/nav.xhtml".into(), NAV.as_bytes()),
+                ("OEBPS/a.mp3".into(), b"ID3 fake audio"),
+            ];
+            for f in extra_files {
+                files.push((format!("OEBPS/{f}"), b"ID3 fake audio"));
+            }
+            for (name, data) in files {
+                zip.start_file(&name, deflated).unwrap();
+                zip.write_all(data).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// #41: OPF-043 is "no fallback"; OPF-044 is "a fallback chain exists but
+    /// never reaches a content document". We used to report both as OPF-043.
+    #[test]
+    fn opf_043_vs_044_fallback_split() {
+        let ids = |bytes: Vec<u8>| -> Vec<&'static str> {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect()
+        };
+        // Audio in the spine, no fallback -> OPF-043 (not OPF-044).
+        let no_fb = ids(epub_audio_spine("", "", &[]));
+        assert!(
+            no_fb.contains(&crate::ids::OPF_043),
+            "no fallback: {no_fb:?}"
+        );
+        assert!(
+            !no_fb.contains(&crate::ids::OPF_044),
+            "no fallback: {no_fb:?}"
+        );
+        // Audio with a fallback to another audio (chain never reaches a
+        // content document) -> OPF-044 (not OPF-043).
+        let bad_fb = ids(epub_audio_spine(
+            " fallback=\"aud2\"",
+            r#"<item id="aud2" href="a2.mp3" media-type="audio/mpeg"/>"#,
+            &["a2.mp3"],
+        ));
+        assert!(
+            bad_fb.contains(&crate::ids::OPF_044),
+            "bad fallback: {bad_fb:?}"
+        );
+        assert!(
+            !bad_fb.contains(&crate::ids::OPF_043),
+            "bad fallback: {bad_fb:?}"
+        );
     }
 
     /// #45: MED-004 is specifically the "file too short to read a header"

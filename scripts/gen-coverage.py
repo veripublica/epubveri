@@ -64,9 +64,9 @@ ANN = {
         "Approximated as \"3 lowercase ASCII letters\" (shape), not the real "
         "MARC relator list - a fake code like `xyz` passes us but epubcheck "
         "flags it."),
-    "OPF-044": (None, "Not emitted, but the condition IS detected: a spine "
-        "item whose fallback chain never reaches a content document is "
-        "reported as OPF-043. Splitting the two IDs is tracked in #41."),
+    "OPF-044": (None, "A spine item whose fallback chain exists but never "
+        "reaches a content document (distinct from OPF-043, no fallback at "
+        "all). Split from OPF-043 in #41."),
     "OPF-010": (None, "Not emitted; reference resolution is covered under "
         "RSC-007/RSC-012."),
     "OPF-016": (None, "Not emitted; a rootfile missing `full-path` is caught "

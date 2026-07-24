@@ -83,6 +83,7 @@ pub const OPF_030: &str = "OPF-030"; // the unique-identifier was not found
 pub const OPF_033: &str = "OPF-033"; // the spine contains no linear resources
 pub const OPF_034: &str = "OPF-034"; // the spine references the same manifest item more than once
 pub const OPF_043: &str = "OPF-043"; // spine item w/ non-content media-type has no fallback
+pub const OPF_044: &str = "OPF-044"; // spine item w/ non-content media-type: fallback chain never reaches a content doc
 pub const OPF_049: &str = "OPF-049"; // spine itemref idref not found in the manifest
 pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resource
 pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't application/xhtml+xml

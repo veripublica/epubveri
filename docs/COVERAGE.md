@@ -19,7 +19,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 17 | 1 | 7 | 0 | 25 | 18/25 | reviewed |
-| OPF | 70 | 1 | 12 | 12 | 83 | 71/83 | reviewed |
+| OPF | 71 | 1 | 11 | 12 | 83 | 72/83 | reviewed |
 | RSC | 27 | 2 | 1 | 3 | 30 | 29/30 | reviewed |
 | HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **170** | **5** | **26** | **97** | **201** | **175/201** | |
+| **All** | **171** | **5** | **25** | **97** | **201** | **176/201** | |
 
-**epubveri implements 175 of 201 live epubcheck checks (~87%)** — 170 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 176 of 201 live epubcheck checks (~88%)** — 171 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -110,7 +110,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-041 | Fallback-style item with id "%1$s" could not be found. | Y | Y | a fallback-style attribute references an unknown manifest item |
 | OPF-042 | %1$s" is not a permissible spine media-type. | Y | Y | a spine item's media-type is an image (not a Content Document) |
 | OPF-043 | Spine item with non-standard media-type "%1$s" has no fallback. | Y | Y | spine item w/ non-content media-type has no fallback |
-| OPF-044 | Spine item with non-standard media-type "%1$s" has no EPUB content document fallback. | Y | x | Not emitted, but the condition IS detected: a spine item whose fallback chain never reaches a content document is reported as OPF-043. Splitting the two IDs is tracked in #41. |
+| OPF-044 | Spine item with non-standard media-type "%1$s" has no EPUB content document fallback. | Y | Y | A spine item whose fallback chain exists but never reaches a content document (distinct from OPF-043, no fallback at all). Split from OPF-043 in #41. |
 | OPF-045 | Encountered circular reference in fallback chain. | Y | Y | fallback references its own item id |
 | OPF-046 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-047 | OPF file is using OEBPS 1.2 syntax allowing backwards compatibility. | Y | x | Legacy OEBPS 1.2 backwards-compat syntax - deliberately out of scope (pre-EPUB format). |
