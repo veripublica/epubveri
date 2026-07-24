@@ -3,6 +3,12 @@
 # Publish the epubveri-wasm npm package (@veripublica/epubveri-wasm),
 # robustly against iCloud "file 2" conflict copies.
 #
+# MANUAL FALLBACK. The normal route is a `v*` tag, which publishes via
+# .github/workflows/publish-npm.yml on a runner - no 2FA prompt, no iCloud,
+# no `.dirty` version, and a provenance attestation. Reach for this script
+# when that path is unavailable (npm's trusted-publishing link broken, GitHub
+# Actions down) or to inspect a build locally with the no-argument dry-run.
+#
 # The project directory can live under an iCloud-synced path (e.g.
 # ~/Documents). iCloud then periodically drops sync-conflict copies
 # ("LICENSE 2", "README 2.md", …) into the gitignored epubveri-wasm/pkg/

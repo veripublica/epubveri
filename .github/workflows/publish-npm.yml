@@ -1,0 +1,120 @@
+name: Publish to npm
+
+# Publishes @veripublica/epubveri-wasm when a `v*` tag is pushed - the npm
+# half of the release that publish-crate.yml does for crates.io.
+#
+# AUTHENTICATION - npm trusted publishing (OIDC), no stored token. Same model
+# as the crates.io workflow: npm issues credentials against a GitHub-signed
+# claim naming this repo and this workflow file. That is what makes CI
+# publishing possible at all here - the owner's npm account authenticates
+# with a passkey, which cannot be replayed from a runner, and the previous
+# route (`scripts/publish-wasm.sh <otp>`) needed a 2FA code typed by hand.
+#
+# It also removes two hazards that only exist on the owner's machine:
+#   - iCloud drops sync-conflict copies ("LICENSE 2") into the build dir; two
+#     of them shipped in the 0.7.2 tarball. A runner has no iCloud.
+#   - build.rs bakes `.dirty` into the version when the working tree is not
+#     clean; 0.7.6 went out that way. A runner checks out the tag clean.
+# scripts/publish-wasm.sh stays as the manual fallback.
+#
+# ONE-TIME SETUP (owner, on npmjs.com): the package -> Settings -> Trusted
+# Publisher -> GitHub Actions, with organization `veripublica`, repository
+# `epubveri`, workflow filename `publish-npm.yml`, environment EMPTY, and
+# `npm publish` among the allowed actions. As with crates.io, the trust link
+# names this file - renaming it breaks publishing until npm is re-pointed.
+#
+# If the publish is rejected for a missing OTP even after that, the package's
+# publishing-access setting is still demanding 2FA for every publish; it has
+# to allow trusted publishers.
+#
+# Provenance is automatic (public repo + public package), so releases carry a
+# signed attestation of the commit and workflow that built them, with no flag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish (e.g. v0.7.7)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for the OIDC claim, and for provenance.
+      id-token: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+
+      # npm trusted publishing needs npm >= 11.5.1 on Node >= 22.14, which is
+      # newer than some runner images ship; setup-node also writes the .npmrc
+      # that points publishing at the registry.
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - name: Ensure npm is new enough for trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      # Guard 1: the package version comes from epubveri-wasm/Cargo.toml at
+      # build time, so a tag that disagrees with it would publish the wrong
+      # number. Checked before anything is built.
+      - name: Verify tag matches the manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          want="${tag#v}"
+          got=$(cargo metadata --no-deps --format-version 1 \
+                | python3 -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='epubveri-wasm'))")
+          echo "tag=$want  epubveri-wasm=$got"
+          [ "$want" = "$got" ] || { echo "::error::tag $tag does not match epubveri-wasm version $got"; exit 1; }
+
+      # Guard 2: npm refuses to republish a version, and that failure reads as
+      # a broken release rather than the no-op it is. Make re-runs harmless.
+      - name: Skip if this version is already on npm
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.tag || github.ref_name }}"
+          ver="${tag#v}"
+          if npm view "@veripublica/epubveri-wasm@$ver" version > /dev/null 2>&1; then
+            echo "::notice::@veripublica/epubveri-wasm $ver is already published; nothing to do."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install wasm-pack
+        if: steps.check.outputs.skip == 'false'
+        run: cargo install wasm-pack --locked
+
+      - name: Build the package
+        if: steps.check.outputs.skip == 'false'
+        run: wasm-pack build epubveri-wasm --target bundler --scope veripublica --out-name epubveri
+
+      # Confirm the built package is what we think it is before publishing:
+      # right name and version, and no stray files. (The iCloud conflict-copy
+      # check the local script needs is moot here, but a surprise in the file
+      # list is worth failing on either way.)
+      - name: Inspect the package
+        if: steps.check.outputs.skip == 'false'
+        run: npm publish ./epubveri-wasm/pkg --access public --dry-run
+
+      - name: Publish
+        if: steps.check.outputs.skip == 'false'
+        run: npm publish ./epubveri-wasm/pkg --access public
