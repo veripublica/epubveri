@@ -41,6 +41,22 @@ fi
 echo "==> Staged package ($(find "$STAGE" -type f | wc -l | tr -d ' ') files):"
 ls "$STAGE"
 
+# Fail fast if this version is already on npm. The package.json version comes
+# from epubveri-wasm/Cargo.toml at build time, so the usual cause is forgetting
+# to bump it - publishing a stale pkg/ then fails deep inside npm with the
+# opaque "You cannot publish over the previously published versions" error.
+# Catch it here with an actionable message instead (2026-07-24, after that bit
+# during the 0.7.3 release).
+PKG_NAME=$(node -p "require('$STAGE/package.json').name")
+PKG_VER=$(node -p "require('$STAGE/package.json').version")
+echo "==> Version check: $PKG_NAME@$PKG_VER"
+if npm view "$PKG_NAME@$PKG_VER" version >/dev/null 2>&1; then
+  echo "!! $PKG_NAME@$PKG_VER is already published on npm." >&2
+  echo "   Bump 'version' in epubveri-wasm/Cargo.toml (keep it in sync with the" >&2
+  echo "   epubveri crate), then re-run this script." >&2
+  exit 1
+fi
+
 echo "==> npm publish --dry-run"
 npm publish "$STAGE" --dry-run --access public
 
