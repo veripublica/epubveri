@@ -1,10 +1,22 @@
 //! A small, hand-written absolute-URL syntax validator for `<a href>`
 //! values - no new dependency, same "no new dependency for a narrow
 //! grammar" style as `smil.rs`'s clock-value parser and `htm.rs`'s
-//! datetime grammar. Scope confirmed via the real corpus's two dedicated
-//! fixtures: literal spaces anywhere in the URL, an invalid character in
-//! the host (a comma), and a scheme not immediately followed by "//" are
-//! all RSC-020; an unregistered URL scheme is HTM-025.
+//! datetime grammar. Scope confirmed via the real corpus's dedicated
+//! fixtures: an invalid character in the host (a comma or a space), and a
+//! scheme not immediately followed by "//", are RSC-020; an unregistered
+//! URL scheme is HTM-025.
+//!
+//! Deliberately NOT flagged: a space (or other stray character) in the
+//! path/query/fragment, or leading/trailing whitespace around the whole
+//! URL. EPUB references the WHATWG URL Standard, whose parser strips
+//! leading/trailing spaces and percent-encodes an interior path/query
+//! space - so such a URL is a *valid URL string* in practice, which is why
+//! epubcheck accepts it (`url-valid.xhtml`'s "Whitespace around" case and
+//! its `%20`-in-query case). Only a space that breaks the *host* (where it
+//! genuinely can't be parsed, `url-invalid-error.xhtml`) is an error.
+//! Reported by patrik on the MobileRead forum: a trailing space in a
+//! youtube query was wrongly drawing RSC-020 while epubcheck stayed
+//! silent.
 
 /// Real, commonly-registered IANA URL schemes - anything else is
 /// HTM-025. Includes every scheme `is_external`/`is_remote_url` already
@@ -29,9 +41,6 @@ pub(crate) fn is_absolute(href: &str) -> bool {
 /// applying that rule to them uniformly would be a real false positive
 /// (confirmed via `a-href-valid.xhtml`'s `mailto:` link).
 pub(crate) fn has_syntax_error(href: &str) -> bool {
-    if href.contains(' ') {
-        return true;
-    }
     let Some((scheme, rest)) = href.split_once(':') else {
         return false;
     };
@@ -51,7 +60,11 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     // percent-encoded octets, and an underscore (non-standard but
     // accepted by most browsers, confirmed via `url-valid.xhtml`) are all
     // legitimate - only a stray ASCII character outside that alphabet
-    // (e.g. a comma) is a real syntax error.
+    // (a comma, or a space) is a real syntax error. The space check is
+    // scoped to the *host* on purpose: a space in the path/query is
+    // normalized by the WHATWG parser EPUB references (percent-encoded, or
+    // stripped when leading/trailing), so it isn't an error there - see
+    // the module note.
     host.chars().any(|c| {
         c.is_ascii()
             && !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']' | '%' | '_'))
@@ -73,9 +86,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detects_space_in_url() {
+    fn detects_space_in_host() {
+        // A space in the host genuinely breaks parsing - still an error
+        // (matches epubcheck's url-invalid-error.xhtml).
         assert!(has_syntax_error("https://www.example .com"));
         assert!(has_syntax_error("http://  www.example.com"));
+    }
+
+    #[test]
+    fn space_in_path_or_query_is_not_an_error() {
+        // patrik (MobileRead): a trailing space in the query was wrongly
+        // flagged. The WHATWG parser EPUB references normalizes a
+        // path/query space (percent-encoded, or stripped when trailing), so
+        // the URL is valid and epubcheck accepts it - we must not error.
+        assert!(!has_syntax_error(
+            "https://www.youtube.com/watch?v=1ju_N8JlXFc. "
+        ));
+        assert!(!has_syntax_error(
+            "https://www.youtube.com/watch?v=1ju_N8JlXFc. \u{202c}"
+        ));
+        assert!(!has_syntax_error("https://example.com/a b/c"));
     }
 
     #[test]
