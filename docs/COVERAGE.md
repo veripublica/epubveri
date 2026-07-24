@@ -21,7 +21,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | PKG | 17 | 1 | 7 | 0 | 25 | 18/25 | reviewed |
 | OPF | 70 | 1 | 12 | 12 | 83 | 71/83 | reviewed |
 | RSC | 27 | 2 | 1 | 3 | 30 | 29/30 | reviewed |
-| HTM | 19 | 0 | 5 | 24 | 24 | 19/24 | first-pass |
+| HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
 | CSS | 12 | 0 | 1 | 13 | 13 | 12/13 | first-pass |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | first-pass |
 | NAV | 4 | 0 | 6 | 1 | 10 | 4/10 | first-pass |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | first-pass |
 | CHK | 0 | 0 | 8 | 0 | 8 | 0/8 | first-pass |
 | INF | 0 | 0 | 1 | 0 | 1 | 0/1 | first-pass |
-| **All** | **168** | **4** | **42** | **84** | **214** | **172/214** | |
+| **All** | **168** | **4** | **38** | **88** | **210** | **172/210** | |
 
-**epubveri implements 172 of 214 live epubcheck checks (~80%)** — 168 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 84 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 172 of 210 live epubcheck checks (~82%)** — 168 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -77,8 +77,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-005 | Invalid prefix declaration: URI for prefix "%1$s" doesn’t exist. | Y | x | Prefix-URI-doesn't-exist - not done (we do prefix syntax OPF-004 + undeclared prefix OPF-028). |
 | OPF-006 | Invalid prefix declaration: URI "%1$s" is not a valid URI. | Y | x | Prefix-URI-not-a-valid-URI - not done (same family). |
 | OPF-007 | Re-declaration of reserved prefix "%1$s". | Y | Y | a reserved vocabulary prefix is redeclared |
-| OPF-008 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-009 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-010 | Error resolving reference: "%1$s". | Y | x | Not emitted; reference resolution is covered under RSC-007/RSC-012. |
 | OPF-011 | itemref can’t have both page-spread-right and page-spread-left properties. | Y | x | itemref can't be both page-spread-left & -right - small discrete gap. |
 | OPF-012 | Item property "%1$s" is not defined for media type "%2$s". | Y | Y | Data Navigation Document isn't application/xhtml+xml |
@@ -88,8 +88,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-016 | The element "rootfile" is missing its required attribute "full-path". | Y | x | Not emitted; a rootfile missing `full-path` is caught via the container.xml RNG grammar (RSC-005). |
 | OPF-017 | The attribute "full-path" on element "rootfile" must not be empty. | Y | x | Not emitted; a rootfile with an empty `full-path` is caught via the container.xml RNG grammar (RSC-005). |
 | OPF-018 | The "remote-resources" property was declared in the Package Document, but no reference ... | Y | Y | a content property is declared but not needed (warning variant) |
-| OPF-019 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-020 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-019 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-020 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-021 | Use of non-registered URI scheme type in href: "%1$s". | Y | x | Non-registered URI scheme in an OPF href - we have HTM-025 for content docs, but not OPF-021 for OPF hrefs. |
 | OPF-025 | Property value list "%1$s" is not allowed, only one value must be specified. | Y | Y | an attribute value must be a single token, not a list |
 | OPF-026 | Found malformed property value: "%1$s". | Y | Y | a meta property name is not well-formed |
@@ -112,20 +112,20 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-043 | Spine item with non-standard media-type "%1$s" has no fallback. | Y | Y | spine item w/ non-content media-type has no fallback |
 | OPF-044 | Spine item with non-standard media-type "%1$s" has no EPUB content document fallback. | Y | x | Not emitted, but the condition IS detected: a spine item whose fallback chain never reaches a content document is reported as OPF-043. Splitting the two IDs is tracked in #41. |
 | OPF-045 | Encountered circular reference in fallback chain. | Y | Y | fallback references its own item id |
-| OPF-046 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-046 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-047 | OPF file is using OEBPS 1.2 syntax allowing backwards compatibility. | Y | x | Legacy OEBPS 1.2 backwards-compat syntax - deliberately out of scope (pre-EPUB format). |
 | OPF-048 | Package tag is missing its required unique-identifier attribute and value. | Y | Y | package is missing its required unique-identifier attribute |
 | OPF-049 | Item id "%1$s" was not found in the manifest. | Y | Y | spine itemref idref not found in the manifest |
 | OPF-050 | TOC attribute references resource with non-NCX mime type; "application/x-dtbncx+xml" is... | Y | Y | spine 'toc' references a non-NCX resource |
-| OPF-051 | Image dimensions exceed recommended size. | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-051 | Image dimensions exceed recommended size. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-052 | Role value "%1$s" is not valid. | Y | ~ | Approximated as "3 lowercase ASCII letters" (shape), not the real MARC relator list - a fake code like `xyz` passes us but epubcheck flags it. |
 | OPF-053 | Date value "%1$s" does not follow recommended syntax as per http://www.w3.org/TR/NOTE-d... | Y | Y | a dc:date value doesn't follow recommended ISO 8601 syntax (warning, EPUB3) |
 | OPF-054 | Date value "%1$s" is not valid as per http://www.w3.org/TR/NOTE-datetime:%2$s. | Y | Y | a dc:date value is empty or doesn't conform to ISO 8601 (error, EPUB2) |
 | OPF-055 | %1$s tag is empty. | Y | Y | a dc:title value is empty (warning) |
-| OPF-056 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-057 | Image file length exceeds recommended size. | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-058 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-059 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-056 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-057 | Image file length exceeds recommended size. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-058 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-059 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-060 | Duplicate entry in the ZIP file: "%1$s" (file names must be unique after Unicode canoni... | Y | Y | two container entry names collide after case-folding/NFC normalization |
 | OPF-062 | Found Adobe page-map attribute on spine element in opf file. | Y | Y | the Adobe page-map extension is in use (usage) |
 | OPF-063 | Referenced Adobe page-map item "%1$s" was not found in the manifest. | Y | Y | a page-map reference doesn't resolve to a real id (warning) |
@@ -133,8 +133,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-065 | Invalid metadata declaration, probably due to a cycle in "refines" metadata. | Y | Y | a refines chain forms a cycle |
 | OPF-066 | Missing "dc:source" or "source-of" pagination metadata. The pagination source must be i... | Y | Y | an edupub page-list nav exists but no print-source is identified |
 | OPF-067 | The resource "%1$s" must not be listed both as a "link" element in the package metadata... | Y | x | Resource listed as both a `<link>` and a manifest item - small discrete gap. |
-| OPF-068 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-069 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-068 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| OPF-069 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-070 | Custom collection role "%1$s" is an invalid URL. | Y | Y | a collection role used as a URL is not a valid URL |
 | OPF-071 | Index collections must only contain resources pointing to XHTML Content Documents. | Y | Y | an index collection links to a non-XHTML resource |
 | OPF-072 | Metadata element "%1$s" is empty. | Y | Y | a dc metadata element is empty (usage, EPUB2) |
@@ -187,12 +187,12 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-015 | A fragment identifier is required for svg use tag references. | Y | Y | an SVG "use" element's href has no fragment identifier |
 | RSC-016 | Fatal Error while parsing file: %1$s | Y | Y | a malformed or unknown XML entity reference |
 | RSC-017 | Warning while parsing file: %1$s | Y | Y | a deprecated construct is used (e.g. epub:switch) |
-| RSC-018 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| RSC-018 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | RSC-019 | EPUBs with Multiple Renditions should contain a META-INF/metadata.xml file. | Y | Y | a multi-rendition publication has no META-INF/metadata.xml |
 | RSC-020 | %1$s" is not a valid URL (%2$s) | Y | ~ | Host syntax + scheme are checked (space/comma in host, missing `//`). A path/query space is treated as valid (matches epubcheck; WHATWG normalizes it). Not a full WHATWG URL parse. |
 | RSC-021 | A Search Key Map Document must point to Content Documents ("%1$s" was not found in the ... | Y | Y | a search-key-group href targets an incompatible resource type |
-| RSC-022 | Cannot check image details (requires Java version 7 or higher). | Y | (/) | Not a validation check - epubcheck reporting its own Java-runtime limitation. N/A for epubveri (we check image details via PKG-021/022). |
-| RSC-023 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| RSC-022 | Cannot check image details (requires Java version 7 or higher). | Y | ⊘ | Not a validation check - epubcheck reporting its own Java-runtime limitation. N/A for epubveri (we check image details via PKG-021/022). |
+| RSC-023 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | RSC-024 | Informative parsing warning: %1$s | Y | x | Generic passthrough of raw XML-parser warnings (usage); we surface real parse errors under RSC-016. Minor gap. |
 | RSC-025 | Informative parsing error: %1$s | Y | Y | SVG content-model violation (usage) |
 | RSC-026 | URL "%1$s" leaks outside the container (it is not a valid-relative-ocf-URL-with-fragmen... | Y | Y | a URL is path-absolute or escapes the container root |
@@ -204,51 +204,51 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-032 | Fallback must be provided for foreign resources, but found none for resource "%1$s" of ... | Y | Y | a foreign resource is used with no required fallback |
 | RSC-033 | Relative URL strings must not have a query component, but found one in "%1$s". | Y | Y | a local reference has a URL query string |
 
-### HTM  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### HTM  _(reviewed)_
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
 | HTM-001 | Any publication resource that is an XML-based media type must be a valid XML 1.0 docume... | Y | Y | XML declaration has version="1.1" (only 1.0 is allowed) |
-| HTM-002 | The installed xml parser doesn’t support xml version verification. Xml files must be a ... | Y | x | Not implemented. |
+| HTM-002 | The installed xml parser doesn’t support xml version verification. Xml files must be a ... | Y | ⊘ | Dead ID - epubcheck defines a severity for it but never emits it anywhere in its source. Not a live check. |
 | HTM-003 | External entities are not allowed in EPUB v3 documents. External entity declaration fou... | Y | Y | an entity is declared SYSTEM/PUBLIC (external) |
 | HTM-004 | Irregular DOCTYPE: found "%1$s", expected "%2$s". | Y | Y | a DOCTYPE has a PUBLIC identifier (obsolete) |
-| HTM-005 | An external reference was found. | Y | x | Not implemented. |
-| HTM-006 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-005 | An external reference was found. | Y | ⊘ | Dead ID - epubcheck never emits it anywhere in its source. Not a live check. |
+| HTM-006 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-007 | Empty or whitespace-only value of attribute ssml:ph. | Y | Y | ssml:ph attribute with an empty/blank value |
-| HTM-008 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-009 | The DOCTYPE provided is obsolete or irregular and can be removed. | Y | Y | the OPF document has a DOCTYPE |
 | HTM-010 | Namespace "%1$s" is unusual for the prefix "epub". | Y | Y | an unrecognized epub: namespace URI is bound (informative) |
-| HTM-011 | Entity is undeclared. | Y | x | Not implemented. |
-| HTM-012 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-013 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-014 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-015 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-016 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-017 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-018 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-019 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-020 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-021 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-022 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-023 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-024 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-011 | Entity is undeclared. | Y | ⊘ | Undeclared entity. epubcheck's own code comment says this "may never be reported" - an undeclared entity is a SAX parse error reported as RSC-005. epubveri catches the same defect as RSC-016 (fatal). The defect is covered; the ID itself is effectively dead. |
+| HTM-012 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-013 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-014 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-015 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-016 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-017 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-018 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-019 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-020 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-021 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-022 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-023 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-024 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-025 | Non-registered URI scheme type found in href. | Y | Y | a URL uses an unregistered scheme |
-| HTM-027 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-028 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-029 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-033 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-036 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-038 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-044 | Namespace uri "%1$s" was included but not used. | Y | x | Not implemented. |
-| HTM-045 | Encountered empty href. | Y | x | Not implemented. |
+| HTM-027 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-028 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-029 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-033 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-036 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-038 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-044 | Namespace uri "%1$s" was included but not used. | Y | ⊘ | Dead ID - epubcheck never emits it anywhere in its source. Not a live check. |
+| HTM-045 | Encountered empty href. | Y | x | Empty `href=""` self-reference hint (USAGE). Small discrete gap - epubveri doesn't emit it. |
 | HTM-046 | Fixed layout document has no "viewport" meta element. | Y | Y | fixed-layout XHTML doc has no viewport meta |
 | HTM-047 | Viewport metadata "%1$s" has a syntax error | Y | Y | viewport content has a blank value after '=' |
 | HTM-048 | SVG Fixed-Layout Documents must have a "viewBox" attribute (on the outermost "svg" elem... | Y | Y | fixed-layout SVG doc's root <svg> has no viewBox |
-| HTM-049 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| HTM-050 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-049 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-050 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-051 | Found Microdata semantic enrichments but no RDFa. EDUPUB recommends using RDFa Lite. | Y | Y | HTML5 microdata attribute in an edupub content document |
 | HTM-052 | The property "region-based" is only allowed on nav elements in Data Navigation Documents. | Y | Y | region-based nav found outside the Data Navigation Document |
-| HTM-053 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-053 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-054 | Custom attribute namespace ("%1$s") must not include the string "%2$s" in its domain. | Y | Y | custom attribute uses a reserved (w3.org/idpf.org) namespace |
 | HTM-055 | The "%1$s" element should not be used (discouraged construct) | Y | Y | a discouraged element (base/embed/rp) is used (usage) |
 | HTM-056 | Viewport metadata has no "%1$s" dimension (both "width" and "height" properties are req... | Y | Y | viewport content is missing the width or height key |
@@ -269,21 +269,21 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | CSS-006 | CSS selector specifies fixed position. | Y | x | Not implemented. |
 | CSS-007 | Font-face reference "%1$s" refers to non-standard font type "%2$s". | Y | Y | a @font-face src names a non-Core-Media-Type font (info) |
 | CSS-008 | An error occurred while parsing the CSS: %1$s. | Y | Y | CSS syntax error (bad string/url token) |
-| CSS-009 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-010 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-011 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-012 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-013 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-010 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-011 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-012 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-013 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-015 | Alternative style sheets must have a title. | Y | Y | an alternate stylesheet link is missing or has an empty title |
-| CSS-016 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-017 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-016 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-017 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-019 | CSS font-face declaration has no attributes. | Y | Y | @font-face with an empty declaration block |
-| CSS-020 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-021 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-022 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-023 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-024 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| CSS-025 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-020 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-021 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-022 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-023 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-024 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| CSS-025 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-028 | Use of Font-face declaration. | Y | Y | a @font-face declaration is present (usage) |
 | CSS-029 | Found CSS class name "%1$s" but no "%2$s" property was declared in the package document. | Y | Y | well-known media-overlay class used but its property isn't declared (usage) |
 | CSS-030 | The package document declares media overlays styling class names but no CSS was found i... | Y | Y | declared media-overlay active-class has no matching CSS selector |
@@ -292,12 +292,12 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| MED-001 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| MED-002 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| MED-001 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| MED-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-003 | Picture "img" elements must reference core media type resources, but found resource "%1... | Y | Y | a <picture> element's own <img> fallback references a foreign resource |
 | MED-004 | Image file header may be corrupted. | Y | Y | an image resource is corrupt |
 | MED-005 | Media Overlay audio reference %1$s to non-standard audio type %2$s found. | Y | Y | <audio> resource is not a Core Media Type |
-| MED-006 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| MED-006 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-007 | Picture "source" elements must define a "type" attribute when they reference foreign re... | Y | Y | a <picture> <source> references a foreign resource with no type attribute |
 | MED-008 | The time specified in the clipBegin attribute must not be after clipEnd. | Y | Y | clipBegin is after clipEnd |
 | MED-009 | The time specified in the clipBegin attribute must not be the same as clipEnd. | Y | Y | clipBegin equals clipEnd |
@@ -316,7 +316,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
 | NAV-001 | The nav file is not supported for EPUB v2. | Y | x | Not implemented. |
-| NAV-002 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| NAV-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NAV-003 | The Navigation Document must have a page list when content document(s) contain page bre... | Y | Y | edupub publication with a pagination source but no page-list nav |
 | NAV-004 | The Navigation Document should contain the full document heading hierarchy in EDUPUB. | Y | x | Not implemented. |
 | NAV-005 | Content documents contain "audio" elements but the Navigation Document does not have a ... | Y | x | Not implemented. |
@@ -332,48 +332,48 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
 | NCX-001 | NCX identifier ("%1$s") does not match OPF identifier ("%2$s"). | Y | Y | dtb:uid doesn't match the package's dc:identifier |
-| NCX-002 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| NCX-003 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| NCX-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| NCX-003 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NCX-004 | NCX identifier ("dtb:uid" metadata) should not contain leading or trailing whitespace. | Y | x | Not implemented. |
-| NCX-005 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| NCX-005 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NCX-006 | Empty "text" label in the NCX document | Y | Y | an empty docTitle/navLabel text element |
 
 ### ACC  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| ACC-001 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-002 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-003 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-004 | Html "a" element must have text. | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-005 | Table heading cells should be identified by "th" elements for accessibility. | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-006 | Tables should include a "thead" element for accessibility. | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-007 | Content Documents do not use "epub:type" attributes for semantic inflection. | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-008 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-001 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-003 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-004 | Html "a" element must have text. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-005 | Table heading cells should be identified by "th" elements for accessibility. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-006 | Tables should include a "thead" element for accessibility. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-007 | Content Documents do not use "epub:type" attributes for semantic inflection. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | ACC-009 | MathML should either have an "alttext" attribute or "annotation-xml" child element. | Y | Y | MathML markup has no alternative text (usage) |
-| ACC-010 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-010 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | ACC-011 | SVG hyperlink has no accessible name | Y | Y | an SVG link has no accessible label (usage) |
-| ACC-012 | Table elements should include a caption element. | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-013 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-014 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-015 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-016 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| ACC-017 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-012 | Table elements should include a caption element. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-013 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-014 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-015 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-016 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| ACC-017 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 
 ### SCP  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| SCP-001 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-002 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-003 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-004 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-005 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-006 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-007 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-008 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-009 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
-| SCP-010 | _(no message text in epubcheck's bundle)_ | (/) | (/) | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-001 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-003 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-004 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-005 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-006 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-007 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| SCP-010 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 
 ### CHK  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
 

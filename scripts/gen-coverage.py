@@ -104,12 +104,25 @@ ANN = {
         "via PKG-021/022)."),
     "RSC-024": (None, "Generic passthrough of raw XML-parser warnings (usage); "
         "we surface real parse errors under RSC-016. Minor gap."),
+    # --- HTM (reviewed) ---
+    "HTM-002": ("na", "Dead ID - epubcheck defines a severity for it but never "
+        "emits it anywhere in its source. Not a live check."),
+    "HTM-005": ("na", "Dead ID - epubcheck never emits it anywhere in its "
+        "source. Not a live check."),
+    "HTM-011": ("na", "Undeclared entity. epubcheck's own code comment says this "
+        "\"may never be reported\" - an undeclared entity is a SAX parse error "
+        "reported as RSC-005. epubveri catches the same defect as RSC-016 "
+        "(fatal). The defect is covered; the ID itself is effectively dead."),
+    "HTM-044": ("na", "Dead ID - epubcheck never emits it anywhere in its "
+        "source. Not a live check."),
+    "HTM-045": (None, "Empty `href=\"\"` self-reference hint (USAGE). Small "
+        "discrete gap - epubveri doesn't emit it."),
 }
 
 # Families whose per-ID full/partial/notes have been reviewed by hand. The
 # rest are first-pass: "full" there means "epubveri has the ID", not yet
 # checked for partialness.
-REVIEWED = {"PKG", "OPF", "RSC"}
+REVIEWED = {"PKG", "OPF", "RSC", "HTM"}
 # whole families / notable gaps described once (applied to every id in the
 # family that epubveri lacks, as a shared note)
 FAMILY_GAP = {
@@ -141,7 +154,7 @@ for iid in ec_ids:
     if ann and ann[0] == "na":
         # Not a real validation check for epubveri (e.g. an epubcheck
         # runtime-limitation message) - excluded from the live denominator.
-        ev_mark = "(/)"
+        ev_mark = "⊘"
         note = ann[1]
         st = "supp"
         ec_mark = "Y"
@@ -152,7 +165,7 @@ for iid in ec_ids:
         continue
     if suppressed and not have:
         # epubcheck disabled this ID by default -> not a real check, N/A.
-        ev_mark = "(/)"
+        ev_mark = "⊘"
         note = "epubcheck-suppressed (disabled by default) — not a gap"
         st = "supp"
     elif suppressed and have:
@@ -171,7 +184,7 @@ for iid in ec_ids:
         ev_mark = "Y"
         note = (ann[1] if ann else "") or ev.get(iid, "")
         st = "full"
-    ec_mark = "(/)" if suppressed else "Y"
+    ec_mark = "⊘" if suppressed else "Y"
     rows.setdefault(fam, []).append((iid, desc, ec_mark, ev_mark, note))
     c = counts.setdefault(fam, [0, 0, 0, 0, 0])
     c[{"full": 0, "partial": 1, "none": 2, "supp": 3}[st]] += 1
