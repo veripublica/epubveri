@@ -178,6 +178,11 @@ pub const MED_018: &str = "MED-018"; // invalid SVG fragment identifier on a med
 // --- Navigation document ---
 pub const NAV_001: &str = "NAV-001"; // an EPUB 2 publication declares an EPUB 3 nav document
 pub const NAV_003: &str = "NAV-003"; // edupub publication with a pagination source but no page-list nav
+pub const NAV_004: &str = "NAV-004"; // edupub: nav heading hierarchy incomplete (sections != toc links) (usage)
+pub const NAV_005: &str = "NAV-005"; // edupub: content has <audio> but the nav has no `loa` (usage)
+pub const NAV_006: &str = "NAV-006"; // edupub: content has <figure> but the nav has no `loi` (usage)
+pub const NAV_007: &str = "NAV-007"; // edupub: content has <table> but the nav has no `lot` (usage)
+pub const NAV_008: &str = "NAV-008"; // edupub: content has <video> but the nav has no `lov` (usage)
 pub const NAV_009: &str = "NAV-009"; // region-based nav target isn't a fixed-layout document
 pub const NAV_010: &str = "NAV-010"; // external link in a toc/page-list/landmarks nav
 pub const NAV_011: &str = "NAV-011"; // toc nav link order doesn't match reading order

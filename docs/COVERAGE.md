@@ -24,15 +24,15 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
-| NAV | 5 | 0 | 5 | 1 | 10 | 5/10 | reviewed |
+| NAV | 10 | 0 | 0 | 1 | 10 | 10/10 | reviewed |
 | NCX | 3 | 0 | 0 | 3 | 3 | 3/3 | reviewed |
 | ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | reviewed |
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **171** | **5** | **25** | **97** | **201** | **176/201** | |
+| **All** | **176** | **5** | **20** | **97** | **201** | **181/201** | |
 
-**epubveri implements 176 of 201 live epubcheck checks (~88%)** — 171 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 181 of 201 live epubcheck checks (~90%)** — 176 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -318,11 +318,11 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | NAV-001 | The nav file is not supported for EPUB v2. | Y | Y | an EPUB 2 publication declares an EPUB 3 nav document |
 | NAV-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NAV-003 | The Navigation Document must have a page list when content document(s) contain page bre... | Y | Y | edupub publication with a pagination source but no page-list nav |
-| NAV-004 | The Navigation Document should contain the full document heading hierarchy in EDUPUB. | Y | x | EDUPUB-only (USAGE): the nav's heading hierarchy is incomplete. Deferred with NAV-005..008 - #46. |
-| NAV-005 | Content documents contain "audio" elements but the Navigation Document does not have a ... | Y | x | EDUPUB-only (USAGE): content has <audio> but no `loa` nav. Deferred - #46. |
-| NAV-006 | Content documents contain "figure" elements but the Navigation Document does not have a... | Y | x | EDUPUB-only (USAGE): content has <figure> but no `loi` nav. Deferred - #46. |
-| NAV-007 | Content documents contain "table" elements but the Navigation Document does not have a ... | Y | x | EDUPUB-only (USAGE): content has <table> but no `lot` nav. Deferred - #46. |
-| NAV-008 | Content documents contain "video" elements but the Navigation Document does not have a ... | Y | x | EDUPUB-only (USAGE): content has <video> but no `lov` nav. Deferred - #46. |
+| NAV-004 | The Navigation Document should contain the full document heading hierarchy in EDUPUB. | Y | Y | edupub: nav heading hierarchy incomplete (sections != toc links) (usage) |
+| NAV-005 | Content documents contain "audio" elements but the Navigation Document does not have a ... | Y | Y | edupub: content has <audio> but the nav has no `loa` (usage) |
+| NAV-006 | Content documents contain "figure" elements but the Navigation Document does not have a... | Y | Y | edupub: content has <figure> but the nav has no `loi` (usage) |
+| NAV-007 | Content documents contain "table" elements but the Navigation Document does not have a ... | Y | Y | edupub: content has <table> but the nav has no `lot` (usage) |
+| NAV-008 | Content documents contain "video" elements but the Navigation Document does not have a ... | Y | Y | edupub: content has <video> but the nav has no `lov` (usage) |
 | NAV-009 | Region-based navigation links must point to Fixed-Layout Documents. | Y | Y | region-based nav target isn't a fixed-layout document |
 | NAV-010 | %1$s" nav must not link to remote resources; found link to "%2$s". | Y | Y | external link in a toc/page-list/landmarks nav |
 | NAV-011 | %1$s" nav must be in reading order; link target "%2$s" is before the previous link’s ta... | Y | Y | toc nav link order doesn't match reading order |

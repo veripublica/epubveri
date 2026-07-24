@@ -128,17 +128,6 @@ ANN = {
         "shapes. Still a subset of epubcheck's full CSS-parser error surface - "
         "styloria's parser is error-recovering, so it accepts some constructs "
         "epubcheck rejects (a bad selector, an invalid at-rule prelude)."),
-    # --- NAV (reviewed) ---
-    "NAV-004": (None, "EDUPUB-only (USAGE): the nav's heading hierarchy is "
-        "incomplete. Deferred with NAV-005..008 - #46."),
-    "NAV-005": (None, "EDUPUB-only (USAGE): content has <audio> but no `loa` "
-        "nav. Deferred - #46."),
-    "NAV-006": (None, "EDUPUB-only (USAGE): content has <figure> but no `loi` "
-        "nav. Deferred - #46."),
-    "NAV-007": (None, "EDUPUB-only (USAGE): content has <table> but no `lot` "
-        "nav. Deferred - #46."),
-    "NAV-008": (None, "EDUPUB-only (USAGE): content has <video> but no `lov` "
-        "nav. Deferred - #46."),
     # --- MED (reviewed) ---
     "MED-004": (None, "Reserved for a file too short to contain a 4-byte image "
         "header, matching epubcheck; a >=4-byte header that matches nothing is "

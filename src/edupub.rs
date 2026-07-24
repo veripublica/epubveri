@@ -300,6 +300,132 @@ pub(crate) fn check_page_list(
     }
 }
 
+const EPUB_TYPE: (&str, &str) = ("http://www.idpf.org/2007/ops", "type");
+const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
+
+/// EDUPUB nav-completeness (NAV-004..008): epubcheck's `OPFChecker30.checkNav`
+/// compares content-document features against the navigation document's
+/// special-nav lists. This accumulates those features across the publication;
+/// [`check`](NavCompleteness::check) then emits the findings. All are USAGE.
+#[derive(Default)]
+pub(crate) struct NavCompleteness {
+    // Content-document features (nav document excluded).
+    audio: bool,
+    video: bool,
+    figure: bool,
+    table: bool,
+    /// epubcheck's SECTIONS count, summed over linear content documents.
+    sections: usize,
+    // Navigation-document features.
+    toc_links: usize,
+    loa: bool,
+    loi: bool,
+    lot: bool,
+    lov: bool,
+}
+
+impl NavCompleteness {
+    /// Fold in a content document's media features (`<audio>`/`<video>`/
+    /// `<figure>`/`<table>`). Call for every content document *except* the
+    /// navigation document, linear or not - epubcheck reports these from its
+    /// content-document handler.
+    pub(crate) fn add_media(&mut self, d: &roxmltree::Document) {
+        for n in d.descendants().filter(|n| n.is_element()) {
+            match n.tag_name().name() {
+                "audio" => self.audio = true,
+                "video" => self.video = true,
+                "figure" => self.figure = true,
+                "table" => self.table = true,
+                _ => {}
+            }
+        }
+    }
+
+    /// Add a linear content document's SECTIONS count, mirroring epubcheck's
+    /// handler exactly (in document order, HTML namespace only): each
+    /// `<section>` counts, and a `<body>` whose first child element isn't a
+    /// `<section>` counts once (its content is one implicit section).
+    pub(crate) fn add_sections(&mut self, d: &roxmltree::Document) {
+        let mut in_body = false;
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().namespace() == Some(XHTML_NS))
+        {
+            match n.tag_name().name() {
+                "body" => in_body = true,
+                "section" => {
+                    in_body = false;
+                    self.sections += 1;
+                }
+                _ if in_body => {
+                    self.sections += 1;
+                    in_body = false;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Record the navigation document: count the `toc` nav's hyperlinks and
+    /// note which of the `loa`/`loi`/`lot`/`lov` special navs are present.
+    pub(crate) fn set_nav(&mut self, d: &roxmltree::Document) {
+        for nav in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "nav")
+        {
+            match nav.attribute(EPUB_TYPE) {
+                Some("toc") => {
+                    self.toc_links += nav
+                        .descendants()
+                        .filter(|n| {
+                            n.is_element()
+                                && n.tag_name().name() == "a"
+                                && n.attribute("href").is_some_and(|h| !h.trim().is_empty())
+                        })
+                        .count();
+                }
+                Some("loa") => self.loa = true,
+                Some("loi") => self.loi = true,
+                Some("lot") => self.lot = true,
+                Some("lov") => self.lov = true,
+                _ => {}
+            }
+        }
+    }
+
+    /// Emit NAV-004..008 (all USAGE). Only meaningful for an EDUPUB
+    /// publication - the caller gates on [`is_edupub`].
+    pub(crate) fn check(&self, opf_path: &str, report: &mut Report) {
+        if self.sections != self.toc_links {
+            report.push_at(
+                NAV_004,
+                Severity::Usage,
+                "the navigation document's heading hierarchy is incomplete: the number \
+                 of sections doesn't match the number of toc links",
+                opf_path,
+            );
+        }
+        for (present, has_nav, id, kind, list) in [
+            (self.audio, self.loa, NAV_005, "audio", "loa"),
+            (self.figure, self.loi, NAV_006, "figure", "loi"),
+            (self.table, self.lot, NAV_007, "table", "lot"),
+            (self.video, self.lov, NAV_008, "video", "lov"),
+        ] {
+            if present && !has_nav {
+                report.push_at(
+                    id,
+                    Severity::Usage,
+                    format!(
+                        "content documents contain <{kind}> elements but the navigation \
+                         document has no \"{list}\" nav"
+                    ),
+                    opf_path,
+                );
+            }
+        }
+    }
+}
+
 /// §3.4 Teacher's Editions, §8.1 Profile Identification, §8.3
 /// Accessibility Metadata - all confirmed via real, single-Package-
 /// Document (bare `.opf`) fixtures. A `dc:type=teacher-edition` (a real,

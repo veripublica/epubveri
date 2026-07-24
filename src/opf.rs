@@ -3407,6 +3407,9 @@ pub fn check(
     // Whether the (required) toc nav has an epub:type="page-list" nav -
     // for the EDUPUB pagination-source cross-check after this loop.
     let mut has_page_list_nav = false;
+    // EDUPUB nav-completeness (NAV-004..008): content-doc features vs the
+    // nav's special-nav lists, accumulated across the loop below.
+    let mut nav_completeness = crate::edupub::NavCompleteness::default();
     // Every local content-doc target hyperlinked from *any* content
     // document (including the nav) - for RSC-011 (a hyperlink target not
     // listed in the spine) and OPF-096 (a linear="no" spine item not
@@ -3585,16 +3588,26 @@ pub fn check(
         // included - no fixture suggests otherwise).
         if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
             crate::edupub::check_content_doc(&d, &path, report);
+            let doc_key = nfc(&path);
+            let is_nav = nav_path.as_deref() == Some(path.as_str());
+            // NAV-005..008: media features come from every content document
+            // (the nav is handled separately, below).
+            if !is_nav {
+                nav_completeness.add_media(&d);
+            }
             // Sectioning/heading structure is exempt for fixed-layout
             // content ("Section with no heading OK in FXL", a real
             // fixture's own comment) and for non-linear spine items
             // ("EDUPUB structural requirements do not apply to non-linear
             // content", also a real fixture comment).
-            let doc_key = nfc(&path);
             let is_fxl = fixed_layout_docs.get(&doc_key).copied().unwrap_or(false);
             let is_non_linear = non_linear_paths.iter().any(|(p, _)| p == &doc_key);
             if !is_fxl && !is_non_linear {
                 crate::edupub::check_sectioning_and_headings(&d, &path, report);
+                // NAV-004: epubcheck counts SECTIONS on linear content docs.
+                if !is_nav {
+                    nav_completeness.add_sections(&d);
+                }
             }
         }
 
@@ -3605,6 +3618,9 @@ pub fn check(
                     && n.tag_name().name() == "nav"
                     && n.attribute(("http://www.idpf.org/2007/ops", "type")) == Some("page-list")
             });
+            if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
+                nav_completeness.set_nav(&d);
+            }
         } else if data_nav_path.as_deref() == Some(nfc_path.as_str()) {
             // Region-Based Navigation: validate the Data Navigation
             // Document's own nav elements and, for the region-based one,
@@ -5538,6 +5554,8 @@ pub fn check(
     // --- EDUPUB pagination source / page-list cross-check (NAV-003/OPF-066) ---
     if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
         crate::edupub::check_page_list(has_pagination_source, has_page_list_nav, opf_path, report);
+        // NAV-004..008: nav-completeness vs content-doc features.
+        nav_completeness.check(opf_path, report);
     }
 
     // SVG top-level content documents that declare a media-overlay also
@@ -7213,6 +7231,120 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// An EDUPUB (`dc:type=edupub`) EPUB 3 with a linear content document and
+    /// a nav document whose bodies are given - for the NAV-004..008 checks.
+    fn epub_edupub(ch1_body: &str, nav_body: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language><dc:type>edupub</dc:type>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        let ch1 = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>C</title></head><body>{ch1_body}</body></html>"#
+        );
+        let nav = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head><body>{nav_body}</body></html>"#
+        );
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ("OEBPS/nav.xhtml", nav.as_str()),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// #46: NAV-005..008 fire when a content document has an
+    /// audio/figure/table/video but the nav lacks the matching special nav;
+    /// NAV-004 fires when the section count doesn't match the toc-link count.
+    #[test]
+    fn edupub_nav_completeness_nav004_008() {
+        let ids = |ch1: &str, nav: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_edupub(ch1, nav))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect()
+        };
+        // One section (matches one toc link -> no NAV-004) containing an
+        // <audio>, and a toc with no `loa` -> NAV-005 only.
+        let a = ids(
+            r#"<section><h1>C</h1><audio src="a.mp3"/></section>"#,
+            r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav>"#,
+        );
+        assert!(a.contains(&crate::ids::NAV_005), "audio/no-loa: {a:?}");
+        assert!(
+            !a.contains(&crate::ids::NAV_004),
+            "sections==toc, no NAV-004: {a:?}"
+        );
+        assert!(!a.contains(&crate::ids::NAV_006), "{a:?}");
+
+        // Same but the nav now has a `loa` -> no NAV-005.
+        let b = ids(
+            r#"<section><h1>C</h1><audio src="a.mp3"/></section>"#,
+            r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav>
+<nav epub:type="loa"><ol><li><a href="ch1.xhtml#a">A</a></li></ol></nav>"#,
+        );
+        assert!(!b.contains(&crate::ids::NAV_005), "audio+loa: {b:?}");
+
+        // Two sections but only one toc link -> NAV-004.
+        let c = ids(
+            r#"<section><h1>A</h1></section><section><h1>B</h1></section>"#,
+            r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">A</a></li></ol></nav>"#,
+        );
+        assert!(
+            c.contains(&crate::ids::NAV_004),
+            "2 sections vs 1 link: {c:?}"
+        );
+
+        // A non-edupub book with the same shape draws none of NAV-004..008.
+        let non_edu = crate::validate_bytes(epub_with_image(b"NOT-A-REAL-JPEG"));
+        for id in [
+            crate::ids::NAV_004,
+            crate::ids::NAV_005,
+            crate::ids::NAV_006,
+            crate::ids::NAV_007,
+            crate::ids::NAV_008,
+        ] {
+            assert!(
+                !non_edu.messages.iter().any(|m| m.id == id),
+                "non-edupub must not draw {id}"
+            );
+        }
     }
 
     /// An EPUB 3 with an audio file in the spine (a non-content media type),
