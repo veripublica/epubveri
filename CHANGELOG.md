@@ -8,6 +8,53 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.8] - 2026-07-25
+
+Six message IDs from a sweep of the coverage matrix (`docs/COVERAGE.md` — now
+187 of 198 live epubcheck checks, ~94%), plus a false positive found while
+implementing one of them. No verdict changes on the epubcheck test corpus.
+
+### Added
+
+- **`HTM-045`** (usage) — an empty `href=""` resolves to the containing
+  document. Legal, so a hint rather than an error.
+- **`OPF-067`** — a resource that is both a metadata `<link>` target and a
+  manifest item. As in epubcheck, only when that item is not in the spine.
+- **`PKG-017`** (warning, EPUB 2) / **`PKG-024`** (usage, EPUB 3) — the
+  container's own file extension is not `.epub`. The existing `PKG-016` still
+  covers the right extension in the wrong case (`.EPUB`).
+- **`OPF-005`** — a `prefix` declaration ending in a prefix name with no URI
+  after it. Reported *instead of* the `OPF-004` syntax error, matching
+  epubcheck.
+- **`OPF-006`** — a `prefix` declaration whose URI half does not parse.
+  Deliberately conservative, matching Java's `new URI(...)`: illegal
+  characters and malformed percent-escapes only.
+
+### Fixed
+
+- **`OPF-052` no longer rejects valid `dc:contributor` roles.** The check ran
+  on `dc:creator` *and* `dc:contributor`; epubcheck only ever checks
+  `dc:creator`, so a contributor role it accepts was an error here.
+- **`OPF-052` now checks membership in the real MARC relator list** (the 273
+  codes epubcheck itself carries, plus its `oth.` escape hatch) rather than
+  approximating it as "three lowercase ASCII letters", which accepted any
+  invented code such as `xyz`.
+
+### Changed
+
+- **`Report` gained an `epub_version` field** — the `version` the package
+  document declared, or `None` when no OPF was reached. `PKG-017`/`PKG-024`
+  need it (the ID and severity depend on the EPUB version, but the filename
+  they judge is known only to the file-level entry point, which never sees an
+  OPF); consumers get it too. Additive, and `Report` still derives `Default`,
+  but code constructing a `Report` by struct literal will need updating.
+- **Four IDs reclassified in `docs/COVERAGE.md` as not-live checks**, verified
+  against epubcheck's source: `OPF-011` and `OPF-036` are dead IDs (the former
+  commented out in favour of the `RSC-005` we already emit, the latter with no
+  call site at all), `RSC-024` is the non-normative half of a pair we have no
+  counterpart for, and `OPF-021`'s only call site is DTBook content, not the
+  OPF as its note had claimed.
+
 ## [0.7.7] - 2026-07-24
 
 **No changes to the validator.** Identical checks, identical behaviour,
