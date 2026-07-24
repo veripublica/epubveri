@@ -19,7 +19,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 17 | 1 | 7 | 0 | 25 | 18/25 | reviewed |
-| OPF | 72 | 1 | 8 | 14 | 81 | 73/81 | reviewed |
+| OPF | 73 | 0 | 8 | 14 | 81 | 73/81 | reviewed |
 | RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **178** | **5** | **15** | **100** | **198** | **183/198** | |
+| **All** | **179** | **4** | **15** | **100** | **198** | **183/198** | |
 
-**epubveri implements 183 of 198 live epubcheck checks (~92%)** — 178 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 183 of 198 live epubcheck checks (~92%)** — 179 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -118,7 +118,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-049 | Item id "%1$s" was not found in the manifest. | Y | Y | spine itemref idref not found in the manifest |
 | OPF-050 | TOC attribute references resource with non-NCX mime type; "application/x-dtbncx+xml" is... | Y | Y | spine 'toc' references a non-NCX resource |
 | OPF-051 | Image dimensions exceed recommended size. | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-052 | Role value "%1$s" is not valid. | Y | ~ | Approximated as "3 lowercase ASCII letters" (shape), not the real MARC relator list - a fake code like `xyz` passes us but epubcheck flags it. |
+| OPF-052 | Role value "%1$s" is not valid. | Y | Y | Membership in the 273-code MARC relator list epubcheck itself carries, plus its `oth.` escape hatch; checked on `creator` only, as epubcheck does (#54). |
 | OPF-053 | Date value "%1$s" does not follow recommended syntax as per http://www.w3.org/TR/NOTE-d... | Y | Y | a dc:date value doesn't follow recommended ISO 8601 syntax (warning, EPUB3) |
 | OPF-054 | Date value "%1$s" is not valid as per http://www.w3.org/TR/NOTE-datetime:%2$s. | Y | Y | a dc:date value is empty or doesn't conform to ISO 8601 (error, EPUB2) |
 | OPF-055 | %1$s tag is empty. | Y | Y | a dc:title value is empty (warning) |
@@ -132,7 +132,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-064 | OPF declares type "%1$s", validating using profile "%2$s". | Y | x | Informational profile-selection message - not emitted. |
 | OPF-065 | Invalid metadata declaration, probably due to a cycle in "refines" metadata. | Y | Y | a refines chain forms a cycle |
 | OPF-066 | Missing "dc:source" or "source-of" pagination metadata. The pagination source must be i... | Y | Y | an edupub page-list nav exists but no print-source is identified |
-| OPF-067 | The resource "%1$s" must not be listed both as a "link" element in the package metadata... | Y | Y | Resource listed as both a `<link>` and a manifest item - small discrete gap. |
+| OPF-067 | The resource "%1$s" must not be listed both as a "link" element in the package metadata... | Y | Y | A metadata `<link>` target that is also a manifest item - and, as epubcheck has it, only when that item is not in the spine (#55). |
 | OPF-068 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-069 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-070 | Custom collection role "%1$s" is an invalid URL. | Y | Y | a collection role used as a URL is not a valid URL |

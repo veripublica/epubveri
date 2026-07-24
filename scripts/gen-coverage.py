@@ -60,10 +60,9 @@ ANN = {
     "PKG-020": (None, "Not emitted, but the condition IS detected: a missing "
         "declared OPF is reported as OPF-002 (Fatal)."),
     # --- OPF (reviewed) ---
-    "OPF-052": ("partial",
-        "Approximated as \"3 lowercase ASCII letters\" (shape), not the real "
-        "MARC relator list - a fake code like `xyz` passes us but epubcheck "
-        "flags it."),
+    "OPF-052": (None, "Membership in the 273-code MARC relator list "
+        "epubcheck itself carries, plus its `oth.` escape hatch; checked on "
+        "`creator` only, as epubcheck does (#54)."),
     "OPF-044": (None, "A spine item whose fallback chain exists but never "
         "reaches a content document (distinct from OPF-043, no fallback at "
         "all). Split from OPF-043 in #41."),
@@ -90,8 +89,9 @@ ANN = {
         "`<a href external=\"true\">` (its only call site is DTBookHandler, not "
         "the OPF). We accept `application/x-dtbook+xml` as a content type but "
         "don't validate DTBook, so this is gated behind that - see #52."),
-    "OPF-067": (None, "Resource listed as both a `<link>` and a manifest item "
-        "- small discrete gap."),
+    "OPF-067": (None, "A metadata `<link>` target that is also a manifest "
+        "item - and, as epubcheck has it, only when that item is not in the "
+        "spine (#55)."),
     # --- RSC (partials confirmed earlier) ---
     "RSC-005": ("partial",
         "XHTML content model is real (EPUB 2 XHTML 1.1 grammar + EPUB 3 HTML5 "

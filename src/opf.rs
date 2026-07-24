@@ -793,6 +793,34 @@ fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize) {
     (pairs, errors)
 }
 
+/// The MARC relator codes epubcheck accepts for `opf:role` (273 of
+/// them, from its own `OPFHandler.validRoles`). Membership, not shape: the
+/// old "three lowercase letters" approximation let a fake code like `xyz`
+/// through (#54).
+const MARC_RELATORS: &[&str] = &[
+    "abr", "acp", "act", "adi", "adp", "aft", "anl", "anm", "ann", "ant", "ape", "apl", "app",
+    "aqt", "arc", "ard", "arr", "art", "asg", "asn", "ato", "att", "auc", "aud", "aui", "aus",
+    "aut", "bdd", "bjd", "bkd", "bkp", "blw", "bnd", "bpd", "brd", "brl", "bsl", "cas", "ccp",
+    "chr", "clb", "cli", "cll", "clr", "clt", "cmm", "cmp", "cmt", "cnd", "cng", "cns", "coe",
+    "col", "com", "con", "cor", "cos", "cot", "cou", "cov", "cpc", "cpe", "cph", "cpl", "cpt",
+    "cre", "crp", "crr", "crt", "csl", "csp", "cst", "ctb", "cte", "ctg", "ctr", "cts", "ctt",
+    "cur", "cwt", "dbp", "dfd", "dfe", "dft", "dgc", "dgg", "dgs", "dis", "dln", "dnc", "dnr",
+    "dpc", "dpt", "drm", "drt", "dsr", "dst", "dtc", "dte", "dtm", "dto", "dub", "edc", "edm",
+    "edt", "egr", "elg", "elt", "eng", "enj", "etr", "evp", "exp", "fac", "fds", "fld", "flm",
+    "fmd", "fmk", "fmo", "fmp", "fnd", "fpy", "frg", "gis", "grt", "his", "hnr", "hst", "ill",
+    "ilu", "ins", "inv", "isb", "itr", "ive", "ivr", "jud", "jug", "lbr", "lbt", "ldr", "led",
+    "lee", "lel", "len", "let", "lgd", "lie", "lil", "lit", "lsa", "lse", "lso", "ltg", "lyr",
+    "mcp", "mdc", "med", "mfp", "mfr", "mod", "mon", "mrb", "mrk", "msd", "mte", "mtk", "mus",
+    "nrt", "opn", "org", "orm", "osp", "oth", "own", "pad", "pan", "pat", "pbd", "pbl", "pdr",
+    "pfr", "pht", "plt", "pma", "pmn", "pop", "ppm", "ppt", "pra", "prc", "prd", "pre", "prf",
+    "prg", "prm", "prn", "pro", "prp", "prs", "prt", "prv", "pta", "pte", "ptf", "pth", "ptt",
+    "pup", "rbr", "rcd", "rce", "rcp", "rdd", "red", "ren", "res", "rev", "rpc", "rps", "rpt",
+    "rpy", "rse", "rsg", "rsp", "rsr", "rst", "rth", "rtm", "sad", "sce", "scl", "scr", "sds",
+    "sec", "sgd", "sgn", "sht", "sll", "sng", "spk", "spn", "spy", "srv", "std", "stg", "stl",
+    "stm", "stn", "str", "tcd", "tch", "ths", "tld", "tlp", "trc", "trl", "tyd", "tyg", "uvp",
+    "vac", "vdg", "voc", "wac", "wal", "wam", "wat", "wdc", "wde", "win", "wit", "wpr", "wst",
+];
+
 /// Validates a `prefix`/`epub:prefix` attribute's declared value: syntax
 /// errors (OPF-004), the reserved prefix `_` (OPF-007), a prefix mapped
 /// to one of the 4 default-vocabulary URIs (OPF-007), a prefix mapped to
@@ -1977,20 +2005,26 @@ pub fn check(
                 );
             }
         }
-        // OPF-052: a dc:creator/dc:contributor's opf:role (any of the
-        // "opf"/"epub" prefixes real fixtures use - both bind to the same
-        // namespace) must be a real MARC relator code - approximated as
-        // "exactly 3 lowercase ASCII letters" (every MARC code has this
-        // shape; the corpus's own fixtures - "edc"/"clr" valid, the 9-
-        // letter "companion" invalid - don't need the full ~500-entry
-        // vocabulary to distinguish).
+        // OPF-052: a dc:creator's opf:role (any of the "opf"/"epub"
+        // prefixes real fixtures use - both bind to the same namespace)
+        // must be a real MARC relator code.
+        //
+        // Two things this used to get wrong (#54). The shape test - "exactly
+        // 3 lowercase ASCII letters" - passed any invented code, `xyz`
+        // included; it is now membership in `MARC_RELATORS`. And the check
+        // ran on `contributor` as well, which epubcheck does not do: its
+        // only OPF-052 site is `else if (name.equals("creator"))`, so a
+        // contributor role it accepts was an error for us.
+        //
+        // `oth.`-prefixed roles are epubcheck's escape hatch for anything
+        // outside the vocabulary, and are valid by definition.
         const OPF_NS_ROLE: &str = "http://www.idpf.org/2007/opf";
         for n in md
             .children()
-            .filter(|n| n.is_element() && matches!(n.tag_name().name(), "creator" | "contributor"))
+            .filter(|n| n.is_element() && n.tag_name().name() == "creator")
         {
             if let Some(role) = n.attribute((OPF_NS_ROLE, "role")) {
-                let valid = role.len() == 3 && role.bytes().all(|b| b.is_ascii_lowercase());
+                let valid = MARC_RELATORS.contains(&role) || role.starts_with("oth.");
                 if !valid {
                     report.push_at_pos(
                         OPF_052,
@@ -8464,6 +8498,59 @@ mod tests {
             "must carry the source element path"
         );
         assert_eq!(m.rule, Some("opf.spine.hyperlinked_not_in_spine"));
+    }
+
+    /// OPF-052 (#54): `opf:role` must be a real MARC relator code. The shape
+    /// heuristic this replaced ("three lowercase letters") accepted anything
+    /// invented, and it also ran on `contributor`, which epubcheck never
+    /// checks - so a contributor role it accepts used to be an error here.
+    #[test]
+    fn opf_role_is_checked_against_the_marc_relator_list() {
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title></head>\
+            <body><p>hi</p></body></html>";
+        let opf = |element: &str, role: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <dc:{element} opf:role="{role}">N</dc:{element}>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        let fires = |element: &str, role: &str| {
+            crate::validate_bytes(epub_with_opf(Some(&opf(element, role)), CH1))
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::OPF_052)
+        };
+        assert!(!fires("creator", "aut"), "'aut' is a real relator code");
+        assert!(!fires("creator", "edc"), "'edc' is a real relator code");
+        assert!(
+            fires("creator", "xyz"),
+            "'xyz' has the right shape but is not a relator code - the whole point of #54"
+        );
+        assert!(
+            fires("creator", "companion"),
+            "a word is not a relator code"
+        );
+        assert!(
+            !fires("creator", "oth.whatever"),
+            "'oth.' is epubcheck's escape hatch for roles outside the vocabulary"
+        );
+        assert!(
+            !fires("contributor", "xyz"),
+            "epubcheck only checks creator roles"
+        );
     }
 
     /// OPF-067 (#55): a metadata `<link>` must not point at a manifest item.
