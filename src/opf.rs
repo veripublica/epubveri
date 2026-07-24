@@ -3297,6 +3297,17 @@ pub fn check(
             Vec::new(),
         );
     }
+    // NAV-001: the EPUB 3 navigation document is not a valid EPUB 2 construct.
+    // epubcheck emits this from its NavChecker when a `properties="nav"` item
+    // appears in a version-2 publication; anchor it at the nav document.
+    if !is_epub3 && nav_present {
+        report.push_at(
+            NAV_001,
+            Severity::Error,
+            "the navigation document (properties=\"nav\") is not supported in EPUB 2".to_string(),
+            nav_path.as_deref().unwrap_or(opf_path),
+        );
+    }
 
     // Manifest-declared resource paths (nfc-normalized) - used by
     // `css::check` to distinguish RSC-001 (declared but missing) from
@@ -7870,6 +7881,73 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// NAV-001: an EPUB 3 navigation document (`properties="nav"`) is not a
+    /// valid EPUB 2 construct. epubcheck flags it; the EPUB 3 nav is fine.
+    #[test]
+    fn nav_001_epub2_nav_property() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+</package>"#;
+        const NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:12345678-1234-1234-1234-123456789abc"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap><navPoint id="n1" playOrder="1"><navLabel><text>Ch1</text></navLabel><content src="ch1.xhtml"/></navPoint></navMap>
+</ncx>"#;
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>hi</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>n</title></head><body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/toc.ncx", NCX),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let report = crate::validate_bytes(buf);
+        assert!(
+            report.messages.iter().any(|m| m.id == crate::ids::NAV_001),
+            "EPUB 2 with a nav property must draw NAV-001"
+        );
+        // The same nav in an EPUB 3 is valid - no NAV-001.
+        let ep3 = crate::validate_bytes(epub_with_nav_body(
+            r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>"#,
+        ));
+        assert!(!ep3.messages.iter().any(|m| m.id == crate::ids::NAV_001));
     }
 
     /// Every RSC-005 `rule` slug a validation of `bytes` produces.

@@ -24,15 +24,15 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 14 | 1 | 0 | 3 | 15 | 15/15 | reviewed |
-| NAV | 4 | 0 | 6 | 1 | 10 | 4/10 | first-pass |
+| NAV | 5 | 0 | 5 | 1 | 10 | 5/10 | reviewed |
 | NCX | 2 | 0 | 1 | 3 | 3 | 2/3 | first-pass |
 | ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | first-pass |
 | SCP | 0 | 0 | 0 | 10 | 0 | — | first-pass |
 | CHK | 0 | 0 | 8 | 0 | 8 | 0/8 | first-pass |
 | INF | 0 | 0 | 1 | 0 | 1 | 0/1 | first-pass |
-| **All** | **167** | **6** | **37** | **88** | **210** | **173/210** | |
+| **All** | **168** | **6** | **36** | **88** | **210** | **174/210** | |
 
-**epubveri implements 173 of 210 live epubcheck checks (~82%)** — 167 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 174 of 210 live epubcheck checks (~83%)** — 168 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -311,18 +311,18 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | MED-017 | URL fragment should indicate an element ID, but found '#%1$s'. | Y | Y | scheme-based fragment on an XHTML media-overlay text target |
 | MED-018 | URL fragment should be an SVG fragment identifier, but found '#%1$s'. | Y | Y | invalid SVG fragment identifier on a media-overlay text target |
 
-### NAV  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### NAV  _(reviewed)_
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| NAV-001 | The nav file is not supported for EPUB v2. | Y | x | Not implemented. |
+| NAV-001 | The nav file is not supported for EPUB v2. | Y | Y | an EPUB 2 publication declares an EPUB 3 nav document |
 | NAV-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NAV-003 | The Navigation Document must have a page list when content document(s) contain page bre... | Y | Y | edupub publication with a pagination source but no page-list nav |
-| NAV-004 | The Navigation Document should contain the full document heading hierarchy in EDUPUB. | Y | x | Not implemented. |
-| NAV-005 | Content documents contain "audio" elements but the Navigation Document does not have a ... | Y | x | Not implemented. |
-| NAV-006 | Content documents contain "figure" elements but the Navigation Document does not have a... | Y | x | Not implemented. |
-| NAV-007 | Content documents contain "table" elements but the Navigation Document does not have a ... | Y | x | Not implemented. |
-| NAV-008 | Content documents contain "video" elements but the Navigation Document does not have a ... | Y | x | Not implemented. |
+| NAV-004 | The Navigation Document should contain the full document heading hierarchy in EDUPUB. | Y | x | EDUPUB-only (USAGE): the nav's heading hierarchy is incomplete. Deferred with NAV-005..008 - #46. |
+| NAV-005 | Content documents contain "audio" elements but the Navigation Document does not have a ... | Y | x | EDUPUB-only (USAGE): content has <audio> but no `loa` nav. Deferred - #46. |
+| NAV-006 | Content documents contain "figure" elements but the Navigation Document does not have a... | Y | x | EDUPUB-only (USAGE): content has <figure> but no `loi` nav. Deferred - #46. |
+| NAV-007 | Content documents contain "table" elements but the Navigation Document does not have a ... | Y | x | EDUPUB-only (USAGE): content has <table> but no `lot` nav. Deferred - #46. |
+| NAV-008 | Content documents contain "video" elements but the Navigation Document does not have a ... | Y | x | EDUPUB-only (USAGE): content has <video> but no `lov` nav. Deferred - #46. |
 | NAV-009 | Region-based navigation links must point to Fixed-Layout Documents. | Y | Y | region-based nav target isn't a fixed-layout document |
 | NAV-010 | %1$s" nav must not link to remote resources; found link to "%2$s". | Y | Y | external link in a toc/page-list/landmarks nav |
 | NAV-011 | %1$s" nav must be in reading order; link target "%2$s" is before the previous link’s ta... | Y | Y | toc nav link order doesn't match reading order |

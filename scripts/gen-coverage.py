@@ -128,6 +128,17 @@ ANN = {
         "shapes. Still a subset of epubcheck's full CSS-parser error surface - "
         "styloria's parser is error-recovering, so it accepts some constructs "
         "epubcheck rejects (a bad selector, an invalid at-rule prelude)."),
+    # --- NAV (reviewed) ---
+    "NAV-004": (None, "EDUPUB-only (USAGE): the nav's heading hierarchy is "
+        "incomplete. Deferred with NAV-005..008 - #46."),
+    "NAV-005": (None, "EDUPUB-only (USAGE): content has <audio> but no `loa` "
+        "nav. Deferred - #46."),
+    "NAV-006": (None, "EDUPUB-only (USAGE): content has <figure> but no `loi` "
+        "nav. Deferred - #46."),
+    "NAV-007": (None, "EDUPUB-only (USAGE): content has <table> but no `lot` "
+        "nav. Deferred - #46."),
+    "NAV-008": (None, "EDUPUB-only (USAGE): content has <video> but no `lov` "
+        "nav. Deferred - #46."),
     # --- MED (reviewed) ---
     "MED-004": ("partial",
         "We flag any image whose bytes match no known format's magic. "
@@ -140,7 +151,7 @@ ANN = {
 # Families whose per-ID full/partial/notes have been reviewed by hand. The
 # rest are first-pass: "full" there means "epubveri has the ID", not yet
 # checked for partialness.
-REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS", "MED"}
+REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS", "MED", "NAV"}
 # whole families / notable gaps described once (applied to every id in the
 # family that epubveri lacks, as a shared note)
 FAMILY_GAP = {
