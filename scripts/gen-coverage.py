@@ -89,9 +89,14 @@ ANN = {
         "-right conflict as RSC-005. We emit that same RSC-005, and "
         "epubcheck's own test expects it (verified #51)."),
     "OPF-021": (None, "Unregistered URI scheme in a *DTBook* content document's "
-        "`<a href external=\"true\">` (its only call site is DTBookHandler, not "
-        "the OPF). We accept `application/x-dtbook+xml` as a content type but "
-        "don't validate DTBook, so this is gated behind that - see #52."),
+        "`<a href external=\"true\">` - its only call site is DTBookHandler, not "
+        "the OPF. Gated behind DTBook validation, which is deliberately out of "
+        "scope (owner decision, #52): a legacy DAISY format EPUB 2 permits but "
+        "the ecosystem has moved off, same call as OPF-047. We still accept "
+        "`application/x-dtbook+xml` as a content type; we just don't validate "
+        "those documents. Counted as a gap rather than N/A on purpose - it is a "
+        "real check we don't do, and calling it N/A would inflate coverage with "
+        "a scope decision."),
     "OPF-067": (None, "A metadata `<link>` target that is also a manifest "
         "item - and, as epubcheck has it, only when that item is not in the "
         "spine (#55)."),
