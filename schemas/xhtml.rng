@@ -1571,37 +1571,108 @@
     </element>
   </define>
 
+  <!-- XHTML 1.1 tables (EPUB 2). The whole subtree carried globalAttrs only,
+       so the Tables Module's own presentational/structural attributes drew
+       RSC-005 on perfectly valid EPUB 2 markup - colspan/rowspan on a cell,
+       span/width on a col (reported by Doitsu on the MobileRead forum, #47).
+       Same shape of gap as the img width/height one in #43.
+
+       Value constraints follow epubcheck's schema/20: the enumerated
+       attributes (align/valign/scope/frame/rules) are checked, while
+       Number/Length/MultiLength/Character/Text are all `<text/>` there, i.e.
+       unconstrained - so `width="2*"` or `colspan="x"` is not an error on
+       EPUB 2. The HTML5 rules above stay in force for EPUB 3. -->
   <define name="tableEl-epub2">
     <element name="table">
       <ref name="globalAttrs"/>
+      <!-- XHTML 1.1 `border` is Pixels (any number), not HTML5's ""|"1". -->
+      <optional><attribute name="border"><data type="string"/></attribute></optional>
+      <optional><attribute name="summary"><data type="string"/></attribute></optional>
+      <optional><attribute name="width"><data type="string"/></attribute></optional>
+      <optional><attribute name="cellspacing"><data type="string"/></attribute></optional>
+      <optional><attribute name="cellpadding"><data type="string"/></attribute></optional>
       <optional>
-        <attribute name="border">
-          <choice><value type="token"></value><value>1</value></choice>
+        <attribute name="frame">
+          <choice><value>void</value><value>above</value><value>below</value>
+            <value>hsides</value><value>lhs</value><value>rhs</value>
+            <value>vsides</value><value>box</value><value>border</value></choice>
+        </attribute>
+      </optional>
+      <optional>
+        <attribute name="rules">
+          <choice><value>none</value><value>groups</value><value>rows</value>
+            <value>cols</value><value>all</value></choice>
         </attribute>
       </optional>
       <optional><element name="caption"><ref name="globalAttrs"/><ref name="epub2Inline"/></element></optional>
       <zeroOrMore>
         <choice>
-          <element name="thead"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-          <element name="tbody"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-          <element name="tfoot"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-          <element name="colgroup"><ref name="globalAttrs"/><zeroOrMore><element name="col"><ref name="globalAttrs"/></element></zeroOrMore></element>
-          <element name="col"><ref name="globalAttrs"/></element>
+          <element name="thead"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          <element name="tbody"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          <element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><ref name="colEl-epub2"/></zeroOrMore></element>
+          <ref name="colEl-epub2"/>
           <ref name="trEl-epub2"/>
         </choice>
       </zeroOrMore>
     </element>
   </define>
 
+  <define name="colEl-epub2">
+    <element name="col"><ref name="colAttrs-epub2"/></element>
+  </define>
+
+  <!-- col/colgroup: Common + span + width + the cell-alignment set. -->
+  <define name="colAttrs-epub2">
+    <ref name="rowGroupAttrs-epub2"/>
+    <optional><attribute name="span"><data type="string"/></attribute></optional>
+    <optional><attribute name="width"><data type="string"/></attribute></optional>
+  </define>
+
+  <!-- thead/tbody/tfoot/tr: Common + CellHAlign + CellVAlign. -->
+  <define name="rowGroupAttrs-epub2">
+    <ref name="globalAttrs"/>
+    <optional>
+      <attribute name="align">
+        <choice><value>left</value><value>center</value><value>right</value>
+          <value>justify</value><value>char</value></choice>
+      </attribute>
+    </optional>
+    <optional><attribute name="char"><data type="string"/></attribute></optional>
+    <optional><attribute name="charoff"><data type="string"/></attribute></optional>
+    <optional>
+      <attribute name="valign">
+        <choice><value>top</value><value>middle</value><value>bottom</value>
+          <value>baseline</value></choice>
+      </attribute>
+    </optional>
+  </define>
+
   <define name="trEl-epub2">
-    <element name="tr"><ref name="globalAttrs"/><zeroOrMore><ref name="cellEl-epub2"/></zeroOrMore></element>
+    <element name="tr"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="cellEl-epub2"/></zeroOrMore></element>
   </define>
 
   <define name="cellEl-epub2">
     <choice>
-      <element name="td"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
-      <element name="th"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
+      <element name="td"><ref name="cellAttrs-epub2"/><ref name="epub2Flow"/></element>
+      <element name="th"><ref name="cellAttrs-epub2"/><ref name="epub2Flow"/></element>
     </choice>
+  </define>
+
+  <!-- th/td: Common + abbr/axis/headers/scope/rowspan/colspan + alignment. -->
+  <define name="cellAttrs-epub2">
+    <ref name="rowGroupAttrs-epub2"/>
+    <optional><attribute name="abbr"><data type="string"/></attribute></optional>
+    <optional><attribute name="axis"><data type="string"/></attribute></optional>
+    <optional><attribute name="headers"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="colspan"><data type="string"/></attribute></optional>
+    <optional>
+      <attribute name="scope">
+        <choice><value>row</value><value>col</value>
+          <value>rowgroup</value><value>colgroup</value></choice>
+      </attribute>
+    </optional>
   </define>
 
 </grammar>

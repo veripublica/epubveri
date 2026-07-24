@@ -8,6 +8,21 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **XHTML 1.1 table attributes no longer draw `RSC-005` on EPUB 2** (#47,
+  reported by Doitsu on MobileRead). The EPUB 2 table subtree carried the
+  global attributes only, so the Tables Module's own attributes were rejected
+  on valid markup: `colspan`/`rowspan`/`headers`/`scope`/`abbr`/`axis` on a
+  cell, `span`/`width` on a `col`/`colgroup`, `align`/`char`/`charoff`/`valign`
+  on rows and row groups, and `summary`/`width`/`cellspacing`/`cellpadding`/
+  `frame`/`rules` on the table. `table/@border` was restricted to HTML5's
+  `""`/`"1"` and now takes any value, as XHTML 1.1's `Pixels` does. Same class
+  of gap as #43. EPUB 3 keeps HTML5's stricter rules unchanged — `width` on a
+  `<col>` is still an error there, as in epubcheck.
+
 ## [0.7.5] - 2026-07-24
 
 More checks from the coverage-matrix review (`docs/COVERAGE.md` — now ~90% of

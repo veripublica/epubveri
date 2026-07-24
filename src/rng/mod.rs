@@ -466,6 +466,76 @@ mod tests {
         );
     }
 
+    /// #47 (Doitsu): the XHTML 1.1 Tables Module's own attributes - colspan/
+    /// rowspan on a cell, span/width on a col - drew RSC-005 on EPUB 2, where
+    /// the whole table subtree carried globalAttrs only. epubcheck's
+    /// schema/20 accepts them, so this exact table must validate clean.
+    /// `width` on `<col>` is obsolete in HTML5, so EPUB 3 still rejects it -
+    /// that half of the report was correct behaviour.
+    #[test]
+    fn xhtml11_table_attributes_epub2() {
+        let table = "<table border=\"1\">\
+             <colgroup>\
+               <col span=\"2\" width=\"100\" style=\"background-color: #f0f0f0;\"/>\
+               <col width=\"80\"/>\
+             </colgroup>\
+             <thead><tr><th colspan=\"3\">Quarterly Report</th></tr></thead>\
+             <tfoot><tr><td colspan=\"2\">Total</td><td>215</td></tr></tfoot>\
+             <tbody><tr><td rowspan=\"2\">January</td><td>Widgets</td></tr></tbody>\
+             </table>";
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let x = doc(table);
+        assert!(
+            validate_node_report(
+                &xhtml_grammar_epub2(),
+                roxmltree::Document::parse(&x).unwrap().root_element()
+            )
+            .is_empty(),
+            "EPUB 2 must accept the XHTML 1.1 table attribute set"
+        );
+
+        // The rest of the module: table presentation, cell alignment, the
+        // header-association attributes, and the wider XHTML 1.1 `scope`.
+        let full = "<table summary=\"s\" width=\"80%\" cellpadding=\"2\" cellspacing=\"0\" \
+             frame=\"box\" rules=\"all\" border=\"2\">\
+             <tbody align=\"char\" char=\".\" charoff=\"2\" valign=\"baseline\">\
+             <tr align=\"justify\"><th scope=\"rowgroup\" abbr=\"a\" axis=\"x\" id=\"h\">H</th>\
+             <td headers=\"h\" valign=\"middle\">v</td></tr></tbody></table>";
+        let xf = doc(full);
+        assert!(
+            validate_node_report(
+                &xhtml_grammar_epub2(),
+                roxmltree::Document::parse(&xf).unwrap().root_element()
+            )
+            .is_empty(),
+            "EPUB 2 must accept the full Tables Module attribute set"
+        );
+
+        // Still strict where epubcheck is: the enumerated values are checked,
+        // and EPUB 3 keeps HTML5's rules (no `width` on `<col>`).
+        let bad = doc("<table><tr><td valign=\"sideways\">v</td></tr></table>");
+        assert!(
+            !validate_node_report(
+                &xhtml_grammar_epub2(),
+                roxmltree::Document::parse(&bad).unwrap().root_element()
+            )
+            .is_empty(),
+            "an out-of-vocabulary valign must still be rejected"
+        );
+        let x3 = doc("<table><colgroup><col width=\"80\"/></colgroup>\
+             <tr><td>v</td></tr></table>");
+        assert!(
+            !validate_node_report(
+                &xhtml_grammar(),
+                roxmltree::Document::parse(&x3).unwrap().root_element()
+            )
+            .is_empty(),
+            "EPUB 3 must keep rejecting the obsolete col/@width"
+        );
+    }
+
     /// A rejected container is not the end of the story: recovery descends
     /// into it and reports the bad elements nested inside, too. Doitsu\'s
     /// case is an obsolete `<center>` wrapping obsolete `<font>`/`<s>`/… -
