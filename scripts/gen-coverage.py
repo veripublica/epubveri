@@ -117,12 +117,24 @@ ANN = {
         "source. Not a live check."),
     "HTM-045": (None, "Empty `href=\"\"` self-reference hint (USAGE). Small "
         "discrete gap - epubveri doesn't emit it."),
+    # --- CSS (reviewed) ---
+    "CSS-001": (None, "epubcheck flags exactly `direction`/`unicode-bidi` "
+        "(EPUB 3 only) - we match it."),
+    "CSS-006": (None, "`position: fixed` (USAGE) - matches epubcheck's "
+        "first-value-component == \"fixed\" test."),
+    "CSS-008": ("partial",
+        "We surface the CSS syntax errors we can derive from styloria's parse "
+        "tree - bad-string/bad-url tokens and malformed declaration shapes. "
+        "styloria's parser is error-recovering and doesn't yet expose the "
+        "errors it recovers from (unterminated blocks, dropped rules, …), so "
+        "the full parser-error surface epubcheck's CSS-008 covers isn't "
+        "reachable yet. Tracked upstream: veripublica/styloria#1."),
 }
 
 # Families whose per-ID full/partial/notes have been reviewed by hand. The
 # rest are first-pass: "full" there means "epubveri has the ID", not yet
 # checked for partialness.
-REVIEWED = {"PKG", "OPF", "RSC", "HTM"}
+REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS"}
 # whole families / notable gaps described once (applied to every id in the
 # family that epubveri lacks, as a shared note)
 FAMILY_GAP = {

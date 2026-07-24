@@ -22,7 +22,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF | 70 | 1 | 12 | 12 | 83 | 71/83 | reviewed |
 | RSC | 27 | 2 | 1 | 3 | 30 | 29/30 | reviewed |
 | HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
-| CSS | 12 | 0 | 1 | 13 | 13 | 12/13 | first-pass |
+| CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | first-pass |
 | NAV | 4 | 0 | 6 | 1 | 10 | 4/10 | first-pass |
 | NCX | 2 | 0 | 1 | 3 | 3 | 2/3 | first-pass |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | first-pass |
 | CHK | 0 | 0 | 8 | 0 | 8 | 0/8 | first-pass |
 | INF | 0 | 0 | 1 | 0 | 1 | 0/1 | first-pass |
-| **All** | **168** | **4** | **38** | **88** | **210** | **172/210** | |
+| **All** | **168** | **5** | **37** | **88** | **210** | **173/210** | |
 
-**epubveri implements 172 of 210 live epubcheck checks (~82%)** — 168 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 173 of 210 live epubcheck checks (~82%)** — 168 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -257,18 +257,18 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM-059 | Viewport "%1$s" property must not be defined more than once, but found values [%2$s]. | Y | Y | viewport width or height key appears more than once |
 | HTM-061 | %1$s" is not a valid custom data attribute (it must have at least one character after t... | Y | Y | an invalid data-* attribute name |
 
-### CSS  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### CSS  _(reviewed)_
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| CSS-001 | The "%1$s" property must not be included in an EPUB Style Sheet. | Y | Y | use of the 'direction' or 'unicode-bidi' property |
+| CSS-001 | The "%1$s" property must not be included in an EPUB Style Sheet. | Y | Y | epubcheck flags exactly `direction`/`unicode-bidi` (EPUB 3 only) - we match it. |
 | CSS-002 | Empty or NULL reference found. | Y | Y | @font-face 'src' has an empty url() |
 | CSS-003 | CSS document is encoded in UTF-16. It should be encoded in UTF-8 instead. | Y | Y | a stylesheet is UTF-16 encoded |
 | CSS-004 | CSS documents must be encoded in UTF-8, detected %1$s; | Y | Y | @charset value isn't utf-8 or utf-16 |
 | CSS-005 | Conflicting alternate style tags found: %1$s. | Y | Y | a stylesheet link's class conflicts between alt style tags (usage) |
-| CSS-006 | CSS selector specifies fixed position. | Y | x | Not implemented. |
+| CSS-006 | CSS selector specifies fixed position. | Y | Y | `position: fixed` (USAGE) - matches epubcheck's first-value-component == "fixed" test. |
 | CSS-007 | Font-face reference "%1$s" refers to non-standard font type "%2$s". | Y | Y | a @font-face src names a non-Core-Media-Type font (info) |
-| CSS-008 | An error occurred while parsing the CSS: %1$s. | Y | Y | CSS syntax error (bad string/url token) |
+| CSS-008 | An error occurred while parsing the CSS: %1$s. | Y | ~ | We surface the CSS syntax errors we can derive from styloria's parse tree - bad-string/bad-url tokens and malformed declaration shapes. styloria's parser is error-recovering and doesn't yet expose the errors it recovers from (unterminated blocks, dropped rules, …), so the full parser-error surface epubcheck's CSS-008 covers isn't reachable yet. Tracked upstream: veripublica/styloria#1. |
 | CSS-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-010 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-011 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |

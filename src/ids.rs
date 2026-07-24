@@ -143,6 +143,7 @@ pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi'
 pub const CSS_002: &str = "CSS-002"; // @font-face 'src' has an empty url()
 pub const CSS_007: &str = "CSS-007"; // a @font-face src names a non-Core-Media-Type font (info)
 pub const CSS_005: &str = "CSS-005"; // a stylesheet link's class conflicts between alt style tags (usage)
+pub const CSS_006: &str = "CSS-006"; // a 'position: fixed' declaration (usage)
 pub const CSS_003: &str = "CSS-003"; // a stylesheet is UTF-16 encoded
 pub const CSS_004: &str = "CSS-004"; // @charset value isn't utf-8 or utf-16
 pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)

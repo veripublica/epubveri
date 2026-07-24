@@ -524,17 +524,35 @@ fn check_declaration_shapes_spanned(
             }
         } else if let Some(f) = first
             && let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node
-            && FLAGGED_PROPERTIES
+        {
+            if FLAGGED_PROPERTIES
                 .iter()
                 .any(|p| name.eq_ignore_ascii_case(p))
-        {
-            report.push_at_pos(
-                CSS_001,
-                Severity::Error,
-                format!("use of the '{name}' property is not recommended"),
-                css_path,
-                origin.position(css, f.span.start),
-            );
+            {
+                report.push_at_pos(
+                    CSS_001,
+                    Severity::Error,
+                    format!("use of the '{name}' property is not recommended"),
+                    css_path,
+                    origin.position(css, f.span.start),
+                );
+            } else if name.eq_ignore_ascii_case("position")
+                && matches!(
+                    iter.next().map(|v| &v.node),
+                    Some(spanned::ComponentValue::Token(Token::Ident(v)))
+                        if v.eq_ignore_ascii_case("fixed")
+                )
+            {
+                // CSS-006: `position: fixed` (matches epubcheck, which compares
+                // the first value component to "fixed", case-insensitively).
+                report.push_at_pos(
+                    CSS_006,
+                    Severity::Usage,
+                    "use of 'position: fixed' is not recommended".to_string(),
+                    css_path,
+                    origin.position(css, f.span.start),
+                );
+            }
         }
         // A malformed chunk can still contain a nested block (e.g. an
         // unclosed rule swallowing a whole well-formed sibling rule) —
@@ -569,17 +587,30 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
                 "css.declaration.malformed_shape",
                 Vec::new(),
             );
-        } else if let Some(ComponentValue::Token(Token::Ident(name))) = first
-            && FLAGGED_PROPERTIES
+        } else if let Some(ComponentValue::Token(Token::Ident(name))) = first {
+            if FLAGGED_PROPERTIES
                 .iter()
                 .any(|p| name.eq_ignore_ascii_case(p))
-        {
-            report.push_at(
-                CSS_001,
-                Severity::Error,
-                format!("use of the '{name}' property is not recommended"),
-                css_path,
-            );
+            {
+                report.push_at(
+                    CSS_001,
+                    Severity::Error,
+                    format!("use of the '{name}' property is not recommended"),
+                    css_path,
+                );
+            } else if name.eq_ignore_ascii_case("position")
+                && matches!(
+                    iter.next(),
+                    Some(ComponentValue::Token(Token::Ident(v))) if v.eq_ignore_ascii_case("fixed")
+                )
+            {
+                report.push_at(
+                    CSS_006,
+                    Severity::Usage,
+                    "use of 'position: fixed' is not recommended".to_string(),
+                    css_path,
+                );
+            }
         }
         // A malformed chunk can still contain a nested block (e.g. an
         // unclosed rule swallowing a whole well-formed sibling rule) —
@@ -1074,6 +1105,17 @@ mod tests {
     fn unicode_bidi_property_flagged() {
         let findings = run("body { unicode-bidi: bidi-override; }", &empty_index());
         assert!(findings.contains(&CSS_001));
+    }
+
+    #[test]
+    fn position_fixed_flagged_css006() {
+        // Flagged (case-insensitive on both name and value), matching
+        // epubcheck's CSS-006.
+        assert!(run("div { position: fixed; }", &empty_index()).contains(&CSS_006));
+        assert!(run("div { POSITION: Fixed }", &empty_index()).contains(&CSS_006));
+        // Any other position value is fine.
+        assert!(!run("div { position: absolute; }", &empty_index()).contains(&CSS_006));
+        assert!(!run("div { position: relative; }", &empty_index()).contains(&CSS_006));
     }
 
     #[test]
