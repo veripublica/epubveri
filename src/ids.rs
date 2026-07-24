@@ -89,6 +89,7 @@ pub const OPF_050: &str = "OPF-050"; // spine 'toc' references a non-NCX resourc
 pub const OPF_012: &str = "OPF-012"; // Data Navigation Document isn't application/xhtml+xml
 pub const OPF_013: &str = "OPF-013"; // a declared type attribute doesn't match the resource's actual media-type
 pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no print-source is identified
+pub const OPF_067: &str = "OPF-067"; // a metadata <link> target is also a manifest item
 pub const OPF_086: &str = "OPF-086"; // warning: a deprecated rendition property/value or deprecated meta viewport
 pub const OPF_086B: &str = "OPF-086b"; // same family, usage-level: a deprecated epub:type semantic value
 pub const OPF_087: &str = "OPF-087"; // epub:type value only restates its host element's own native semantic (usage)

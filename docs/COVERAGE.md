@@ -19,7 +19,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 17 | 1 | 7 | 0 | 25 | 18/25 | reviewed |
-| OPF | 71 | 1 | 9 | 14 | 81 | 72/81 | reviewed |
+| OPF | 72 | 1 | 8 | 14 | 81 | 73/81 | reviewed |
 | RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **177** | **5** | **16** | **100** | **198** | **182/198** | |
+| **All** | **178** | **5** | **15** | **100** | **198** | **183/198** | |
 
-**epubveri implements 182 of 198 live epubcheck checks (~92%)** — 177 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 183 of 198 live epubcheck checks (~92%)** — 178 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -132,7 +132,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-064 | OPF declares type "%1$s", validating using profile "%2$s". | Y | x | Informational profile-selection message - not emitted. |
 | OPF-065 | Invalid metadata declaration, probably due to a cycle in "refines" metadata. | Y | Y | a refines chain forms a cycle |
 | OPF-066 | Missing "dc:source" or "source-of" pagination metadata. The pagination source must be i... | Y | Y | an edupub page-list nav exists but no print-source is identified |
-| OPF-067 | The resource "%1$s" must not be listed both as a "link" element in the package metadata... | Y | x | Resource listed as both a `<link>` and a manifest item - small discrete gap. |
+| OPF-067 | The resource "%1$s" must not be listed both as a "link" element in the package metadata... | Y | Y | Resource listed as both a `<link>` and a manifest item - small discrete gap. |
 | OPF-068 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-069 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-070 | Custom collection role "%1$s" is an invalid URL. | Y | Y | a collection role used as a URL is not a valid URL |

@@ -3253,6 +3253,57 @@ pub fn check(
         );
     }
 
+    // OPF-067 (#55): a resource pointed at by a metadata <link> must not
+    // also be a manifest item. epubcheck's rule
+    // (`OPFChecker30.checkLinkedResources`) carries one extra condition that
+    // is easy to miss: it only fires when the manifest item is **not in the
+    // spine**. Dropping that would over-fire on the legitimate case of a
+    // linked resource that is also a content document. EPUB 3 only - the
+    // check lives in epubcheck's EPUB 3 checker.
+    if is_epub3 && let Some(md) = metadata {
+        let spine_ids: HashSet<&str> = pkg
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "spine")
+            .into_iter()
+            .flat_map(|sp| sp.children())
+            .filter(|n| n.is_element() && n.tag_name().name() == "itemref")
+            .filter_map(|ir| ir.attr_no_ns("idref").map(str::trim))
+            .collect();
+        // resolved manifest path -> is that item in the spine
+        let in_spine: HashMap<&str, bool> = items
+            .iter()
+            .map(|(id, (resolved, _))| (resolved.as_str(), spine_ids.contains(id.as_str())))
+            .collect();
+        for link in md
+            .children()
+            .filter(|n| n.is_element() && n.tag_name().name() == "link")
+        {
+            let Some(href) = link.attr_no_ns("href") else {
+                continue;
+            };
+            if is_external(href) {
+                continue;
+            }
+            // The rule is about the linked *document*, so a fragment on the
+            // link doesn't change which resource it names.
+            let doc_href = href.split('#').next().unwrap_or(href);
+            let resolved = resolve(&base_dir, doc_href);
+            if in_spine.get(resolved.as_str()) == Some(&false) {
+                report.push_node(
+                    OPF_067,
+                    Severity::Error,
+                    format!(
+                        "'{doc_href}' must not be both a metadata <link> target and a manifest item"
+                    ),
+                    opf_path,
+                    link,
+                    "opf.link.also_a_manifest_item",
+                    vec![doc_href.to_string()],
+                );
+            }
+        }
+    }
+
     // --- Data Navigation Document (EPUB Region-Based Navigation) ---
     if data_nav_items.len() > 1 {
         report.push_at_rule(
@@ -7980,6 +8031,13 @@ mod tests {
     }
 
     fn epub_with_ch1(ch1: &str) -> Vec<u8> {
+        epub_with_opf(None, ch1)
+    }
+
+    /// The same book with the package document swapped out, for checks that
+    /// are about the OPF itself. `OEBPS/meta.xml` is always present, so an
+    /// OPF can point a metadata `<link>` at a real resource.
+    fn epub_with_opf(opf: Option<&str>, ch1: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -8017,9 +8075,10 @@ mod tests {
                 SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
             for (name, data) in [
                 ("META-INF/container.xml", CONTAINER),
-                ("OEBPS/content.opf", OPF),
+                ("OEBPS/content.opf", opf.unwrap_or(OPF)),
                 ("OEBPS/ch1.xhtml", ch1),
                 ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/meta.xml", "<?xml version=\"1.0\"?><r/>"),
             ] {
                 zip.start_file(name, deflated).unwrap();
                 zip.write_all(data.as_bytes()).unwrap();
@@ -8405,6 +8464,55 @@ mod tests {
             "must carry the source element path"
         );
         assert_eq!(m.rule, Some("opf.spine.hyperlinked_not_in_spine"));
+    }
+
+    /// OPF-067 (#55): a metadata `<link>` must not point at a manifest item.
+    /// The paired negative is the whole point - epubcheck only reports this
+    /// when the item is **not in the spine**, so a link at a content document
+    /// must stay silent. Dropping that condition is the obvious way to
+    /// implement this wrong, and it would over-fire on valid books.
+    #[test]
+    fn metadata_link_at_a_non_spine_manifest_item() {
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title></head>\
+            <body><p>hi</p></body></html>";
+        let opf = |link_href: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <link rel="record" href="{link_href}" media-type="application/xml"/>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="m" href="meta.xml" media-type="application/xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        let fires = |href: &str| {
+            crate::validate_bytes(epub_with_opf(Some(&opf(href)), CH1))
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::OPF_067)
+        };
+        assert!(
+            fires("meta.xml"),
+            "a link at a manifest item outside the spine is OPF-067"
+        );
+        assert!(
+            !fires("ch1.xhtml"),
+            "a link at an in-spine item must stay silent"
+        );
+        assert!(
+            !fires("nowhere.xml"),
+            "a link at a non-manifest resource is not OPF-067"
+        );
     }
 
     #[test]
