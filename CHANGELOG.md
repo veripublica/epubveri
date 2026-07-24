@@ -8,6 +8,31 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.5] - 2026-07-24
+
+More checks from the coverage-matrix review (`docs/COVERAGE.md` — now ~90% of
+live epubcheck checks). Additive; no verdict changes on the epubcheck test
+corpus.
+
+### Added
+
+- **`OPF-044`** — a spine item with a non-content media type whose fallback
+  chain exists but never reaches a content document is now reported separately
+  from **`OPF-043`** (no fallback at all), matching epubcheck's two IDs. Both
+  stay errors; the ID just sharpens.
+- **`NAV-004`–`NAV-008`** — EDUPUB nav-completeness (usage): the navigation
+  document's heading hierarchy is incomplete (`NAV-004`), or content documents
+  contain `<audio>`/`<figure>`/`<table>`/`<video>` but the nav has no matching
+  `loa`/`loi`/`lot`/`lov` list (`NAV-005`–`NAV-008`). Gated on
+  `dc:type="edupub"`, like the existing `NAV-003`.
+
+### Fixed
+
+- **Image error mapping now matches epubcheck.** `MED-004` is reserved for a
+  file too short to contain a 4-byte header; a ≥4-byte file whose header
+  matches no known format is a declared/actual mismatch (`OPF-029`), not
+  `MED-004`, as it was before. `PKG-021` still covers unreadable content.
+
 ## [0.7.4] - 2026-07-24
 
 Three new checks and a broader `CSS-008`, found while building a per-message-ID
