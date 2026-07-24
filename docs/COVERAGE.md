@@ -18,7 +18,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
-| PKG | 17 | 1 | 7 | 0 | 25 | 18/25 | reviewed |
+| PKG | 19 | 1 | 5 | 0 | 25 | 20/25 | reviewed |
 | OPF | 73 | 0 | 8 | 14 | 81 | 73/81 | reviewed |
 | RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **179** | **4** | **15** | **100** | **198** | **183/198** | |
+| **All** | **181** | **4** | **13** | **100** | **198** | **185/198** | |
 
-**epubveri implements 183 of 198 live epubcheck checks (~92%)** — 179 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 185 of 198 live epubcheck checks (~93%)** — 181 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -55,13 +55,13 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | PKG-014 | The EPUB contains empty directory "%1$s". | Y | Y | an empty directory is present in the OCF container |
 | PKG-015 | Unable to read EPUB contents: %1$s | Y | x | Not implemented. |
 | PKG-016 | Use only lowercase characters for the EPUB file extension for maximum compatibility. | Y | Y | the file's own ".epub" extension is not lowercase |
-| PKG-017 | Uncommon EPUB file extension. | Y | x | Not implemented. |
+| PKG-017 | Uncommon EPUB file extension. | Y | Y | uncommon file extension on an EPUB 2 book (warning) |
 | PKG-018 | The EPUB file could not be found. | Y | x | Not implemented. |
 | PKG-020 | OPF file "%1$s" could not be found. | Y | x | Not emitted, but the condition IS detected: a missing declared OPF is reported as OPF-002 (Fatal). |
 | PKG-021 | Corrupted image file encountered. | Y | Y | an image resource is corrupt (its bytes don't match any known image format) |
 | PKG-022 | Wrong file extension for image. The image is a "%1$s" file but has the file extension "... | Y | Y | an image resource's file extension doesn't match its actual format |
 | PKG-023 | Validating the EPUB against version 2.0, default validation profile will be used. | Y | x | Not implemented. |
-| PKG-024 | Uncommon EPUB file extension. | Y | x | Not implemented. |
+| PKG-024 | Uncommon EPUB file extension. | Y | Y | uncommon file extension on an EPUB 3 book (usage) |
 | PKG-025 | Publication resource must not be located in the META-INF directory | Y | Y | a publication resource is stored inside META-INF |
 | PKG-026 | Obfuscated resource must be a Font Core Media Type (was declared as "%1$s" in "%2$s"). | Y | Y | font-obfuscated resource isn't a font Core Media Type |
 | PKG-027 | Could not extract EPUB ZIP content, probably due to file names not encoded in UTF-8. | Y | Y | a ZIP entry's file name isn't valid UTF-8 |

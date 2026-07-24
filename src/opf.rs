@@ -1518,6 +1518,12 @@ pub fn check(
 
     // --- version ---
     let version = pkg.attr_no_ns("version").unwrap_or("");
+    // Recorded even when unrecognized: callers outside the package document
+    // (the PKG-017/PKG-024 extension check) need to know what the book
+    // claimed, not what we made of it.
+    if !version.is_empty() {
+        report.epub_version = Some(version.to_string());
+    }
     if version.is_empty() {
         report.push_node(
             OPF_001,

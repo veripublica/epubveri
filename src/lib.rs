@@ -173,18 +173,42 @@ pub fn validate_path_with_profile(path: &Path, profile: Option<&str>) -> std::io
 /// Validate an EPUB file on disk under explicit [`Options`] (profile + advisory).
 pub fn validate_path_with_options(path: &Path, options: &Options) -> std::io::Result<Report> {
     let mut report = validate_bytes_with_options(std::fs::read(path)?, options);
-    // PKG-016: the file's own ".epub" extension should be lowercase - a
-    // filesystem-level concern `validate_bytes` alone can't see, since it
-    // only ever receives raw bytes with no filename attached.
+    // The file's own extension - a filesystem-level concern `validate_bytes`
+    // alone can't see, since it only ever receives raw bytes with no filename
+    // attached. epubcheck's `OCFExtensionChecker` splits three ways:
+    //
+    //   ".epub"            -> fine
+    //   ".EPUB"/".ePub"    -> PKG-016, the right extension in the wrong case
+    //   anything else      -> PKG-024 (usage) on EPUB 3, PKG-017 (warning) on
+    //                         EPUB 2 - same condition, different ID and
+    //                         severity per version
+    //
+    // The version split is why `Report` carries `epub_version`: it is decided
+    // inside the package document, which this layer never sees. With no
+    // version at all (an unreadable or version-less book) there is nothing to
+    // choose between, and the extension is the least of that book's problems -
+    // so say nothing rather than guess.
     if let Some(ext) = path.extension().and_then(|e| e.to_str())
         && ext != "epub"
-        && ext.eq_ignore_ascii_case("epub")
     {
-        report.push(
-            ids::PKG_016,
-            report::Severity::Warning,
-            "the file extension should be lowercase \".epub\"",
-        );
+        if ext.eq_ignore_ascii_case("epub") {
+            report.push(
+                ids::PKG_016,
+                report::Severity::Warning,
+                "the file extension should be lowercase \".epub\"",
+            );
+        } else if let Some(version) = report.epub_version.clone() {
+            let (id, severity) = if version.starts_with('3') {
+                (ids::PKG_024, report::Severity::Usage)
+            } else {
+                (ids::PKG_017, report::Severity::Warning)
+            };
+            report.push(
+                id,
+                severity,
+                format!("\".{ext}\" is an uncommon extension for an EPUB file"),
+            );
+        }
     }
     Ok(report)
 }
@@ -205,6 +229,55 @@ mod tests {
     /// about the content document's own contents rather than its encoding.
     fn epub2_with_link(extra_body: &str) -> Vec<u8> {
         epub2_with_body("C1", extra_body)
+    }
+
+    /// A minimal valid EPUB 3, for checks whose behaviour differs by version.
+    fn epub3_minimal() -> Vec<u8> {
+        const OPF: &str = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const NAV: &str = r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav></body></html>"#;
+        const CH1: &str = r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>x</p></body></html>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/ch1.xhtml", CH1),
+            ] {
+                z.start_file(name, opts).unwrap();
+                z.write_all(data.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
     }
 
     fn epub2_with_body(title: &str, extra_body: &str) -> Vec<u8> {
@@ -279,6 +352,50 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// PKG-016/017/024 (#49): the three-way split on the container's own
+    /// file extension. PKG-017 vs PKG-024 is decided by EPUB version, which
+    /// is why `Report` carries `epub_version` - this layer has the filename
+    /// and no OPF, the OPF layer has the version and no filename.
+    #[test]
+    fn container_file_extension_splits_by_version() {
+        let dir = std::env::temp_dir().join(format!("epubveri-ext-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let ids_for = |name: &str, bytes: &[u8]| {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            let r = crate::validate_path(&p).unwrap();
+            let out: Vec<&str> = r
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| id.starts_with("PKG-01") || *id == crate::ids::PKG_024)
+                .collect();
+            std::fs::remove_file(&p).ok();
+            out
+        };
+        let epub2 = epub2_with_dtd_entities("C1");
+        assert!(
+            !ids_for("book.epub", &epub2).contains(&crate::ids::PKG_017),
+            "a plain .epub extension is fine"
+        );
+        assert!(
+            ids_for("book.EPUB", &epub2).contains(&crate::ids::PKG_016),
+            "the right extension in the wrong case is PKG-016, not PKG-017"
+        );
+        assert!(
+            ids_for("book.zip", &epub2).contains(&crate::ids::PKG_017),
+            "an EPUB 2 book with a foreign extension is PKG-017 (warning)"
+        );
+        // The same condition on an EPUB 3 book carries the other ID, at usage
+        // severity - the whole reason the version had to be plumbed through.
+        let epub3 = epub3_minimal();
+        assert!(
+            ids_for("book.zip", &epub3).contains(&crate::ids::PKG_024),
+            "an EPUB 3 book with a foreign extension is PKG-024 (usage)"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// HTM-045 (#56): an empty `href` resolves to the containing document.

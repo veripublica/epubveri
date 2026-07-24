@@ -131,6 +131,19 @@ pub struct Message {
 #[derive(Debug, Default, Clone)]
 pub struct Report {
     pub messages: Vec<Message>,
+    /// The `version` the package document declared (`"3.0"`, `"2.0"`, …), as
+    /// written — `None` when no OPF was reached or it declared no version.
+    ///
+    /// Recorded because some checks are version-dependent but run outside the
+    /// package document entirely: PKG-017 vs PKG-024 pick their ID and
+    /// severity by EPUB version, yet the filename they judge is only known to
+    /// the file-level entry point, which never sees the OPF. Consumers get it
+    /// for free — epubcheck likewise reports which version it validated.
+    ///
+    /// A multi-rendition publication has one per rootfile; this holds the
+    /// last one checked. They must agree for the book to be valid anyway
+    /// (a mixed set is PKG-013).
+    pub epub_version: Option<String>,
 }
 
 impl Report {
