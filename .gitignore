@@ -6,6 +6,9 @@ __pycache__/
 # wasm-pack build output (generated npm package) — not committed.
 /epubveri-wasm/pkg/
 
+# macOS Finder metadata
+.DS_Store
+
 # Local-only project context / history — not for publication (owner decision).
 /CLAUDE.md
 /docs/PROGRESS_LOG.md
