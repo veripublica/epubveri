@@ -2951,8 +2951,10 @@ pub fn check(
     // nav toc's spine-order check (NAV-011).
     let mut spine_order: HashMap<String, usize> = HashMap::new();
     // resolved+NFC'd paths of every itemref explicitly marked
-    // linear="no", for the OPF-096 reachability check below.
-    let mut non_linear_paths: Vec<String> = Vec::new();
+    // linear="no", each paired with that itemref's position, for the
+    // OPF-096 reachability check below (the position lets OPF-096 point at
+    // the offending `<itemref linear="no">` rather than the package root).
+    let mut non_linear_paths: Vec<(String, Position)> = Vec::new();
     // content-doc resolved-path -> whether it's fixed-layout, for the
     // region-based nav's NAV-009 target cross-check below.
     let mut fixed_layout_docs: HashMap<String, bool> = HashMap::new();
@@ -3060,7 +3062,7 @@ pub fn check(
                         Some((path, mt)) => {
                             spine_order.entry(nfc(path)).or_insert(position);
                             if ir.attr_no_ns("linear").map(str::trim) == Some("no") {
-                                non_linear_paths.push(nfc(path));
+                                non_linear_paths.push((nfc(path), Position::of(ir)));
                             }
                             // Core content-document media types valid in the
                             // spine without a fallback; otherwise walk the
@@ -3566,7 +3568,7 @@ pub fn check(
             // content", also a real fixture comment).
             let doc_key = nfc(&path);
             let is_fxl = fixed_layout_docs.get(&doc_key).copied().unwrap_or(false);
-            let is_non_linear = non_linear_paths.contains(&doc_key);
+            let is_non_linear = non_linear_paths.iter().any(|(p, _)| p == &doc_key);
             if !is_fxl && !is_non_linear {
                 crate::edupub::check_sectioning_and_headings(&d, &path, report);
             }
@@ -5483,7 +5485,7 @@ pub fn check(
     // a real EPUB 2 book with an unreachable `linear=no` document that we
     // used to flag (reported by Doitsu on the MobileRead forum). Same class
     // as #9 and #21: an EPUB 3 rule leaking into EPUB 2.
-    for path in &non_linear_paths {
+    for (path, itemref_pos) in &non_linear_paths {
         if is_epub3 && !hyperlink_targets.contains_key(path) {
             // Real epubcheck downgrades this from an error to a usage note
             // when the book uses scripting anywhere - script could add
@@ -5499,9 +5501,12 @@ pub fn check(
             report.push_at_pos(
                 id,
                 severity,
-                format!("non-linear content '{path}' is not reachable from the reading order"),
+                format!(
+                    "non-linear content '{path}' has no hyperlink pointing to it, \
+                     so it is not reachable from the reading order"
+                ),
                 opf_path,
-                Position::of(pkg),
+                *itemref_pos,
             );
         }
     }

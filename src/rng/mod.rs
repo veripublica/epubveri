@@ -430,6 +430,42 @@ mod tests {
         }
     }
 
+    /// #43 (Doitsu): `<img width="50%">` is the XHTML 1.1 `Length` datatype
+    /// (pixels or percentage), which epubcheck's schema/20 types as free
+    /// text - so it is valid in EPUB 2 and must not draw RSC-005. The HTML5
+    /// integer rule still applies in EPUB 3, where a percentage is an error.
+    #[test]
+    fn img_percentage_dimensions_epub2_only() {
+        let body = "<p><img src=\"c.png\" alt=\"c\" width=\"50%\" height=\"100%\"/></p>";
+        let doc = |ns: &str, b: &str| {
+            format!("<html {ns}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        // EPUB 2: percentage is fine.
+        let g2 = xhtml_grammar_epub2();
+        let x2 = doc(XHTML_NS_DECLS, body);
+        assert!(
+            validate_node_report(&g2, roxmltree::Document::parse(&x2).unwrap().root_element())
+                .is_empty(),
+            "EPUB 2 img width/height percentage must be accepted"
+        );
+        // EPUB 3: percentage is an error (integer only).
+        let g3 = xhtml_grammar();
+        let x3 = doc(XHTML_NS_DECLS, body);
+        assert!(
+            !validate_node_report(&g3, roxmltree::Document::parse(&x3).unwrap().root_element())
+                .is_empty(),
+            "EPUB 3 img width/height percentage must be rejected"
+        );
+        // A plain integer stays valid in both.
+        let intbody = "<p><img src=\"c.png\" alt=\"c\" width=\"50\" height=\"100\"/></p>";
+        let xi = doc(XHTML_NS_DECLS, intbody);
+        assert!(
+            validate_node_report(&g3, roxmltree::Document::parse(&xi).unwrap().root_element())
+                .is_empty(),
+            "EPUB 3 img integer dimensions must stay valid"
+        );
+    }
+
     /// A rejected container is not the end of the story: recovery descends
     /// into it and reports the bad elements nested inside, too. Doitsu\'s
     /// case is an obsolete `<center>` wrapping obsolete `<font>`/`<s>`/… -

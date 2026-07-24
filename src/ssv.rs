@@ -24,41 +24,54 @@ const KNOWN: &[&str] = &[
     "afterword",
     "answer",
     "answers",
+    "antonym-group",
     "appendix",
     "aside",
     "assessment",
     "assessments",
     "backlink",
     "backmatter",
+    "balloon",
     "bibliography",
+    "biblioref",
     "bodymatter",
     "chapter",
     "colophon",
-    "concludingsentence",
+    "concluding-sentence",
     "conclusion",
+    "condensed-entry",
     "contributors",
     "copyright-page",
     "cover",
+    "covertitle",
     "credit",
     "credits",
     "dedication",
+    "def",
+    "dictentry",
+    "dictionary",
     "division",
     "endnotes",
     "epigraph",
     "epilogue",
     "errata",
+    "etymology",
     "example",
+    "figure",
     "footnote",
     "footnotes",
     "foreword",
     "frontmatter",
-    "figure",
+    "fulltitle",
     "fulltitlepage",
     "glossary",
     "glossdef",
     "glossref",
     "glossterm",
+    "gram-info",
+    "halftitle",
     "halftitlepage",
+    "idiom",
     "imprimatur",
     "imprint",
     "index",
@@ -99,7 +112,15 @@ const KNOWN: &[&str] = &[
     "other-credits",
     "page-list",
     "pagebreak",
+    "panel",
+    "panel-group",
     "part",
+    "part-of-speech",
+    "part-of-speech-group",
+    "part-of-speech-list",
+    "phonetic-transcription",
+    "phrase-group",
+    "phrase-list",
     "practice",
     "practice-answer",
     "preamble",
@@ -110,17 +131,24 @@ const KNOWN: &[&str] = &[
     "question",
     "region-based",
     "revision-history",
+    "sense-group",
+    "sense-list",
     "seriespage",
+    "sound-area",
     "subtitle",
+    "synonym-group",
     "table",
     "table-cell",
     "table-row",
+    "text-area",
     "tip",
     "title",
     "titlepage",
     "toc",
     "toc-brief",
     "topic-sentence",
+    "tran",
+    "tran-info",
     "translator-note",
     "volume",
 ];
@@ -238,6 +266,37 @@ mod tests {
                 "'{t}' is both media-overlay-only (OPF-087) and deprecated (OPF-086b)"
             );
         }
+    }
+
+    /// Regression for the MobileRead report (Doitsu): the default vocab is
+    /// epubcheck's aggregate of the Structure, Dictionary, Index and Comics
+    /// vocabularies, so terms from all of them must be accepted, and the
+    /// hyphenated `concluding-sentence` (not the old unhyphenated spelling)
+    /// is the real term.
+    #[test]
+    fn aggregate_vocab_terms_are_known() {
+        for t in [
+            "biblioref",
+            "covertitle",
+            "fulltitle",
+            "halftitle", // structure
+            "concluding-sentence",
+            "dictionary",
+            "dictentry",
+            "part-of-speech",
+            "etymology", // dict
+            "balloon",
+            "panel",
+            "sound-area",
+            "text-area", // comics
+        ] {
+            assert!(
+                is_default_vocab_type(t),
+                "'{t}' must be in the default vocab"
+            );
+        }
+        // the misspelling we used to carry is not a real term
+        assert!(!is_default_vocab_type("concludingsentence"));
     }
 
     /// No term is listed twice inside a single table either - a duplicate

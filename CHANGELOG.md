@@ -8,6 +8,34 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.3] - 2026-07-24
+
+### Fixed
+
+- **`epub:type` terms from the dictionary, comics and structure vocabularies
+  are no longer reported as `OPF-088`.** The default (unprefixed) `epub:type`
+  vocabulary is epubcheck's *aggregate* of the Structure, Data-Navigation,
+  Dictionary, Index and Comics vocabularies; 29 current terms from it were
+  missing, so valid values such as `biblioref`, `dictionary`, `dictentry`,
+  `part-of-speech`, `balloon` and `panel` were wrongly flagged
+  "not in the default vocabulary." The misspelled `concludingsentence` is
+  also corrected to `concluding-sentence` (the real term). (Reported by
+  Doitsu on the MobileRead forum.)
+- **`img`/`iframe`/`object` `width` and `height` percentages are no longer
+  reported as `RSC-005` in EPUB 2.** XHTML 1.1 types these as the `Length`
+  datatype (pixels *or* a percentage), which epubcheck's EPUB 2 schema
+  accepts as free text, so `<img width="50%">` is valid there. The stricter
+  HTML5 rule (a non-negative integer only) still applies in EPUB 3, where a
+  percentage remains an error — matching epubcheck on both. (Reported by
+  Doitsu on the MobileRead forum.)
+
+### Changed
+
+- **`OPF-096` now points at the offending `<itemref linear="no">`** rather
+  than the package root, and its wording spells out the cause — a non-linear
+  content document with no hyperlink pointing to it is unreachable from the
+  reading order. (Reported by Doitsu on the MobileRead forum.)
+
 ## [0.7.2] - 2026-07-24
 
 ### Fixed

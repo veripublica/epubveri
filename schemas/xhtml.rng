@@ -914,23 +914,44 @@
     </element>
   </define>
 
+  <!-- HTML5 `img` (EPUB 3): width/height are non-negative integers
+       (embed.rnc's `common.data.integer.non-negative`). -->
   <define name="imgEl">
     <element name="img">
-      <ref name="globalAttrs"/>
-      <attribute name="src"><data type="anyURI"/></attribute>
-      <optional><attribute name="alt"><data type="string"/></attribute></optional>
+      <ref name="imgAttrsCommon"/>
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
-      <optional><attribute name="srcset"><data type="string"/></attribute></optional>
-      <optional><attribute name="sizes"><data type="string"/></attribute></optional>
-      <optional><attribute name="usemap"><data type="string"/></attribute></optional>
-      <!-- #33: img.attrs completion (embed.rnc). -->
-      <optional><attribute name="loading"><data type="token"/></attribute></optional>
-      <optional><attribute name="decoding"><data type="token"/></attribute></optional>
-      <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
-      <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
-      <optional><attribute name="ismap"><data type="token"/></attribute></optional>
     </element>
+  </define>
+
+  <!-- XHTML 1.1 `img` (EPUB 2): width/height are the `Length` datatype -
+       pixels OR a percentage. epubcheck's schema/20 types them
+       `Length.datatype = <text/>`, i.e. anything, so a percentage is not an
+       error there (reported by Doitsu on the MobileRead forum: `width="50%"`
+       wrongly drawing RSC-005 on an EPUB 2 book, #43). The HTML5 integer
+       rule above stays in force for EPUB 3. -->
+  <define name="imgEl-epub2">
+    <element name="img">
+      <ref name="imgAttrsCommon"/>
+      <optional><attribute name="width"><data type="string"/></attribute></optional>
+      <optional><attribute name="height"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <!-- Everything on `img` except width/height, shared by both versions. -->
+  <define name="imgAttrsCommon">
+    <ref name="globalAttrs"/>
+    <attribute name="src"><data type="anyURI"/></attribute>
+    <optional><attribute name="alt"><data type="string"/></attribute></optional>
+    <optional><attribute name="srcset"><data type="string"/></attribute></optional>
+    <optional><attribute name="sizes"><data type="string"/></attribute></optional>
+    <optional><attribute name="usemap"><data type="string"/></attribute></optional>
+    <!-- #33: img.attrs completion (embed.rnc). -->
+    <optional><attribute name="loading"><data type="token"/></attribute></optional>
+    <optional><attribute name="decoding"><data type="token"/></attribute></optional>
+    <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
+    <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
+    <optional><attribute name="ismap"><data type="token"/></attribute></optional>
   </define>
 
   <!-- ============ tabular + sectioning + grouping (flow-only) ============ -->
@@ -1168,6 +1189,19 @@
       <optional><attribute name="title"><data type="string"/></attribute></optional>
       <!-- #33: found by the corpus fallout of excepting `name` from the
            wildcard for input/select/textarea/button's own rules. -->
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <!-- EPUB 2 iframe: same as above but with the XHTML 1.1 `Length` (text)
+       width/height, matching epubcheck's schema/20 (#43) - see imgEl-epub2. -->
+  <define name="iframeEl-epub2">
+    <element name="iframe">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="width"><data type="string"/></attribute></optional>
+      <optional><attribute name="height"><data type="string"/></attribute></optional>
+      <optional><attribute name="title"><data type="string"/></attribute></optional>
       <optional><attribute name="name"><data type="string"/></attribute></optional>
     </element>
   </define>
@@ -1416,8 +1450,8 @@
       <element name="q"><ref name="globalAttrs"/><ref name="epub2Inline"/></element>
       <element name="bdo"><ref name="globalAttrs"/><ref name="epub2Inline"/></element>
       <element name="br"><ref name="globalAttrs"/></element>
-      <ref name="imgEl"/>
-      <ref name="iframeEl"/>
+      <ref name="imgEl-epub2"/>
+      <ref name="iframeEl-epub2"/>
       <ref name="objectEl-epub2"/>
       <element name="applet">
         <ref name="globalAttrs"/>
@@ -1495,8 +1529,9 @@
       <ref name="globalAttrs"/>
       <optional><attribute name="data"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
-      <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
-      <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <!-- XHTML 1.1 `Length` (pixels or percentage), text in schema/20 (#43). -->
+      <optional><attribute name="width"><data type="string"/></attribute></optional>
+      <optional><attribute name="height"><data type="string"/></attribute></optional>
       <interleave>
         <zeroOrMore><ref name="paramEl"/></zeroOrMore>
         <ref name="epub2Flow"/>
