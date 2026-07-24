@@ -23,16 +23,16 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC | 27 | 2 | 1 | 3 | 30 | 29/30 | reviewed |
 | HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
-| MED | 15 | 0 | 0 | 3 | 15 | 15/15 | first-pass |
+| MED | 14 | 1 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 4 | 0 | 6 | 1 | 10 | 4/10 | first-pass |
 | NCX | 2 | 0 | 1 | 3 | 3 | 2/3 | first-pass |
 | ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | first-pass |
 | SCP | 0 | 0 | 0 | 10 | 0 | — | first-pass |
 | CHK | 0 | 0 | 8 | 0 | 8 | 0/8 | first-pass |
 | INF | 0 | 0 | 1 | 0 | 1 | 0/1 | first-pass |
-| **All** | **168** | **5** | **37** | **88** | **210** | **173/210** | |
+| **All** | **167** | **6** | **37** | **88** | **210** | **173/210** | |
 
-**epubveri implements 173 of 210 live epubcheck checks (~82%)** — 168 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 173 of 210 live epubcheck checks (~82%)** — 167 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 88 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -288,14 +288,14 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | CSS-029 | Found CSS class name "%1$s" but no "%2$s" property was declared in the package document. | Y | Y | well-known media-overlay class used but its property isn't declared (usage) |
 | CSS-030 | The package document declares media overlays styling class names but no CSS was found i... | Y | Y | declared media-overlay active-class has no matching CSS selector |
 
-### MED  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+### MED  _(reviewed)_
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
 | MED-001 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-003 | Picture "img" elements must reference core media type resources, but found resource "%1... | Y | Y | a <picture> element's own <img> fallback references a foreign resource |
-| MED-004 | Image file header may be corrupted. | Y | Y | an image resource is corrupt |
+| MED-004 | Image file header may be corrupted. | Y | ~ | We flag any image whose bytes match no known format's magic. epubcheck reserves MED-004 for a file *shorter than 4 bytes* and uses OPF-029 for a >=4-byte magic/declared-type mismatch, so a >=4-byte garbage image draws MED-004 from us but OPF-029 from epubcheck (same INVALID verdict, different ID). Tracked: #45. |
 | MED-005 | Media Overlay audio reference %1$s to non-standard audio type %2$s found. | Y | Y | <audio> resource is not a Core Media Type |
 | MED-006 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-007 | Picture "source" elements must define a "type" attribute when they reference foreign re... | Y | Y | a <picture> <source> references a foreign resource with no type attribute |

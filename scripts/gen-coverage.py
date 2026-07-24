@@ -128,12 +128,19 @@ ANN = {
         "shapes. Still a subset of epubcheck's full CSS-parser error surface - "
         "styloria's parser is error-recovering, so it accepts some constructs "
         "epubcheck rejects (a bad selector, an invalid at-rule prelude)."),
+    # --- MED (reviewed) ---
+    "MED-004": ("partial",
+        "We flag any image whose bytes match no known format's magic. "
+        "epubcheck reserves MED-004 for a file *shorter than 4 bytes* and uses "
+        "OPF-029 for a >=4-byte magic/declared-type mismatch, so a >=4-byte "
+        "garbage image draws MED-004 from us but OPF-029 from epubcheck (same "
+        "INVALID verdict, different ID). Tracked: #45."),
 }
 
 # Families whose per-ID full/partial/notes have been reviewed by hand. The
 # rest are first-pass: "full" there means "epubveri has the ID", not yet
 # checked for partialness.
-REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS"}
+REVIEWED = {"PKG", "OPF", "RSC", "HTM", "CSS", "MED"}
 # whole families / notable gaps described once (applied to every id in the
 # family that epubveri lacks, as a shared note)
 FAMILY_GAP = {
