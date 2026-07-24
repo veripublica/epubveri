@@ -6823,12 +6823,36 @@ fn check_image_signatures(
         let Some(bytes) = ocf.read(&orig) else {
             continue;
         };
+        // Mirror epubcheck's `BitmapChecker` branch order (#45):
+        //   < 4 bytes         -> MED-004 (can't even read a 4-byte header)
+        //   magic != declared -> OPF-029; and dimensions unreadable -> PKG-021
+        //   magic == declared -> extension-vs-format check (PKG-022)
+        // MED-004 is specifically the too-short case; a >=4-byte file whose
+        // header matches nothing is a declared/actual mismatch (OPF-029), not
+        // MED-004 - that was the divergence in #45.
+        if bytes.len() < 4 {
+            report.push_at(
+                MED_004,
+                Severity::Error,
+                format!("image '{path}' is corrupt (too short to contain an image header)"),
+                path.as_str(),
+            );
+            report.push_at(
+                PKG_021,
+                Severity::Error,
+                format!("image '{path}' is corrupt"),
+                path.as_str(),
+            );
+            continue;
+        }
         match crate::image::sniff_image_type(&bytes) {
             None => {
                 report.push_at(
-                    MED_004,
+                    OPF_029,
                     Severity::Error,
-                    format!("image '{path}' is corrupt (its content doesn't match any known image format)"),
+                    format!(
+                        "image '{path}' is declared as '{mt}' but its content doesn't match that media type"
+                    ),
                     path.as_str(),
                 );
                 report.push_at(
@@ -7121,6 +7145,91 @@ mod tests {
     fn has_opf_096(nav_body: &str) -> bool {
         let report = crate::validate_bytes(epub_with_nav_body(nav_body));
         report.messages.iter().any(|m| m.id == crate::ids::OPF_096)
+    }
+
+    /// An EPUB 3 whose manifest declares `img.jpg` as `image/jpeg`, with the
+    /// given raw bytes for it - so the image-signature check can be exercised.
+    fn epub_with_image(img: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="img" href="img.jpg" media-type="image/jpeg"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p><img src="img.jpg" alt="x"/></p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER.as_bytes()),
+                ("OEBPS/content.opf", OPF.as_bytes()),
+                ("OEBPS/ch1.xhtml", CH1.as_bytes()),
+                ("OEBPS/nav.xhtml", NAV.as_bytes()),
+                ("OEBPS/img.jpg", img),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// #45: MED-004 is specifically the "file too short to read a header"
+    /// case (<4 bytes). A >=4-byte file whose header matches nothing is a
+    /// declared/actual mismatch (OPF-029), not MED-004 - matching epubcheck.
+    #[test]
+    fn image_error_mapping_med004_only_for_too_short() {
+        let ids = |b: &[u8]| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_image(b))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect()
+        };
+        // >=4-byte garbage declared as JPEG: OPF-029 + PKG-021, not MED-004.
+        let g = ids(b"NOT-A-REAL-JPEG");
+        assert!(g.contains(&crate::ids::OPF_029), "garbage: {g:?}");
+        assert!(g.contains(&crate::ids::PKG_021), "garbage: {g:?}");
+        assert!(
+            !g.contains(&crate::ids::MED_004),
+            "garbage should not be MED-004: {g:?}"
+        );
+        // 0-byte file: MED-004 + PKG-021, not OPF-029.
+        let e = ids(b"");
+        assert!(e.contains(&crate::ids::MED_004), "empty: {e:?}");
+        assert!(e.contains(&crate::ids::PKG_021), "empty: {e:?}");
+        assert!(
+            !e.contains(&crate::ids::OPF_029),
+            "empty should not be OPF-029: {e:?}"
+        );
     }
 
     #[test]

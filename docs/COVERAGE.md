@@ -23,16 +23,16 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC | 27 | 2 | 1 | 3 | 30 | 29/30 | reviewed |
 | HTM | 19 | 0 | 1 | 28 | 20 | 19/20 | reviewed |
 | CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
-| MED | 14 | 1 | 0 | 3 | 15 | 15/15 | reviewed |
+| MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 5 | 0 | 5 | 1 | 10 | 5/10 | reviewed |
 | NCX | 3 | 0 | 0 | 3 | 3 | 3/3 | reviewed |
 | ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | reviewed |
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **169** | **6** | **26** | **97** | **201** | **175/201** | |
+| **All** | **170** | **5** | **26** | **97** | **201** | **175/201** | |
 
-**epubveri implements 175 of 201 live epubcheck checks (~87%)** — 169 fully, 6 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 175 of 201 live epubcheck checks (~87%)** — 170 fully, 5 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 97 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -295,7 +295,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | MED-001 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-003 | Picture "img" elements must reference core media type resources, but found resource "%1... | Y | Y | a <picture> element's own <img> fallback references a foreign resource |
-| MED-004 | Image file header may be corrupted. | Y | ~ | We flag any image whose bytes match no known format's magic. epubcheck reserves MED-004 for a file *shorter than 4 bytes* and uses OPF-029 for a >=4-byte magic/declared-type mismatch, so a >=4-byte garbage image draws MED-004 from us but OPF-029 from epubcheck (same INVALID verdict, different ID). Tracked: #45. |
+| MED-004 | Image file header may be corrupted. | Y | Y | Reserved for a file too short to contain a 4-byte image header, matching epubcheck; a >=4-byte header that matches nothing is a declared/actual mismatch (OPF-029). Aligned in #45. |
 | MED-005 | Media Overlay audio reference %1$s to non-standard audio type %2$s found. | Y | Y | <audio> resource is not a Core Media Type |
 | MED-006 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | MED-007 | Picture "source" elements must define a "type" attribute when they reference foreign re... | Y | Y | a <picture> <source> references a foreign resource with no type attribute |

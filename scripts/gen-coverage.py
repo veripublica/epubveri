@@ -140,12 +140,9 @@ ANN = {
     "NAV-008": (None, "EDUPUB-only (USAGE): content has <video> but no `lov` "
         "nav. Deferred - #46."),
     # --- MED (reviewed) ---
-    "MED-004": ("partial",
-        "We flag any image whose bytes match no known format's magic. "
-        "epubcheck reserves MED-004 for a file *shorter than 4 bytes* and uses "
-        "OPF-029 for a >=4-byte magic/declared-type mismatch, so a >=4-byte "
-        "garbage image draws MED-004 from us but OPF-029 from epubcheck (same "
-        "INVALID verdict, different ID). Tracked: #45."),
+    "MED-004": (None, "Reserved for a file too short to contain a 4-byte image "
+        "header, matching epubcheck; a >=4-byte header that matches nothing is "
+        "a declared/actual mismatch (OPF-029). Aligned in #45."),
 }
 
 # Families whose per-ID full/partial/notes have been reviewed by hand. The
