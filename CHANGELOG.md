@@ -8,6 +8,32 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.4] - 2026-07-24
+
+Three new checks and a broader `CSS-008`, found while building a per-message-ID
+coverage matrix against epubcheck (`docs/COVERAGE.md` — now ~87% of live
+epubcheck checks). All additive; no verdict changes on the epubcheck test
+corpus.
+
+### Added
+
+- **`CSS-006`** — a `position: fixed` declaration is now flagged (usage),
+  matching epubcheck (a valid CSS property EPUB discourages, like the existing
+  `CSS-001` `direction`/`unicode-bidi` check).
+- **`NAV-001`** — an EPUB 3 navigation document (`properties="nav"`) declared
+  in an **EPUB 2** publication is now flagged; the nav document is not a valid
+  EPUB 2 construct.
+- **`NCX-004`** — leading/trailing whitespace in the NCX `dtb:uid` metadata is
+  now flagged (usage), for both EPUB 2 and EPUB 3.
+
+### Changed
+
+- **`CSS-008` now also detects unterminated rules and blocks**, not just bad
+  string/url tokens, by consuming styloria 0.4's new `syntax_errors` API
+  (which surfaces the parse errors its recovering parser previously discarded
+  silently). Still a subset of epubcheck's full CSS-parser error surface.
+- Depends on **styloria 0.4** (up from 0.3).
+
 ## [0.7.3] - 2026-07-24
 
 ### Fixed
