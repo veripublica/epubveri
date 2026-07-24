@@ -21,6 +21,30 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# A real publish requires a clean working tree. build.rs bakes
+# `+<short-hash>[.dirty]` into the version that `version()` reports — the whole
+# point being that a build says exactly which source it came from — and it
+# derives `.dirty` from `git status --porcelain`, which also counts *untracked*
+# files. So a stray uncommitted file, even one unrelated to the crate, ships a
+# release package that reports itself as `0.7.6+45ae97a.dirty`. That is how
+# 0.7.6 went out (an uncommitted CI workflow was sitting in the tree), and npm
+# will not let a version be republished, so this has to be caught beforehand.
+#
+# Only the real publish is gated: a dirty tree during development is normal,
+# and the no-argument dry-run stays usable there — it just warns.
+if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
+  if [ -n "${1:-}" ]; then
+    echo "!! Working tree is not clean — refusing to publish." >&2
+    echo "   The build would bake a '.dirty' suffix into the published" >&2
+    echo "   version string, and npm cannot republish a version." >&2
+    echo "   Commit or stash the following, then re-run:" >&2
+    git status --short >&2
+    exit 1
+  fi
+  echo "!! Working tree is not clean; this build will be marked '.dirty'."
+  echo "   Fine for a dry-run — commit before publishing for real."
+fi
+
 echo "==> Building epubveri-wasm (bundler, @veripublica scope)"
 rm -rf epubveri-wasm/pkg
 wasm-pack build epubveri-wasm --target bundler --scope veripublica --out-name epubveri
