@@ -840,39 +840,6 @@ const KNOWN_NAMESPACES: [&str; 7] = [
     "http://www.w3.org/1998/Math/MathML",
 ];
 
-/// A curated (not exhaustive) set of elements HTML5 introduced that don't
-/// exist in the older XHTML 1.1 module set EPUB 2's content model is
-/// built on - confirmed via a real fixture using `<aside>` (the only
-/// HTML5-only element actually used anywhere in the whole EPUB 2 corpus).
-const HTML5_ONLY_ELEMENTS: [&str; 26] = [
-    "aside",
-    "section",
-    "article",
-    "nav",
-    "header",
-    "footer",
-    "hgroup",
-    "figure",
-    "figcaption",
-    "main",
-    "mark",
-    "time",
-    "meter",
-    "progress",
-    "output",
-    "details",
-    "summary",
-    "dialog",
-    "canvas",
-    "audio",
-    "video",
-    "source",
-    "track",
-    "embed",
-    "data",
-    "wbr",
-];
-
 /// Presentational attributes HTML5 removed and epubcheck rejects (RSC-005)
 /// wherever they appear - none is valid on any element, so they're matched on
 /// every host. `link`/`vlink` are HTML4 `<body>` attributes, `clear` an HTML4
@@ -958,19 +925,6 @@ pub(crate) fn check_obsolete_attrs(
 /// nest another `<a>` (all three confirmed via dedicated real fixtures).
 pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut Report) {
     for node in d.descendants().filter(|n| n.is_element()) {
-        if node.tag_name().namespace() == Some(XHTML_NS)
-            && HTML5_ONLY_ELEMENTS.contains(&node.tag_name().name())
-        {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                format!("element \"{}\" not allowed here", node.tag_name().name()),
-                path,
-                node,
-                "htm.epub2_dom.html5_only_element",
-                vec![node.tag_name().name().to_string()],
-            );
-        }
         for attr in node.attributes() {
             if let Some(ns) = attr.namespace()
                 && !KNOWN_NAMESPACES.contains(&ns)
@@ -1626,16 +1580,23 @@ mod tests {
         );
     }
 
+    /// The HTML5-only element check used to live here *as well as* in the
+    /// EPUB 2 RELAX NG grammar, so every `<section>`/`<figure>` in an EPUB 2
+    /// book produced two findings at the same line:col with two different
+    /// wordings. Found on a real book with 47 `<figure>`s — 94 errors.
+    ///
+    /// The same double report had already been fixed once, for bare text in
+    /// `<body>` (Doitsu, MobileRead #100); the element list was left behind.
+    /// The grammar rejects all 26 of them, in both block and inline position,
+    /// so this check is gone and `check_dom_epub2` keeps only what the
+    /// grammar cannot express.
     #[test]
-    fn epub2_dom_flags_html5_only_element() {
-        // check_dom_epub2 still carries the EPUB 2-specific hand-coded checks
-        // (bare text in body moved to the RELAX NG grammar to stop a double
-        // report — Doitsu, MobileRead #100). A HTML5-only element like <section>
-        // is not in XHTML 1.1, so it is flagged.
+    fn epub2_dom_no_longer_duplicates_the_grammars_element_check() {
         let doc = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><section>x</section></body></html>"#;
-        assert_eq!(run_dom_epub2(doc), vec!["htm.epub2_dom.html5_only_element"]);
-        let ok = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><div>x</div></body></html>"#;
-        assert!(run_dom_epub2(ok).is_empty());
+        assert!(
+            run_dom_epub2(doc).is_empty(),
+            "the grammar reports HTML5-only elements; this must not report them too"
+        );
     }
 
     #[test]
