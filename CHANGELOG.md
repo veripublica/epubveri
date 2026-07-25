@@ -8,6 +8,38 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.11] - 2026-07-26
+
+Three false positives and a duplicate-reporting fix, all found by running
+epubveri over real books rather than test fixtures. No verdict changes on the
+epubcheck test corpus.
+
+### Fixed
+
+- **HTML5-only elements are no longer reported twice on EPUB 2 books.** A
+  `<figure>` or `<section>` was flagged once by a hand-coded list and once by
+  the EPUB 2 grammar, at the same line and column, with two different
+  wordings. On a real book with 47 `<figure>` elements that was 94 errors
+  where there should have been 47. The grammar rejects all 26 elements of the
+  hand-coded list, in every position, so the duplicate is gone and the
+  remaining message is the more useful one — it names what was expected.
+- **Valid Presentation MathML is no longer reported as Content MathML.** Nine
+  elements were missing from the recognised vocabulary: the elementary-
+  mathematics family (`mstack`, `mlongdiv`, `msrow`, `msline`, `msgroup`,
+  `mscarries`, `mscarry` — long division and column arithmetic) and the
+  alignment markers (`maligngroup`, `malignmark`). A textbook typesetting a
+  long division was told its markup was the wrong kind of MathML.
+- **`epub:type` in SVG now uses epubcheck's own allowlist** of renderable
+  elements instead of an inverted list, which had let it pass on `marker`,
+  `linearGradient`, `clipPath`, `mask`, `pattern` and others.
+
+### Added
+
+- **`id` is checked against HTML5's rule** — one or more characters, none of
+  them whitespace — so an empty `id=""` or one containing a space is now
+  reported. Measured first: across 61 real books and 28,778 `id` values there
+  was not one violation, so this is a guard rather than a change in verdicts.
+
 ## [0.7.10] - 2026-07-26
 
 **If you validate EPUB 2 books, upgrade.** Seven false positives fixed — cases
