@@ -69,6 +69,9 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
     check_id_attributes(&d, ncx_path, report);
     check_page_target_types(&d, ncx_path, report);
     check_play_order(&d, ncx_path, report);
+    check_play_order_sequence(&d, ncx_path, report);
+    check_page_target_uniqueness(&d, ncx_path, report);
+    check_multi_lang_siblings(&d, ncx_path, report);
 }
 
 /// Every `id` attribute anywhere in the NCX must be a valid XML NCName
@@ -212,6 +215,201 @@ fn check_play_order(doc: &roxmltree::Document, ncx_path: &str, report: &mut Repo
     }
 }
 
+/// The rest of `schema/20/sch/ncx.sch`'s `playOrder` model (#59), alongside
+/// `ncx_playOrderMatch2` above:
+///
+/// - **`ncx_playOrderOrigin`** — if anything carries a `playOrder`, some
+///   element must carry `playOrder="1"`. Reading order has to start.
+/// - **`ncx_playOrderNoGaps`** — for a `playOrder` above 1, the value one
+///   below must exist somewhere.
+/// - **`ncx_playOrderMatch`** — the converse of Match2: elements pointing at
+///   the *same* target must carry the *same* `playOrder`.
+///
+/// Two details taken from the Schematron rather than from intuition: origin
+/// compares as a **string** (`@playOrder='1'`), so a padded `"01"` does not
+/// satisfy it, while no-gaps compares numerically; and every rule is
+/// per-element, so a bad NCX names each offender rather than one line.
+fn check_play_order_sequence(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    use std::collections::{HashMap, HashSet};
+
+    // Every element carrying a playOrder, with its raw value and the target
+    // it names - the same population `check_play_order` walks.
+    let holders: Vec<(roxmltree::Node, &str, String)> = doc
+        .descendants()
+        .filter(|n| {
+            n.is_element() && matches!(n.tag_name().name(), "navPoint" | "navTarget" | "pageTarget")
+        })
+        .filter_map(|n| {
+            n.attr_no_ns("playOrder").map(|order| {
+                let target = n
+                    .children()
+                    .find(|c| c.is_element() && c.tag_name().name() == "content")
+                    .and_then(|c| c.attr_no_ns("src"))
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                (n, order.trim(), target)
+            })
+        })
+        .collect();
+    if holders.is_empty() {
+        return;
+    }
+
+    // Origin: string comparison, per the Schematron.
+    if !holders.iter().any(|(_, order, _)| *order == "1") {
+        for (n, order, _) in &holders {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "no element carries playOrder \"1\"; the sequence must start at 1",
+                ncx_path,
+                *n,
+                "ncx.play_order.no_origin",
+                vec![order.to_string()],
+            );
+        }
+    }
+
+    // No gaps: numeric. A non-numeric value simply takes no part, exactly as
+    // XPath's `number()` makes it NaN and drops it from both sides.
+    let numbers: HashSet<i64> = holders
+        .iter()
+        .filter_map(|(_, order, _)| order.parse::<i64>().ok())
+        .collect();
+    for (n, order, _) in &holders {
+        if let Ok(v) = order.parse::<i64>()
+            && v > 1
+            && !numbers.contains(&(v - 1))
+        {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!("playOrder '{v}' has no predecessor '{}'", v - 1),
+                ncx_path,
+                *n,
+                "ncx.play_order.gap",
+                vec![v.to_string()],
+            );
+        }
+    }
+
+    // Match: one target, one position. Only elements that actually name a
+    // target take part - the Schematron's context requires `ncx:content`.
+    let mut by_target: HashMap<&str, Vec<(roxmltree::Node, &str)>> = HashMap::new();
+    for (n, order, target) in &holders {
+        if !target.is_empty() {
+            by_target.entry(target).or_default().push((*n, order));
+        }
+    }
+    let mut offenders: Vec<(roxmltree::Node, &str)> = Vec::new();
+    for group in by_target.values() {
+        let first = group[0].1;
+        if group.iter().any(|(_, o)| *o != first) {
+            offenders.extend(group.iter().copied());
+        }
+    }
+    offenders.sort_by_key(|(n, _)| n.range().start);
+    for (n, order) in offenders {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!("playOrder '{order}' differs from another element naming the same target"),
+            ncx_path,
+            n,
+            "ncx.play_order.target_mismatch",
+            vec![order.to_string()],
+        );
+    }
+}
+
+/// `ncx_pageTargUniqValTypeComb` (#59): a `pageTarget`'s `value`+`type`
+/// combination must be unique. The Schematron's context is a `pageTarget`
+/// *with* a `@value` inside a `pageList`, but it counts across every
+/// `pageTarget` in the document - so a colliding target elsewhere still
+/// counts against it.
+fn check_page_target_uniqueness(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    use std::collections::HashMap;
+
+    let all: Vec<roxmltree::Node> = doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "pageTarget")
+        .collect();
+    let mut counts: HashMap<(&str, &str), u32> = HashMap::new();
+    for n in &all {
+        if let Some(v) = n.attr_no_ns("value") {
+            *counts
+                .entry((v.trim(), n.attr_no_ns("type").unwrap_or("").trim()))
+                .or_default() += 1;
+        }
+    }
+    for n in &all {
+        // Only those inside a pageList are reported, matching the context.
+        let in_page_list = n
+            .parent()
+            .is_some_and(|p| p.is_element() && p.tag_name().name() == "pageList");
+        let Some(v) = n.attr_no_ns("value") else {
+            continue;
+        };
+        let key = (v.trim(), n.attr_no_ns("type").unwrap_or("").trim());
+        if in_page_list && counts.get(&key).copied().unwrap_or(0) > 1 {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!("pageTarget value '{}' is not unique for its type", key.0),
+                ncx_path,
+                *n,
+                "ncx.page_target.duplicate_value_type",
+                vec![key.0.to_string(), key.1.to_string()],
+            );
+        }
+    }
+}
+
+/// `ncx_multiNavLabel` / `ncx_multiNavInfo` (#59): siblings of these types
+/// must not repeat an `xml:lang`.
+///
+/// The Schematron compares `@xml:lang=current()/@xml:lang`, and in XPath an
+/// absent attribute is an empty node-set that equals nothing - **not even
+/// another absent one**. So two `navLabel`s with no `xml:lang` at all are
+/// fine, and only a repeated *explicit* language is an error. Implementing
+/// this as a plain duplicate-sibling check would reject the ordinary
+/// single-language NCX every EPUB 2 book ships.
+fn check_multi_lang_siblings(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    use std::collections::HashMap;
+    const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+
+    for parent in doc.descendants().filter(|n| n.is_element()) {
+        for name in ["navLabel", "navInfo"] {
+            let mut seen: HashMap<&str, u32> = HashMap::new();
+            let sibs: Vec<roxmltree::Node> = parent
+                .children()
+                .filter(|c| c.is_element() && c.tag_name().name() == name)
+                .collect();
+            for c in &sibs {
+                if let Some(lang) = c.attribute((XML_NS, "lang")) {
+                    *seen.entry(lang.trim()).or_default() += 1;
+                }
+            }
+            for c in &sibs {
+                if let Some(lang) = c.attribute((XML_NS, "lang"))
+                    && seen.get(lang.trim()).copied().unwrap_or(0) > 1
+                {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        format!("more than one <{name}> here carries xml:lang=\"{lang}\""),
+                        ncx_path,
+                        *c,
+                        "ncx.nav_label.duplicate_lang",
+                        vec![name.to_string(), lang.trim().to_string()],
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Report) {
     let Some(text_el) = container
         .children()
@@ -252,6 +450,140 @@ mod tests {
             .iter()
             .map(|m| (m.rule, m.position.map(|p| p.line).unwrap_or(0)))
             .collect()
+    }
+
+    /// Wraps a navMap body in a minimal, otherwise-valid NCX.
+    fn ncx_with(body: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" xmlns:xml="http://www.w3.org/XML/1998/namespace" version="2005-1">
+  <head><meta name="dtb:uid" content="uid"/></head>
+  <docTitle><text>T</text></docTitle>
+  {body}
+</ncx>"#
+        )
+    }
+
+    fn rules_for(body: &str) -> Vec<&'static str> {
+        run_at(&ncx_with(body))
+            .into_iter()
+            .filter_map(|(r, _)| r)
+            .collect()
+    }
+
+    /// #59: `ncx_playOrderOrigin` and `ncx_playOrderNoGaps`.
+    ///
+    /// Origin compares as a **string** in the Schematron (`@playOrder='1'`),
+    /// so a padded `"01"` does not satisfy it even though it is numerically
+    /// one - that asymmetry with no-gaps (which is numeric) is deliberate and
+    /// is why both are pinned here.
+    #[test]
+    fn play_order_sequence_origin_and_gaps() {
+        let np = |id: &str, order: &str, src: &str| {
+            format!(
+                "<navPoint id=\"{id}\" playOrder=\"{order}\"><navLabel><text>x</text></navLabel>\
+                 <content src=\"{src}\"/></navPoint>"
+            )
+        };
+        // 1,2,3 - clean.
+        let ok = format!(
+            "<navMap>{}{}{}</navMap>",
+            np("a", "1", "1.xhtml"),
+            np("b", "2", "2.xhtml"),
+            np("c", "3", "3.xhtml")
+        );
+        assert!(
+            rules_for(&ok).is_empty(),
+            "a clean sequence: {:?}",
+            rules_for(&ok)
+        );
+
+        // Starts at 2 - no origin.
+        let no_origin = format!(
+            "<navMap>{}{}</navMap>",
+            np("a", "2", "1.xhtml"),
+            np("b", "3", "2.xhtml")
+        );
+        assert!(rules_for(&no_origin).contains(&"ncx.play_order.no_origin"));
+
+        // 1,2,4 - a gap at 3.
+        let gap = format!(
+            "<navMap>{}{}{}</navMap>",
+            np("a", "1", "1.xhtml"),
+            np("b", "2", "2.xhtml"),
+            np("c", "4", "3.xhtml")
+        );
+        assert!(rules_for(&gap).contains(&"ncx.play_order.gap"));
+
+        // Same target, different positions - ncx_playOrderMatch.
+        let mismatch = format!(
+            "<navMap>{}{}</navMap>",
+            np("a", "1", "same.xhtml"),
+            np("b", "2", "same.xhtml")
+        );
+        assert!(rules_for(&mismatch).contains(&"ncx.play_order.target_mismatch"));
+    }
+
+    /// #59: `ncx_pageTargUniqValTypeComb` - the value+type *combination* is
+    /// what must be unique, so the same value under a different type is fine.
+    #[test]
+    fn page_target_value_type_combination_must_be_unique() {
+        let pt = |id: &str, value: &str, ty: &str| {
+            format!(
+                "<pageTarget id=\"{id}\" type=\"{ty}\" value=\"{value}\" playOrder=\"1\">\
+                 <navLabel><text>{value}</text></navLabel><content src=\"a.xhtml\"/></pageTarget>"
+            )
+        };
+        let dup = format!(
+            "<pageList><navLabel><text>P</text></navLabel>{}{}</pageList>",
+            pt("p1", "1", "normal"),
+            pt("p2", "1", "normal")
+        );
+        assert!(rules_for(&dup).contains(&"ncx.page_target.duplicate_value_type"));
+
+        let differing_type = format!(
+            "<pageList><navLabel><text>P</text></navLabel>{}{}</pageList>",
+            pt("p1", "1", "normal"),
+            pt("p2", "1", "front")
+        );
+        assert!(
+            !rules_for(&differing_type).contains(&"ncx.page_target.duplicate_value_type"),
+            "same value under a different type is a different combination"
+        );
+    }
+
+    /// #59: `ncx_multiNavLabel`/`ncx_multiNavInfo`.
+    ///
+    /// The negative case is the important one. The Schematron compares
+    /// `@xml:lang=current()/@xml:lang`, and in XPath an absent attribute is
+    /// an empty node-set that equals nothing - not even another absent one.
+    /// So two `navLabel`s carrying no `xml:lang` are valid, and reading this
+    /// rule as "duplicate sibling" would reject the ordinary single-language
+    /// NCX that every EPUB 2 book ships.
+    #[test]
+    fn repeated_xml_lang_on_sibling_nav_labels() {
+        let body = "<navMap><navPoint id=\"a\" playOrder=\"1\">\
+             <navLabel xml:lang=\"en\"><text>A</text></navLabel>\
+             <navLabel xml:lang=\"en\"><text>B</text></navLabel>\
+             <content src=\"a.xhtml\"/></navPoint></navMap>";
+        assert!(rules_for(body).contains(&"ncx.nav_label.duplicate_lang"));
+
+        // Different languages: the point of allowing several.
+        let multilingual = "<navMap><navPoint id=\"a\" playOrder=\"1\">\
+             <navLabel xml:lang=\"en\"><text>A</text></navLabel>\
+             <navLabel xml:lang=\"tr\"><text>B</text></navLabel>\
+             <content src=\"a.xhtml\"/></navPoint></navMap>";
+        assert!(!rules_for(multilingual).contains(&"ncx.nav_label.duplicate_lang"));
+
+        // No xml:lang at all - must stay silent.
+        let unlabelled = "<navMap><navPoint id=\"a\" playOrder=\"1\">\
+             <navLabel><text>A</text></navLabel>\
+             <navLabel><text>B</text></navLabel>\
+             <content src=\"a.xhtml\"/></navPoint></navMap>";
+        assert!(
+            !rules_for(unlabelled).contains(&"ncx.nav_label.duplicate_lang"),
+            "an absent xml:lang equals nothing, not even another absent one"
+        );
     }
 
     const PLAY_ORDER_NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
