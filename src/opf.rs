@@ -4080,7 +4080,13 @@ pub fn check(
         }
 
         // lang/xml:lang must agree when both are present on the same element.
-        for n in d.descendants().filter(|n| n.is_element()) {
+        //
+        // EPUB 3 only (#58). epubcheck asserts this in `epub-xhtml-30.sch`
+        // (`lang-xmllang`); `schema/20` has no counterpart, and XHTML 1.1's
+        // own `lang.attrib` declares `xml:lang` and `lang` as two independent
+        // optional attributes with no constraint tying their values together.
+        // So a book that sets both to different values is valid EPUB 2.
+        for n in d.descendants().filter(|n| is_epub3 && n.is_element()) {
             if let (Some(lang), Some(xml_lang)) = (
                 n.attr_no_ns("lang"),
                 n.attribute(("http://www.w3.org/XML/1998/namespace", "lang")),
@@ -4230,9 +4236,13 @@ pub fn check(
         }
 
         // A <dfn> must not have a <dfn> descendant.
+        //
+        // EPUB 3 only (#58). `descendant-dfn-dfn` lives in
+        // `epub-xhtml-30.sch`; EPUB 2's whole XHTML Schematron is a single
+        // rule (nested hyperlinks), and XHTML 1.1's grammar lets `dfn` nest.
         for n in d
             .descendants()
-            .filter(|n| n.is_element() && n.tag_name().name() == "dfn")
+            .filter(|n| is_epub3 && n.is_element() && n.tag_name().name() == "dfn")
         {
             if n.descendants()
                 .skip(1)
@@ -8571,6 +8581,55 @@ mod tests {
             "must carry the source element path"
         );
         assert_eq!(m.rule, Some("opf.spine.hyperlinked_not_in_spine"));
+    }
+
+    /// #58: two Schematron rules that are EPUB 3-only in epubcheck and were
+    /// firing on EPUB 2 books as well.
+    ///
+    /// `lang-xmllang` and `descendant-dfn-dfn` both live in
+    /// `epub-xhtml-30.sch`. EPUB 2's entire XHTML Schematron is a single rule
+    /// (nested hyperlinks), and XHTML 1.1's `lang.attrib` declares `xml:lang`
+    /// and `lang` as independent optional attributes with nothing tying their
+    /// values together. Both must stay silent on EPUB 2 and keep firing on
+    /// EPUB 3 - the pairing is the test, since gating a rule is easy to
+    /// overshoot into never firing at all.
+    #[test]
+    fn epub3_only_schematron_rules_do_not_fire_on_epub2() {
+        const BODY: &str = "<p lang=\"en\" xml:lang=\"fr\">x</p>\
+             <p><dfn>outer <dfn>inner</dfn></dfn></p>";
+        let epub2 = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+             \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+             <head><title>t</title></head><body>{BODY}</body></html>"
+        );
+        let epub3 = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+             <head><title>t</title></head><body>{BODY}</body></html>"
+        );
+        let rules = |bytes: Vec<u8>| -> Vec<String> {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .filter_map(|m| m.rule.map(String::from))
+                .collect()
+        };
+        let two = rules(epub2_with_ch1(&epub2));
+        for r in [
+            "opf.content_document.lang_xmllang_mismatch",
+            "opf.content_document.nested_dfn",
+        ] {
+            assert!(
+                !two.contains(&r.to_string()),
+                "{r} must not fire on EPUB 2; got {two:?}"
+            );
+            assert!(
+                rules(epub_with_ch1(&epub3)).contains(&r.to_string()),
+                "{r} must still fire on EPUB 3"
+            );
+        }
     }
 
     /// OPF-005 (#50): a prefix declaration ending in a name with no URI.
