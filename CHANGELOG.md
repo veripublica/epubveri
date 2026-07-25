@@ -8,6 +8,42 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.10] - 2026-07-26
+
+**If you validate EPUB 2 books, upgrade.** Seven false positives fixed — cases
+where epubveri rejected markup that epubcheck accepts. All were EPUB 3 rules
+leaking into the EPUB 2 branch, found by auditing our rules against
+epubcheck's own `schema/20` instead of waiting for reports. No verdict changes
+on the epubcheck test corpus.
+
+### Fixed
+
+- **`<a name="…">` no longer draws `RSC-005`.** The classic pre-`id` anchor
+  form, so internal links in a large share of older EPUB 2 books were being
+  rejected. OPS 2.0.1 assembles `a`'s attribute list from four modules and
+  epubveri carried only one of them; `target`, `charset`, `rel`, `rev`,
+  `shape`, `coords` and `usemap` were missing for the same reason, and `img`
+  was missing `longdesc`, `name`, `shape` and `coords`.
+- **An empty `<title>` is no longer an error on EPUB 2.** XHTML 1.1 types
+  `<title>` as text, which permits empty content; epubcheck asserts non-empty
+  only for EPUB 3.
+- **`lang` and `xml:lang` may differ on EPUB 2.** XHTML 1.1 declares them as
+  independent attributes with nothing tying their values together.
+- **A nested `<dfn>` is no longer an error on EPUB 2** — that rule is EPUB 3
+  only.
+- **The legacy `<tours>` package child is accepted**, as `opf20.rng` allows.
+
+### Added
+
+- **Six NCX checks**, completing epubcheck's `ncx.sch`: the `playOrder`
+  sequence must start at 1 and have no gaps, elements naming the same target
+  must share a `playOrder`, a `pageTarget`'s `value`+`type` combination must
+  be unique, and sibling `navLabel`/`navInfo` elements must not repeat an
+  `xml:lang`. All `RSC-005`, and all reported per offending element.
+- `scripts/scan-shelf.sh` — runs epubveri over a directory of real EPUBs and
+  summarises verdicts, error-level findings, and the number of *distinct*
+  messages per ID. The corpus cannot find false positives; real books can.
+
 ## [0.7.9] - 2026-07-25
 
 One new class of finding, from work in the sibling `styloria` crate. No
