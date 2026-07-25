@@ -133,15 +133,29 @@ pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &m
     }
 }
 
-/// `epub:type` is disallowed on non-visual/metadata SVG elements - `title`/
-/// `desc`/`defs`/`tref` (confirmed via one real fixture testing all four
-/// at once, plus an unrecognized element, expecting exactly 5 findings)
-/// - and on any unrecognized element; it's allowed everywhere else,
-/// including the `<svg>` root itself (confirmed via a real "valid"
-/// fixture using it on a dozen ordinary shape/text elements plus the
-/// root). Any *other* `epub:*`-namespaced attribute (i.e. anything other
-/// than `epub:type`) is always disallowed, regardless of element.
-const EPUB_TYPE_FORBIDDEN_ELEMENTS: &[&str] = &["title", "desc", "defs", "tref"];
+/// The SVG elements `epub:type` is allowed on — epubcheck's own list, from
+/// `svg.renderable.elem` in `mod/epub-svg-forgiving-inc.rnc`. That grammar is
+/// the **normative** half of its SVG validation (the full SVG 1.1 grammar
+/// runs non-normatively, which is why our vocabulary check is usage-level),
+/// and `epub:type` placement is one of only three things it enforces.
+///
+/// This used to be the inverse — a denylist of `title`/`desc`/`defs`/`tref`
+/// plus unrecognized elements, reverse-engineered from the corpus fixtures.
+/// It agreed with epubcheck on everything those fixtures exercised and
+/// silently disagreed everywhere else: `marker`, `pattern`, `clipPath`,
+/// `mask`, `linearGradient`, `stop`, `metadata`, `style` and the rest are
+/// recognized SVG elements, so a denylist let `epub:type` through on all of
+/// them. An allowlist is also the safer shape here — a new SVG element we
+/// don't know about defaults to "not allowed", matching epubcheck, rather
+/// than to silence.
+///
+/// Any *other* `epub:*`-namespaced attribute is always disallowed, on every
+/// element, which is unchanged.
+const EPUB_TYPE_ALLOWED_ELEMENTS: &[&str] = &[
+    "a", "audio", "canvas", "circle", "ellipse", "g", "iframe", "image", "line", "path", "polygon",
+    "polyline", "rect", "svg", "switch", "symbol", "text", "textPath", "tspan", "unknown", "use",
+    "video",
+];
 
 pub(crate) fn check_epub_attributes(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     for attr in svg_root.attributes() {
@@ -181,7 +195,7 @@ fn check_one_epub_attribute(
     }
     if attr.name() == "type" {
         let name = n.tag_name().name();
-        if EPUB_TYPE_FORBIDDEN_ELEMENTS.contains(&name) || !is_recognized_element(name) {
+        if !EPUB_TYPE_ALLOWED_ELEMENTS.contains(&name) {
             report.push_node(
                 RSC_005,
                 Severity::Error,
@@ -459,6 +473,56 @@ mod tests {
         "xmlns:svg=\"http://www.w3.org/2000/svg\" ",
         "xmlns:xlink=\"http://www.w3.org/1999/xlink\">"
     );
+
+    /// `epub:type` placement is one of only three things epubcheck's
+    /// *normative* SVG grammar enforces, and it uses an allowlist
+    /// (`svg.renderable.elem`). We used a denylist reverse-engineered from
+    /// the corpus, which agreed on everything the fixtures exercised and
+    /// silently let `epub:type` through on every other recognized SVG
+    /// element — `marker`, `linearGradient`, `clipPath` and the rest.
+    #[test]
+    fn epub_type_is_allowed_only_on_renderable_svg_elements() {
+        let svg_with = |el: &str| {
+            format!(
+                "{XHTML_OPEN}<body><svg:svg xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <svg:{el} epub:type=\"pagebreak\"/></svg:svg></body></html>"
+            )
+        };
+        let flagged = |el: &str| {
+            let xml = svg_with(el);
+            let d = doc(&xml);
+            let root = d
+                .descendants()
+                .find(|n| n.tag_name().name() == "svg")
+                .unwrap();
+            let mut report = Report::new();
+            check_epub_attributes(root, "c.xhtml", &mut report);
+            report
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("svg.epub_attributes.type_not_allowed"))
+        };
+
+        // On the list: renderable shape/text/structural elements.
+        for ok in ["circle", "g", "path", "text", "tspan", "use", "a", "image"] {
+            assert!(!flagged(ok), "epub:type is allowed on <{ok}>");
+        }
+        // Off it — recognized SVG elements the old denylist let through.
+        for bad in [
+            "marker",
+            "linearGradient",
+            "clipPath",
+            "mask",
+            "pattern",
+            "stop",
+            "metadata",
+            "desc",
+            "title",
+            "defs",
+        ] {
+            assert!(flagged(bad), "epub:type is not allowed on <{bad}>");
+        }
+    }
 
     #[test]
     fn foreign_object_rejects_body_element() {

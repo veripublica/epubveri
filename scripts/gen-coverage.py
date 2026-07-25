@@ -104,9 +104,17 @@ ANN = {
     "RSC-005": ("partial",
         "XHTML content model is real (EPUB 2 XHTML 1.1 grammar + EPUB 3 HTML5 "
         "grammar + Schematron nesting/IDREF rules + closed per-element "
-        "attribute allowlists). SVG/MathML are accepted as opaque foreign "
-        "subtrees, not schema-validated. Attribute *values* are permissive "
-        "(e.g. `role` accepts any token, `aria-*` values aren't range-checked)."),
+        "attribute allowlists). **SVG is not an opaque subtree** - epubcheck "
+        "validates SVG twice, and only the small `forgiving` grammar is "
+        "normative (id datatype, title/foreignObject content models, "
+        "`epub:type` placement); the full SVG 1.1 grammar runs with "
+        "`isNormative=false`, so its findings are RSC-025 usage - which is "
+        "the shape `src/svg.rs` already has. Of the three normative rules we "
+        "do all three (`epub:type` placement matched to epubcheck's own "
+        "allowlist), except the SVG `id` datatype. MathML: the EPUB "
+        "restriction (Presentation-only + `semantics`) is implemented; the "
+        "MathML3 presentation grammar itself is not. Attribute *values* stay "
+        "permissive (`role` accepts any token, `aria-*` unranged)."),
     "RSC-020": ("partial",
         "Host syntax + scheme are checked (space/comma in host, missing `//`). "
         "A path/query space is treated as valid (matches epubcheck; WHATWG "
