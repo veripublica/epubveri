@@ -169,7 +169,15 @@
   <!-- globals minus epub:type/epub:trigger; used on head/metadata elements,
        where epubcheck flags epub:type as invalid. -->
   <define name="globalAttrsCore">
-    <optional><attribute name="id"><data type="string"/></attribute></optional>
+    <!-- HTML5 types `id` as `datatype.html5.token` - one or more characters,
+         none of them whitespace - so an empty `id=""` or one containing a
+         space is invalid. XHTML 1.1 is *stricter* (`xsd:ID`, i.e. an NCName),
+         but this define is shared by both versions and splitting it would
+         touch 158 references for no measured gain: a scan of 59 real books
+         (28,778 `id` values) found not one violation of either rule. Every
+         valid NCName is also a valid html5 token, so applying the looser rule
+         to EPUB 2 can only under-report, never invent an error. -->
+    <optional><attribute name="id"><data type="html5Token"/></attribute></optional>
     <optional><attribute name="class"><data type="string"/></attribute></optional>
     <optional><attribute name="style"><data type="string"/></attribute></optional>
     <optional><attribute name="title"><data type="string"/></attribute></optional>

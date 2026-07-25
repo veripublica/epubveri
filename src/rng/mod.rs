@@ -466,6 +466,40 @@ mod tests {
         );
     }
 
+    /// HTML5 types `id` as `datatype.html5.token` — one or more characters,
+    /// none of them whitespace — where we had it as free text. An empty
+    /// `id=""` and one containing a space are the two shapes that catches.
+    ///
+    /// XHTML 1.1 is stricter still (`xsd:ID`, an NCName), but `globalAttrs`
+    /// is shared by both versions and this applies the looser rule to both.
+    /// Every valid NCName is also a valid html5 token, so EPUB 2 can only
+    /// under-report here, never gain a wrong error — the `id="1"` case below
+    /// pins that direction deliberately.
+    #[test]
+    fn id_must_be_a_non_empty_whitespace_free_token() {
+        let doc = |id: &str| {
+            format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+                 <body><p id=\"{id}\">x</p></body></html>"
+            )
+        };
+        let ok = |id: &str| {
+            validate_node_report(
+                &xhtml_grammar(),
+                roxmltree::Document::parse(&doc(id)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+        assert!(ok("ok-id"), "an ordinary id");
+        assert!(ok("_x.y-z"), "punctuation HTML5 permits");
+        assert!(
+            ok("1"),
+            "HTML5 allows a digit-initial id; only XHTML 1.1 does not"
+        );
+        assert!(!ok("a b"), "whitespace is not allowed in an id");
+        assert!(!ok(""), "an empty id is not allowed");
+    }
+
     /// #58, OPF round: `<tours>` is a legacy OPF 2.0 package child that
     /// `opf20.rng` lists explicitly in `OPF20.package-content`. It had been
     /// left out because no corpus fixture exercises it - the wrong test: the

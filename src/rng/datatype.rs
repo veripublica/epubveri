@@ -15,6 +15,12 @@ pub enum Datatype {
     Name,
     NCName,
     Id,
+    /// HTML5's `id`: one or more characters, none of them whitespace
+    /// (`xsd:string { pattern = '[^\\s]+' }` in epubcheck's `datatypes.rnc`,
+    /// where it is called `datatype.html5.token`). Not an XSD built-in -
+    /// there is no standard type with these bounds - so it carries a name of
+    /// our own, used only by our own schemas.
+    Html5Token,
     IdRef,
     IdRefs,
     Language,
@@ -46,6 +52,7 @@ impl Datatype {
             "Name" => Name,
             "NCName" => NCName,
             "ID" => Id,
+            "html5Token" => Html5Token,
             "IDREF" => IdRef,
             "IDREFS" => IdRefs,
             "language" => Language,
@@ -94,6 +101,7 @@ impl Datatype {
             Datatype::NmTokens => !s.is_empty() && s.split(' ').all(is_nmtoken),
             Datatype::Name => is_name(&s),
             Datatype::NCName | Datatype::Id | Datatype::IdRef => is_ncname(&s),
+            Datatype::Html5Token => !raw.is_empty() && !raw.chars().any(char::is_whitespace),
             Datatype::IdRefs => !s.is_empty() && s.split(' ').all(is_ncname),
             Datatype::Language => is_language(&s),
             Datatype::Boolean => matches!(s.as_str(), "true" | "false" | "0" | "1"),
