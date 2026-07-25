@@ -23,9 +23,21 @@ use crate::xmlext::NodeExt;
 
 pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 
-/// Real Presentation MathML (MathML3 §3) element vocabulary. A false
-/// negative is far safer than a false positive here - this list is
-/// deliberately generous.
+/// Real Presentation MathML (MathML3 §3) element vocabulary, taken from the
+/// element definitions in epubcheck's own `mod/mathml/mathml3-presentation.rnc`
+/// rather than assembled by hand.
+///
+/// Anything inside `<math>` that is not on this list is reported as Content
+/// MathML used directly, so a **missing** entry is a false positive on valid
+/// markup - which is what happened: the elementary-mathematics family
+/// (`mstack`, `mlongdiv`, `msrow`, `msline`, `msgroup`, `mscarries`,
+/// `mscarry` - long division and column arithmetic) and the alignment pair
+/// (`maligngroup`, `malignmark`) were all absent, so a textbook typesetting
+/// a long division was told its Presentation MathML was Content MathML.
+///
+/// Keep it derived from the grammar. "Deliberately generous" was the previous
+/// note here and it was still nine elements short, because a hand-written
+/// list is generous only about the elements its author thought of.
 const PRESENTATION_ELEMENTS: &[&str] = &[
     "mi",
     "mn",
@@ -59,6 +71,18 @@ const PRESENTATION_ELEMENTS: &[&str] = &[
     "mtd",
     "maction",
     "semantics",
+    // Elementary mathematics (MathML3 §3.6): long division and the
+    // column-arithmetic layouts.
+    "mstack",
+    "mlongdiv",
+    "msrow",
+    "msline",
+    "msgroup",
+    "mscarries",
+    "mscarry",
+    // Alignment markers (MathML3 §3.5.5).
+    "maligngroup",
+    "malignmark",
 ];
 
 const CONTENT_ENCODINGS: &[&str] = &["MathML-Content", "application/mathml-content+xml"];
@@ -192,6 +216,50 @@ mod tests {
         d.descendants()
             .find(|n| n.tag_name().name() == "math" && n.tag_name().namespace() == Some(MATHML_NS))
             .unwrap()
+    }
+
+    /// The Presentation vocabulary must cover MathML3 §3 in full, because
+    /// anything missing from it is reported as Content MathML used directly
+    /// — a false positive on valid markup, not a missed check.
+    ///
+    /// The elementary-mathematics family (long division, column arithmetic)
+    /// and the alignment markers were absent, so a textbook typesetting a
+    /// long division was told its Presentation MathML was Content MathML.
+    #[test]
+    fn elementary_and_alignment_presentation_elements_are_recognised() {
+        let xml = concat!(
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">",
+            "<mstack><msrow><mn>12</mn></msrow><msline/></mstack>",
+            "<mlongdiv><mn>3</mn><mn>9</mn></mlongdiv>",
+            "<mtable><mtr><mtd><maligngroup/><malignmark/><mn>1</mn></mtd></mtr></mtable>",
+            "</math>"
+        );
+        let d = doc(xml);
+        let mut report = Report::new();
+        check_math_element(math_of(&d), "c.xhtml", &mut report);
+        assert!(
+            report.messages.is_empty(),
+            "valid Presentation MathML must be accepted; got {:?}",
+            report.messages.iter().map(|m| &m.text).collect::<Vec<_>>()
+        );
+    }
+
+    /// The other direction, unchanged: Content MathML at the top level of
+    /// `<math>` is still an error. Widening the vocabulary must not have
+    /// widened it into accepting `apply`/`ci`.
+    #[test]
+    fn content_mathml_is_still_rejected_after_widening() {
+        let xml = concat!(
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\">",
+            "<apply><ci>x</ci></apply></math>"
+        );
+        let d = doc(xml);
+        let mut report = Report::new();
+        check_math_element(math_of(&d), "c.xhtml", &mut report);
+        assert!(
+            !report.messages.is_empty(),
+            "Content MathML must still fail"
+        );
     }
 
     #[test]
