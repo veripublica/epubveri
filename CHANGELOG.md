@@ -8,7 +8,10 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.7.9] - 2026-07-25
+
+One new class of finding, from work in the sibling `styloria` crate. No
+verdict changes on the epubcheck test corpus.
 
 ### Added
 
