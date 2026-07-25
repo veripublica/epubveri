@@ -288,6 +288,12 @@ pub(crate) fn check(
             | spanned::SyntaxErrorKind::UnterminatedBlock => "css.stylesheet.unterminated",
             spanned::SyntaxErrorKind::MalformedDeclaration
             | spanned::SyntaxErrorKind::UnexpectedToken => "css.stylesheet.malformed",
+            // styloria 0.5 reads a qualified rule's prelude as a selector
+            // list. Its own slug, so the finding says which half of the rule
+            // was wrong: epubcheck reports both as CSS-008, but "the selector
+            // is malformed" and "the declarations are malformed" send an
+            // author to different places.
+            spanned::SyntaxErrorKind::InvalidSelector => "css.stylesheet.invalid_selector",
         };
         report.push_full(
             CSS_008,

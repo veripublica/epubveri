@@ -140,11 +140,15 @@ ANN = {
     "CSS-006": (None, "`position: fixed` (USAGE) - matches epubcheck's "
         "first-value-component == \"fixed\" test."),
     "CSS-008": ("partial",
-        "Covers bad-string/bad-url tokens and unterminated rules/blocks (via "
-        "styloria 0.4's `syntax_errors`), plus in-block malformed declaration "
-        "shapes. Still a subset of epubcheck's full CSS-parser error surface - "
-        "styloria's parser is error-recovering, so it accepts some constructs "
-        "epubcheck rejects (a bad selector, an invalid at-rule prelude)."),
+        "Covers bad-string/bad-url tokens, unterminated rules/blocks, "
+        "malformed declaration shapes, and - since styloria 0.5 - malformed "
+        "selector lists. The one epubcheck CSS error with no counterpart left "
+        "is a malformed `U+` unicode-range (its SCANNER_ILLEGAL_URANGE). "
+        "Note two things the old note claimed that turned out to be wrong: "
+        "epubcheck does *not* validate at-rule preludes (its ATRULE_PARAM "
+        "restriction is `return true`), and its GRAMMAR_INVALID_SELECTOR code "
+        "is never raised - selector errors reach CSS-008 via "
+        "GRAMMAR_EXPECTING_TOKEN instead."),
     # --- MED (reviewed) ---
     "MED-004": (None, "Reserved for a file too short to contain a 4-byte image "
         "header, matching epubcheck; a >=4-byte header that matches nothing is "

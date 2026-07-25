@@ -8,6 +8,34 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **Malformed CSS selectors are now reported as `CSS-008`.** styloria 0.5
+  reads a qualified rule's prelude as a selector list, so `a > > b { }`,
+  `[href=] { }` and `, p { }` are flagged instead of silently accepted. The
+  check is syntactic only — it never asks whether an element, pseudo-class or
+  attribute *name* is real — and is deliberately permissive about anything
+  newer than it (`&` nesting, `::part()`, unknown pseudo names, and the whole
+  inside of `:not()`/`:is()`/`:has()`/`:nth-child()`), because a wrong error
+  on a valid stylesheet costs more than a missed one. Findings carry their own
+  `css.stylesheet.invalid_selector` rule, so "the selector is malformed" and
+  "the declarations are malformed" are distinguishable even though epubcheck
+  reports both as `CSS-008`.
+
+### Fixed
+
+- **A stylesheet starting with a UTF-8 BOM is no longer mis-parsed.** The BOM
+  was left in the token stream, which turned a following `@charset` into a
+  qualified rule's prelude and cascaded errors through the rest of the file.
+  Fixed in styloria 0.5's tokenizer; `decode_bytes` already handled UTF-16
+  BOMs, and this was the UTF-8 case falling through.
+
+### Changed
+
+- styloria dependency `0.4` → `0.5`.
+
 ## [0.7.8] - 2026-07-25
 
 Six message IDs from a sweep of the coverage matrix (`docs/COVERAGE.md` — now
