@@ -466,6 +466,31 @@ mod tests {
         );
     }
 
+    /// #58, OPF round: `<tours>` is a legacy OPF 2.0 package child that
+    /// `opf20.rng` lists explicitly in `OPF20.package-content`. It had been
+    /// left out because no corpus fixture exercises it - the wrong test: the
+    /// corpus not covering something says nothing about what the schema
+    /// allows, and a real legacy EPUB 2 book using it was being rejected.
+    #[test]
+    fn legacy_tours_package_child_is_accepted() {
+        let with = MIN_OPF.replace(
+            "<spine><itemref idref=\"nav\"/></spine>",
+            "<spine><itemref idref=\"nav\"/></spine>\
+             <tours><tour id=\"t\" title=\"T\"><site title=\"s\" href=\"a.xhtml\"/></tour></tours>",
+        );
+        assert!(
+            validate_xml(&package_grammar(), &with).unwrap(),
+            "opf20.rng allows tours as a package child"
+        );
+        // An unrecognised OPF-namespaced child is still a violation - the
+        // point is that `tours` is real, not that the model went loose.
+        let bogus = MIN_OPF.replace(
+            "<spine><itemref idref=\"nav\"/></spine>",
+            "<spine><itemref idref=\"nav\"/></spine><hello/>",
+        );
+        assert!(!validate_xml(&package_grammar(), &bogus).unwrap());
+    }
+
     /// #58, grammar round: the rest of XHTML 1.1's `a` and `img` attribute
     /// sets. OPS 2.0.1 assembles `a.attlist` from four included modules and
     /// we carried only the hypertext module's half, so `<a name="x">` - the
