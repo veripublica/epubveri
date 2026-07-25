@@ -466,6 +466,61 @@ mod tests {
         );
     }
 
+    /// #58, grammar round: the rest of XHTML 1.1's `a` and `img` attribute
+    /// sets. OPS 2.0.1 assembles `a.attlist` from four included modules and
+    /// we carried only the hypertext module's half, so `<a name="x">` - the
+    /// classic pre-`id` anchor form, and the commonest of these in real
+    /// EPUB 2 books - drew RSC-005. Same class as #47, one element over.
+    ///
+    /// The negative half is the point: the attributes XHTML 1.1 does *not*
+    /// have must stay rejected. `legacy.rng` is not among content.rng's
+    /// includes, so the presentational set never became legal in EPUB 2.
+    #[test]
+    fn xhtml11_a_and_img_attributes_epub2() {
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let ok = |b: &str| {
+            validate_node_report(
+                &xhtml_grammar_epub2(),
+                roxmltree::Document::parse(&doc(b)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+        // nameident.rng, target.rng, hypertext.rng, csismap.rng.
+        assert!(ok("<p><a name=\"anchor\">x</a></p>"), "a/@name");
+        assert!(
+            ok("<p><a href=\"x\" target=\"_blank\">x</a></p>"),
+            "a/@target"
+        );
+        assert!(
+            ok("<p><a href=\"x\" charset=\"utf-8\" rel=\"next\" rev=\"prev\">x</a></p>"),
+            "a link attrs"
+        );
+        assert!(
+            ok("<p><a href=\"x\" shape=\"rect\" coords=\"1,2\">x</a></p>"),
+            "a image-map attrs"
+        );
+        // image.rng + nameident.rng.
+        assert!(
+            ok("<p><img src=\"i.png\" alt=\"a\" longdesc=\"d.html\" name=\"n\"/></p>"),
+            "img/@longdesc,@name"
+        );
+
+        // Still rejected - presentational attributes XHTML 1.1 drops, whose
+        // module content.rng never includes.
+        for bad in [
+            "<hr width=\"50%\"/>",
+            "<hr noshade=\"noshade\"/>",
+            "<p align=\"center\">x</p>",
+            "<ul type=\"disc\"><li>x</li></ul>",
+            "<table><tr><td bgcolor=\"#fff\">v</td></tr></table>",
+            "<table><tr><td nowrap=\"nowrap\">v</td></tr></table>",
+        ] {
+            assert!(!ok(bad), "must stay rejected: {bad}");
+        }
+    }
+
     /// #47 (Doitsu): the XHTML 1.1 Tables Module's own attributes - colspan/
     /// rowspan on a cell, span/width on a col - drew RSC-005 on EPUB 2, where
     /// the whole table subtree carried globalAttrs only. epubcheck's
