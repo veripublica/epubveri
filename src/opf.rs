@@ -3931,7 +3931,16 @@ pub fn check(
                     .filter(|n| n.is_text())
                     .filter_map(|n| n.text())
                     .collect();
-                if text.trim().is_empty() {
+                // EPUB 3 only. epubcheck's rule is a Schematron assertion in
+                // `epub-xhtml-30.sch` (`title.non-empty`); there is no
+                // equivalent under `schema/20`, and XHTML 1.1's own grammar
+                // types `<title>` as `<text/>`, which RELAX NG matches on
+                // empty content. So an empty title is valid in an EPUB 2
+                // book, and we were rejecting it - 115 findings across ten
+                // real EPUB 2 books on the first mixed-producer shelf run.
+                // Same shape as #43 and #47: an EPUB 3 rule leaking into the
+                // EPUB 2 branch.
+                if is_epub3 && text.trim().is_empty() {
                     report.push_node(
                         RSC_005,
                         Severity::Error,
@@ -8206,22 +8215,28 @@ mod tests {
     /// right for our parser and wrong for the file is worse than none.
     #[test]
     fn epub2_dtd_entities_report_columns_of_the_real_file() {
-        // DOCTYPE, root and an empty <title> all on line 2, after a &nbsp;
+        // DOCTYPE, root and an obsolete <font> all on line 2, after a &nbsp;
         // document. `epub_type_findings`-style single-line shape on purpose.
+        //
+        // The anchor used to be an empty <title>, until a real-book shelf run
+        // showed that is valid in EPUB 2 (XHTML 1.1 types it `<text/>`; only
+        // `epub-xhtml-30.sch` asserts non-empty). <font> is obsolete in every
+        // version, so it anchors the position check without depending on a
+        // rule that turned out to be EPUB 3-only.
         let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
             <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
             \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
             <html xmlns=\"http://www.w3.org/1999/xhtml\">\
-            <head><title></title></head><body><p>a&nbsp;b</p></body></html>";
+            <head><title>t</title></head><body><p>a&nbsp;<font>b</font></p></body></html>";
         let report = crate::validate_bytes(epub2_with_ch1(ch1));
         let hit = report
             .messages
             .iter()
-            .find(|m| m.rule == Some("opf.content_document.empty_title"))
-            .expect("the empty <title> behind the &nbsp; must be seen");
+            .find(|m| m.id == crate::ids::RSC_005 && m.text.contains("font"))
+            .expect("the obsolete <font> behind the &nbsp; must be seen");
         let pos = hit.position.expect("a position");
-        // Where <title> really is, in the file the author has.
-        let want = crate::report::Position::of_offset(ch1, ch1.find("<title>").unwrap());
+        // Where <font> really is, in the file the author has.
+        let want = crate::report::Position::of_offset(ch1, ch1.find("<font>").unwrap());
         assert_eq!(
             (pos.line, pos.column),
             (want.line, want.column),

@@ -447,20 +447,25 @@ mod tests {
     /// document that fails to parse has every DOM check on it skipped, and
     /// the book quietly validates clean.
     ///
-    /// This asserts a *positive* observation on purpose: the empty `<title>`
-    /// is a real defect sitting behind the `&nbsp;`, and RSC-005 can only
-    /// fire if the document was actually read. Asserting the absence of
+    /// This asserts a *positive* observation on purpose: the obsolete
+    /// `<font>` is a real defect sitting behind the `&nbsp;`, and RSC-005 can
+    /// only fire if the document was actually read. Asserting the absence of
     /// something here would prove nothing - "no findings" is exactly what
     /// the bug produced.
+    ///
+    /// (The probe used to be an empty `<title>`, until the shelf run showed
+    /// that is *valid* in EPUB 2 - XHTML 1.1 types `<title>` as `<text/>` and
+    /// only `epub-xhtml-30.sch` asserts non-empty. The probe has to be a
+    /// defect in the version the fixture actually declares.)
     #[test]
     fn epub2_dtd_entities_do_not_hide_the_document_from_dom_checks() {
-        let report = crate::validate_bytes(epub2_with_dtd_entities(""));
+        let report = crate::validate_bytes(epub2_with_link("<p>x <font>y</font></p>"));
         assert!(
             report
                 .messages
                 .iter()
-                .any(|m| m.rule == Some("opf.content_document.empty_title")),
-            "the empty <title> behind the &nbsp; must still be seen; got {:?}",
+                .any(|m| m.id == crate::ids::RSC_005 && m.text.contains("font")),
+            "the obsolete <font> behind the &nbsp; must still be seen; got {:?}",
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>()
         );
     }
