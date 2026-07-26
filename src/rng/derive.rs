@@ -497,11 +497,39 @@ impl<'a> Env<'a> {
         if is_not_allowed(&cur) {
             return cur; // a descendant failed; `children_deriv` recorded it
         }
+        let inside = cur.clone();
         cur = self.end_tag_deriv(&cur);
         if is_not_allowed(&cur) {
             blames.push(Blame::Element(node, ElementFault::IncompleteContent));
+            // Recover: carry on as if this element's content had been
+            // complete, so its *siblings* are still checked. Without this a
+            // body of four empty containers reported only the first, where
+            // epubcheck names all four, and an author fixed them one run at a
+            // time (#60, promised to Doitsu on MobileRead #126).
+            //
+            // The continuation is exact rather than guessed. `end_tag_deriv`
+            // turns `After(content, rest)` into `rest` only when `content` is
+            // nullable; `rest` is the outer pattern already advanced past this
+            // whole element, and it is sitting right there either way. So the
+            // recovery is "take `rest` regardless", not an approximation of
+            // where the parser should resume - which is why this cannot
+            // cascade the way a guessed resume point would.
+            cur = self.end_tag_recover(&inside);
         }
         cur
+    }
+
+    /// The continuation after an element whose content did not satisfy its
+    /// model — `After(_, rest) -> rest`, ignoring the nullability check
+    /// `end_tag_deriv` applies. Only for error recovery: taking this without
+    /// having recorded a blame would silently accept invalid content.
+    fn end_tag_recover(&self, p: &Pat) -> Pat {
+        match &**p {
+            Pattern::Choice(a, b) => choice(self.end_tag_recover(a), self.end_tag_recover(b)),
+            Pattern::After(_, b) => b.clone(),
+            Pattern::Ref(i) => self.end_tag_recover(&self.defs[*i]),
+            _ => not_allowed(),
+        }
     }
 }
 

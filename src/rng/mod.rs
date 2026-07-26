@@ -525,6 +525,42 @@ mod tests {
         assert!(!validate_xml(&package_grammar(), &bogus).unwrap());
     }
 
+    /// #60: an element with incomplete content used to stop its *siblings*
+    /// from being checked, so a body of four empty containers reported one
+    /// error where epubcheck reports four.
+    ///
+    /// The recovery takes the continuation the derivative already holds —
+    /// `end_tag_deriv` turns `After(content, rest)` into `rest` only when
+    /// `content` is nullable, and this takes `rest` regardless — so it
+    /// resumes at exactly the right position rather than guessing one. The
+    /// second half of this test is the guard that matters: one failure must
+    /// still produce exactly one finding, because a resume point that is even
+    /// slightly wrong shows up as a cascade of invented siblings.
+    #[test]
+    fn incomplete_content_does_not_stop_the_siblings() {
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let count = |b: &str| {
+            validate_node_report(
+                &xhtml_grammar_epub2(),
+                roxmltree::Document::parse(&doc(b)).unwrap().root_element(),
+            )
+            .len()
+        };
+        assert_eq!(
+            count("<ol></ol><ul></ul><table></table><dl></dl>"),
+            4,
+            "each independent failure reported once"
+        );
+        // One failure stays one finding - no cascade into what follows it.
+        assert_eq!(count("<ol></ol><p>fine</p><p>also fine</p>"), 1);
+        assert_eq!(count("<p>fine</p><ol></ol><p>also fine</p>"), 1);
+        // And valid siblings after a failure are still *checked*, not merely
+        // tolerated: an obsolete element following one must still be caught.
+        assert_eq!(count("<ol></ol><p><font>x</font></p>"), 2);
+    }
+
     /// XHTML 1.1 requires content in `ol`/`ul` (`oneOrMore li`), `dl`
     /// (`oneOrMore (dt|dd)`) and `table` (its model ends in `tbody+ | tr+`),
     /// so an empty one is an error — reported by Doitsu, MobileRead #126.
