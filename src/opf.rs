@@ -4997,6 +4997,16 @@ pub fn check(
         let mut has_remote = false;
         let mut has_script = false;
         let mut has_svg = false;
+        // Distinct from `has_svg`: epubcheck separates a property that is
+        // *required* (the document contains SVG markup - OPF-014 if the
+        // declaration is missing) from one that is merely *allowed* (the
+        // document references an SVG resource - declaring it is optional,
+        // and doing so is not an error). Its own comment says so:
+        // "the `svg` property MAY be set if an SVG resource is referenced in
+        // HTML". We had only the required half, so `properties="svg"` on a
+        // document whose only SVG is an `<img src="x.svg">` drew OPF-015 -
+        // reported by Doitsu, MobileRead #126.
+        let mut references_svg = false;
         let mut has_switch = false;
         let mut remote_refs: HashSet<String> = HashSet::new();
         let mut remote_link_refs: HashSet<String> = HashSet::new();
@@ -5253,6 +5263,25 @@ pub fn check(
             {
                 has_svg = true;
             }
+            if !references_svg {
+                for attr in node.attributes() {
+                    if !matches!(attr.name(), "src" | "href" | "data" | "poster") {
+                        continue;
+                    }
+                    let v = attr.value();
+                    if is_external(v) {
+                        continue;
+                    }
+                    let target = nfc(&resolve(&dir, v.split('#').next().unwrap_or(v)));
+                    if items
+                        .values()
+                        .any(|(res, mt)| nfc(res) == target && mt.trim() == "image/svg+xml")
+                    {
+                        references_svg = true;
+                        break;
+                    }
+                }
+            }
             // Embedded CSS: inline <style> resolves relative to this
             // content document's own location, not to any separate file.
             if node.tag_name().name() == "style" {
@@ -5444,13 +5473,34 @@ pub fn check(
             // remote-resources is OPF-018/Warning, scripted/svg are
             // OPF-015/Error (confirmed via each property's own dedicated
             // corpus fixture, not assumed uniform).
-            for (used, name, unused_id, unused_sev) in [
-                (has_remote, "remote-resources", OPF_018, Severity::Warning),
-                (has_script, "scripted", OPF_015, Severity::Error),
-                (has_svg, "svg", OPF_015, Severity::Error),
+            // Two flags per property, not one. `required` drives OPF-014
+            // (used but undeclared); `allowed` drives the "declared but not
+            // needed" branch. They differ only for `svg`: referencing an SVG
+            // resource makes the declaration *permitted* without making it
+            // *required*, which is epubcheck's own distinction between
+            // `requiredProperties` and `allowedProperties`. Collapsing them
+            // into one flag would trade this false positive for the opposite
+            // one - demanding the property from any document that links to an
+            // SVG image.
+            for (required, allowed, name, unused_id, unused_sev) in [
+                (
+                    has_remote,
+                    has_remote,
+                    "remote-resources",
+                    OPF_018,
+                    Severity::Warning,
+                ),
+                (has_script, has_script, "scripted", OPF_015, Severity::Error),
+                (
+                    has_svg,
+                    has_svg || references_svg,
+                    "svg",
+                    OPF_015,
+                    Severity::Error,
+                ),
             ] {
                 let declared_here = declared_tokens.contains(&name);
-                if used && !declared_here {
+                if required && !declared_here {
                     report.push_node(
                         OPF_014,
                         Severity::Error,
@@ -5462,7 +5512,7 @@ pub fn check(
                         "opf.content_document.property_used_undeclared",
                         vec![name.to_string()],
                     );
-                } else if declared_here && !used {
+                } else if declared_here && !allowed {
                     // For `remote-resources` specifically, scripted content
                     // changes the verdict from a warning to a usage note: a
                     // script can fetch a remote resource dynamically, which

@@ -525,6 +525,47 @@ mod tests {
         assert!(!validate_xml(&package_grammar(), &bogus).unwrap());
     }
 
+    /// XHTML 1.1 requires content in `ol`/`ul` (`oneOrMore li`), `dl`
+    /// (`oneOrMore (dt|dd)`) and `table` (its model ends in `tbody+ | tr+`),
+    /// so an empty one is an error — reported by Doitsu, MobileRead #126.
+    ///
+    /// **HTML5 relaxed all four to zero-or-more**, so the EPUB 3 grammar must
+    /// stay permissive. Making this version-wide would have traded a missed
+    /// error for a false positive, which is the worse trade; the EPUB 3 half
+    /// of this test is the guard against that.
+    #[test]
+    fn empty_lists_and_tables_are_an_error_only_on_epub2() {
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let ok = |g: &Grammar, b: &str| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&doc(b)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+        let two = xhtml_grammar_epub2();
+        let three = xhtml_grammar();
+        for empty in ["<ol></ol>", "<ul></ul>", "<dl></dl>", "<table></table>"] {
+            assert!(!ok(&two, empty), "EPUB 2 rejects {empty}");
+            assert!(ok(&three, empty), "EPUB 3 accepts {empty}");
+        }
+        // Populated ones stay valid in both, and a table's columns may still
+        // appear in any order relative to its rows - the rule added here is
+        // cardinality, not sequence.
+        for full in [
+            "<ol><li>x</li></ol>",
+            "<ul><li>x</li></ul>",
+            "<dl><dt>t</dt><dd>d</dd></dl>",
+            "<table><tr><td>v</td></tr></table>",
+            "<table><tr><td>v</td></tr><colgroup><col/></colgroup></table>",
+        ] {
+            assert!(ok(&two, full), "EPUB 2 accepts {full}");
+            assert!(ok(&three, full), "EPUB 3 accepts {full}");
+        }
+    }
+
     /// #58, grammar round: the rest of XHTML 1.1's `a` and `img` attribute
     /// sets. OPS 2.0.1 assembles `a.attlist` from four included modules and
     /// we carried only the hypertext module's half, so `<a name="x">` - the

@@ -1575,17 +1575,23 @@
     </element>
   </define>
 
+  <!-- XHTML 1.1 requires content in these three: `ol`/`ul` are `oneOrMore
+       li`, `dl` is `oneOrMore (dt|dd)`, so an empty one is an error. HTML5
+       relaxed all of them to zero-or-more, which is why the EPUB 3 versions
+       above stay permissive - this is an EPUB 2-only rule, and making it
+       version-wide would be a false positive on EPUB 3 (reported by Doitsu,
+       MobileRead #126). -->
   <define name="olEl-epub2">
     <element name="ol">
       <ref name="globalAttrs"/>
       <optional><attribute name="start"><data type="integer"/></attribute></optional>
       <optional><attribute name="type"><data type="token"/></attribute></optional>
-      <zeroOrMore><ref name="liEl-epub2"/></zeroOrMore>
+      <oneOrMore><ref name="liEl-epub2"/></oneOrMore>
     </element>
   </define>
 
   <define name="ulEl-epub2">
-    <element name="ul"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl-epub2"/></zeroOrMore></element>
+    <element name="ul"><ref name="globalAttrs"/><oneOrMore><ref name="liEl-epub2"/></oneOrMore></element>
   </define>
 
   <define name="liEl-epub2">
@@ -1598,12 +1604,12 @@
   <define name="dlEl-epub2">
     <element name="dl">
       <ref name="globalAttrs"/>
-      <zeroOrMore>
+      <oneOrMore>
         <choice>
           <element name="dt"><ref name="globalAttrs"/><ref name="epub2Inline"/></element>
           <element name="dd"><ref name="globalAttrs"/><ref name="epub2Flow"/></element>
         </choice>
-      </zeroOrMore>
+      </oneOrMore>
     </element>
   </define>
 
@@ -1641,16 +1647,29 @@
         </attribute>
       </optional>
       <optional><element name="caption"><ref name="globalAttrs"/><ref name="epub2Inline"/></element></optional>
-      <zeroOrMore>
-        <choice>
-          <element name="thead"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-          <element name="tbody"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-          <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-          <element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><ref name="colEl-epub2"/></zeroOrMore></element>
-          <ref name="colEl-epub2"/>
-          <ref name="trEl-epub2"/>
-        </choice>
-      </zeroOrMore>
+      <!-- XHTML 1.1's table model ends in `(thead?, tfoot?, tbody+) | tr+`,
+           so a table with no rows at all is an error - an empty `<table/>`
+           is what Doitsu reported (MobileRead #126). HTML5 relaxed this to
+           `tbody*`, so the EPUB 3 `tableEl` above stays permissive.
+           `interleave` keeps this a *cardinality* rule rather than an
+           ordering one: columns may still appear anywhere, matching the
+           schema-wide "permissive on nesting order" stance. -->
+      <interleave>
+        <zeroOrMore>
+          <choice>
+            <element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><ref name="colEl-epub2"/></zeroOrMore></element>
+            <ref name="colEl-epub2"/>
+          </choice>
+        </zeroOrMore>
+        <oneOrMore>
+          <choice>
+            <element name="thead"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+            <element name="tbody"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+            <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+            <ref name="trEl-epub2"/>
+          </choice>
+        </oneOrMore>
+      </interleave>
     </element>
   </define>
 

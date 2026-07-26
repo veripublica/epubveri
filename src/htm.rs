@@ -391,8 +391,21 @@ fn named_entity_refs(text: &str) -> impl Iterator<Item = EntityRef<'_>> {
                 .find(|c: char| !c.is_ascii_alphanumeric())
                 .unwrap_or(after.len());
             if name_len == 0 {
+                // A bare `&` - not the start of any reference. XML says this
+                // is malformed, and it is the commonest error in hand-edited
+                // ebooks. Yielded with an empty name so the caller reports
+                // it; skipping it here is what let it fall between the two
+                // checks (the parse-failure path suppresses entity errors on
+                // the grounds that this scan owns them, and this scan used
+                // to walk straight past). The document then failed to parse
+                // and every DOM check on it was silently skipped - reported
+                // by Doitsu, MobileRead #126.
                 i = amp + 1;
-                continue;
+                return Some(EntityRef {
+                    offset: amp,
+                    name: "",
+                    terminated: false,
+                });
             }
             let name = &after[..name_len];
             let terminated = bytes.get(amp + 1 + name_len) == Some(&b';');
@@ -439,7 +452,21 @@ fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Repo
         terminated,
     } in named_entity_refs(&masked)
     {
-        if !terminated {
+        if name.is_empty() {
+            // Deliberately phrased as the fix rather than as the parser's
+            // complaint ("the entity name must immediately follow the '&'"),
+            // which means nothing to someone hand-editing a chapter -
+            // Doitsu's suggestion, MobileRead #126.
+            report.push_full(
+                RSC_016,
+                Severity::Fatal,
+                "a bare '&' must be written as '&amp;'",
+                path,
+                Position::of_offset(orig_text, amp),
+                "htm.entity.bare_ampersand",
+                Vec::new(),
+            );
+        } else if !terminated {
             report.push_full(
                 RSC_016,
                 Severity::Fatal,
@@ -1590,6 +1617,37 @@ mod tests {
     /// The grammar rejects all 26 of them, in both block and inline position,
     /// so this check is gone and `check_dom_epub2` keeps only what the
     /// grammar cannot express.
+    /// A bare `&` is the commonest XML error in a hand-edited ebook, and it
+    /// used to fall between two checks: the parse-failure path suppresses
+    /// entity errors on the grounds that this scan owns them, and this scan
+    /// walked straight past a `&` with no name after it. The document then
+    /// failed to parse and *every* DOM check on it was silently skipped, so
+    /// the book validated clean — Doitsu, MobileRead #126.
+    #[test]
+    fn a_bare_ampersand_is_reported() {
+        let rules = |body: &str| {
+            let mut r = Report::new();
+            let text =
+                format!("<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>{body}</body></html>");
+            check_raw(text.as_bytes(), &text, "c.xhtml", true, &mut r);
+            r.messages.iter().filter_map(|m| m.rule).collect::<Vec<_>>()
+        };
+        assert!(rules("<p>Tom & Jerry</p>").contains(&"htm.entity.bare_ampersand"));
+        // Everything that is a real reference must stay silent.
+        for ok in [
+            "<p>A &amp; B</p>",
+            "<p>&#39;</p>",
+            "<p>&#x27;</p>",
+            "<p>&lt;tag&gt;</p>",
+            "<!-- a & in a comment -->",
+        ] {
+            assert!(
+                !rules(ok).contains(&"htm.entity.bare_ampersand"),
+                "must stay silent: {ok}"
+            );
+        }
+    }
+
     #[test]
     fn epub2_dom_no_longer_duplicates_the_grammars_element_check() {
         let doc = r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><section>x</section></body></html>"#;
