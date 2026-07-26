@@ -9,8 +9,32 @@ use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
 pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &mut Report) {
-    let Ok(d) = crate::ocf::parse_xml(ncx_xml) else {
-        return;
+    let d = match crate::ocf::parse_xml(ncx_xml) {
+        Ok(d) => d,
+        Err(e) => {
+            // An NCX that isn't well-formed XML used to return here without a
+            // word, so every check below - playOrder, the uid agreement, the
+            // whole structure - quietly didn't run and the book reported as
+            // though its table of contents were fine. Nothing else parses
+            // this file, so the silence was total: a `</navMapX>` typo was
+            // invisible.
+            //
+            // Reporting it costs nothing in false positives. epubcheck's own
+            // `ncx-2005-1.dtd` declares four parameter entities and no named
+            // character entities at all, so a `&nbsp;` in an NCX is malformed
+            // there too - unlike an XHTML content document, this file has no
+            // DTD-declared entity set to be lenient about.
+            report.push_full(
+                RSC_016,
+                Severity::Fatal,
+                format!("NCX is not well-formed XML: {e}"),
+                ncx_path,
+                Position::of_parse_error(&e),
+                "ncx.malformed_xml",
+                Vec::new(),
+            );
+            return;
+        }
     };
     let root = d.root_element();
 
@@ -469,6 +493,37 @@ mod tests {
             .into_iter()
             .filter_map(|(r, _)| r)
             .collect()
+    }
+
+    /// An NCX that isn't well-formed XML used to return from `check` without
+    /// reporting, and nothing else in the codebase parses this file - so a
+    /// `</navMapX>` typo took every NCX check with it and the book came back
+    /// clean. Measured on a probe EPUB: byte-identical output to the same
+    /// book with a valid NCX.
+    ///
+    /// No leniency is owed here the way an XHTML content document is owed it
+    /// for its DTD-declared `&nbsp;`: epubcheck's `ncx-2005-1.dtd` declares
+    /// four parameter entities and no named character entities, so a named
+    /// reference in an NCX is malformed for epubcheck too.
+    #[test]
+    fn malformed_ncx_is_reported_rather_than_skipped() {
+        for (label, ncx) in [
+            ("mismatched tag", ncx_with("<navMap></navMapX>")),
+            ("bad numeric reference", ncx_with("<navMap>&#0;</navMap>")),
+            (
+                "undeclared named entity",
+                ncx_with("<navMap>&nbsp;</navMap>"),
+            ),
+        ] {
+            let rules = run_at(&ncx)
+                .into_iter()
+                .filter_map(|(r, _)| r)
+                .collect::<Vec<_>>();
+            assert!(
+                rules.contains(&"ncx.malformed_xml"),
+                "{label}: an unparsable NCX must say so; got {rules:?}"
+            );
+        }
     }
 
     /// #59: `ncx_playOrderOrigin` and `ncx_playOrderNoGaps`.

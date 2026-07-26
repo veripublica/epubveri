@@ -24,13 +24,21 @@ pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree
 }
 
 /// Whether a `roxmltree` parse error is an entity-reference problem — an
-/// undeclared named entity (`&nbsp;` with no DTD declaration) or a malformed
-/// one (missing `;`). These are reported separately, and earlier, by
-/// `htm::check_raw`'s raw-text entity scanner (`check_entities`), so when a
-/// document fails to parse *for this reason* it must NOT also be re-reported
-/// as a generic well-formedness `RSC-016` — that would double up two Fatals
-/// on the one defect. Any other parse failure (mismatched/unclosed tags,
-/// stray `<`, …) is a genuine well-formedness error nothing else catches.
+/// undeclared named entity (`&nbsp;` with no DTD declaration), a malformed
+/// one (missing `;`), or a malformed *numeric* character reference (`&#0;`,
+/// `&#zz;`), which the parser puts in the same two variants.
+///
+/// This is only half of a suppression, never the whole of it. When
+/// `htm::check_raw`'s raw-text scanner (`check_entities`) has already
+/// reported the defect, re-reporting the parse failure would double up two
+/// Fatals on the one defect; when it has *not*, suppressing here would drop
+/// the document from every remaining check and let a book with real errors
+/// validate clean. So the caller pairs this with a check that a finding was
+/// actually produced — see the content-document loop in `opf.rs`. Widening
+/// this predicate without that pairing is how the silence keeps coming back.
+///
+/// Any other parse failure (mismatched/unclosed tags, stray `<`, …) is a
+/// genuine well-formedness error nothing else catches.
 pub(crate) fn is_entity_reference_error(err: &roxmltree::Error) -> bool {
     matches!(
         err,

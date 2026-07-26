@@ -3617,6 +3617,7 @@ pub fn check(
         let t = crate::css::decode_bytes(&b);
         // The raw scans must see the document exactly as authored, so they
         // run before the entity declarations below are added to it.
+        let before_raw = report.messages.len();
         crate::htm::check_raw(&b, &t, &path, is_epub3, report);
         // An EPUB 2 document's DOCTYPE promises the XHTML DTD's named
         // entities; declare them inline so `&nbsp;` doesn't fail the parse
@@ -3643,20 +3644,29 @@ pub fn check(
                 // position, mirroring how the OPF's own parse failure is
                 // handled. Entity-reference failures are the one exception:
                 // `check_raw`'s entity scan above already owns those
-                // (undeclared / missing-';' named entities), so skip them
-                // here to avoid double-reporting the same defect.
+                // (undeclared / missing-';' named entities), and reporting
+                // them here too would double up two Fatals on one defect.
                 //
-                // That exception rests on an invariant worth stating, since
-                // it once broke silently and took 690 documents with it
-                // (issue #23): every entity reference that fails this parse
-                // *is* reported by the scan above. `declare_dtd_entities`
-                // is what keeps it true - the one class the scan
-                // deliberately stays quiet about (an EPUB 2 document's
-                // DTD-declared `&nbsp;`, which is not a defect) is exactly
-                // the class it now makes parse. Anything still failing here
-                // is undeclared by any DTD, and the scan reports it. Do not
-                // widen this suppression without re-checking that.
-                if !crate::ocf::is_entity_reference_error(&e) {
+                // The suppression asks whether that scan *actually*
+                // reported, instead of trusting that it covers the class.
+                // That trust has now been misplaced three times, and every
+                // time the failure was silence rather than a wrong answer:
+                // the document neither parsed nor drew a finding, so it
+                // vanished from every check below and a book with real
+                // errors validated clean. Issue #23 lost 690 documents that
+                // way; 0.7.12 was a bare `&`; 0.7.13 an XHTML 1.0 `&nbsp;`;
+                // and malformed numeric references (`&#0;`, `&#;`, `&#zz;`,
+                // an unterminated `&#38`) were the same hole again - the
+                // parser calls them entity errors, the scan reads only named
+                // references and walks straight past them.
+                //
+                // Reading the report costs one slice scan and cannot drift
+                // out of date, which is the point: the invariant is enforced
+                // here rather than documented and hoped for.
+                let entity_reported = report.messages[before_raw..]
+                    .iter()
+                    .any(|m| m.rule.is_some_and(|r| r.starts_with("htm.entity.")));
+                if !(crate::ocf::is_entity_reference_error(&e) && entity_reported) {
                     report.push_full(
                         RSC_016,
                         Severity::Fatal,
@@ -9331,6 +9341,56 @@ mod tests {
             <body><p>a&nbsp;b</p></body></html>";
         let rules = rsc_016_rules(ch1);
         assert_eq!(rules, vec!["htm.entity.undeclared"], "got: {rules:?}");
+    }
+
+    /// The other half of that suppression, and the one that keeps breaking.
+    ///
+    /// Skipping the parse failure is only safe while the raw scan really does
+    /// report the defect. Where it doesn't, the document parses as nothing,
+    /// draws no finding, and drops out of *every* check below - so a book
+    /// with real errors reports clean. That has now happened three times
+    /// (issue #23's 690 documents, a bare `&` in 0.7.12, an XHTML 1.0
+    /// `&nbsp;` in 0.7.13), and malformed numeric references were a fourth:
+    /// `&#0;` in a chapter that also carried a broken image reference
+    /// validated VALID, because the scan reads named references only.
+    ///
+    /// Asserted as an invariant rather than as four fixed cases: whatever the
+    /// parser classifies as an entity error, epubveri must say *something*
+    /// about. A shape roxmltree accepts is not in scope and is skipped, so
+    /// this fails for the right reason if that ever changes.
+    #[test]
+    fn no_entity_class_parse_failure_goes_unreported() {
+        for frag in [
+            "a&#0;b",           // numeric: NUL is not a legal XML character
+            "a&#;b",            // numeric: no digits at all
+            "a&#x;b",           // numeric: hex prefix, no digits
+            "a&#zz;b",          // numeric: not digits
+            "a&#38 b",          // numeric: unterminated
+            "a&#xFFFFFFFFFF;b", // numeric: overflows a code point
+            "a&nbsp;b",         // named: undeclared (EPUB 3 has no DTD)
+            "a&foo b",          // named: unterminated
+            "a & b",            // a bare ampersand
+            "a&#x110000;b",     // accepted by the parser - skipped below
+        ] {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body><p>{frag}</p></body></html>"
+            );
+            let Err(e) = crate::ocf::parse_xml(&ch1) else {
+                continue;
+            };
+            if !crate::ocf::is_entity_reference_error(&e) {
+                continue;
+            }
+            let messages = crate::validate_bytes(epub_with_ch1(&ch1)).messages;
+            assert!(
+                messages.iter().any(|m| m.id == crate::ids::RSC_016),
+                "'{frag}' fails the parse as an entity error ({e:?}) and the \
+                 parse-failure branch suppresses it, so nothing at all was \
+                 reported and every other check on the document was skipped"
+            );
+        }
     }
 
     /// Build an EPUB 3 whose `ch1` manifest item carries `ch1_props` (e.g.

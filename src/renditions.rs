@@ -11,7 +11,7 @@
 
 use crate::ids::*;
 use crate::ocf::{Ocf, parse_xml};
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
 const RENDITION_NS: &str = "http://www.idpf.org/2013/rendition";
@@ -53,8 +53,24 @@ fn check_metadata_file(ocf: &mut Ocf, report: &mut Report) {
         return;
     };
     let text = String::from_utf8_lossy(&bytes).into_owned();
-    let Ok(doc) = parse_xml(&text) else {
-        return;
+    let doc = match parse_xml(&text) {
+        Ok(doc) => doc,
+        Err(e) => {
+            // This file is parsed here and nowhere else, so returning quietly
+            // meant a malformed metadata.xml was indistinguishable from a
+            // correct one - including from the `dcterms:modified` check just
+            // below, which then never ran.
+            report.push_full(
+                RSC_016,
+                Severity::Fatal,
+                format!("{METADATA} is not well-formed XML: {e}"),
+                METADATA,
+                Position::of_parse_error(&e),
+                "renditions.metadata_malformed_xml",
+                Vec::new(),
+            );
+            return;
+        }
     };
     let count = doc
         .descendants()
@@ -187,8 +203,34 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
         return;
     };
     let text = String::from_utf8_lossy(&bytes).into_owned();
-    let Ok(doc) = parse_xml(&text) else {
-        return;
+    let doc = match parse_xml(&text) {
+        Ok(doc) => doc,
+        Err(e) => {
+            // A mapping document may also be listed in a rendition's
+            // manifest, in which case the content-document walk - which runs
+            // before this, from `validate_bytes_with_options` - has already
+            // reported the parse failure. It may equally not be, in which
+            // case this is the only place that can. Asking the report which
+            // world we are in beats assuming: assuming it was reported is
+            // how a file goes silent, and assuming it wasn't is a duplicate
+            // Fatal on one defect.
+            let already_reported = report.messages.iter().any(|m| {
+                m.location.as_deref() == Some(href)
+                    && m.rule.is_some_and(|r| r.ends_with("malformed_xml"))
+            });
+            if !already_reported {
+                report.push_full(
+                    RSC_016,
+                    Severity::Fatal,
+                    format!("rendition mapping document is not well-formed XML: {e}"),
+                    href,
+                    Position::of_parse_error(&e),
+                    "renditions.mapping_malformed_xml",
+                    Vec::new(),
+                );
+            }
+            return;
+        }
     };
 
     let has_version_meta = doc.descendants().any(|n| {

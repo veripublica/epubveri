@@ -424,9 +424,16 @@ fn named_entity_refs(text: &str) -> impl Iterator<Item = EntityRef<'_>> {
 /// `roxmltree` simply fails to parse a document with a malformed or
 /// undeclared entity reference (confirmed: neither of the two real corpus
 /// fixtures for this parse successfully today), so this is the only place
-/// these two conditions can be caught. Numeric character references
-/// (`&#39;`/`&#x27;`) are always well-formed and out of scope here — only
-/// named references (`&foo;`) are checked.
+/// these two conditions can be caught with a message naming the entity.
+///
+/// **Named references only.** A numeric character reference is skipped here,
+/// and a malformed one (`&#;`, `&#0;`, `&#zz;`, an unterminated `&#38`) is
+/// left to the parse-failure branch's generic RSC-016 — worth being explicit
+/// about, because the comment this replaces claimed numeric references were
+/// "always well-formed", and on the strength of that claim four such shapes
+/// silently passed a whole document through unvalidated. Whatever this scan
+/// does not report, that branch must; it now verifies as much rather than
+/// assuming it.
 fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Report) {
     let declared = declared_entity_names(orig_text);
     // An EPUB 2 XHTML content document references an external DTD (XHTML 1.1

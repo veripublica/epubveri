@@ -38,8 +38,25 @@ pub(crate) fn check(
 ) -> (Vec<(String, String)>, Vec<(String, String)>) {
     let mut text_targets = Vec::new();
     let mut textref_targets = Vec::new();
-    let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
-        return (text_targets, textref_targets);
+    let doc = match crate::ocf::parse_xml(smil_xml) {
+        Ok(doc) => doc,
+        Err(e) => {
+            // Same silence the NCX had: nothing else parses a Media Overlay,
+            // so a malformed one used to disappear along with every check on
+            // it, and the empty target lists returned here then made the
+            // *content* side look consistent with it. A book could carry an
+            // unparsable overlay and report clean.
+            report.push_full(
+                RSC_016,
+                Severity::Fatal,
+                format!("media overlay is not well-formed XML: {e}"),
+                smil_path,
+                Position::of_parse_error(&e),
+                "smil.malformed_xml",
+                Vec::new(),
+            );
+            return (text_targets, textref_targets);
+        }
     };
     let root = doc.root_element();
     // 9.2.2.2: the head container may only hold a <metadata> element (not
@@ -490,6 +507,22 @@ mod tests {
             &mut report,
         );
         (report.messages.iter().map(|m| m.id).collect(), targets)
+    }
+
+    /// The NCX's silence, in the other file only one place parses. A
+    /// malformed overlay used to return empty target lists without a word,
+    /// and empty lists happen to look exactly like an overlay that is
+    /// consistent with its content documents - so the failure propagated as
+    /// agreement rather than as an error.
+    #[test]
+    fn malformed_overlay_is_reported_rather_than_skipped() {
+        let (ids, targets) = run(
+            r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0"><body></bodyX></smil>"#,
+            &idx(&[]),
+            &HashMap::new(),
+        );
+        assert_eq!(ids, vec![crate::ids::RSC_016], "got {ids:?}");
+        assert!(targets.is_empty());
     }
 
     #[test]

@@ -8,6 +8,29 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+An audit of every place a check stays quiet on the grounds that another check
+owns the case. Two of those arrangements had a gap, and a gap between two
+checks reports *nothing* — the one failure a user cannot notice.
+
+- **A malformed numeric character reference no longer silences a whole
+  content document.** `&#0;`, `&#;`, `&#zz;` and an unterminated `&#38` all
+  fail the XML parse as entity errors, and the parse-failure branch suppressed
+  entity errors on the grounds that the raw entity scan reports them — but
+  that scan reads named references only. Measured: a book with a broken image
+  reference *and* a `&#0;` reported VALID. The suppression now asks whether a
+  finding was actually produced instead of assuming the other check covers the
+  class, so this cannot recur in a shape nobody thought of.
+- **A malformed NCX, Media Overlay, `META-INF/metadata.xml` or rendition
+  mapping document is now reported (RSC-016) instead of skipped.** Nothing
+  else parses any of these four files, so a `</navMapX>` typo took every NCX
+  check with it and the book validated clean. `META-INF/container.xml`,
+  `encryption.xml` and `signatures.xml` already reported; these four were the
+  outliers.
+
 ## [0.7.13] - 2026-07-26
 
 The headline is a silent one: a content document could be dropped from every
