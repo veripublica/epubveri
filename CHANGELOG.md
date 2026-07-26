@@ -8,7 +8,10 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.7.14] - 2026-07-26
+
+Two files that could be skipped in silence, and the coverage matrix reaching
+~96%.
 
 ### Added
 
