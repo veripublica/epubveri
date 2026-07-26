@@ -756,16 +756,42 @@ fn extract_doctype(text: &str) -> Option<&str> {
 /// declare the full set of standard HTML named character entities, so a
 /// document carrying one of these DOCTYPEs may use `&nbsp;` and friends
 /// without an internal `<!ENTITY>` declaration (see `check_entities`).
+/// The PUBLIC identifiers epubcheck *accepts* on an EPUB 2 content document.
+/// Anything else is HTM-004 - its `DeclarationHandler` compares against
+/// `-//W3C//DTD XHTML 1.1//EN` exactly.
 const EPUB2_XHTML_PUBLIC_IDS: [&str; 2] = [
     "-//W3C//DTD XHTML 1.1//EN",
     "+//ISBN 0-9673008-1-9//DTD OEB 1.2 Document//EN",
+];
+
+/// The PUBLIC identifiers whose DTD *declares the HTML named entities*
+/// (`&nbsp;`, `&eacute;`, …) - a different question from whether the doctype
+/// is the one EPUB 2 wants, and previously answered with the same list.
+///
+/// epubcheck bundles `xhtml1-strict.dtd` and `xhtml1-transitional.dtd`
+/// alongside the 1.1 and OEB ones, so it resolves `&nbsp;` in an XHTML 1.0
+/// document perfectly well - and separately reports HTM-004 for the
+/// identifier. Conflating the two meant an XHTML 1.0 book got a **fatal**
+/// RSC-016 per `&nbsp;`, and, because the document then failed to parse, was
+/// dropped from every DOM check: one real book had 15 fatals and 1 other
+/// finding on a file whose siblings each produced ~300. Found on a real book
+/// added to the shelf 2026-07-26.
+///
+/// Frameset is deliberately absent: epubcheck does not bundle that DTD
+/// either, so it could not resolve those entities.
+const DTD_DECLARES_NAMED_ENTITIES: [&str; 4] = [
+    "-//W3C//DTD XHTML 1.1//EN",
+    "+//ISBN 0-9673008-1-9//DTD OEB 1.2 Document//EN",
+    "-//W3C//DTD XHTML 1.0 Strict//EN",
+    "-//W3C//DTD XHTML 1.0 Transitional//EN",
 ];
 
 /// True when the document's DOCTYPE carries a recognized EPUB 2 XHTML/OEB
 /// PUBLIC identifier - i.e. it pulls in an external DTD that declares the
 /// standard HTML named entities.
 fn has_epub2_xhtml_doctype(text: &str) -> bool {
-    extract_doctype(text).is_some_and(|dt| EPUB2_XHTML_PUBLIC_IDS.iter().any(|id| dt.contains(id)))
+    extract_doctype(text)
+        .is_some_and(|dt| DTD_DECLARES_NAMED_ENTITIES.iter().any(|id| dt.contains(id)))
 }
 
 fn check_doctype_epub2(text: &str, path: &str, report: &mut Report) {
@@ -1617,6 +1643,55 @@ mod tests {
     /// The grammar rejects all 26 of them, in both block and inline position,
     /// so this check is gone and `check_dom_epub2` keeps only what the
     /// grammar cannot express.
+    /// An XHTML 1.0 doctype declares the HTML named entities just as 1.1
+    /// does — epubcheck bundles `xhtml1-strict.dtd` and
+    /// `xhtml1-transitional.dtd` for exactly that — so `&nbsp;` in such a
+    /// document is not undeclared.
+    ///
+    /// Conflating "is this the doctype EPUB 2 wants" with "does this DTD
+    /// declare the entities" cost more than a wrong message: the document
+    /// then failed to parse, so it was dropped from every DOM check. One real
+    /// book had 15 fatals and one other finding on a file whose siblings each
+    /// produced ~300. The HTM-004 half must stay strict, which is the second
+    /// assertion here.
+    #[test]
+    fn xhtml_1_0_doctype_declares_the_named_entities() {
+        let doc = |public_id: &str| {
+            format!(
+                "<!DOCTYPE html PUBLIC \"{public_id}\" \"x.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\
+                 <p>a&nbsp;b</p></body></html>"
+            )
+        };
+        let rules = |text: &str| {
+            let mut r = Report::new();
+            check_raw(text.as_bytes(), text, "c.xhtml", false, &mut r);
+            r.messages.iter().filter_map(|m| m.rule).collect::<Vec<_>>()
+        };
+        for id in [
+            "-//W3C//DTD XHTML 1.1//EN",
+            "-//W3C//DTD XHTML 1.0 Strict//EN",
+            "-//W3C//DTD XHTML 1.0 Transitional//EN",
+        ] {
+            assert!(
+                !rules(&doc(id)).contains(&"htm.entity.undeclared"),
+                "{id} declares &nbsp;"
+            );
+        }
+        // Still HTM-004 for anything that is not the 1.1/OEB pair, because
+        // epubcheck compares that identifier exactly.
+        assert!(
+            rules(&doc("-//W3C//DTD XHTML 1.0 Strict//EN"))
+                .contains(&"htm.doctype.epub2_unrecognized_public_id"),
+            "an XHTML 1.0 doctype is still the wrong one for EPUB 2"
+        );
+        // A doctype that declares nothing still leaves &nbsp; undeclared.
+        assert!(
+            rules(&doc("-//W3C//DTD HTML 4.01//EN")).contains(&"htm.entity.undeclared"),
+            "an unbundled DTD cannot be assumed to declare the entities"
+        );
+    }
+
     /// A bare `&` is the commonest XML error in a hand-edited ebook, and it
     /// used to fall between two checks: the parse-failure path suppresses
     /// entity errors on the grounds that this scan owns them, and this scan
