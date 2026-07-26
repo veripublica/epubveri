@@ -1274,6 +1274,13 @@
     <mixed><zeroOrMore><ref name="anyForeignElement"/></zeroOrMore></mixed>
   </define>
 
+  <!-- Any attributes, no constraint on names or values - the idiom
+       `foreignContent` uses, pulled out so the MathML grammar below can take
+       the attributes without also taking the opaque content model. -->
+  <define name="anyAttributes">
+    <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
+  </define>
+
   <define name="anyForeignElement">
     <element><anyName/><ref name="foreignContent"/></element>
   </define>
@@ -1282,10 +1289,260 @@
     <element name="svg" ns="http://www.w3.org/2000/svg"><ref name="foreignContent"/></element>
   </define>
 
+  <!-- ============ MathML 3 Presentation ============ -->
+
+  <!-- Content models only; **attributes are left free**. epubcheck validates
+       MathML normatively (it is part of its EPUB 3 XHTML schema), and the
+       content models are where the real constraints live - `mfrac` takes
+       exactly two children, `msubsup` exactly three, `mtable` holds only
+       rows. Attribute *values* are a second, independent surface with its own
+       false-positive risk and far less to catch, so they stay permissive,
+       exactly as the XHTML side leaves `role`/`aria-*` values unchecked.
+
+       Derived from `mod/mathml/mathml3-presentation.rnc`, and measured
+       against 257k live MathML elements across two independently-produced
+       real books (a W3C sample built by LaTeX->XML, and an O'Reilly title) -
+       the cover that was missing when this work was first deferred. Both must
+       stay clean; a wrong arity rule shows up there immediately.
+
+       Content MathML is deliberately absent: EPUB restricts `<math>` to
+       `semantics | PresentationExpression`, and `opf.rs` already reports
+       Content MathML used directly. -->
   <define name="mathEl">
     <element name="math" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="foreignContent"/>
+      <ref name="anyAttributes"/>
+      <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
     </element>
+  </define>
+
+  <define name="mathExpression">
+    <choice>
+      <ref name="mlSemantics"/>
+      <ref name="mlPresentation"/>
+    </choice>
+  </define>
+
+  <!-- `semantics` carries the presentation form plus any number of
+       annotations; `annotation`/`annotation-xml` hold foreign content, whose
+       encoding/name rules `mathml.rs` checks separately. -->
+  <define name="mlSemantics">
+    <element name="semantics" ns="http://www.w3.org/1998/Math/MathML">
+      <ref name="anyAttributes"/>
+      <zeroOrMore>
+        <choice>
+          <ref name="mathExpression"/>
+          <element name="annotation" ns="http://www.w3.org/1998/Math/MathML">
+            <ref name="anyAttributes"/><text/>
+          </element>
+          <element name="annotation-xml" ns="http://www.w3.org/1998/Math/MathML">
+            <ref name="anyAttributes"/><ref name="foreignContent"/>
+          </element>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+
+  <define name="mlPresentation">
+    <choice>
+      <ref name="mlToken"/>
+      <ref name="mlEmpty"/>
+      <ref name="mlImpliedMrow"/>
+      <ref name="mlBinary"/>
+      <ref name="mlTernary"/>
+      <ref name="mlAnyChildren"/>
+      <ref name="mlTable"/>
+      <ref name="mlScripts"/>
+      <ref name="mlStack"/>
+    </choice>
+  </define>
+
+  <!-- mi/mn/mo/ms/mtext: text, with `mglyph`/`malignmark` allowed inside. -->
+  <define name="mlToken">
+    <element ns="http://www.w3.org/1998/Math/MathML">
+      <choice>
+        <name>mi</name><name>mn</name><name>mo</name>
+        <name>ms</name><name>mtext</name>
+      </choice>
+      <ref name="anyAttributes"/>
+      <mixed>
+        <zeroOrMore>
+          <element ns="http://www.w3.org/1998/Math/MathML">
+            <choice><name>mglyph</name><name>malignmark</name></choice>
+            <ref name="anyAttributes"/><empty/>
+          </element>
+        </zeroOrMore>
+      </mixed>
+    </element>
+  </define>
+
+  <define name="mlEmpty">
+    <element ns="http://www.w3.org/1998/Math/MathML">
+      <choice>
+        <name>mspace</name><name>mglyph</name><name>msline</name>
+        <name>none</name><name>mprescripts</name>
+        <name>maligngroup</name><name>malignmark</name>
+      </choice>
+      <ref name="anyAttributes"/><empty/>
+    </element>
+  </define>
+
+  <!-- ImpliedMrow (`MathExpression*`), plus mrow/mfenced which share it. -->
+  <define name="mlImpliedMrow">
+    <element ns="http://www.w3.org/1998/Math/MathML">
+      <choice>
+        <name>mrow</name><name>mfenced</name><name>msqrt</name>
+        <name>mstyle</name><name>merror</name><name>mpadded</name>
+        <name>mphantom</name><name>menclose</name>
+      </choice>
+      <ref name="anyAttributes"/>
+      <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+    </element>
+  </define>
+
+  <!-- Exactly two children. -->
+  <define name="mlBinary">
+    <element ns="http://www.w3.org/1998/Math/MathML">
+      <choice>
+        <name>mfrac</name><name>mroot</name><name>msub</name>
+        <name>msup</name><name>munder</name><name>mover</name>
+      </choice>
+      <ref name="anyAttributes"/>
+      <ref name="mathExpression"/>
+      <ref name="mathExpression"/>
+    </element>
+  </define>
+
+  <!-- Exactly three. -->
+  <define name="mlTernary">
+    <element ns="http://www.w3.org/1998/Math/MathML">
+      <choice><name>msubsup</name><name>munderover</name></choice>
+      <ref name="anyAttributes"/>
+      <ref name="mathExpression"/>
+      <ref name="mathExpression"/>
+      <ref name="mathExpression"/>
+    </element>
+  </define>
+
+  <!-- One or more. -->
+  <define name="mlAnyChildren">
+    <element name="maction" ns="http://www.w3.org/1998/Math/MathML">
+      <ref name="anyAttributes"/>
+      <oneOrMore><ref name="mathExpression"/></oneOrMore>
+    </element>
+  </define>
+
+  <!-- Only `mtable` is a PresentationExpression: rows and cells are
+       reachable solely through their container, so a bare `<mtr>` or `<mtd>`
+       is an error. -->
+  <define name="mlTable">
+    <element name="mtable" ns="http://www.w3.org/1998/Math/MathML">
+      <ref name="anyAttributes"/>
+      <zeroOrMore><ref name="mlTableRow"/></zeroOrMore>
+    </element>
+  </define>
+
+  <define name="mlTableRow">
+    <choice>
+      <element name="mtr" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="anyAttributes"/>
+        <zeroOrMore><ref name="mlCell"/></zeroOrMore>
+      </element>
+      <element name="mlabeledtr" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="anyAttributes"/>
+        <oneOrMore><ref name="mlCell"/></oneOrMore>
+      </element>
+    </choice>
+  </define>
+
+  <define name="mlCell">
+    <element name="mtd" ns="http://www.w3.org/1998/Math/MathML">
+      <ref name="anyAttributes"/>
+      <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+    </element>
+  </define>
+
+  <!-- mmultiscripts: a base, then (sub, sup) pairs, optionally `mprescripts`
+       and more pairs. `none` stands in for an absent script. -->
+  <define name="mlScripts">
+    <element name="mmultiscripts" ns="http://www.w3.org/1998/Math/MathML">
+      <ref name="anyAttributes"/>
+      <ref name="mathExpression"/>
+      <zeroOrMore><ref name="mlScriptPair"/></zeroOrMore>
+      <optional>
+        <element name="mprescripts" ns="http://www.w3.org/1998/Math/MathML">
+          <ref name="anyAttributes"/><empty/>
+        </element>
+        <zeroOrMore><ref name="mlScriptPair"/></zeroOrMore>
+      </optional>
+    </element>
+  </define>
+
+  <define name="mlScriptPair">
+    <group>
+      <ref name="mlScriptSlot"/>
+      <ref name="mlScriptSlot"/>
+    </group>
+  </define>
+
+  <define name="mlScriptSlot">
+    <choice>
+      <element name="none" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="anyAttributes"/><empty/>
+      </element>
+      <ref name="mathExpression"/>
+    </choice>
+  </define>
+
+  <!-- Elementary maths (MathML3 §3.6): long division and column arithmetic. -->
+  <define name="mlStack">
+    <choice>
+      <element ns="http://www.w3.org/1998/Math/MathML">
+        <choice><name>mstack</name><name>msgroup</name></choice>
+        <ref name="anyAttributes"/>
+        <zeroOrMore><ref name="mlStackExpression"/></zeroOrMore>
+      </element>
+      <element name="mlongdiv" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="anyAttributes"/>
+        <ref name="mlStackExpression"/>
+        <ref name="mlStackExpression"/>
+        <oneOrMore><ref name="mlStackExpression"/></oneOrMore>
+      </element>
+    </choice>
+  </define>
+
+  <define name="mlStackExpression">
+    <choice>
+      <ref name="mathExpression"/>
+      <ref name="mlStackRow"/>
+      <element name="mscarries" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="anyAttributes"/>
+        <zeroOrMore>
+          <choice>
+            <ref name="mlSrowExpression"/>
+            <element name="mscarry" ns="http://www.w3.org/1998/Math/MathML">
+              <ref name="anyAttributes"/>
+              <zeroOrMore><ref name="mlSrowExpression"/></zeroOrMore>
+            </element>
+          </choice>
+        </zeroOrMore>
+      </element>
+    </choice>
+  </define>
+
+  <define name="mlStackRow">
+    <element name="msrow" ns="http://www.w3.org/1998/Math/MathML">
+      <ref name="anyAttributes"/>
+      <zeroOrMore><ref name="mlSrowExpression"/></zeroOrMore>
+    </element>
+  </define>
+
+  <define name="mlSrowExpression">
+    <choice>
+      <ref name="mathExpression"/>
+      <element name="none" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="anyAttributes"/><empty/>
+      </element>
+    </choice>
   </define>
 
   <!-- ============ epub:switch (real sequencing: case* then default?) ============ -->

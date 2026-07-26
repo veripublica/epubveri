@@ -525,6 +525,60 @@ mod tests {
         assert!(!validate_xml(&package_grammar(), &bogus).unwrap());
     }
 
+    /// MathML 3 Presentation content models. The arity rules are the point:
+    /// `mfrac` takes exactly two children, `msubsup` exactly three, and rows
+    /// and cells exist only inside their container.
+    ///
+    /// This work was deferred twice for want of cover - epubcheck's 12 valid
+    /// MathML fixtures touch about 11 of 39 elements, all in trivial shapes.
+    /// It became measurable once two independently-produced real books
+    /// carrying 257k live MathML elements reached the shelf, and *those* are
+    /// the real test: a wrong arity rule rejects thousands of equations
+    /// there. Both must stay clean.
+    #[test]
+    fn mathml_presentation_content_models() {
+        const NS: &str = "xmlns=\"http://www.w3.org/1998/Math/MathML\"";
+        let doc = |m: &str| {
+            format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+                 <body><p><math {NS}>{m}</math></p></body></html>"
+            )
+        };
+        let ok = |m: &str| {
+            validate_node_report(
+                &xhtml_grammar(),
+                roxmltree::Document::parse(&doc(m)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+        for good in [
+            "<mfrac><mi>a</mi><mi>b</mi></mfrac>",
+            "<msubsup><mi>a</mi><mi>b</mi><mi>c</mi></msubsup>",
+            "<munderover><mo>x</mo><mi>i</mi><mi>n</mi></munderover>",
+            "<mtable><mtr><mtd><mi>x</mi></mtd></mtr></mtable>",
+            "<mrow></mrow>",
+            "<msqrt><mi>a</mi><mi>b</mi></msqrt>",
+            "<mmultiscripts><mi>R</mi><mi>i</mi><none/></mmultiscripts>",
+            "<mstack><msrow><mn>1</mn></msrow><msline/></mstack>",
+            "<semantics><mrow><mi>a</mi></mrow><annotation>x</annotation></semantics>",
+            "<mtext>a<mglyph/>b</mtext>",
+        ] {
+            assert!(ok(good), "must be accepted: {good}");
+        }
+        for bad in [
+            "<mfrac><mi>a</mi></mfrac>",
+            "<mfrac><mi>a</mi><mi>b</mi><mi>c</mi></mfrac>",
+            "<msubsup><mi>a</mi><mi>b</mi></msubsup>",
+            "<mtable><mi>x</mi></mtable>",
+            "<mtr><mtd><mi>x</mi></mtd></mtr>",
+            "<mtd><mi>x</mi></mtd>",
+            "<maction></maction>",
+            "<mspace><mi>x</mi></mspace>",
+        ] {
+            assert!(!ok(bad), "must be rejected: {bad}");
+        }
+    }
+
     /// A missing `<title>` is an RSC-005 *error* in EPUB 2 and an RSC-017
     /// *warning* in EPUB 3, and the difference is in the schemas rather than
     /// in taste: XHTML 1.1's `head.content` is simply `title`, so the grammar

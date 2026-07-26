@@ -111,10 +111,14 @@ ANN = {
         "`isNormative=false`, so its findings are RSC-025 usage - which is "
         "the shape `src/svg.rs` already has. Of the three normative rules we "
         "do all three (`epub:type` placement matched to epubcheck's own "
-        "allowlist), except the SVG `id` datatype. MathML: the EPUB "
-        "restriction (Presentation-only + `semantics`) is implemented; the "
-        "MathML3 presentation grammar itself is not. Attribute *values* stay "
-        "permissive (`role` accepts any token, `aria-*` unranged)."),
+        "allowlist), except the SVG `id` datatype. MathML: both the EPUB "
+        "restriction (Presentation-only + `semantics`) and the MathML3 "
+        "presentation **content models** are implemented - the arity of "
+        "`mfrac`/`msubsup`/`munderover` and the like, and table containment. "
+        "Attribute *values* stay permissive throughout (MathML attributes are "
+        "unconstrained, `role` accepts any token, `aria-*` unranged) - a "
+        "separate surface with its own false-positive risk and much less to "
+        "catch."),
     "RSC-020": ("partial",
         "Checked: host syntax and scheme (space/comma in host, missing `//`) "
         "on any reference, plus an unencoded space in a manifest href. Not "
