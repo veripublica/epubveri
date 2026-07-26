@@ -8,6 +8,35 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.7.12] - 2026-07-26
+
+Three fixes from one MobileRead report by Doitsu. One of them is serious: a
+single stray character could silently disable validation of a whole content
+document.
+
+### Fixed
+
+- **A bare `&` no longer makes a content document skip validation entirely.**
+  `<p>Tom & Jerry</p>` is malformed XML, but the error fell between two
+  checks — the parse-failure path defers entity errors to the raw-text scan,
+  and that scan skipped a `&` with no entity name after it. The document then
+  failed to parse and *every* check on it was quietly dropped, so a book with
+  other real errors in the same file could still report as valid. It is now
+  reported as `RSC-016`, phrased as the fix rather than as the parser's
+  complaint: **"a bare '&' must be written as '&amp;'"**.
+- **`properties="svg"` is no longer an error when the document only
+  *references* an SVG.** The property is required when a document contains SVG
+  markup and merely *permitted* when it links to an SVG resource, so declaring
+  it on a document whose only SVG is an `<img src="…svg"/>` is optional, not
+  wrong. A missing declaration on a document with inline `<svg>` is still
+  `OPF-014`.
+
+### Added
+
+- **Empty `<ol>`, `<ul>`, `<dl>` and `<table>` are reported on EPUB 2.**
+  XHTML 1.1 requires content in all four. HTML5 does not, so this applies to
+  EPUB 2 books only — an empty list in an EPUB 3 book stays valid.
+
 ## [0.7.11] - 2026-07-26
 
 Three false positives and a duplicate-reporting fix, all found by running
