@@ -8,7 +8,11 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.7.13] - 2026-07-26
+
+The headline is a silent one: a content document could be dropped from every
+check because of a single `&nbsp;`. Also completes MathML validation and two
+CSS/schema checks.
 
 ### Fixed
 
@@ -20,8 +24,22 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `head` content model simply *is* `title`. It stays a warning on EPUB 3,
   where epubcheck's own rule is a warning-level Schematron assertion.
 
+- **A content document using `&nbsp;` under an XHTML 1.0 doctype is no longer
+  skipped entirely.** The entity was reported as undeclared — a *fatal* — and
+  the document then failed to parse, so every other check on it was silently
+  dropped. On one real book the affected file produced 15 fatals and one other
+  finding where its siblings each produced around 300. XHTML 1.0 Strict and
+  Transitional declare the HTML named entities just as 1.1 does; a separate
+  question from whether the doctype is the one EPUB 2 wants, which is still
+  reported as `HTM-004`.
+
 ### Added
 
+- **MathML Presentation content models are now validated** — `mfrac` takes
+  exactly two children, `msubsup` exactly three, rows and cells exist only
+  inside their container, and so on. Attribute values are left unconstrained.
+  Verified against two independently-produced real books carrying 257,000
+  MathML elements between them, both of which stay clean.
 - **Malformed `U+` unicode-ranges are reported as `CSS-008`** — a run of more
   than six hex digits, which is more than any code point needs. This was the
   last item in `CSS-008`, so that check is now complete against epubcheck's
