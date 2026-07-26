@@ -61,6 +61,13 @@ fn peek_opf_version(ocf: &mut ocf::Ocf, opf_path: &str) -> Option<String> {
     doc.root_element().attr_no_ns("version").map(String::from)
 }
 
+/// The EPUB extension-spec profiles this tool recognizes, matching epubcheck's
+/// own `--profile` values. Public because the CLI validates its `--profile`
+/// argument against exactly this list, and PKG-023 asks the same question of
+/// the same list — two callers, one answer, so there is only one list to
+/// change when a profile is added.
+pub const PROFILES: [&str; 4] = ["dict", "edupub", "idx", "preview"];
+
 /// Optional validation settings. `Options::default()` is exactly the behavior
 /// of [`validate_bytes`] — no profile, advisory off — so passing it changes
 /// nothing.
@@ -120,6 +127,24 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     // more than one, each validated as its own, independent OPF.
     for opf_path in &opf_paths {
         opf::check(&mut container, opf_path, profile, advisory, &mut report);
+        // PKG-023 (usage): validation profiles are an EPUB 3 feature, so a
+        // `--profile` request against an EPUB 2 publication is silently
+        // ignored - epubcheck says so rather than letting the user believe
+        // their profile ran. Only a *recognized* profile counts: an
+        // unrecognized name already means "default" everywhere else in this
+        // tool (documented on `validate_bytes_with_profile`), and reporting
+        // that one as an ignored profile would describe a request the user
+        // never successfully made.
+        if PROFILES.contains(&profile.unwrap_or_default())
+            && peek_opf_version(&mut container, opf_path).is_some_and(|v| v.starts_with('2'))
+        {
+            report.push_at(
+                ids::PKG_023,
+                report::Severity::Usage,
+                "validation profiles do not apply to EPUB 2; the default profile was used",
+                opf_path,
+            );
+        }
     }
     // Checked once for the whole publication (not per-rendition): the
     // multi-rendition dc:type cardinality cross-check reads
@@ -352,6 +377,37 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// PKG-023: validation profiles are an EPUB 3 feature, so `--profile` on
+    /// an EPUB 2 book quietly does nothing. epubcheck says so, rather than
+    /// leaving the user to believe their profile ran.
+    ///
+    /// The third case is the one worth having a test for: an unrecognized
+    /// profile name already means "the default profile" everywhere else in
+    /// this tool, so reporting it here would describe a request the user
+    /// never successfully made.
+    #[test]
+    fn a_profile_requested_for_an_epub2_book_is_reported_as_not_applying() {
+        let count = |bytes: Vec<u8>, profile: Option<&str>| {
+            crate::validate_bytes_with_profile(bytes, profile)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::PKG_023)
+                .count()
+        };
+        assert_eq!(count(epub2_with_dtd_entities("C1"), Some("edupub")), 1);
+        assert_eq!(count(epub2_with_dtd_entities("C1"), None), 0);
+        assert_eq!(
+            count(epub2_with_dtd_entities("C1"), Some("nonsense")),
+            0,
+            "an unrecognized name is the default profile, not an ignored one"
+        );
+        assert_eq!(
+            count(epub3_minimal(), Some("edupub")),
+            0,
+            "profiles do apply to EPUB 3"
+        );
     }
 
     /// PKG-016/017/024 (#49): the three-way split on the container's own

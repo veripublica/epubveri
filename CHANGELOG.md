@@ -10,6 +10,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **PKG-023**: asking for a validation profile (`--profile`) on an EPUB 2 book
+  now says the profile doesn't apply, instead of silently ignoring it.
+  Profiles are an EPUB 3 feature.
+- **PKG-018**: an input path that doesn't exist is reported as a finding with
+  its epubcheck message ID — so the JSON output carries it like any other —
+  rather than as a bare stderr line. The exit code is unchanged (`2`).
+
+### Changed
+
+- **Coverage is now 189 of 197 live epubcheck checks (~96%)**, up from
+  187/198. Two of those come from the checks above; the third move is
+  PKG-015 leaving the denominator. It is a dead ID: "unable to read EPUB
+  contents" exists only in epubcheck's severity table and translation
+  bundles, with no Java source line that emits it and no scenario expecting
+  it. PKG-001 stays counted as a gap, and its note now says why it is a
+  missing *feature* rather than a missing check — it can only fire when the
+  caller demands a specific EPUB version that disagrees with the book's own,
+  and epubveri has no version-override flag.
+
 ### Fixed
 
 An audit of every place a check stays quiet on the grounds that another check

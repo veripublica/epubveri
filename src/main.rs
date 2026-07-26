@@ -190,9 +190,12 @@ fn parse(args: &[String]) -> Cli {
         fail!("invalid value '{f}' for --format; supported values: human, json, ids");
     }
     if let Some(p) = &profile
-        && !["dict", "edupub", "idx", "preview"].contains(&p.as_str())
+        && !epubveri::PROFILES.contains(&p.as_str())
     {
-        fail!("invalid value '{p}' for --profile; supported values: dict, edupub, idx, preview");
+        fail!(
+            "invalid value '{p}' for --profile; supported values: {}",
+            epubveri::PROFILES.join(", ")
+        );
     }
 
     // Precedence: help short-circuits even a malformed line; a usage error
@@ -242,6 +245,15 @@ fn main() -> ExitCode {
     }
 }
 
+/// Whether a report is the synthetic "this file does not exist" one - see the
+/// PKG-018 branch in [`run`].
+fn has_pkg_018(report: &epubveri::report::Report) -> bool {
+    report
+        .messages
+        .iter()
+        .any(|m| m.id == epubveri::ids::PKG_018)
+}
+
 /// Validate every input, report on each, and aggregate the exit code: `2` if
 /// any input could not be read, else `1` if any has errors/fatals, else `0`.
 fn run(inputs: &[String], format: &str, profile: Option<&str>, advisory: bool) -> ExitCode {
@@ -254,8 +266,27 @@ fn run(inputs: &[String], format: &str, profile: Option<&str>, advisory: bool) -
     let results: Vec<(&String, Result<epubveri::report::Report, String>)> = inputs
         .iter()
         .map(|path| {
-            let r = epubveri::validate_path_with_options(Path::new(path), &options)
-                .map_err(|e| format!("cannot read {path}: {e}"));
+            let r = match epubveri::validate_path_with_options(Path::new(path), &options) {
+                Ok(report) => Ok(report),
+                // A path that simply isn't there is the one I/O failure with
+                // an epubcheck message ID of its own, so it is reported as a
+                // finding - which also carries it through the JSON envelope
+                // like any other. Every other failure (a permission problem,
+                // a directory, a broken symlink) has no ID and stays a plain
+                // message. The exit code is unaffected either way: nothing
+                // was validated, so it stays 2 (see the aggregation below).
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    let mut report = epubveri::report::Report::new();
+                    report.push_at(
+                        epubveri::ids::PKG_018,
+                        epubveri::report::Severity::Fatal,
+                        "the EPUB file could not be found",
+                        path.as_str(),
+                    );
+                    Ok(report)
+                }
+                Err(e) => Err(format!("cannot read {path}: {e}")),
+            };
             (path, r)
         })
         .collect();
@@ -264,6 +295,10 @@ fn run(inputs: &[String], format: &str, profile: Option<&str>, advisory: bool) -
     for (_, r) in &results {
         worst = worst.max(match r {
             Ok(report) if report.is_valid() => 0,
+            // PKG-018 is a finding, but it is still "the input could not be
+            // read" - no verdict was possible, so it exits 2 like any other
+            // unreadable input rather than 1 (§6).
+            Ok(report) if has_pkg_018(report) => 2,
             Ok(_) => 1,
             Err(_) => 2, // no verdict was possible (§6)
         });

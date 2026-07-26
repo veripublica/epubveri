@@ -59,6 +59,18 @@ ANN = {
         "nonempty header goes to PKG-004/PKG-008 instead."),
     "PKG-020": (None, "Not emitted, but the condition IS detected: a missing "
         "declared OPF is reported as OPF-002 (Fatal)."),
+    "PKG-015": ("na", "Dead ID - \"unable to read EPUB contents\" exists only "
+        "in DefaultSeverities and the translation bundles; no Java source "
+        "line emits it and no scenario expects it (verified 2026-07-26, same "
+        "shape as OPF-036). The conditions it reads as covering are reported "
+        "as PKG-004/PKG-008."),
+    "PKG-001": (None, "Not emitted, and the condition cannot arise here: it "
+        "fires only when the caller demands a specific EPUB version that "
+        "disagrees with the book's own (epubcheck's `--version`), and "
+        "epubveri has no version-override flag. A missing *feature* rather "
+        "than a missing check - implementing the message means first "
+        "deciding whether to validate a 3.0 book as 2.0 on request, which is "
+        "a behaviour change, not a rule."),
     # --- OPF (reviewed) ---
     "OPF-052": (None, "Membership in the 273-code MARC relator list "
         "epubcheck itself carries, plus its `oth.` escape hatch; checked on "
