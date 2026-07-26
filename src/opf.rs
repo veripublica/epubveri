@@ -3952,7 +3952,15 @@ pub fn check(
                     );
                 }
             }
-            None => {
+            None if is_epub3 => {
+                // EPUB 3 only. epubcheck's `title.present` is a Schematron
+                // assertion whose message begins with "WARNING:", and its
+                // error handler maps that prefix to RSC-017 rather than
+                // RSC-005 - so a warning is right here. XHTML 1.1 instead
+                // makes `title` *required* by the grammar itself
+                // (`head.content = title`), which is an RSC-005 error and is
+                // now enforced by `headEl-epub2`. Reporting both would double
+                // up on the same missing element.
                 report.push_node(
                     RSC_017,
                     Severity::Warning,
@@ -3963,6 +3971,7 @@ pub fn check(
                     Vec::new(),
                 );
             }
+            None => {}
         }
 
         // Duplicate `id` attribute values within this document.

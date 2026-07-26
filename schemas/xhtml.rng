@@ -59,29 +59,37 @@
     <element name="head">
       <ref name="globalAttrs"/>
       <interleave>
-        <!-- a missing <title> is a warning in epubcheck, not a hard error;
-             keep it grammar-optional so we don't reject the whole document. -->
+        <!-- HTML5 makes a missing <title> a soft rule, and epubcheck reports
+             it as an RSC-017 *warning* (its Schematron message there starts
+             with "WARNING:", which its handler maps to RSC-017 rather than
+             RSC-005). So it stays grammar-optional here and `opf.rs` emits
+             the warning. XHTML 1.1 differs - see `headEl-epub2`. -->
         <optional><element name="title"><ref name="globalAttrsCore"/><text/></element></optional>
-        <zeroOrMore>
-          <choice>
-            <ref name="metaEl"/>
-            <ref name="linkEl"/>
-            <element name="style"><ref name="globalAttrsCore"/>
-              <optional><attribute name="type"><data type="string"/></attribute></optional>
-              <text/>
-            </element>
-            <element name="base">
-              <ref name="globalAttrsCore"/>
-              <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
-            </element>
-            <ref name="scriptEl"/>
-            <!-- the deprecated EPUB3 trigger element (still epubcheck-valid,
-                 with a deprecation warning) -->
-            <element name="epub:trigger"><ref name="globalAttrsCore"/></element>
-          </choice>
-        </zeroOrMore>
+        <ref name="headContentsCommon"/>
       </interleave>
     </element>
+  </define>
+
+  <!-- Everything a <head> may hold besides <title>, shared by both versions. -->
+  <define name="headContentsCommon">
+    <zeroOrMore>
+      <choice>
+        <ref name="metaEl"/>
+        <ref name="linkEl"/>
+        <element name="style"><ref name="globalAttrsCore"/>
+          <optional><attribute name="type"><data type="string"/></attribute></optional>
+          <text/>
+        </element>
+        <element name="base">
+          <ref name="globalAttrsCore"/>
+          <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+        </element>
+        <ref name="scriptEl"/>
+        <!-- the deprecated EPUB3 trigger element (still epubcheck-valid,
+             with a deprecation warning) -->
+        <element name="epub:trigger"><ref name="globalAttrsCore"/></element>
+      </choice>
+    </zeroOrMore>
   </define>
 
   <define name="scriptEl">
@@ -1401,7 +1409,7 @@
   <define name="htmlEl-epub2">
     <element name="html">
       <ref name="globalAttrs"/>
-      <ref name="headEl"/>
+      <ref name="headEl-epub2"/>
       <ref name="bodyEl-epub2"/>
     </element>
   </define>
@@ -1409,6 +1417,22 @@
   <!-- body is block-level in XHTML 1.1: loose text and inline elements
        directly under it are content-model errors (#13). This is *not*
        HTML5, where the same is valid flow content, so it is EPUB 2 only. -->
+  <!-- XHTML 1.1's `head.content` is simply `title` - required, not optional -
+       so a document with no `<title>` is an RSC-005 grammar error in EPUB 2.
+       HTML5 made it a soft rule, which is why `headEl` above keeps it
+       optional and `opf.rs` reports the EPUB 3 case as an RSC-017 warning
+       (epubcheck's own Schematron message there starts with "WARNING:",
+       which its handler maps to RSC-017). -->
+  <define name="headEl-epub2">
+    <element name="head">
+      <ref name="globalAttrs"/>
+      <interleave>
+        <element name="title"><ref name="globalAttrsCore"/><text/></element>
+        <ref name="headContentsCommon"/>
+      </interleave>
+    </element>
+  </define>
+
   <define name="bodyEl-epub2">
     <element name="body"><ref name="globalAttrs"/><ref name="bodyOnlyEvents"/><ref name="epub2Block"/></element>
   </define>

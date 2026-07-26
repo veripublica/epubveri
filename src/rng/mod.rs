@@ -525,6 +525,52 @@ mod tests {
         assert!(!validate_xml(&package_grammar(), &bogus).unwrap());
     }
 
+    /// A missing `<title>` is an RSC-005 *error* in EPUB 2 and an RSC-017
+    /// *warning* in EPUB 3, and the difference is in the schemas rather than
+    /// in taste: XHTML 1.1's `head.content` is simply `title`, so the grammar
+    /// requires it, while epubcheck's EPUB 3 rule is a Schematron assertion
+    /// whose message begins with "WARNING:" — a prefix its error handler maps
+    /// to RSC-017. We had the EPUB 3 behaviour on both.
+    #[test]
+    fn head_requires_a_title_only_on_epub2() {
+        let head_only = |g: &Grammar| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&format!(
+                    "<html {XHTML_NS_DECLS}><head></head><body><p>x</p></body></html>"
+                ))
+                .unwrap()
+                .root_element(),
+            )
+            .is_empty()
+        };
+        assert!(
+            !head_only(&xhtml_grammar_epub2()),
+            "EPUB 2 requires <title>"
+        );
+        assert!(
+            head_only(&xhtml_grammar()),
+            "EPUB 3 leaves it to the RSC-017 warning, so the grammar accepts it"
+        );
+        // A head that has one is fine in both, and the rest of its contents
+        // are unaffected by the split.
+        let full = |g: &Grammar| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&format!(
+                    "<html {XHTML_NS_DECLS}><head><title>t</title>\
+                     <meta name=\"a\" content=\"b\"/><style>p{{}}</style></head>\
+                     <body><p>x</p></body></html>"
+                ))
+                .unwrap()
+                .root_element(),
+            )
+            .is_empty()
+        };
+        assert!(full(&xhtml_grammar_epub2()));
+        assert!(full(&xhtml_grammar()));
+    }
+
     /// #60: an element with incomplete content used to stop its *siblings*
     /// from being checked, so a body of four empty containers reported one
     /// error where epubcheck reports four.
