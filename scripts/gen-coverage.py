@@ -147,17 +147,17 @@ ANN = {
         "(EPUB 3 only) - we match it."),
     "CSS-006": (None, "`position: fixed` (USAGE) - matches epubcheck's "
         "first-value-component == \"fixed\" test."),
-    "CSS-008": ("partial",
-        "Covers bad-string/bad-url tokens, unterminated rules/blocks, "
-        "malformed declaration shapes, and - since styloria 0.5 - malformed "
-        "selector lists. The one epubcheck CSS error with no counterpart left "
-        "is a malformed `U+` unicode-range (its SCANNER_ILLEGAL_URANGE). "
-        "Note two things the old note claimed that turned out to be wrong: "
-        "epubcheck does *not* validate at-rule preludes (its ATRULE_PARAM "
-        "restriction is `return true`), and its GRAMMAR_INVALID_SELECTOR code "
-        "is never raised - selector errors reach CSS-008 via "
-        "GRAMMAR_EXPECTING_TOKEN instead."),
-    # --- MED (reviewed) ---
+    "CSS-008": (None, "Covers bad-string/bad-url tokens, unterminated "
+        "rules/blocks, malformed declaration shapes, malformed selector lists "
+        "(styloria 0.5) and over-long `U+` unicode-ranges (styloria 0.6) - "
+        "epubcheck's whole live CSS error surface. Two of its error codes are "
+        "dead and never raised (`GRAMMAR_INVALID_SELECTOR`, "
+        "`SCANNER_MALFORMED_ESCAPE`); selector errors reach CSS-008 via "
+        "`GRAMMAR_EXPECTING_TOKEN`, and epubcheck does *not* validate at-rule "
+        "preludes at all (its ATRULE_PARAM restriction is `return true`). One "
+        "deliberate deviation: selector validation flags only what is "
+        "malformed under Selectors Level 4 **and** epubcheck flags, so "
+        "modern-but-valid selectors its old parser rejects stay silent."),    # --- MED (reviewed) ---
     "MED-004": (None, "Reserved for a file too short to contain a 4-byte image "
         "header, matching epubcheck; a >=4-byte header that matches nothing is "
         "a declared/actual mismatch (OPF-029). Aligned in #45."),

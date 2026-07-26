@@ -22,7 +22,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF | 75 | 0 | 6 | 14 | 81 | 75/81 | reviewed |
 | RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
-| CSS | 12 | 1 | 0 | 13 | 13 | 13/13 | reviewed |
+| CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 10 | 0 | 0 | 1 | 10 | 10/10 | reviewed |
 | NCX | 3 | 0 | 0 | 3 | 3 | 3/3 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **183** | **4** | **11** | **100** | **198** | **187/198** | |
+| **All** | **184** | **3** | **11** | **100** | **198** | **187/198** | |
 
-**epubveri implements 187 of 198 live epubcheck checks (~94%)** — 183 fully, 4 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 187 of 198 live epubcheck checks (~94%)** — 184 fully, 3 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 100 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -268,7 +268,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | CSS-005 | Conflicting alternate style tags found: %1$s. | Y | Y | a stylesheet link's class conflicts between alt style tags (usage) |
 | CSS-006 | CSS selector specifies fixed position. | Y | Y | `position: fixed` (USAGE) - matches epubcheck's first-value-component == "fixed" test. |
 | CSS-007 | Font-face reference "%1$s" refers to non-standard font type "%2$s". | Y | Y | a @font-face src names a non-Core-Media-Type font (info) |
-| CSS-008 | An error occurred while parsing the CSS: %1$s. | Y | ~ | Covers bad-string/bad-url tokens, unterminated rules/blocks, malformed declaration shapes, and - since styloria 0.5 - malformed selector lists. The one epubcheck CSS error with no counterpart left is a malformed `U+` unicode-range (its SCANNER_ILLEGAL_URANGE). Note two things the old note claimed that turned out to be wrong: epubcheck does *not* validate at-rule preludes (its ATRULE_PARAM restriction is `return true`), and its GRAMMAR_INVALID_SELECTOR code is never raised - selector errors reach CSS-008 via GRAMMAR_EXPECTING_TOKEN instead. |
+| CSS-008 | An error occurred while parsing the CSS: %1$s. | Y | Y | Covers bad-string/bad-url tokens, unterminated rules/blocks, malformed declaration shapes, malformed selector lists (styloria 0.5) and over-long `U+` unicode-ranges (styloria 0.6) - epubcheck's whole live CSS error surface. Two of its error codes are dead and never raised (`GRAMMAR_INVALID_SELECTOR`, `SCANNER_MALFORMED_ESCAPE`); selector errors reach CSS-008 via `GRAMMAR_EXPECTING_TOKEN`, and epubcheck does *not* validate at-rule preludes at all (its ATRULE_PARAM restriction is `return true`). One deliberate deviation: selector validation flags only what is malformed under Selectors Level 4 **and** epubcheck flags, so modern-but-valid selectors its old parser rejects stay silent. |
 | CSS-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-010 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-011 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |

@@ -294,6 +294,10 @@ pub(crate) fn check(
             // is malformed" and "the declarations are malformed" send an
             // author to different places.
             spanned::SyntaxErrorKind::InvalidSelector => "css.stylesheet.invalid_selector",
+            // Its own slug for the same reason as the selector one: epubcheck
+            // reports every CSS parse problem as CSS-008, but "the range is
+            // malformed" points somewhere quite different from "the block is".
+            spanned::SyntaxErrorKind::InvalidUnicodeRange => "css.stylesheet.invalid_unicode_range",
         };
         report.push_full(
             CSS_008,
