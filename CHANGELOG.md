@@ -8,7 +8,13 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-07-26
+
+A minor bump rather than a patch: the library API changed. See **Breaking**
+below — embedders need `..Options::default()` in a `Options` literal, and
+`opf::check` now takes `&Options`. The CLI and the WASM bindings are
+source-compatible; nothing an existing invocation or JS call does changes
+meaning.
 
 ### Added
 
