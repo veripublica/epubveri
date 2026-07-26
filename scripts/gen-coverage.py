@@ -116,9 +116,23 @@ ANN = {
         "MathML3 presentation grammar itself is not. Attribute *values* stay "
         "permissive (`role` accepts any token, `aria-*` unranged)."),
     "RSC-020": ("partial",
-        "Host syntax + scheme are checked (space/comma in host, missing `//`). "
-        "A path/query space is treated as valid (matches epubcheck; WHATWG "
-        "normalizes it). Not a full WHATWG URL parse."),
+        "Checked: host syntax and scheme (space/comma in host, missing `//`) "
+        "on any reference, plus an unencoded space in a manifest href. Not "
+        "checked: an unencoded space in a *content document* reference, "
+        "backslashes, malformed percent-escapes, and the illegal-character "
+        "set. **Correcting an earlier note here**: it claimed a path space is "
+        "valid and that this matched epubcheck. It does not - epubcheck "
+        "parses every URL twice through galimatias, once with a strict error "
+        "handler that turns WHATWG's recoverable warnings into errors, and "
+        "its own two sibling fixtures settle it (a `%20` href is PKG-010 "
+        "warning, an unencoded one is RSC-020 error). Deliberately left "
+        "partial (2026-07-26): galimatias is a Maven dependency rather than "
+        "vendored, so the exact rule cannot be read here; the corpus carries "
+        "one RSC-020 scenario, which we already pass; and a scan of 61 real "
+        "books found exactly one malformed relative URL - the manifest-href "
+        "space we already catch. Building strictness against an unreadable "
+        "reference, on one test case, for something 60 of 61 books never do "
+        "is more likely to invent false positives than to catch defects."),
     "RSC-006": (None, "Remote stylesheet references (also SVG stylesheet forms)."),
     "RSC-030": (None, "Any reference starting with `file:` (CSS, XHTML, SVG forms)."),
     "RSC-022": ("na", "Not a validation check - epubcheck reporting its own "
