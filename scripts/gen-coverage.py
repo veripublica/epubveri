@@ -70,7 +70,7 @@ ANN = {
         "epubveri has no version-override flag. A missing *feature* rather "
         "than a missing check - implementing the message means first "
         "deciding whether to validate a 3.0 book as 2.0 on request, which is "
-        "a behaviour change, not a rule."),
+        "a behaviour change, not a rule (#61)."),
     # --- OPF (reviewed) ---
     "OPF-052": (None, "Membership in the 273-code MARC relator list "
         "epubcheck itself carries, plus its `oth.` escape hatch; checked on "

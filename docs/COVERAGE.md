@@ -40,7 +40,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| PKG-001 | Validating the EPUB against version %1$s but detected version %2$s. | Y | x | Not emitted, and the condition cannot arise here: it fires only when the caller demands a specific EPUB version that disagrees with the book's own (epubcheck's `--version`), and epubveri has no version-override flag. A missing *feature* rather than a missing check - implementing the message means first deciding whether to validate a 3.0 book as 2.0 on request, which is a behaviour change, not a rule. |
+| PKG-001 | Validating the EPUB against version %1$s but detected version %2$s. | Y | x | Not emitted, and the condition cannot arise here: it fires only when the caller demands a specific EPUB version that disagrees with the book's own (epubcheck's `--version`), and epubveri has no version-override flag. A missing *feature* rather than a missing check - implementing the message means first deciding whether to validate a 3.0 book as 2.0 on request, which is a behaviour change, not a rule (#61). |
 | PKG-003 | Unable to read EPUB file header. This is likely a corrupted EPUB file. | Y | ~ | Emitted only for a literally empty (0-byte) file; a corrupted-but-nonempty header goes to PKG-004/PKG-008 instead. |
 | PKG-004 | Corrupted EPUB ZIP header. | Y | Y | corrupted/unreadable ZIP header (not a usable OCF) |
 | PKG-005 | The mimetype file has an extra field of length %1$s. The use of the extra field feature... | Y | Y | the mimetype entry's ZIP header has a non-empty extra field |
