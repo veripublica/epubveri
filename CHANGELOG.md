@@ -8,6 +8,29 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An element with incomplete content no longer stops its siblings being
+  checked.** A body containing four empty `<ol>`/`<ul>`/`<table>`/`<dl>`
+  reported one error where epubcheck reports four, so the same file had to be
+  re-run once per fix (#60).
+- **A missing `<title>` is now an error on EPUB 2**, matching XHTML 1.1, whose
+  `head` content model simply *is* `title`. It stays a warning on EPUB 3,
+  where epubcheck's own rule is a warning-level Schematron assertion.
+
+### Added
+
+- **Malformed `U+` unicode-ranges are reported as `CSS-008`** — a run of more
+  than six hex digits, which is more than any code point needs. This was the
+  last item in `CSS-008`, so that check is now complete against epubcheck's
+  live CSS error surface.
+
+### Changed
+
+- styloria dependency `0.5` → `0.6`.
+
 ## [0.7.12] - 2026-07-26
 
 Three fixes from one MobileRead report by Doitsu. One of them is serious: a
