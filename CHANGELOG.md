@@ -8,6 +8,37 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **`-v` / `--epub-version <2|2.0|3|3.0>`: validate against a version the book
+  doesn't declare** (#61), the same flag epubcheck spells `-v`. On a
+  disagreement **PKG-001** reports it and the requested version wins — as
+  epubcheck does, so a ported invocation means the same thing here. Expect a
+  long report when the two disagree: a 3.0 book checked as 2.0 breaks a great
+  many EPUB 2 rules, all of them really one finding. Exposed to embedders as
+  `Options::epub_version` and as `validate()`'s fourth argument in the WASM
+  bindings.
+- Coverage is now **190 of 197 live epubcheck checks (~96%)**.
+
+### Breaking
+
+- `Options` gained a field, so a struct literal that lists every field no
+  longer compiles — add `..Options::default()` (which is now what this crate's
+  own helpers do).
+- `opf::check` takes `&Options` in place of its separate `profile` and
+  `advisory` parameters. This is the second time that signature had to change
+  for a new option, and each change breaks embedders over something they don't
+  care about; passing the struct means the next option costs them nothing.
+
+### Fixed
+
+- **PKG-023 now keys on the version being validated against**, not the one the
+  package document declares — so forcing an EPUB 3 book to EPUB 2 with `-v`
+  correctly reports that its profile does not apply. (It landed in 0.7.14
+  keyed on the declared version, which was right until `-v` existed.)
+
 ## [0.7.14] - 2026-07-26
 
 Two files that could be skipped in silence, and the coverage matrix reaching

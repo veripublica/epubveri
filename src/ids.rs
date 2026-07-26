@@ -21,6 +21,7 @@
 //! define. See the [`crate::css`] unknown-property/descriptor checks.
 
 // --- Packaging / OCF ---
+pub const PKG_001: &str = "PKG-001"; // a requested EPUB version disagrees with the declared one
 pub const PKG_003: &str = "PKG-003"; // the zip file is empty
 pub const PKG_004: &str = "PKG-004"; // corrupted/unreadable ZIP header (not a usable OCF)
 pub const PKG_005: &str = "PKG-005"; // the mimetype entry's ZIP header has a non-empty extra field

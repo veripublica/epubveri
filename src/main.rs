@@ -33,6 +33,12 @@ OPTIONS:
                            see the veripublica FORMATS spec).
         --profile <NAME>   Also check against an EPUB extension profile: one of
                            dict, edupub, idx, preview.
+    -v, --epub-version <V> Validate against this EPUB version (2, 2.0, 3, 3.0)
+                           whatever the book declares — epubcheck's -v. On a
+                           disagreement PKG-001 says so and the requested
+                           version wins, so a 3.0 book checked as 2.0 reports
+                           at length. Default: the version the book declares.
+                           (Note: -V, below, prints this tool's version.)
         --advisory         Also emit opt-in advisory findings epubcheck has no
                            verdict on (currently unknown CSS property/descriptor
                            names, as ADV-* at usage severity). Off by default;
@@ -52,6 +58,17 @@ EXIT CODES:
 
 Conforms to veripublica conventions v0.4.";
 
+/// Both spellings epubcheck accepts for each version, normalized to the bare
+/// major so the library never has to parse a version string. `None` means the
+/// value is not a version at all.
+fn normalize_epub_version(value: &str) -> Option<String> {
+    match value {
+        "2" | "2.0" => Some("2".to_string()),
+        "3" | "3.0" => Some("3".to_string()),
+        _ => None,
+    }
+}
+
 /// The outcome of parsing `argv` — decided entirely before any work is done.
 #[derive(Debug, PartialEq)]
 enum Cli {
@@ -60,6 +77,9 @@ enum Cli {
         inputs: Vec<String>,
         format: String,
         profile: Option<String>,
+        /// The EPUB version to validate against ("2"/"3"), whatever the book
+        /// declares - epubcheck's `-v`. `None` means "as declared".
+        epub_version: Option<String>,
         advisory: bool,
     },
     /// `-h`/`--help` was requested (short-circuits everything else).
@@ -83,6 +103,7 @@ fn parse(args: &[String]) -> Cli {
     let mut inputs: Vec<String> = Vec::new();
     let mut format: Option<String> = None;
     let mut profile: Option<String> = None;
+    let mut epub_version: Option<String> = None;
     let mut advisory = false;
     let mut help = false;
     let mut version = false;
@@ -118,7 +139,7 @@ fn parse(args: &[String]) -> Cli {
                 "help" => help = true,
                 "version" => version = true,
                 "advisory" => advisory = true,
-                "input" | "format" | "profile" => {
+                "input" | "format" | "profile" | "epub-version" => {
                     let value = match attached {
                         Some(v) => v,
                         None => {
@@ -136,6 +157,13 @@ fn parse(args: &[String]) -> Cli {
                         "input" => inputs.push(value),
                         "format" => set_single!(format, "--format", value),
                         "profile" => set_single!(profile, "--profile", value),
+                        "epub-version" => match normalize_epub_version(&value) {
+                            Some(v) => set_single!(epub_version, "--epub-version", v),
+                            None => fail!(
+                                "invalid value '{value}' for --epub-version; \
+                                 supported values: 2, 2.0, 3, 3.0"
+                            ),
+                        },
                         _ => unreachable!(),
                     }
                 }
@@ -150,7 +178,12 @@ fn parse(args: &[String]) -> Cli {
                 match chars[j] {
                     'h' => help = true,
                     'V' => version = true,
-                    'i' => {
+                    // epubcheck spells this `-v`; `-V` is this tool's own
+                    // version, as the convention requires. The two being one
+                    // letter apart is inherited, not chosen - the help text
+                    // spells out which is which.
+                    'v' | 'i' => {
+                        let flag = chars[j];
                         let rest: String = chars[j + 1..].iter().collect();
                         let value = if !rest.is_empty() {
                             rest
@@ -159,13 +192,30 @@ fn parse(args: &[String]) -> Cli {
                             match args.get(i) {
                                 Some(v) => v.clone(),
                                 None => {
-                                    fail!("option '-i' needs a value");
+                                    fail!("option '-{flag}' needs a value");
                                     break;
                                 }
                             }
                         };
-                        inputs.push(value);
-                        break; // -i has consumed the rest of the cluster
+                        if flag == 'i' {
+                            inputs.push(value);
+                        } else {
+                            match normalize_epub_version(&value) {
+                                Some(v) => set_single!(epub_version, "-v", v),
+                                // Checked here rather than after the scan (as
+                                // --format and --profile are) because of the
+                                // collision this flag brings: `-v -i book.epub`
+                                // feeds `-i` to `-v`, and the post-scan order
+                                // would then blame the *book* for being a
+                                // positional argument - telling the user to
+                                // use `-i`, which is exactly what they did.
+                                None => fail!(
+                                    "invalid value '{value}' for -v; \
+                                     supported values: 2, 2.0, 3, 3.0"
+                                ),
+                            }
+                        }
+                        break; // the value consumed the rest of the cluster
                     }
                     c => {
                         fail!("unexpected option '-{c}'");
@@ -216,6 +266,7 @@ fn parse(args: &[String]) -> Cli {
         inputs,
         format: format.unwrap_or_else(|| "human".to_string()),
         profile,
+        epub_version,
         advisory,
     }
 }
@@ -240,8 +291,9 @@ fn main() -> ExitCode {
             inputs,
             format,
             profile,
+            epub_version,
             advisory,
-        } => run(&inputs, &format, profile.as_deref(), advisory),
+        } => run(&inputs, &format, profile, epub_version, advisory),
     }
 }
 
@@ -256,9 +308,16 @@ fn has_pkg_018(report: &epubveri::report::Report) -> bool {
 
 /// Validate every input, report on each, and aggregate the exit code: `2` if
 /// any input could not be read, else `1` if any has errors/fatals, else `0`.
-fn run(inputs: &[String], format: &str, profile: Option<&str>, advisory: bool) -> ExitCode {
+fn run(
+    inputs: &[String],
+    format: &str,
+    profile: Option<String>,
+    epub_version: Option<String>,
+    advisory: bool,
+) -> ExitCode {
     let options = epubveri::Options {
-        profile: profile.map(String::from),
+        profile,
+        epub_version,
         advisory,
     };
     // Validate everything first; an input that can't be read carries its own
@@ -393,6 +452,7 @@ mod tests {
                 format,
                 profile,
                 advisory,
+                ..
             } => (inputs, format, profile, advisory),
             other => panic!("expected Run, got {other:?}"),
         }
@@ -457,14 +517,54 @@ mod tests {
 
     #[test]
     fn unknown_option_is_a_usage_error() {
-        // The -v bug: an unrecognized flag is named, not swallowed as a path.
+        // An unrecognized flag is named, not swallowed as a path. (This used
+        // to be spelled with `-v`, which is now the EPUB-version flag.)
         assert_eq!(
-            parse_str(&["-v", "-i", "a.epub"]),
-            Cli::Usage("unexpected option '-v'".into())
+            parse_str(&["-z", "-i", "a.epub"]),
+            Cli::Usage("unexpected option '-z'".into())
         );
         assert_eq!(
             parse_str(&["--bogus"]),
             Cli::Usage("unexpected option '--bogus'".into())
+        );
+    }
+
+    /// `-v`/`--epub-version` (#61), normalized to the bare major so the
+    /// library never parses a version string.
+    #[test]
+    fn epub_version_flag_normalizes_both_spellings() {
+        let version_of = |argv: &[&str]| match parse_str(argv) {
+            Cli::Run { epub_version, .. } => epub_version,
+            other => panic!("expected Run, got {other:?}"),
+        };
+        assert_eq!(version_of(&["-i", "a.epub"]), None);
+        assert_eq!(version_of(&["-i", "a.epub", "-v", "2"]), Some("2".into()));
+        assert_eq!(version_of(&["-i", "a.epub", "-v", "2.0"]), Some("2".into()));
+        assert_eq!(version_of(&["-i", "a.epub", "-v3.0"]), Some("3".into()));
+        assert_eq!(
+            version_of(&["-i", "a.epub", "--epub-version=3"]),
+            Some("3".into())
+        );
+        assert_eq!(
+            parse_str(&["-i", "a.epub", "-v", "4"]),
+            Cli::Usage("invalid value '4' for -v; supported values: 2, 2.0, 3, 3.0".into())
+        );
+        assert_eq!(
+            parse_str(&["-i", "a.epub", "-v", "2", "-v", "3"]),
+            Cli::Usage("option '-v' given more than once".into())
+        );
+    }
+
+    /// The trap this flag brings with it, recorded on purpose: the token after
+    /// a value-taking option is *always* its value (§3.3), so `-v -i x.epub`
+    /// asks for EPUB version "-i" rather than quietly doing something
+    /// sensible. Being one letter from `-V` makes the slip easy, so it must
+    /// fail loudly rather than validate the wrong thing.
+    #[test]
+    fn epub_version_consumes_the_next_token_even_if_it_looks_like_a_flag() {
+        assert_eq!(
+            parse_str(&["-v", "-i", "a.epub"]),
+            Cli::Usage("invalid value '-i' for -v; supported values: 2, 2.0, 3, 3.0".into())
         );
     }
 

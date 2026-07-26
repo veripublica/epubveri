@@ -75,6 +75,14 @@ pub const PROFILES: [&str; 4] = ["dict", "edupub", "idx", "preview"];
 pub struct Options {
     /// EPUB extension-spec profile — see [`validate_bytes_with_profile`].
     pub profile: Option<String>,
+    /// Validate against this EPUB version (`"2"` or `"3"`) whatever the
+    /// package document declares — epubcheck's `-v` flag. When it disagrees
+    /// with the declared version, PKG-001 reports the disagreement and the
+    /// *requested* version wins, as epubcheck does; expect a long report,
+    /// since a 3.0 book checked as 2.0 breaks a great many EPUB 2 rules.
+    /// `None` (the default) validates every book as the version it declares,
+    /// which is what whole-EPUB validation normally wants.
+    pub epub_version: Option<String>,
     /// Enable opt-in *advisory* checks: currently unknown CSS property and
     /// descriptor names (`ADV-*`, `Usage` severity, via the `styloria`
     /// validator). Off by default, and with it off the output is byte-identical
@@ -105,15 +113,13 @@ pub fn validate_bytes_with_profile(bytes: Vec<u8>, profile: Option<&str>) -> Rep
         bytes,
         &Options {
             profile: profile.map(String::from),
-            advisory: false,
+            ..Options::default()
         },
     )
 }
 
 /// Validate raw EPUB bytes under explicit [`Options`] (profile + advisory).
 pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report {
-    let profile = options.profile.as_deref();
-    let advisory = options.advisory;
     let mut report = Report::new();
     let mut container = match ocf::open(bytes, &mut report) {
         Some(c) => c,
@@ -126,25 +132,7 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     // with a reflowable + fixed-layout rendition) legitimately declares
     // more than one, each validated as its own, independent OPF.
     for opf_path in &opf_paths {
-        opf::check(&mut container, opf_path, profile, advisory, &mut report);
-        // PKG-023 (usage): validation profiles are an EPUB 3 feature, so a
-        // `--profile` request against an EPUB 2 publication is silently
-        // ignored - epubcheck says so rather than letting the user believe
-        // their profile ran. Only a *recognized* profile counts: an
-        // unrecognized name already means "default" everywhere else in this
-        // tool (documented on `validate_bytes_with_profile`), and reporting
-        // that one as an ignored profile would describe a request the user
-        // never successfully made.
-        if PROFILES.contains(&profile.unwrap_or_default())
-            && peek_opf_version(&mut container, opf_path).is_some_and(|v| v.starts_with('2'))
-        {
-            report.push_at(
-                ids::PKG_023,
-                report::Severity::Usage,
-                "validation profiles do not apply to EPUB 2; the default profile was used",
-                opf_path,
-            );
-        }
+        opf::check(&mut container, opf_path, options, &mut report);
     }
     // Checked once for the whole publication (not per-rendition): the
     // multi-rendition dc:type cardinality cross-check reads
@@ -190,7 +178,7 @@ pub fn validate_path_with_profile(path: &Path, profile: Option<&str>) -> std::io
         path,
         &Options {
             profile: profile.map(String::from),
-            advisory: false,
+            ..Options::default()
         },
     )
 }
@@ -377,6 +365,86 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// PKG-001 (#61): the caller can demand a version, and epubcheck's rule is
+    /// that the demand wins — it reports the disagreement and then validates
+    /// against what was asked for.
+    ///
+    /// The last assertion is the one that matters. Reporting PKG-001 while
+    /// quietly carrying on with the declared version would look identical in
+    /// any test that only counted messages, and would make `-v` a lie: the
+    /// same invocation would mean one thing in epubcheck and another here,
+    /// which defeats the compatibility the flag exists for.
+    #[test]
+    fn a_requested_epub_version_wins_over_the_declared_one() {
+        let check = |bytes: Vec<u8>, requested: Option<&str>| {
+            crate::validate_bytes_with_options(
+                bytes,
+                &crate::Options {
+                    epub_version: requested.map(String::from),
+                    ..Default::default()
+                },
+            )
+        };
+        let pkg_001 = |r: &crate::report::Report| {
+            r.messages
+                .iter()
+                .filter(|m| m.id == crate::ids::PKG_001)
+                .count()
+        };
+
+        assert_eq!(pkg_001(&check(epub2_with_dtd_entities("C1"), None)), 0);
+        assert_eq!(
+            pkg_001(&check(epub2_with_dtd_entities("C1"), Some("2"))),
+            0,
+            "agreeing with the book is not a disagreement"
+        );
+        assert_eq!(pkg_001(&check(epub2_with_dtd_entities("C1"), Some("3"))), 1);
+
+        // The EPUB 2 book, checked as EPUB 3, is now held to an EPUB 3 rule
+        // it was never subject to before - so the override reached the rules
+        // and not just the message.
+        let forced = check(epub2_with_dtd_entities("C1"), Some("3"));
+        assert!(
+            forced
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.package.missing_nav_document")),
+            "a book validated as EPUB 3 must be asked for a nav document; got {:?}",
+            forced.messages.iter().map(|m| m.rule).collect::<Vec<_>>()
+        );
+        assert!(
+            !check(epub2_with_dtd_entities("C1"), None)
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.package.missing_nav_document")),
+            "and must not be, without the override"
+        );
+    }
+
+    /// PKG-023 keys on the version being *validated against*, not the one the
+    /// book declares - which is why it lives next to that decision rather
+    /// than beside the call site. An EPUB 3 book forced to EPUB 2 has no
+    /// profiles either.
+    #[test]
+    fn a_profile_is_reported_against_the_version_being_validated() {
+        let report = crate::validate_bytes_with_options(
+            epub3_minimal(),
+            &crate::Options {
+                profile: Some("edupub".to_string()),
+                epub_version: Some("2".to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::PKG_023)
+                .count(),
+            1
+        );
     }
 
     /// PKG-023: validation profiles are an EPUB 3 feature, so `--profile` on

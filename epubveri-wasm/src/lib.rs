@@ -98,15 +98,28 @@ pub struct Data {
 /// leaves them off, and with them off the report is byte-identical — so
 /// existing two-argument callers are unaffected.
 ///
+/// `epub_version` mirrors the CLI `-v` flag — pass `"2"`, `"2.0"`, `"3"`,
+/// `"3.0"` to validate against that version whatever the book declares, or
+/// `undefined`/`null` to judge it as what it declares. On a disagreement
+/// PKG-001 reports it and the requested version wins, so forcing a 3.0 book
+/// to 2.0 produces a long report. Unrecognized values behave like
+/// `undefined`, matching how `profile` treats an unknown name.
+///
 /// Note: the CLI-only PKG-016 check (the `.epub` file extension should be
 /// lowercase) is filename-based and intentionally not reachable here — this
 /// entry point only ever sees bytes, never a filename.
 #[wasm_bindgen]
-pub fn validate(bytes: &[u8], profile: Option<String>, advisory: Option<bool>) -> Report {
+pub fn validate(
+    bytes: &[u8],
+    profile: Option<String>,
+    advisory: Option<bool>,
+    epub_version: Option<String>,
+) -> Report {
     let report = epubveri::validate_bytes_with_options(
         bytes.to_vec(),
         &epubveri::Options {
             profile,
+            epub_version,
             advisory: advisory.unwrap_or(false),
         },
     );

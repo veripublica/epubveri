@@ -18,7 +18,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
-| PKG | 21 | 1 | 2 | 1 | 24 | 22/24 | reviewed |
+| PKG | 22 | 1 | 1 | 1 | 24 | 23/24 | reviewed |
 | OPF | 75 | 0 | 6 | 14 | 81 | 75/81 | reviewed |
 | RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **186** | **3** | **8** | **101** | **197** | **189/197** | |
+| **All** | **187** | **3** | **7** | **101** | **197** | **190/197** | |
 
-**epubveri implements 189 of 197 live epubcheck checks (~96%)** — 186 fully, 3 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 101 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 190 of 197 live epubcheck checks (~96%)** — 187 fully, 3 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 101 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -40,7 +40,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| PKG-001 | Validating the EPUB against version %1$s but detected version %2$s. | Y | x | Not emitted, and the condition cannot arise here: it fires only when the caller demands a specific EPUB version that disagrees with the book's own (epubcheck's `--version`), and epubveri has no version-override flag. A missing *feature* rather than a missing check - implementing the message means first deciding whether to validate a 3.0 book as 2.0 on request, which is a behaviour change, not a rule (#61). |
+| PKG-001 | Validating the EPUB against version %1$s but detected version %2$s. | Y | Y | a requested EPUB version disagrees with the declared one |
 | PKG-003 | Unable to read EPUB file header. This is likely a corrupted EPUB file. | Y | ~ | Emitted only for a literally empty (0-byte) file; a corrupted-but-nonempty header goes to PKG-004/PKG-008 instead. |
 | PKG-004 | Corrupted EPUB ZIP header. | Y | Y | corrupted/unreadable ZIP header (not a usable OCF) |
 | PKG-005 | The mimetype file has an extra field of length %1$s. The use of the extra field feature... | Y | Y | the mimetype entry's ZIP header has a non-empty extra field |

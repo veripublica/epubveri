@@ -1485,13 +1485,15 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
     }
 }
 
-pub fn check(
-    ocf: &mut Ocf,
-    opf_path: &str,
-    profile: Option<&str>,
-    advisory: bool,
-    report: &mut Report,
-) {
+/// Check one package document and everything it reaches.
+///
+/// Takes the whole [`crate::Options`] rather than one parameter per setting:
+/// the third option added (an EPUB-version override, #61) was also the second
+/// time this signature had to change, and every such change breaks embedders
+/// for a reason they don't care about. One more option now costs them nothing.
+pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
+    let profile = options.profile.as_deref();
+    let advisory = options.advisory;
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
         None => {
@@ -1610,8 +1612,66 @@ pub fn check(
     if !(version.starts_with("2.") || version.starts_with("3.")) {
         return;
     }
-    let is_epub3 = version.starts_with("3.");
-    let is_epub2 = version.starts_with("2.");
+    // PKG-001 (#61): the caller may demand a version, and epubcheck's rule is
+    // that the demand wins - it reports the disagreement and then validates
+    // against the version that was *asked for*, not the one the book
+    // declares (`OCFChecker.checkPublicationVersion` returns `context.version`
+    // on the mismatch branch). Matching that is the whole point of having the
+    // flag: a `-v 2.0` invocation ported from epubcheck has to mean here what
+    // it means there, or the compatibility it exists for is a fiction.
+    //
+    // Expect noise when the two disagree - a 3.0 book checked as 2.0 draws a
+    // long list of findings that are all really one finding. That is
+    // epubcheck's behaviour too, and PKG-001 sits at the top of the report
+    // saying why.
+    let declared_major = if version.starts_with("3.") { "3" } else { "2" };
+    // Both spellings of each version are accepted, and anything else is
+    // ignored rather than rejected - the same permissiveness an unrecognized
+    // `profile` gets, so an embedder passing junk validates the book normally
+    // instead of having its call fail. The CLI checks the value itself, where
+    // a typo can still be answered with a usage error.
+    let requested_major = match options.epub_version.as_deref() {
+        Some("2" | "2.0") => Some("2"),
+        Some("3" | "3.0") => Some("3"),
+        _ => None,
+    };
+    let major = match requested_major {
+        Some(requested) if requested != declared_major => {
+            report.push_at(
+                PKG_001,
+                Severity::Warning,
+                format!(
+                    "validating as EPUB {requested}.0 because it was requested, \
+                     but the package document declares version {version}"
+                ),
+                opf_path,
+            );
+            requested
+        }
+        _ => declared_major,
+    };
+    let is_epub3 = major == "3";
+    let is_epub2 = !is_epub3;
+    // PKG-023 (usage): validation profiles are an EPUB 3 feature, so asking
+    // for one against an EPUB 2 publication does nothing - epubcheck says so
+    // rather than letting the caller believe their profile ran. Keyed on the
+    // version being *validated against*, which is why it lives here and not
+    // beside the call: with an override in play the declared version is the
+    // wrong question, and epubcheck likewise keys its own check on the
+    // validation version (`checkPublicationProfile`).
+    //
+    // Only a recognized profile counts. An unrecognized name already means
+    // "the default profile" everywhere else in this tool, and reporting that
+    // as an ignored profile would describe a request the caller never
+    // successfully made.
+    if is_epub2 && crate::PROFILES.contains(&profile.unwrap_or_default()) {
+        report.push_at(
+            PKG_023,
+            Severity::Usage,
+            "validation profiles do not apply to EPUB 2; the default profile was used",
+            opf_path,
+        );
+    }
     // The 'dict'/'edupub'/'preview' CLI profiles are all EPUB 3-only
     // extension specs - a real fixture confirms an EPUB 2 publication
     // stays fully valid even when one of these profiles is specified

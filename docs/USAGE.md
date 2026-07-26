@@ -189,6 +189,21 @@ Glossaries), `edupub` (EDUPUB), `idx` (Indexes), and `preview` (Previews):
 epubveri --profile dict -i my-dictionary.epub
 ```
 
+**Checking against a specific EPUB version** — normally epubveri judges a
+book as whatever version its package document declares, which is almost
+always what you want. If you need to ask "would this pass as EPUB 2?", say so
+with `-v` (the same flag epubcheck uses):
+
+```sh
+epubveri -v 2.0 -i my-book.epub
+```
+
+On a disagreement you get a `PKG-001` warning and the version you asked for
+wins — so checking an EPUB 3 book as 2.0 produces a long list of complaints
+that are really all one complaint ("this isn't an EPUB 2 book"). Note that
+`-v` takes a value and `-V` prints epubveri's own version; they are one
+letter apart because epubcheck's flag is `-v`.
+
 ---
 
 ## Getting help or reporting a problem
