@@ -8633,6 +8633,45 @@ mod tests {
             .collect()
     }
 
+    /// `<hgroup>` holds exactly one heading, interleaved with any number of
+    /// `<p>` — epubcheck's `hgroup.inner` verbatim. Reported by Doitsu on
+    /// MobileRead: the canonical modern shape, a title with a subtitle
+    /// paragraph, was drawing RSC-005.
+    ///
+    /// Both directions are asserted because the old definition was wrong in
+    /// both: it rejected `<p>` outright, and its `oneOrMore` accepted the
+    /// pre-2022 `<h1>` + `<h2>` pairing that epubcheck's schema does not.
+    /// The corpus has no `hgroup` fixture either way, so the schema is the
+    /// only authority — the same footing as the EPUB 2 rules in #58.
+    #[test]
+    fn hgroup_takes_one_heading_and_any_number_of_paragraphs() {
+        let body = |inner: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{inner}</body></html>"
+            )
+        };
+        for valid in [
+            "<hgroup><h1>Frankenstein</h1><p>Or: The Modern Prometheus</p></hgroup>",
+            "<hgroup><p>before</p><h2>T</h2><p>after</p></hgroup>",
+            "<hgroup><h1>T</h1></hgroup>",
+        ] {
+            assert_eq!(
+                rsc_005_rules(epub_with_ch1(&body(valid))),
+                Vec::<String>::new(),
+                "must be accepted: {valid}"
+            );
+        }
+        assert!(
+            !rsc_005_rules(epub_with_ch1(&body(
+                "<hgroup><h1>T</h1><h2>Sub</h2></hgroup>"
+            )))
+            .is_empty(),
+            "a second heading is not epubcheck's model - the subtitle is a <p>"
+        );
+    }
+
     /// #24 end-to-end: an EPUB 2 book is validated against the EPUB 2 content
     /// model, not the EPUB 3 one. `<big>` (valid XHTML 1.1, removed in HTML5)
     /// must pass, and `<s>` (valid HTML5, absent from XHTML 1.1) must be

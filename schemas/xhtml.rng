@@ -1620,7 +1620,31 @@
       <element name="footer"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       <element name="address"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       <ref name="headingEl"/>
-      <element name="hgroup"><ref name="globalAttrs"/><oneOrMore><ref name="headingEl"/></oneOrMore></element>
+      <!-- hgroup is exactly *one* heading interleaved with any number of <p>
+           (and script-supporting elements), which is epubcheck's
+           `hgroup.inner` verbatim - the modern HTML model, where the
+           subtitle is a <p> rather than a second heading.
+
+           Both halves were wrong here before. Rejecting <p> was a false
+           positive on the canonical shape (<h1>title</h1><p>subtitle</p>,
+           reported by Doitsu on MobileRead), and `oneOrMore` accepted the
+           pre-2022 <h1>+<h2> pairing that epubcheck's schema rejects. No
+           corpus fixture covers either direction, so the schema is the
+           authority, as it was for the EPUB 2 branch.
+
+           `template` is not modelled anywhere in this grammar, so
+           script-supporting is just <script> here - the same simplification
+           the list and table content models already carry. -->
+      <element name="hgroup">
+        <ref name="globalAttrs"/>
+        <interleave>
+          <ref name="headingEl"/>
+          <zeroOrMore>
+            <element name="p"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+          </zeroOrMore>
+          <zeroOrMore><ref name="scriptEl"/></zeroOrMore>
+        </interleave>
+      </element>
       <ref name="tableEl"/>
       <ref name="epubSwitchEl"/>
     </choice>

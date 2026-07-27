@@ -8,6 +8,25 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`<hgroup>` accepts `<p>`** — a heading with a subtitle paragraph
+  (`<h1>Frankenstein</h1><p>Or: The Modern Prometheus</p>`) was drawing
+  RSC-005. That is the canonical modern shape and epubcheck accepts it.
+  Reported by Doitsu on MobileRead.
+
+### Changed
+
+- **`<hgroup>` now holds exactly one heading**, which is the other half of
+  epubcheck's model: since 2022 the subtitle is a `<p>`, not a second
+  heading. The older `<h1>` + `<h2>` pairing was accepted here and is
+  rejected by epubcheck, so books written to the old model will start
+  drawing RSC-005 — the same finding epubcheck gives them. Surfacing it is
+  all a validator can do; correcting the markup belongs to whatever produces
+  the book.
+
 ## [0.8.0] - 2026-07-26
 
 A minor bump rather than a patch: the library API changed. See **Breaking**
