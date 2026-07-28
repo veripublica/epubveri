@@ -8811,6 +8811,50 @@ mod tests {
             .collect()
     }
 
+    /// #65: an EPUB 2 `<body>` must hold at least one block element
+    /// (XHTML 1.1's `Block.model` is `oneOrMore Block.mix`). Ours was
+    /// `zeroOrMore`, so a document whose every child was rejected reported
+    /// only the children, where epubcheck also reports the body itself as
+    /// incomplete — one of the findings missing from the MobileRead #134
+    /// comparison.
+    ///
+    /// The per-child reports are asserted alongside it, since the point of
+    /// the issue was that *all* of them should appear: fixing the body
+    /// message by swallowing the children would be a worse answer than the
+    /// bug.
+    #[test]
+    fn an_epub2_body_needs_content_and_still_names_every_bad_child() {
+        let doc = |body: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            )
+        };
+        let texts = |body: &str| {
+            crate::validate_bytes(epub2_with_ch1(&doc(body)))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        };
+
+        let found = texts("<nav>a</nav><nav>b</nav><nav>c</nav>");
+        assert_eq!(
+            found.iter().filter(|t| t.contains("\"nav\"")).count(),
+            3,
+            "every rejected child is still named: {found:?}"
+        );
+        assert!(
+            found.iter().any(|t| t.contains("\"body\"")),
+            "and the body itself is incomplete: {found:?}"
+        );
+        assert_eq!(texts("<p>x</p>"), Vec::<String>::new());
+    }
+
     /// #63: an EPUB 2 package document is checked against opf20's closed
     /// shapes, not the permissive EPUB 3 grammar. `<meta property=…>` and a
     /// manifest/spine `properties` attribute are EPUB 3 constructs that

@@ -1760,8 +1760,14 @@
        Only body and the inline-only containers are constrained; the flow
        containers stay permissive, so the false-positive surface is just the
        cases XHTML 1.1 genuinely forbids and epubcheck genuinely reports. -->
+  <!-- XHTML 1.1's `Block.model` is `oneOrMore Block.mix` - a body must hold
+       at least one block element. `zeroOrMore` here meant that a document
+       whose every child was rejected reported only the children, where
+       epubcheck also reports the body itself as incomplete (issue #65; the
+       nav document in DNSB's MobileRead #134 comparison). Used by `body`
+       alone; the flow containers keep their own permissive models. -->
   <define name="epub2Block">
-    <zeroOrMore><ref name="epub2BlockChoice"/></zeroOrMore>
+    <oneOrMore><ref name="epub2BlockChoice"/></oneOrMore>
   </define>
   <define name="epub2Inline">
     <mixed><zeroOrMore><ref name="epub2InlineChoice"/></zeroOrMore></mixed>
