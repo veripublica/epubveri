@@ -570,6 +570,29 @@ pub enum ElementFault {
     IncompleteContent,
 }
 
+/// An attribute's name as the author wrote it, prefix included.
+///
+/// `roxmltree` hands back the local name, so `epub:type` arrives as `type` -
+/// and "attribute \"type\" is not allowed here" on an `<a>` sends the reader
+/// hunting for a `type` attribute that is, in fact, perfectly legal there.
+/// epubcheck names the attribute in full, and so should we.
+///
+/// The prefix is reconstructed from the namespace rather than read off the
+/// source, because the parse tree no longer has the source spelling. A
+/// document is free to bind these namespaces to other prefixes; the
+/// conventional one is what a reader will recognise, and getting it exactly
+/// right would mean threading the element's namespace declarations through
+/// for a cosmetic gain.
+fn qualified_attribute_name(a: &roxmltree::Attribute) -> String {
+    let prefix = match a.namespace() {
+        Some("http://www.idpf.org/2007/ops") => "epub:",
+        Some("http://www.w3.org/XML/1998/namespace") => "xml:",
+        Some("http://www.w3.org/1999/xlink") => "xlink:",
+        _ => "",
+    };
+    format!("{prefix}{}", a.name())
+}
+
 /// Where content-model validation failed (issues #17/#18): an element (tagged
 /// with *how* it failed, see [`ElementFault`]), or a specific present attribute
 /// of one. The [`Attribute`](Blame::Attribute) case lets the diagnostic pin
@@ -653,7 +676,8 @@ impl<'d, 'i> Blame<'d, 'i> {
                 (text, params)
             }
             Blame::Attribute(_, a, fault) => {
-                let name = a.name();
+                let name = qualified_attribute_name(&a);
+                let name = name.as_str();
                 match fault {
                     AttributeFault::NotAllowed => (
                         format!("attribute \"{name}\" is not allowed here"),

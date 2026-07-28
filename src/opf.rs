@@ -8806,6 +8806,53 @@ mod tests {
             .collect()
     }
 
+    /// #64: `epub:type` and `meta@charset` are EPUB 3, and the EPUB 2 branch
+    /// was accepting both because it reused the EPUB 3 attribute pools.
+    /// Found by diffing epubcheck's output against ours on a mislabelled book
+    /// (DNSB, MobileRead #134), where they accounted for four of the eleven
+    /// findings we were missing.
+    ///
+    /// The EPUB 3 half of each pair is asserted too. This is the direction
+    /// #58 had to undo ten times: an EPUB 3 rule leaking into EPUB 2 is a
+    /// false positive, and the same mistake in reverse would be one here.
+    #[test]
+    fn epub3_only_attributes_are_rejected_in_epub2_and_kept_in_epub3() {
+        let doc = |doctype: &str, head: &str, body: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>{doctype}\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>t</title>{head}</head><body>{body}</body></html>"
+            )
+        };
+        const DT: &str = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                          \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">";
+
+        for (head, body) in [
+            ("", "<p epub:type=\"chapter\">x</p>"),
+            ("<meta charset=\"utf-8\"/>", "<p>x</p>"),
+        ] {
+            assert!(
+                !rsc_005_rules(epub2_with_ch1(&doc(DT, head, body))).is_empty(),
+                "EPUB 2 must reject: {head}{body}"
+            );
+            assert_eq!(
+                rsc_005_rules(epub_with_ch1(&doc("", head, body))),
+                Vec::<String>::new(),
+                "EPUB 3 must still accept: {head}{body}"
+            );
+        }
+        // And nothing else moved: the XHTML 1.1 spellings stay valid.
+        assert_eq!(
+            rsc_005_rules(epub2_with_ch1(&doc(
+                DT,
+                "<meta name=\"author\" content=\"a\"/>",
+                "<p>x</p>"
+            ))),
+            Vec::<String>::new()
+        );
+    }
+
     /// `<hgroup>` holds exactly one heading, interleaved with any number of
     /// `<p>` — epubcheck's `hgroup.inner` verbatim. Reported by Doitsu on
     /// MobileRead: the canonical modern shape, a title with a subtitle
