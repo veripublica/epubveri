@@ -8,6 +8,29 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.8.3] - 2026-07-28
+
+### Fixed
+
+- **Six XHTML 1.1 attributes are no longer rejected in EPUB 2 documents**:
+  `style@media`, `meta@scheme`, `base@target`, `head@profile`,
+  `html@version` and `q@cite`. `<style type="text/css" media="screen">` is
+  ordinary markup; the rest are rarer but equally valid.
+
+  Found by diffing our EPUB 2 attribute lists against epubcheck's own
+  XHTML 1.1 modules, rather than by waiting for someone to report them —
+  which is how the two attributes in 0.8.2 arrived. The same audit found a
+  larger gap in the other direction (attributes we accept and XHTML 1.1 does
+  not); that one is deliberately not in this release, because it is a
+  tightening whose effect on real books has to be measured first.
+
+### Internal
+
+- CI now gates on `cargo clippy -D warnings`, and the 41 findings that stood
+  in the way are cleared. Twenty of them were doc-comment list continuations
+  that rustdoc was rendering outside their list item, so that lint was
+  reporting a real documentation defect. No behaviour change.
+
 ## [0.8.2] - 2026-07-28
 
 Two false positives removed and four EPUB 2 checks added, all of them from
