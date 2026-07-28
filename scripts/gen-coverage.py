@@ -80,6 +80,17 @@ ANN = {
     "OPF-047": (None, "Legacy OEBPS 1.2 backwards-compat syntax - deliberately "
         "out of scope (pre-EPUB format)."),
     "OPF-064": (None, "Informational profile-selection message - not emitted."),
+    "NAV-001": ("na", "Dead ID - its only call site is `NavChecker`'s "
+        "constructor under `version == VERSION_2`, but a NavChecker is only "
+        "built for an item where `isNav()` holds, and `isNav()` reads the "
+        "manifest `properties` attribute, which only the EPUB 3 handler "
+        "parses; the CLI's single-file path guards the same construction with "
+        "`version == VERSION_3`. Unreachable from either direction. epubveri "
+        "used to emit it, which was a false positive - confirmed against "
+        "epubcheck's own output on a real mislabelled book (MobileRead #134, "
+        "DNSB). An EPUB 2 book carrying a nav document is still reported "
+        "through the XHTML 1.1 content model, exactly as epubcheck reports "
+        "it."),
     "OPF-036": ("na", "Dead ID - the video-codec-support note exists only in "
         "MessageId/DefaultSeverities and the translation bundles; nothing in "
         "epubcheck's source emits it and no test expects it (verified #53)."),

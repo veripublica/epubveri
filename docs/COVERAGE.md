@@ -24,15 +24,15 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
-| NAV | 10 | 0 | 0 | 1 | 10 | 10/10 | reviewed |
+| NAV | 9 | 0 | 0 | 2 | 9 | 9/9 | reviewed |
 | NCX | 3 | 0 | 0 | 3 | 3 | 3/3 | reviewed |
 | ACC | 2 | 0 | 0 | 15 | 2 | 2/2 | reviewed |
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **187** | **3** | **7** | **101** | **197** | **190/197** | |
+| **All** | **186** | **3** | **7** | **102** | **196** | **189/196** | |
 
-**epubveri implements 190 of 197 live epubcheck checks (~96%)** — 187 fully, 3 partially — plus 3 checks of its own (`ADV-*` and viewport/data-* extras). 101 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 189 of 196 live epubcheck checks (~96%)** — 186 fully, 3 partially — plus 4 checks of its own (`ADV-*` and viewport/data-* extras). 102 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -315,7 +315,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 | ID | Checks | epubcheck | epubveri | Notes |
 |---|---|:---:|:---:|---|
-| NAV-001 | The nav file is not supported for EPUB v2. | Y | Y | an EPUB 2 publication declares an EPUB 3 nav document |
+| NAV-001 | The nav file is not supported for EPUB v2. | Y | ⊘ | Dead ID - its only call site is `NavChecker`'s constructor under `version == VERSION_2`, but a NavChecker is only built for an item where `isNav()` holds, and `isNav()` reads the manifest `properties` attribute, which only the EPUB 3 handler parses; the CLI's single-file path guards the same construction with `version == VERSION_3`. Unreachable from either direction. epubveri used to emit it, which was a false positive - confirmed against epubcheck's own output on a real mislabelled book (MobileRead #134, DNSB). An EPUB 2 book carrying a nav document is still reported through the XHTML 1.1 content model, exactly as epubcheck reports it. |
 | NAV-002 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | NAV-003 | The Navigation Document must have a page list when content document(s) contain page bre... | Y | Y | edupub publication with a pagination source but no page-list nav |
 | NAV-004 | The Navigation Document should contain the full document heading hierarchy in EDUPUB. | Y | Y | edupub: nav heading hierarchy incomplete (sections != toc links) (usage) |
@@ -408,4 +408,5 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 |---|---|:---:|:---:|
 | ADV-001 | a declaration uses a property CSS does not define (usage) | — | Y |
 | ADV-002 | an at-rule uses a descriptor it does not define (usage) | — | Y |
+| ADV-004 | an EPUB 2 package document is written in EPUB 3 (usage, #62) | — | Y |
 | HTM-060 | extra viewport meta, or viewport on a reflowable doc (usage) | — | Y |

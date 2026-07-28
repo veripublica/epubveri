@@ -3585,17 +3585,31 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             Vec::new(),
         );
     }
-    // NAV-001: the EPUB 3 navigation document is not a valid EPUB 2 construct.
-    // epubcheck emits this from its NavChecker when a `properties="nav"` item
-    // appears in a version-2 publication; anchor it at the nav document.
-    if !is_epub3 && nav_present {
-        report.push_at(
-            NAV_001,
-            Severity::Error,
-            "the navigation document (properties=\"nav\") is not supported in EPUB 2".to_string(),
-            nav_path.as_deref().unwrap_or(opf_path),
-        );
-    }
+    // NAV-001 is NOT emitted, because epubcheck cannot emit it: the ID is
+    // dead in their source and we had implemented it as a false positive.
+    //
+    // Its one call site is `NavChecker`'s constructor, guarded by
+    // `version == VERSION_2` - which reads like "an EPUB 2 book with a nav
+    // document". But a `NavChecker` is only ever constructed for an item
+    // where `isNav()` holds, and `isNav()` comes from the manifest
+    // `properties` attribute, which **only the EPUB 3 handler parses**;
+    // `OPFHandler` (EPUB 2) has no properties handling at all. The CLI's
+    // single-file path guards the same construction with
+    // `if (version == VERSION_3)`. So the branch is unreachable from either
+    // direction.
+    //
+    // Confirmed on a real book rather than by reading alone: DNSB posted
+    // epubcheck's and epubveri's output for the same mislabelled EPUB
+    // (MobileRead #134). epubcheck reported the nav document's *contents*
+    // as ordinary XHTML 1.1 violations - `<nav>` is not in that content
+    // model - and no NAV-001. We reported NAV-001 on top of the same
+    // content errors.
+    //
+    // Nothing is lost by removing it. An EPUB 2 book carrying a nav document
+    // is still reported, through the content grammar, which is exactly how
+    // epubcheck reports it. See docs/COVERAGE.md, where NAV-001 now joins
+    // OPF-011/OPF-036/PKG-015 as a dead ID.
+    let _ = nav_present;
 
     if advisory && !is_epub3 {
         check_declared_version_advisory(&doc, opf_path, report);
@@ -8689,14 +8703,25 @@ mod tests {
         }
         let report = crate::validate_bytes(buf);
         assert!(
-            report.messages.iter().any(|m| m.id == crate::ids::NAV_001),
-            "EPUB 2 with a nav property must draw NAV-001"
+            !report.messages.iter().any(|m| m.id == crate::ids::NAV_001),
+            "NAV-001 is unreachable in epubcheck; emitting it was a false positive"
         );
-        // The same nav in an EPUB 3 is valid - no NAV-001.
-        let ep3 = crate::validate_bytes(epub_with_nav_body(
-            r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>"#,
-        ));
-        assert!(!ep3.messages.iter().any(|m| m.id == crate::ids::NAV_001));
+        // The book is still reported, the way epubcheck reports it: `<nav>`
+        // is not in the XHTML 1.1 content model, so the nav document's own
+        // contents are the finding. Losing NAV-001 loses no coverage.
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::RSC_005
+                    && m.location.as_deref() == Some("OEBPS/nav.xhtml")),
+            "the nav document must still be reported through the content grammar: {:?}",
+            report
+                .messages
+                .iter()
+                .map(|m| (m.id, m.location.clone()))
+                .collect::<Vec<_>>()
+        );
     }
 
     /// ADV-004 (#62): a book declaring EPUB 2 whose package document is

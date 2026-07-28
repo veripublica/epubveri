@@ -186,7 +186,10 @@ pub const MED_017: &str = "MED-017"; // scheme-based fragment on an XHTML media-
 pub const MED_018: &str = "MED-018"; // invalid SVG fragment identifier on a media-overlay text target
 
 // --- Navigation document ---
-pub const NAV_001: &str = "NAV-001"; // an EPUB 2 publication declares an EPUB 3 nav document
+// NAV-001 is deliberately never emitted - dead in epubcheck (see the comment
+// at the removed call site in opf.rs). The constant stays so the tests that
+// assert its *absence* name it rather than a string literal.
+pub const NAV_001: &str = "NAV-001";
 pub const NAV_003: &str = "NAV-003"; // edupub publication with a pagination source but no page-list nav
 pub const NAV_004: &str = "NAV-004"; // edupub: nav heading hierarchy incomplete (sections != toc links) (usage)
 pub const NAV_005: &str = "NAV-005"; // edupub: content has <audio> but the nav has no `loa` (usage)
