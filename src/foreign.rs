@@ -226,7 +226,7 @@ fn img_candidates(node: roxmltree::Node) -> Vec<String> {
         srcset
             .split(',')
             .filter_map(|c| {
-                let u = c.trim().split_whitespace().next()?;
+                let u = c.split_whitespace().next()?;
                 (!u.is_empty()).then(|| u.to_string())
             })
             .collect()
@@ -293,7 +293,7 @@ fn check_picture(
                 };
                 let mut any_foreign = false;
                 for candidate in srcset.split(',') {
-                    let Some(u) = candidate.trim().split_whitespace().next() else {
+                    let Some(u) = candidate.split_whitespace().next() else {
                         continue;
                     };
                     if resolve_ref(dir, u, status).is_some_and(|(cat, _)| cat == Category::Foreign)

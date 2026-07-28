@@ -15,6 +15,11 @@ use crate::opf::{is_external, nfc, resolve};
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
+/// `(document path, fragment id)` pairs an overlay points at - one list for
+/// `<text src>`, one for `epub:textref`. Named because the pair of them in a
+/// return type is otherwise unreadable at the call site.
+pub(crate) type Targets = Vec<(String, String)>;
+
 const CORE_AUDIO_TYPES: [&str; 2] = ["audio/mpeg", "audio/mp4"];
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -35,7 +40,7 @@ pub(crate) fn check(
     name_index: &HashMap<String, String>,
     media_types: &HashMap<String, String>,
     report: &mut Report,
-) -> (Vec<(String, String)>, Vec<(String, String)>) {
+) -> (Targets, Targets) {
     let mut text_targets = Vec::new();
     let mut textref_targets = Vec::new();
     let doc = match crate::ocf::parse_xml(smil_xml) {

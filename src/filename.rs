@@ -6,9 +6,9 @@
 //! Applied both to real container entry names (`ocf.rs`, a full-
 //! publication check) and to a manifest item's declared `href` (`opf.rs`)
 //! - real epubcheck's single-package-document check mode has no actual
-//! container to inspect, so it validates the declared href string itself
-//! (confirmed via a real fixture pair testing the identical defect once as
-//! a real file name and once as a bare `.opf`'s manifest href).
+//!   container to inspect, so it validates the declared href string itself
+//!   (confirmed via a real fixture pair testing the identical defect once as
+//!   a real file name and once as a bare `.opf`'s manifest href).
 
 use unicode_normalization::UnicodeNormalization;
 

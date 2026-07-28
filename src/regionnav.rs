@@ -63,7 +63,7 @@ pub(crate) fn check_misplaced(d: &roxmltree::Document, path: &str, report: &mut 
 
 /// The `href` of every `<a>` inside a region-based nav, in document order
 /// - for the caller to resolve and cross-check against fixed-layout
-/// status (NAV-009).
+///   status (NAV-009).
 pub(crate) fn collect_targets(nav_el: roxmltree::Node) -> Vec<String> {
     nav_el
         .descendants()

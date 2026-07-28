@@ -191,6 +191,11 @@ pub fn text() -> Pat {
     intern(Pattern::Text)
 }
 
+// `is_na(&a) -> b` and `is_na(&b) -> a` return different values; clippy sees
+// two arms that look alike because each returns "the other one". Collapsing
+// them would mean writing the condition as a disjunction and then picking a
+// side again inside it, which is longer and says less.
+#[allow(clippy::if_same_then_else)]
 pub fn choice(a: Pat, b: Pat) -> Pat {
     if is_na(&a) {
         b

@@ -6,7 +6,7 @@
 //! > Union(|) > Path`. `and`/`or`/`div`/`mod` are plain `Ident` tokens
 //! lexically (see `lexer.rs`'s docs) — each precedence level checks for its
 //! own keyword(s) by string value, exactly like it checks for `Token::Plus`
-//! etc.
+//! > etc.
 //!
 //! `*`/keyword-vs-name ambiguity (e.g. is `div` the operator or an element
 //! named "div"?) is resolved the same way real XPath resolves it: purely by

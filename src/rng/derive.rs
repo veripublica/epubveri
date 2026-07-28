@@ -127,10 +127,8 @@ impl<'a> Env<'a> {
                 }
             }
             Pattern::OneOrMore(a) => self.expected_names(a, out, visited),
-            Pattern::Ref(i) => {
-                if visited.insert(*i) {
-                    self.expected_names(&self.defs[*i], out, visited);
-                }
+            Pattern::Ref(i) if visited.insert(*i) => {
+                self.expected_names(&self.defs[*i], out, visited);
             }
             // Text/Data/Value/Attribute/Empty/NotAllowed name no element.
             _ => {}
@@ -676,7 +674,7 @@ impl<'d, 'i> Blame<'d, 'i> {
                 (text, params)
             }
             Blame::Attribute(_, a, fault) => {
-                let name = qualified_attribute_name(&a);
+                let name = qualified_attribute_name(a);
                 let name = name.as_str();
                 match fault {
                     AttributeFault::NotAllowed => (

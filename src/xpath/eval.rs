@@ -626,9 +626,9 @@ mod tests {
     #[test]
     fn attribute_existence_and_count() {
         let xml = r#"<opf:package xmlns:opf="urn:test:opf"><opf:metadata id="a"/><opf:metadata id="b"/></opf:package>"#;
-        assert!(eval_bool_on(xml, "@xmlns:opf") == false); // xmlns declarations aren't real attributes in roxmltree
+        assert!(!eval_bool_on(xml, "@xmlns:opf")); // xmlns declarations aren't real attributes in roxmltree
         assert!(eval_bool_on(xml, "count(opf:metadata) = 2"));
-        assert!(eval_bool_on(xml, "count(opf:metadata) = 3") == false);
+        assert!(!eval_bool_on(xml, "count(opf:metadata) = 3"));
     }
 
     #[test]

@@ -236,16 +236,16 @@ fn write_wrapped_zip(tmp: &Path, extra: &[(String, Vec<u8>)]) {
 /// build a minimal synthetic EPUB that includes it (plus all of its
 /// directory siblings, so any relative reference it makes still resolves
 /// - avoiding spurious missing-resource errors that would be an artifact
-/// of this harness, not of epubveri) via a synthetic nav doc satisfying
-/// the EPUB 3 nav requirement, and the fixture itself as an ordinary
-/// (non-nav, non-spine) manifest item, so only the content-model checks
-/// are exercised. `version` defaults to `"3.0"` but is set to `"2.0"` for
-/// scenarios that originate from an `epub2/` feature file - real corpus
-/// fixtures found this matters: several checks (e.g. the XHTML
-/// content-model's obsolete-DOCTYPE rule, HTM-004) are EPUB3-only, and an
-/// EPUB2-context fixture legitimately uses constructs (like the XHTML 1.1
-/// DTD doctype) that would otherwise wrongly get EPUB3 rules applied via
-/// a `version="3.0"` wrap.
+///   of this harness, not of epubveri) via a synthetic nav doc satisfying
+///   the EPUB 3 nav requirement, and the fixture itself as an ordinary
+///   (non-nav, non-spine) manifest item, so only the content-model checks
+///   are exercised. `version` defaults to `"3.0"` but is set to `"2.0"` for
+///   scenarios that originate from an `epub2/` feature file - real corpus
+///   fixtures found this matters: several checks (e.g. the XHTML
+///   content-model's obsolete-DOCTYPE rule, HTM-004) are EPUB3-only, and an
+///   EPUB2-context fixture legitimately uses constructs (like the XHTML 1.1
+///   DTD doctype) that would otherwise wrongly get EPUB3 rules applied via
+///   a `version="3.0"` wrap.
 pub fn wrap_single_doc(
     target_full: &Path,
     target_name: &str,

@@ -26,6 +26,14 @@ jobs:
       - name: Format (cargo fmt --check)
         run: cargo fmt --all --check
 
+      # Gating on clippy, not merely running it: a lint job that cannot fail
+      # is a lint job nobody reads. The workspace was 40 warnings and one
+      # deny-level error away from clean when this was added; clearing them
+      # first is what makes `-D warnings` meaningful rather than a permanent
+      # red X. styloria has had this since its own CI was created.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
       - name: Build (workspace)
         run: cargo build --workspace --locked
 

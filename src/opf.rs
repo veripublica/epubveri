@@ -319,7 +319,7 @@ fn check_itemref_rendition_conflicts(
             Vec::new(),
         );
     }
-    if tokens.iter().any(|t| *t == "rendition:spread-portrait") {
+    if tokens.contains(&"rendition:spread-portrait") {
         report.push_node(
             OPF_086,
             Severity::Warning,
@@ -356,9 +356,9 @@ const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 /// OPF-092: a language tag (`xml:lang`, `link/@hreflang`, or `dc:language`'s
 /// own text) must not have leading/trailing whitespace, and - once trimmed
 /// - must be empty (allowed) or a syntactically plausible BCP-47 tag. No
-/// regex needed: the only real failure mode confirmed by the corpus is a
-/// single-letter primary subtag ("a-value"), which real BCP-47 never
-/// allows (a language subtag is ISO 639, always 2-8 letters).
+///   regex needed: the only real failure mode confirmed by the corpus is a
+///   single-letter primary subtag ("a-value"), which real BCP-47 never
+///   allows (a language subtag is ISO 639, always 2-8 letters).
 fn is_valid_lang_tag(raw: &str) -> bool {
     if raw != raw.trim() {
         return false;
@@ -738,9 +738,9 @@ fn check_meta_property_scheme_shape(
 /// The 4 default-vocabulary URIs - package `meta`/`link`/`item`/`itemref`
 /// attribute contexts each have their own unprefixed "default" vocabulary
 /// - explicitly mapping any prefix to one of these is forbidden
-/// (OPF-007, "b" sub-case), confirmed via a real fixture (which happens
-/// to reuse the names "meta"/"link"/"item"/"itemref" as its prefix names
-/// too, but the rule text is about the URI side, not the name).
+///   (OPF-007, "b" sub-case), confirmed via a real fixture (which happens
+///   to reuse the names "meta"/"link"/"item"/"itemref" as its prefix names
+///   too, but the rule text is about the URI side, not the name).
 const DEFAULT_VOCAB_URIS: &[&str] = &[
     "http://idpf.org/epub/vocab/package/meta/#",
     "http://idpf.org/epub/vocab/package/link/#",
@@ -4733,7 +4733,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 href.split(',')
                     .next()
                     .unwrap_or(href)
-                    .trim()
                     .split_whitespace()
                     .next()
             } else {
@@ -4988,7 +4987,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 && let Some(srcset_attr) = attr_no_ns_node(n, "srcset")
             {
                 for candidate in srcset_attr.value().split(',') {
-                    let url = candidate.trim().split_whitespace().next().unwrap_or("");
+                    let url = candidate.split_whitespace().next().unwrap_or("");
                     if url.is_empty() || is_external(url) {
                         continue;
                     }
@@ -6702,6 +6701,14 @@ fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &m
 /// confirmed dictionary publication - a glossary can have one too), and -
 /// only for a confirmed dictionary publication (`dc:type="dictionary"`) -
 /// the single- vs. collection-based structural rules from spec §2.5.
+// Eleven arguments, and the honest fix is not a struct wrapping these
+// eleven: nine of them are the same publication-wide context that half the
+// functions in this file thread through (`items`, `item_properties`,
+// `name_index`, `base_dir`, `ocf`, `opf_path`, `report`, …). Bundling that
+// once, for all of them, is a real refactor with a real payoff; bundling it
+// here alone would move the argument list behind a type without making
+// anything simpler. Left as it is until that refactor is worth doing.
+#[allow(clippy::too_many_arguments)]
 fn check_dictionaries(
     pkg: &roxmltree::Node,
     is_dictionary_pub: bool,

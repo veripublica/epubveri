@@ -384,7 +384,7 @@ pub(crate) fn check_foreign_object(
     let Some(first) = children.next() else {
         return;
     };
-    let last = fo.children().last().unwrap_or(first);
+    let last = fo.children().next_back().unwrap_or(first);
     let inner = &text[first.range().start..last.range().end];
 
     // Every *prefixed* namespace binding from the real document's root
@@ -765,8 +765,7 @@ mod tests {
 
     #[test]
     fn title_accepts_plain_text() {
-        let xml =
-            concat!("<svg xmlns=\"http://www.w3.org/2000/svg\"><title>Plain text</title></svg>");
+        let xml = "<svg xmlns=\"http://www.w3.org/2000/svg\"><title>Plain text</title></svg>";
         let d = doc(xml);
         let title = d
             .descendants()

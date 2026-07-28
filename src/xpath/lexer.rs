@@ -297,11 +297,11 @@ mod tests {
     #[test]
     fn string_and_number_literals() {
         assert_eq!(
-            Lexer::new(r#"'a "b" c' "d 'e' f" 3.14 -2"#).tokenize(),
+            Lexer::new(r#"'a "b" c' "d 'e' f" 3.5 -2"#).tokenize(),
             vec![
                 Token::Str("a \"b\" c".into()),
                 Token::Str("d 'e' f".into()),
-                Token::Number(3.14),
+                Token::Number(3.5),
                 Token::Minus,
                 Token::Number(2.0),
             ]
