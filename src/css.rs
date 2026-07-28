@@ -34,7 +34,7 @@
 use std::collections::{HashMap, HashSet};
 
 use styloria::{
-    ComponentValue, DiagnosticKind, Parser, Rule, Span, Spanned, Token, spanned,
+    BlockKind, ComponentValue, DiagnosticKind, Parser, Rule, Span, Spanned, Token, spanned,
     validate_declaration_list, validate_stylesheet,
 };
 
@@ -496,7 +496,17 @@ fn check_rule_list_block_spanned(
     report: &mut Report,
 ) {
     for v in block_values {
-        if let spanned::ComponentValue::Block(b) = &v.node {
+        // Only a `{}` block is a rule body. A `[]` block is part of a
+        // *prelude* - an attribute selector - and its contents are not
+        // declarations; reading them as such reported CSS-008 on every
+        // `img[alt]` inside an `@media`, which is ordinary CSS (Doitsu,
+        // MobileRead). `()` never reaches here: CSS Syntax makes `name(` a
+        // function token rather than a simple block, which is why a
+        // `:nth-child(2n)` in the same position was unaffected and hid the
+        // shape of the bug.
+        if let spanned::ComponentValue::Block(b) = &v.node
+            && b.kind == BlockKind::Curly
+        {
             if b.values
                 .iter()
                 .any(|nv| matches!(&nv.node, spanned::ComponentValue::Block(_)))
@@ -584,7 +594,9 @@ fn check_declaration_shapes_spanned(
         // unclosed rule swallowing a whole well-formed sibling rule) —
         // recurse so declarations inside it still get checked too.
         for v in chunk {
-            if let spanned::ComponentValue::Block(b) = &v.node {
+            if let spanned::ComponentValue::Block(b) = &v.node
+                && b.kind == BlockKind::Curly
+            {
                 check_declaration_shapes_spanned(&b.values, css, css_path, origin, report);
             }
         }
@@ -642,7 +654,9 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
         // unclosed rule swallowing a whole well-formed sibling rule) —
         // recurse so declarations inside it still get checked too.
         for v in chunk {
-            if let ComponentValue::Block(b) = v {
+            if let ComponentValue::Block(b) = v
+                && b.kind == BlockKind::Curly
+            {
                 check_declaration_shapes(&b.values, css_path, report);
             }
         }
@@ -1105,6 +1119,38 @@ mod tests {
         let mut off = Report::new();
         check_style_attribute("font-eight: bold", "doc.xhtml", false, &mut off);
         assert!(!off.messages.iter().any(|m| m.id.starts_with("ADV-")));
+    }
+
+    /// An attribute selector inside a grouping at-rule is a *prelude*, not a
+    /// rule body. Walking into its `[]` block and reading the contents as
+    /// declarations reported CSS-008 on ordinary CSS — `img[alt]` inside an
+    /// `@media` — which is what Doitsu hit on MobileRead (his case was the
+    /// namespaced `img[epub|type~="…"]`, but the namespace was incidental:
+    /// every attribute selector in that position was affected).
+    ///
+    /// `()` never had the bug, because CSS Syntax makes `name(` a function
+    /// token rather than a simple block. That asymmetry is why a
+    /// `:nth-child(2n)` in the same position looked fine and disguised how
+    /// wide the defect was — so it is asserted here too.
+    #[test]
+    fn a_selector_prelude_inside_an_at_rule_is_not_a_declaration_list() {
+        for css in [
+            r#"@media all { img[alt] { color: red } }"#,
+            r#"@media print { a[href^="http"] { color: red } }"#,
+            r#"@media all { li:nth-child(2n) { color: red } }"#,
+            r#"@media all and (prefers-color-scheme: dark) {
+                 img[epub|type~="se:image.color-depth.black-on-transparent"] {
+                   filter: invert(100%);
+                 }
+               }"#,
+            r#"@supports (display: grid) { .a[data-x="1"] { color: red } }"#,
+            r#"@media all { @media print { p[lang] { color: red } } }"#,
+        ] {
+            assert_eq!(run(css, &empty_index()), Vec::<&str>::new(), "{css}");
+        }
+        // The check it was doing correctly is untouched: a real malformed
+        // declaration inside a grouping at-rule is still reported.
+        assert!(run("@media all { p { span.bold: bold } }", &empty_index()).contains(&CSS_008));
     }
 
     #[test]
