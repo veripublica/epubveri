@@ -165,6 +165,8 @@ pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has 
 // --- Advisory (epubveri-owned, opt-in via --advisory; see the module note) ---
 pub const ADV_001: &str = "ADV-001"; // a declaration uses a property CSS does not define (usage)
 pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not define (usage)
+// ADV-003 is reserved for the unknown-type-selector advisory (#28), deferred.
+pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)
 
 // --- Media Overlays (SMIL) ---
 pub const MED_003: &str = "MED-003"; // a <picture> element's own <img> fallback references a foreign resource

@@ -1491,6 +1491,78 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
 /// the third option added (an EPUB-version override, #61) was also the second
 /// time this signature had to change, and every such change breaks embedders
 /// for a reason they don't care about. One more option now costs them nothing.
+/// ADV-004 (#62, suggested by JSWolf on MobileRead): the book declares EPUB 2,
+/// but its package document is written in EPUB 3. DNSB reports having seen
+/// several such books - EPUB 3 throughout, with `version="2.0"` left in the
+/// OPF.
+///
+/// **This does not detect anything the other checks miss.** A mislabelled book
+/// already draws a pile of findings, every one of them accurate: the nav
+/// document is not an EPUB 2 construct, `<section>` is not in XHTML 1.1, and
+/// so on. What it lacks is the *diagnosis* - that all of them follow from one
+/// wrong character in the version attribute. So this fires only where such a
+/// pile already exists, which is what keeps it from inventing a verdict.
+///
+/// Scoped to package-document signals, deliberately. Each is structural, and
+/// each is illegal in EPUB 2 on its own - no judgement about intent is being
+/// made, only a count. Content-side signals (`epub:type`, HTML5 sectioning
+/// elements) were left out until the real-book shelf can say whether they add
+/// anything a correctly-labelled book doesn't also trip.
+///
+/// The reverse direction - a `3.0` book that is really EPUB 2 - is not
+/// implemented, and not for lack of interest: EPUB 3 *permits* an NCX and a
+/// `<guide>` for backwards compatibility, so the obvious signals there are
+/// legal constructs rather than illegal ones. That is a different and much
+/// weaker instrument, and it would be the first check here to guess.
+///
+/// Advisory-only (opt-in `--advisory`, usage severity, never in the exit
+/// code): epubcheck has no verdict on this, and the standing rule is that
+/// anything beyond its verdict stays opt-in.
+fn check_declared_version_advisory(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    let elements = || doc.descendants().filter(|n| n.is_element());
+    let mut signals: Vec<String> = Vec::new();
+
+    // EPUB 2 spells metadata `<meta name="…" content="…">`; the `property`
+    // attribute arrived with EPUB 3's metadata vocabulary.
+    if elements().any(|n| n.tag_name().name() == "meta" && n.attr_no_ns("property").is_some()) {
+        signals.push("EPUB 3 metadata (a <meta property=\"…\">)".to_string());
+    }
+    // `properties` on a manifest item is EPUB 3 only. A navigation document
+    // is called out separately from the rest (`scripted`, `mathml`, `svg`,
+    // `remote-resources`) because it is the single most telling one - it is
+    // the EPUB 3 table of contents.
+    let item_props = || {
+        elements()
+            .filter(|n| n.tag_name().name() == "item")
+            .filter_map(|n| n.attr_no_ns("properties"))
+    };
+    if item_props().any(|p| p.split_whitespace().any(|t| t == "nav")) {
+        signals.push("a navigation document (properties=\"nav\")".to_string());
+    }
+    if item_props().any(|p| p.split_whitespace().any(|t| t != "nav")) {
+        signals.push("other EPUB 3 manifest properties".to_string());
+    }
+
+    // Two independent signals, not one. A single stray attribute is a
+    // mistake in one line; two say the document was written to the other
+    // version. The threshold is the whole of the judgement here, so it is
+    // one number in one place, easy to revisit against the shelf.
+    if signals.len() < 2 {
+        return;
+    }
+    report.push_at(
+        ADV_004,
+        Severity::Usage,
+        format!(
+            "the package document declares EPUB 2 but is written in EPUB 3: {}. \
+             If this book was meant to be EPUB 3, most other findings in this \
+             report follow from the version attribute rather than from the content",
+            signals.join(", ")
+        ),
+        opf_path,
+    );
+}
+
 pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
     let profile = options.profile.as_deref();
     let advisory = options.advisory;
@@ -3523,6 +3595,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             "the navigation document (properties=\"nav\") is not supported in EPUB 2".to_string(),
             nav_path.as_deref().unwrap_or(opf_path),
         );
+    }
+
+    if advisory && !is_epub3 {
+        check_declared_version_advisory(&doc, opf_path, report);
     }
 
     // Manifest-declared resource paths (nfc-normalized) - used by
@@ -8621,6 +8697,78 @@ mod tests {
             r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>"#,
         ));
         assert!(!ep3.messages.iter().any(|m| m.id == crate::ids::NAV_001));
+    }
+
+    /// ADV-004 (#62): a book declaring EPUB 2 whose package document is
+    /// written in EPUB 3.
+    ///
+    /// The threshold is the whole judgement, so both sides of it are pinned:
+    /// two independent signals fire, one does not. And the default run must
+    /// stay byte-identical — this is advisory-only, and an advisory that
+    /// leaks into the default verdict is just an unreviewed check.
+    #[test]
+    fn a_package_document_written_in_the_other_version_is_advisory_only() {
+        let opf = |metadata: &str, nav_props: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{metadata}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"{nav_props}/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>x</p></body></html>"#;
+        let adv_004 = |opf: String, advisory: bool| {
+            crate::validate_bytes_with_options(
+                epub_with_opf(Some(&opf), CH1),
+                &crate::Options {
+                    advisory,
+                    ..Default::default()
+                },
+            )
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::ADV_004)
+            .count()
+        };
+
+        let both = opf(
+            r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#,
+            r#" properties="nav""#,
+        );
+        assert_eq!(adv_004(both.clone(), true), 1, "two signals must be named");
+        assert_eq!(
+            adv_004(both, false),
+            0,
+            "and must stay out of a default run entirely"
+        );
+
+        assert_eq!(
+            adv_004(opf("", r#" properties="nav""#), true),
+            0,
+            "one signal is a stray attribute, not a mislabelled book"
+        );
+        assert_eq!(
+            adv_004(
+                opf(
+                    r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#,
+                    ""
+                ),
+                true
+            ),
+            0,
+            "likewise in the other direction"
+        );
+        assert_eq!(adv_004(opf("", ""), true), 0, "a plain EPUB 2 says nothing");
     }
 
     /// Every RSC-005 `rule` slug a validation of `bytes` produces.
