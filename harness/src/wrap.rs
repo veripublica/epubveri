@@ -166,13 +166,25 @@ pub fn wrap_nav_doc(target_full: &Path, target_name: &str, version: &str) -> Pat
             "<item id=\"f{i}\" href=\"{fn_}\" media-type=\"{mt}\"/>"
         ));
     }
+    // `dcterms:modified` is EPUB 3 metadata: `<meta property=…>` is not a
+    // legal EPUB 2 `<meta>` at all (opf20 requires name+content). Emitting it
+    // into a `version="2.0"` wrap made the harness synthesise an *invalid*
+    // package and then charge the findings to epubveri - nine of them, the
+    // moment the EPUB 2 package grammar started checking them (#63). An
+    // instrument that generates invalid input attributes its own defect to
+    // whatever it is measuring.
+    let modified_meta = if version.starts_with('2') {
+        ""
+    } else {
+        "    <meta property=\"dcterms:modified\">2026-01-01T00:00:00Z</meta>\n"
+    };
     let opf = format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
          <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"{version}\" unique-identifier=\"id\">\n\
          \x20 <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
          \x20   <dc:identifier id=\"id\">corpus-wrap</dc:identifier>\n\
          \x20   <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n\
-         \x20   <meta property=\"dcterms:modified\">2026-01-01T00:00:00Z</meta>\n\
+         {modified_meta}\
          \x20 </metadata>\n\
          \x20 <manifest>\n    {}\n  </manifest>\n\
          \x20 <spine><itemref idref=\"_content\"/></spine>\n\
@@ -331,13 +343,25 @@ pub fn wrap_single_doc(
         ""
     };
 
+    // `dcterms:modified` is EPUB 3 metadata: `<meta property=…>` is not a
+    // legal EPUB 2 `<meta>` at all (opf20 requires name+content). Emitting it
+    // into a `version="2.0"` wrap made the harness synthesise an *invalid*
+    // package and then charge the findings to epubveri - nine of them, the
+    // moment the EPUB 2 package grammar started checking them (#63). An
+    // instrument that generates invalid input attributes its own defect to
+    // whatever it is measuring.
+    let modified_meta = if version.starts_with('2') {
+        ""
+    } else {
+        "    <meta property=\"dcterms:modified\">2026-01-01T00:00:00Z</meta>\n"
+    };
     let opf = format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
          <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"{version}\" unique-identifier=\"id\">\n\
          \x20 <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
          \x20   <dc:identifier id=\"id\">corpus-wrap</dc:identifier>\n\
          \x20   <dc:title>Corpus wrap</dc:title>\n    <dc:language>en</dc:language>\n\
-         \x20   <meta property=\"dcterms:modified\">2026-01-01T00:00:00Z</meta>\n\
+         {modified_meta}\
          {edupub_meta}{idx_meta}\
          \x20 </metadata>\n\
          \x20 <manifest>\n    {}\n  </manifest>\n\

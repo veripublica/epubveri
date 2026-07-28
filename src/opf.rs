@@ -1761,7 +1761,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // doesn't name the specific rule that failed; a catch-all here.
     {
         let rule = "opf.package.schema_violation";
-        for blame in crate::rng::validate_node_report(&crate::rng::package_grammar(), pkg) {
+        let grammar = if is_epub3 {
+            crate::rng::package_grammar()
+        } else {
+            crate::rng::package_grammar_epub2()
+        };
+        for blame in crate::rng::validate_node_report(&grammar, pkg) {
             let (text, params) = blame.describe();
             match blame.attribute() {
                 Some(a) => report.push_node_attr(
@@ -8804,6 +8809,77 @@ mod tests {
             .filter(|m| m.id == crate::ids::RSC_005)
             .map(|m| m.rule.unwrap_or("").to_string())
             .collect()
+    }
+
+    /// #63: an EPUB 2 package document is checked against opf20's closed
+    /// shapes, not the permissive EPUB 3 grammar. `<meta property=…>` and a
+    /// manifest/spine `properties` attribute are EPUB 3 constructs that
+    /// epubcheck rejects in a `version="2.0"` package, and we accepted all
+    /// three (DNSB, MobileRead #134 — four of the eleven findings we missed).
+    ///
+    /// The EPUB 3 column matters as much as the EPUB 2 one: this grammar had
+    /// no version switch at all before, so the risk in adding one is applying
+    /// the strict shapes to a book that is entitled to them.
+    #[test]
+    fn epub2_package_shapes_are_closed_and_epub3_is_untouched() {
+        let opf = |version: &str, meta: &str, item_attr: &str, itemref_attr: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{meta}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"{item_attr}/>
+  </manifest>
+  <spine><itemref idref="ch1"{itemref_attr}/></spine>
+</package>"#
+            )
+        };
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>x</p></body></html>"#;
+        let schema_hits = |opf: String| {
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.package.schema_violation"))
+                .count()
+        };
+        const EPUB3_META: &str = r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#;
+
+        for (label, meta, item, itemref) in [
+            ("EPUB 3 metadata syntax", EPUB3_META, "", ""),
+            ("item properties", "", r#" properties="scripted""#, ""),
+            (
+                "itemref properties",
+                "",
+                "",
+                r#" properties="page-spread-left""#,
+            ),
+        ] {
+            assert!(
+                schema_hits(opf("2.0", meta, item, itemref)) > 0,
+                "EPUB 2 must reject: {label}"
+            );
+            assert_eq!(
+                schema_hits(opf("3.0", meta, item, itemref)),
+                0,
+                "EPUB 3 must accept: {label}"
+            );
+        }
+        // A package written the EPUB 2 way stays silent, including the
+        // `<meta name= content=>` spelling opf20 does require.
+        assert_eq!(
+            schema_hits(opf(
+                "2.0",
+                r#"<meta name="cover" content="c"/>"#,
+                " fallback=\"nav\"",
+                " linear=\"no\""
+            )),
+            0
+        );
     }
 
     /// #64: `epub:type` and `meta@charset` are EPUB 3, and the EPUB 2 branch

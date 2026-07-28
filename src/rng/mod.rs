@@ -53,6 +53,13 @@ pub fn package_grammar() -> Grammar {
     load(PACKAGE_RNG).expect("built-in package.rng must parse")
 }
 
+/// Load the built-in **EPUB 2** package-document grammar - the same schema
+/// entered at its EPUB 2 root, mirroring how the XHTML grammar splits (#63).
+pub fn package_grammar_epub2() -> Grammar {
+    load_from_define(PACKAGE_RNG, "packageEl-epub2")
+        .expect("built-in package.rng epub2 root must parse")
+}
+
 /// Our own EPUB XHTML content-document RNG, embedded at build time (committed
 /// under the project license; authored from scratch — not derived from
 /// epubcheck/W3C). See `schemas/xhtml.rng` for the scope/design notes.

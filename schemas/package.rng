@@ -108,4 +108,110 @@
     </choice>
   </define>
 
+  <!-- ============================================================ -->
+  <!-- EPUB 2 (OPF 2.0.1) package document.                          -->
+  <!--                                                               -->
+  <!-- The grammar above is deliberately permissive and has no        -->
+  <!-- version switch, which meant an EPUB 2 package was checked      -->
+  <!-- against EPUB 3's rules. epubcheck validates one against a      -->
+  <!-- *closed* grammar (schema/20/rng/opf20.rng), and the difference -->
+  <!-- accounted for four of the eleven findings we were missing on a -->
+  <!-- mislabelled book (issue #63; DNSB, MobileRead #134).           -->
+  <!--                                                               -->
+  <!-- Scoped to the three element shapes that evidence covers:       -->
+  <!-- `meta`, `item`, `itemref`. The metadata *element pool* is left -->
+  <!-- as permissive as before on purpose - that is where real EPUB 2 -->
+  <!-- books vary most (legacy `dc-metadata`/`x-metadata` forms,      -->
+  <!-- vendor extensions), so it is where a false positive would come -->
+  <!-- from, and no evidence asked for it.                            -->
+  <!--                                                               -->
+  <!-- `spine@toc` is required by opf20 too, but stays out of here:   -->
+  <!-- a hand-coded check already reports it, and both would double.  -->
+  <define name="packageEl-epub2">
+    <element name="package">
+      <ref name="anyAttributes"/>
+      <attribute name="version"><data type="string"/></attribute>
+      <interleave>
+        <element name="metadata"><ref name="metadataContent-epub2"/></element>
+        <element name="manifest">
+          <ref name="anyAttributes"/>
+          <oneOrMore>
+            <choice>
+              <ref name="itemEl-epub2"/>
+              <ref name="foreignElement"/>
+            </choice>
+          </oneOrMore>
+        </element>
+        <element name="spine">
+          <ref name="anyAttributes"/>
+          <oneOrMore>
+            <choice>
+              <ref name="itemrefEl-epub2"/>
+              <ref name="foreignElement"/>
+            </choice>
+          </oneOrMore>
+        </element>
+        <zeroOrMore><ref name="otherPackageChild"/></zeroOrMore>
+      </interleave>
+    </element>
+  </define>
+
+  <!-- Everything the permissive metadata model allowed, except that an
+       OPF-namespace <meta> must now be the EPUB 2 shape. -->
+  <define name="metadataContent-epub2">
+    <ref name="anyAttributes"/>
+    <mixed>
+      <zeroOrMore>
+        <choice>
+          <ref name="metaEl-epub2"/>
+          <element>
+            <anyName><except><name>meta</name></except></anyName>
+            <ref name="looseContent"/>
+          </element>
+        </choice>
+      </zeroOrMore>
+    </mixed>
+  </define>
+
+  <!-- opf20: `name` and `content` are required; `id`, `xml:lang` and
+       `scheme` are the only other attributes; the element is empty. An
+       EPUB 3 `<meta property="…">value</meta>` fails all three ways, which
+       is exactly what epubcheck reports on such a book. -->
+  <define name="metaEl-epub2">
+    <element name="meta">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
+      <optional><attribute name="scheme"><data type="string"/></attribute></optional>
+      <attribute name="name"><data type="string"/></attribute>
+      <attribute name="content"><data type="string"/></attribute>
+      <empty/>
+    </element>
+  </define>
+
+  <!-- opf20's closed attribute list. Note the absence of `properties`:
+       it is EPUB 3's, and only the EPUB 3 handler parses it. -->
+  <define name="itemEl-epub2">
+    <element name="item">
+      <attribute name="id"><data type="string"/></attribute>
+      <attribute name="href"><data type="string"/></attribute>
+      <attribute name="media-type"><data type="string"/></attribute>
+      <optional><attribute name="fallback"><data type="string"/></attribute></optional>
+      <optional><attribute name="fallback-style"><data type="string"/></attribute></optional>
+      <optional><attribute name="required-namespace"><data type="string"/></attribute></optional>
+      <optional><attribute name="required-modules"><data type="string"/></attribute></optional>
+      <empty/>
+    </element>
+  </define>
+
+  <define name="itemrefEl-epub2">
+    <element name="itemref">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <attribute name="idref"><data type="string"/></attribute>
+      <optional>
+        <attribute name="linear"><choice><value>yes</value><value>no</value></choice></attribute>
+      </optional>
+      <empty/>
+    </element>
+  </define>
+
 </grammar>
