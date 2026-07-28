@@ -8,6 +8,46 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.8.2] - 2026-07-28
+
+Two false positives removed and four EPUB 2 checks added, all of them from
+MobileRead reports — Doitsu's CSS case, and DNSB posting epubcheck's output
+next to ours for the same book.
+
+### Fixed
+
+- **An attribute selector inside `@media` is no longer a CSS syntax error.**
+  `@media print { a[href^="http"] { … } }` drew CSS-008: the walk over a
+  grouping at-rule's block treated the `[…]` of a *selector* as a rule body
+  and read its contents as declarations. Reported by Doitsu with a namespaced
+  selector, but the namespace was incidental — every attribute selector in
+  that position was affected.
+- **NAV-001 is no longer emitted.** It is unreachable in epubcheck: the only
+  call site needs an EPUB 2 book whose manifest item carries `properties`,
+  and only the EPUB 3 handler parses that attribute. We were reporting a
+  finding epubcheck cannot make. An EPUB 2 book carrying a navigation
+  document is still reported — through the content model, where `<nav>` is
+  not part of XHTML 1.1, which is how epubcheck reports it.
+- **`epub:type` and `meta@charset` are rejected in EPUB 2.** Both are EPUB 3
+  spellings; the EPUB 2 branch had been reusing the EPUB 3 attribute pools.
+- **An EPUB 2 package document is checked against the EPUB 2 shapes.** A
+  `<meta>` needs `name` and `content` and must be empty; `properties` is not
+  an attribute of `item` or `itemref`. That grammar had no version switch at
+  all, so an EPUB 2 package was being held to EPUB 3's rules.
+- **An EPUB 2 `<body>` must hold at least one block element**, so a document
+  whose every child is rejected now says so, rather than listing the children
+  alone.
+- Attributes are named in full in diagnostics: `epub:type` was being reported
+  as `attribute "type"`, which on an `<a>` sends the reader to an attribute
+  that is perfectly legal there.
+
+### Added
+
+- **ADV-004** (advisory, opt-in): a package document that declares EPUB 2 but
+  is written in EPUB 3. It reports the pile of findings such a book already
+  draws as one diagnosis, naming the signals it counted. Suggested by JSWolf;
+  the books DNSB described are the case it is for.
+
 ## [0.8.1] - 2026-07-27
 
 `<hgroup>` matched to epubcheck's content model, in both directions.
