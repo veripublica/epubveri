@@ -8811,6 +8811,48 @@ mod tests {
             .collect()
     }
 
+    /// Attributes XHTML 1.1 has and our EPUB 2 branch was rejecting — false
+    /// positives on ordinary markup, `<style media="…">` most of all.
+    ///
+    /// Found by diffing our EPUB 2 attribute lists against epubcheck's
+    /// `schema/20/rng/xhtml/` modules rather than by waiting for a report,
+    /// which is the same method as #58 and the reason those two attributes
+    /// in #64 should not have needed a user to find them.
+    #[test]
+    fn xhtml11_attributes_we_were_rejecting() {
+        let doc = |head: &str, body: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" version=\"XHTML 1.1\">\
+                 <head profile=\"http://example.org/p\"><title>t</title>{head}</head>\
+                 <body>{body}</body></html>"
+            )
+        };
+        for (head, body) in [
+            (
+                "<style type=\"text/css\" media=\"screen\">p{color:red}</style>",
+                "<p>x</p>",
+            ),
+            (
+                "<meta name=\"d\" content=\"1\" scheme=\"ISO8601\"/>",
+                "<p>x</p>",
+            ),
+            (
+                "<base href=\"http://example.org/\" target=\"_blank\"/>",
+                "<p>x</p>",
+            ),
+            ("", "<p><q cite=\"http://example.org/\">said</q></p>"),
+        ] {
+            assert_eq!(
+                rsc_005_rules(epub2_with_ch1(&doc(head, body))),
+                Vec::<String>::new(),
+                "valid XHTML 1.1 must not be rejected: {head}{body}"
+            );
+        }
+    }
+
     /// #65: an EPUB 2 `<body>` must hold at least one block element
     /// (XHTML 1.1's `Block.model` is `oneOrMore Block.mix`). Ours was
     /// `zeroOrMore`, so a document whose every child was rejected reported
