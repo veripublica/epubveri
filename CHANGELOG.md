@@ -8,6 +8,39 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.8.4] - 2026-07-30
+
+Three findings epubcheck reports and we did not, all from one MobileRead
+post by Doitsu (#138).
+
+### Added
+
+- **`mathml` is now cross-checked against the manifest, in both
+  directions.** A content document containing `<math>` without the `mathml`
+  property draws `OPF-014`; the property declared on a document with no
+  MathML draws `OPF-015`. The property was already *accepted* (declaring it
+  never drew `OPF-027`), so it was the one member of the item-property
+  vocabulary that no rule looked at.
+
+- **Attribute vocabulary for SVG subtrees** (`RSC-025`, usage). An
+  unprefixed attribute that SVG 1.1 has no concept of is now reported —
+  `<image alt="cover image">`, HTML's `alt` reaching into an SVG cover
+  page, being the reported case. Like the existing element check this is
+  usage-level and a flat vocabulary rather than a per-element table, so an
+  attribute used on the wrong SVG element still passes. Two case-mangled
+  spellings on a 65-book shelf (`viewbox`, `preserveaspectratio`) are the
+  only other things it found there.
+
+### Fixed
+
+- **`<html class="calibre">` is now an error in an EPUB 2 document**, as are
+  `id`/`style`/`title` on `html`, `head` or `title`. XHTML 1.1 builds those
+  three elements from `I18n.attrib` alone — `dir`, `lang`, `xml:lang`, plus
+  `version` on `html` and `profile` on `head` — and not from
+  `Common.attrib`, so none of them takes `class`. This is calibre's own
+  output, so expect it on real EPUB 2 books: two of the 65 on the local
+  shelf gained findings, 61 of them in one book.
+
 ## [0.8.3] - 2026-07-28
 
 ### Fixed

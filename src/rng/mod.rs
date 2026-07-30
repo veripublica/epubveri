@@ -135,6 +135,50 @@ mod tests {
         }
     }
 
+    /// XHTML 1.1 builds `html`/`head`/`title` from `I18n.attrib` alone -
+    /// no `Common.attrib`, so no `id`, `class`, `style` or `title` on any
+    /// of the three. `<html class="calibre">` is calibre's own output and
+    /// draws an RSC-005 from epubcheck (Doitsu, MobileRead #138); we were
+    /// granting the EPUB 3 global set there.
+    #[test]
+    fn epub2_html_head_and_title_take_only_the_i18n_attributes() {
+        let g = crate::rng::xhtml_grammar_epub2();
+        let valid = |xml: &str| {
+            let d = crate::ocf::parse_xml(xml).unwrap();
+            crate::rng::validate_node_report(&g, d.root_element()).is_empty()
+        };
+        let doc = |html_attrs: &str, head_attrs: &str, title_attrs: &str| {
+            format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\"{html_attrs}>\
+                 <head{head_attrs}><title{title_attrs}>t</title></head>\
+                 <body><p>x</p></body></html>"
+            )
+        };
+
+        // I18n.attrib (xml:lang, lang, and `dir` interleaved in by
+        // bdo.rng), plus each element's own extra: `version` on html,
+        // `profile` on head.
+        assert!(valid(&doc(
+            " lang=\"en\" xml:lang=\"en\" dir=\"ltr\" version=\"-//W3C//DTD XHTML 1.1//EN\"",
+            " profile=\"http://example.org/p\" lang=\"en\"",
+            " xml:lang=\"en\""
+        )));
+
+        // Common.attrib members, which none of the three inherit.
+        for attrs in [" class=\"calibre\"", " id=\"top\"", " style=\"color:red\""] {
+            assert!(!valid(&doc(attrs, "", "")), "html{attrs} must be rejected");
+            assert!(!valid(&doc("", attrs, "")), "head{attrs} must be rejected");
+            assert!(!valid(&doc("", "", attrs)), "title{attrs} must be rejected");
+        }
+
+        // Not the wider #66 tightening: `class` stays valid everywhere else
+        // in the EPUB 2 pool, since those elements do take Common.attrib.
+        assert!(valid(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+             <body class=\"b\"><p class=\"c\">x</p></body></html>"
+        ));
+    }
+
     use super::*;
 
     const MIN_OPF: &str = concat!(

@@ -133,6 +133,344 @@ pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &m
     }
 }
 
+/// Real SVG 1.1 attribute vocabulary — the union of every unprefixed
+/// `attribute` name in the SVG 1.1 modules the strict grammar drives
+/// (`mod/svg11/`, reached from `epub-svg-strict-inc.rnc`). The same list
+/// extracted independently from epubcheck's *other* copy of SVG 1.1, the
+/// XML RelaxNG under `schema/20/rng/svg/`, is a strict subset of it — two
+/// sources, one answer, which is the check this project owes any list a
+/// script produced.
+///
+/// It is a flat union, not a per-element table: an attribute valid on some
+/// SVG element but used on another passes here. That is a false negative,
+/// and the deliberate trade — the same one `SVG_ELEMENTS` makes, and for
+/// the same reason (`RSC-025` is usage-level, so a false positive costs
+/// more than a miss). What it does catch is the class actually reported:
+/// an attribute SVG has no concept of at all, `<image alt="cover image">`
+/// being HTML's `alt` reaching into an SVG subtree (Doitsu, MobileRead
+/// #138). epubcheck reports that as `USAGE(RSC-025)`, because its full
+/// SVG 1.1 grammar runs with `isNormative=false`.
+///
+/// `inkscape:`/`sodipodi:` attributes are in that grammar too (via
+/// `inkscape.rnc`) but are namespaced, so they never reach this list —
+/// only unprefixed attributes are checked at all. Note that `inkscape.rnc`
+/// *does* have a no-namespace wildcard (`attribute none:*`), but it is
+/// reachable only inside `inkscape:`/`sodipodi:` elements, not from
+/// `SVG.Core.extra.attrib` — which is why `alt` on `<image>` is reported
+/// rather than swallowed by it.
+const SVG_ATTRIBUTES: &[&str] = &[
+    "accent-height",
+    "accumulate",
+    "additive",
+    "alignment-baseline",
+    "alphabetic",
+    "amplitude",
+    "arabic-form",
+    "ascent",
+    "attributeName",
+    "attributeType",
+    "azimuth",
+    "baseFrequency",
+    "baseProfile",
+    "baseline-shift",
+    "bbox",
+    "begin",
+    "bias",
+    "by",
+    "calcMode",
+    "cap-height",
+    "class",
+    "clip",
+    "clip-path",
+    "clip-rule",
+    "clipPathUnits",
+    "color",
+    "color-interpolation",
+    "color-interpolation-filters",
+    "color-profile",
+    "color-rendering",
+    "contentScriptType",
+    "contentStyleType",
+    "cursor",
+    "cx",
+    "cy",
+    "d",
+    "descent",
+    "diffuseConstant",
+    "direction",
+    "display",
+    "divisor",
+    "dominant-baseline",
+    "dur",
+    "dx",
+    "dy",
+    "edgeMode",
+    "elevation",
+    "enable-background",
+    "end",
+    "exponent",
+    "externalResourcesRequired",
+    "fill",
+    "fill-opacity",
+    "fill-rule",
+    "filter",
+    "filterRes",
+    "filterUnits",
+    "flood-color",
+    "flood-opacity",
+    "focusable",
+    "font-family",
+    "font-size",
+    "font-size-adjust",
+    "font-stretch",
+    "font-style",
+    "font-variant",
+    "font-weight",
+    "format",
+    "from",
+    "fx",
+    "fy",
+    "g1",
+    "g2",
+    "glyph-name",
+    "glyph-orientation-horizontal",
+    "glyph-orientation-vertical",
+    "glyphRef",
+    "gradientTransform",
+    "gradientUnits",
+    "hanging",
+    "height",
+    "horiz-adv-x",
+    "horiz-origin-x",
+    "horiz-origin-y",
+    "href",
+    "id",
+    "ideographic",
+    "image-rendering",
+    "in",
+    "in2",
+    "intercept",
+    "k",
+    "k1",
+    "k2",
+    "k3",
+    "k4",
+    "kernelMatrix",
+    "kernelUnitLength",
+    "kerning",
+    "keyPoints",
+    "keySplines",
+    "keyTimes",
+    "lang",
+    "lengthAdjust",
+    "letter-spacing",
+    "lighting-color",
+    "limitingConeAngle",
+    "local",
+    "marker-end",
+    "marker-mid",
+    "marker-start",
+    "markerHeight",
+    "markerUnits",
+    "markerWidth",
+    "mask",
+    "maskContentUnits",
+    "maskUnits",
+    "mathematical",
+    "max",
+    "media",
+    "method",
+    "min",
+    "mode",
+    "name",
+    "numOctaves",
+    "offset",
+    "onabort",
+    "onactivate",
+    "onbegin",
+    "onclick",
+    "onend",
+    "onerror",
+    "onfocusin",
+    "onfocusout",
+    "onload",
+    "onmousedown",
+    "onmousemove",
+    "onmouseout",
+    "onmouseover",
+    "onmouseup",
+    "onrepeat",
+    "onresize",
+    "onscroll",
+    "onunload",
+    "onzoom",
+    "opacity",
+    "operator",
+    "order",
+    "orient",
+    "orientation",
+    "origin",
+    "overflow",
+    "overline-position",
+    "overline-thickness",
+    "panose-1",
+    "path",
+    "pathLength",
+    "patternContentUnits",
+    "patternTransform",
+    "patternUnits",
+    "pointer-events",
+    "points",
+    "pointsAtX",
+    "pointsAtY",
+    "pointsAtZ",
+    "preserveAlpha",
+    "preserveAspectRatio",
+    "primitiveUnits",
+    "r",
+    "radius",
+    "refX",
+    "refY",
+    "rel",
+    "rendering-intent",
+    "repeatCount",
+    "repeatDur",
+    "requiredExtensions",
+    "requiredFeatures",
+    "restart",
+    "result",
+    "rotate",
+    "rx",
+    "ry",
+    "scale",
+    "seed",
+    "shape-rendering",
+    "slope",
+    "spacing",
+    "specularConstant",
+    "specularExponent",
+    "spreadMethod",
+    "startOffset",
+    "stdDeviation",
+    "stemh",
+    "stemv",
+    "stitchTiles",
+    "stop-color",
+    "stop-opacity",
+    "strikethrough-position",
+    "strikethrough-thickness",
+    "string",
+    "stroke",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-miterlimit",
+    "stroke-opacity",
+    "stroke-width",
+    "style",
+    "surfaceScale",
+    "systemLanguage",
+    "tabindex",
+    "tableValues",
+    "target",
+    "targetX",
+    "targetY",
+    "text-anchor",
+    "text-decoration",
+    "text-rendering",
+    "textLength",
+    "title",
+    "to",
+    "transform",
+    "type",
+    "u1",
+    "u2",
+    "underline-position",
+    "underline-thickness",
+    "unicode",
+    "unicode-bidi",
+    "unicode-range",
+    "units-per-em",
+    "v-alphabetic",
+    "v-hanging",
+    "v-ideographic",
+    "v-mathematical",
+    "values",
+    "version",
+    "vert-adv-y",
+    "vert-origin-x",
+    "vert-origin-y",
+    "viewBox",
+    "viewTarget",
+    "visibility",
+    "width",
+    "widths",
+    "word-spacing",
+    "writing-mode",
+    "x",
+    "x-height",
+    "x1",
+    "x2",
+    "xChannelSelector",
+    "y",
+    "y1",
+    "y2",
+    "yChannelSelector",
+    "z",
+    "zoomAndPan",
+];
+
+fn is_recognized_attribute(name: &str) -> bool {
+    // `role` and `aria-*`: `epub-svg-strict-inc.rnc` folds `aria.global`
+    // into `SVG.Core.attrib`, which covers the `aria-*` set but not `role`
+    // itself. `role` is allowed here anyway - accepting it is a miss, and
+    // rejecting an accessibility attribute that authors do put on SVG
+    // would be the expensive direction of wrong.
+    SVG_ATTRIBUTES.contains(&name) || name == "role" || name.starts_with("aria-")
+}
+
+/// `RSC-025` (usage): an unprefixed attribute on an SVG-namespaced element
+/// that SVG 1.1 has no such attribute for. Prefixed attributes are skipped
+/// entirely (`xlink:`, `xml:`, `epub:` - which `check_epub_attributes`
+/// owns - and the `inkscape:`/`sodipodi:` sets the grammar allows
+/// wholesale), so this only ever sees the no-namespace vocabulary.
+pub(crate) fn check_attribute_vocabulary(
+    svg_root: roxmltree::Node,
+    path: &str,
+    report: &mut Report,
+) {
+    check_attrs_of(svg_root, path, report);
+    for child in svg_root
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().namespace() == Some(SVG_NS))
+    {
+        // Same boundaries as `check_vocabulary`: `foreignObject` holds
+        // XHTML and `title` may hold a whole embedded document, so neither
+        // subtree is SVG to begin with.
+        if matches!(child.tag_name().name(), "foreignObject" | "title") {
+            check_attrs_of(child, path, report);
+            continue;
+        }
+        check_attribute_vocabulary(child, path, report);
+    }
+}
+
+fn check_attrs_of(n: roxmltree::Node, path: &str, report: &mut Report) {
+    for attr in n.attributes().filter(|a| a.namespace().is_none()) {
+        let name = attr.name();
+        if !is_recognized_attribute(name) {
+            report.push_at_pos(
+                RSC_025,
+                Severity::Usage,
+                format!("attribute \"{name}\" not allowed here"),
+                path,
+                Position::of(n),
+            );
+        }
+    }
+}
+
 /// The SVG elements `epub:type` is allowed on — epubcheck's own list, from
 /// `svg.renderable.elem` in `mod/epub-svg-forgiving-inc.rnc`. That grammar is
 /// the **normative** half of its SVG validation (the full SVG 1.1 grammar
@@ -522,6 +860,49 @@ mod tests {
         ] {
             assert!(flagged(bad), "epub:type is not allowed on <{bad}>");
         }
+    }
+
+    /// HTML's `alt` reaching into an SVG subtree - `<image alt="cover
+    /// image">`, which calibre-style cover pages emit. SVG 1.1 has no such
+    /// attribute on any element, so epubcheck's non-normative full SVG
+    /// grammar reports it as `USAGE(RSC-025)` (Doitsu, MobileRead #138).
+    #[test]
+    fn svg_attribute_vocabulary_flags_alt_and_keeps_real_svg_attributes() {
+        let attrs_on_image = |attrs: &str| {
+            let xml = format!(
+                "{XHTML_OPEN}<body><svg:svg viewBox=\"0 0 600 800\" width=\"100%\" \
+                 height=\"100%\" preserveAspectRatio=\"xMidYMid meet\" version=\"1.1\">\
+                 <svg:image {attrs} xlink:href=\"c.png\"/></svg:svg></body></html>"
+            );
+            let d = doc(&xml);
+            let root = d
+                .descendants()
+                .find(|n| n.tag_name().name() == "svg")
+                .unwrap();
+            let mut report = Report::new();
+            check_attribute_vocabulary(root, "c.xhtml", &mut report);
+            report
+                .messages
+                .iter()
+                .filter(|m| m.id == RSC_025)
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            attrs_on_image("alt=\"cover image\" width=\"600\" height=\"800\"").len(),
+            1,
+            "`alt` is not an SVG attribute; the width/height beside it are"
+        );
+        // The root's own attributes are checked too, and every one of them
+        // here is real SVG - a case-correct `viewBox`/`preserveAspectRatio`
+        // must stay silent, since the lowercase spellings are what real
+        // books actually get wrong (two on the local shelf).
+        assert!(attrs_on_image("width=\"600\" height=\"800\"").is_empty());
+        // Prefixed attributes are never this check's business: `xlink:href`
+        // above, `epub:type` (check_epub_attributes owns it), and the
+        // `inkscape:`/`sodipodi:` sets the grammar allows wholesale.
+        assert!(attrs_on_image("class=\"c\" id=\"i\" style=\"x\" role=\"img\"").is_empty());
     }
 
     #[test]

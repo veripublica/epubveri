@@ -4039,6 +4039,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 })
         }) {
             crate::svg::check_vocabulary(svg_root, &path, report);
+            crate::svg::check_attribute_vocabulary(svg_root, &path, report);
             crate::svg::check_epub_attributes(svg_root, &path, report);
             // `check_ids` is standalone-SVG-only: a real fixture confirms
             // `id="1"` on an SVG root is fine when the SVG is embedded
@@ -5180,6 +5181,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // document whose only SVG is an `<img src="x.svg">` drew OPF-015 -
         // reported by Doitsu, MobileRead #126.
         let mut references_svg = false;
+        // A `<math>` element in the MathML namespace requires the `mathml`
+        // property, exactly as `<svg>` requires `svg` (OPSHandler30 adds
+        // ITEM_PROPERTIES.MATHML on that element and nothing else - a
+        // MathML *child* without its `math` root cannot occur, and a
+        // reference to a MathML resource has no "allowed" half the way
+        // `references_svg` does). Reported by Doitsu, MobileRead #138.
+        let mut has_mathml = false;
         let mut has_switch = false;
         let mut remote_refs: HashSet<String> = HashSet::new();
         let mut remote_link_refs: HashSet<String> = HashSet::new();
@@ -5436,6 +5444,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             {
                 has_svg = true;
             }
+            if node.tag_name().name() == "math"
+                && node.tag_name().namespace() == Some(crate::mathml::MATHML_NS)
+            {
+                has_mathml = true;
+            }
             if !references_svg {
                 for attr in node.attributes() {
                     if !matches!(attr.name(), "src" | "href" | "data" | "poster") {
@@ -5664,6 +5677,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     Severity::Warning,
                 ),
                 (has_script, has_script, "scripted", OPF_015, Severity::Error),
+                (has_mathml, has_mathml, "mathml", OPF_015, Severity::Error),
                 (
                     has_svg,
                     has_svg || references_svg,
@@ -6038,6 +6052,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
         }
         crate::svg::check_vocabulary(d.root_element(), doc_path, report);
+        crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, report);
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
         crate::svg::check_ids(d.root_element(), doc_path, report);
         crate::svg::check_link_labels(d.root_element(), doc_path, report);
@@ -8330,6 +8345,38 @@ mod tests {
         assert_eq!(hit.id, crate::ids::OPF_018B, "scripted -> OPF-018b");
         assert_eq!(hit.severity, crate::report::Severity::Usage);
         assert!(report.is_valid(), "usage does not invalidate");
+    }
+
+    /// `mathml` was in `KNOWN_ITEM_PROPERTIES` (so declaring it never drew
+    /// OPF-027) but in neither direction of the used/declared cross-check,
+    /// so a book with MathML and no property, and a book with the property
+    /// and no MathML, both passed. epubcheck adds `ITEM_PROPERTIES.MATHML`
+    /// on the `math` element itself (OPSHandler30) - Doitsu, MobileRead
+    /// #138.
+    #[test]
+    fn mathml_property_is_checked_in_both_directions() {
+        const MATH: &str = "<p><math xmlns=\"http://www.w3.org/1998/Math/MathML\">\
+                            <mi>x</mi></math></p>";
+        let finding = |props: &str, body: &str| {
+            crate::validate_bytes(epub_declaring_props(props, body))
+                .messages
+                .iter()
+                .find(|m| m.text.contains("mathml"))
+                .map(|m| (m.id, m.severity))
+        };
+
+        assert_eq!(
+            finding("", MATH),
+            Some((crate::ids::OPF_014, crate::report::Severity::Error)),
+            "MathML present, property missing"
+        );
+        assert_eq!(
+            finding("mathml", "<p>no maths</p>"),
+            Some((crate::ids::OPF_015, crate::report::Severity::Error)),
+            "property declared, no MathML"
+        );
+        assert_eq!(finding("mathml", MATH), None, "declared and used");
+        assert_eq!(finding("", "<p>no maths</p>"), None, "neither");
     }
 
     // #37: scripted-content detection (OPF-014/015). epubcheck (OPSHandler30)

@@ -1698,6 +1698,37 @@
     <ref name="globalAttrsCore"/>
   </define>
 
+  <!-- XHTML 1.1's `I18n.attrib`: `xml:lang` and `lang` from attribs.rng,
+       plus `dir` interleaved in by bdo.rng. It is NOT `Common.attrib` -
+       there is no `id`, `class`, `style` or `title` in it - and `html`,
+       `head` and `title` are the three elements whose attribute lists are
+       built from it alone rather than from `Common.attrib`:
+
+         html.attlist  = XHTML.version.attrib + I18n.attrib
+         head.attlist  = I18n.attrib + profile.attlist
+         title.attlist = I18n.attrib
+
+       so `<html class="calibre">` - calibre's own output - is an RSC-005 in
+       an EPUB 2 book, which is what epubcheck reports ("attribute \"class\"
+       not allowed here; expected attribute \"dir\", \"lang\", \"version\" or
+       \"xml:lang\""). Reported by Doitsu, MobileRead #138.
+
+       Note the scope: this is three elements whose *own* attlist skips
+       `Common.attrib`, not the wider #66 tightening (XHTML 1.1's
+       `Common.attrib` is seven attributes where we still grant the EPUB 3
+       global set on every other element). The two are independent - #66
+       would not have caught this one, since `html` never reaches
+       `Common.attrib` at all. -->
+  <define name="i18nAttrs-epub2">
+    <optional><attribute name="lang"><ref name="langValue"/></attribute></optional>
+    <optional><attribute name="xml:lang"><ref name="langValue"/></attribute></optional>
+    <optional>
+      <attribute name="dir">
+        <choice><value>ltr</value><value>rtl</value></choice>
+      </attribute>
+    </optional>
+  </define>
+
   <!-- Head contents for EPUB 2. Identical to the EPUB 3 pool except that
        `<meta>` loses `charset`: that is the HTML5 spelling, and XHTML 1.1's
        meta takes http-equiv/content instead. Same issue, same book. -->
@@ -1726,7 +1757,7 @@
 
   <define name="htmlEl-epub2">
     <element name="html">
-      <ref name="globalAttrs-epub2"/>
+      <ref name="i18nAttrs-epub2"/>
       <optional><attribute name="version"><data type="string"/></attribute></optional>
       <ref name="headEl-epub2"/>
       <ref name="bodyEl-epub2"/>
@@ -1744,10 +1775,10 @@
        which its handler maps to RSC-017). -->
   <define name="headEl-epub2">
     <element name="head">
-      <ref name="globalAttrs-epub2"/>
+      <ref name="i18nAttrs-epub2"/>
       <optional><attribute name="profile"><data type="string"/></attribute></optional>
       <interleave>
-        <element name="title"><ref name="globalAttrsCore"/><text/></element>
+        <element name="title"><ref name="i18nAttrs-epub2"/><text/></element>
         <ref name="headContentsCommon-epub2"/>
       </interleave>
     </element>
