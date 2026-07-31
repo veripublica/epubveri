@@ -11,6 +11,22 @@ const PREFERRED: &[&str] = &[
     "image/png",
     "image/svg+xml",
     "image/webp",
+    // EPUB 3.4 (CR draft, 2026-07-21) adds two image types, each with a
+    // dated entry in the spec's own change log and a "3.4" row in the core
+    // media types table: `image/avif` (06-Oct-2025, w3c/epub-specs#2794) and
+    // `image/jxl` (23-Jan-2026, #2896). epubcheck has an open issue for AVIF
+    // (w3c/epubcheck#1642, "ready for implementation") and none for JXL, so
+    // JXL was checked against the table directly rather than taken from the
+    // issue list.
+    //
+    // Shipping these before epubcheck does makes us *more* permissive than it
+    // is today: a 3.3-targeting book using AVIF draws a fallback error there
+    // and none here. That is a false negative against epubcheck-as-it-is and
+    // a true negative against the spec as it will be - the deliberate cost of
+    // being first, and the safe direction, since it cannot invent an error on
+    // a valid book.
+    "image/avif",
+    "image/jxl",
     "audio/mpeg",
     "audio/mp4",
     "audio/ogg",
@@ -95,6 +111,25 @@ mod tests {
         assert!(is_core_media_type("font/ttf"));
         assert!(!is_core_media_type("audio/foreign"));
         assert!(!is_core_media_type("image/vnd.xyz"));
+    }
+
+    /// EPUB 3.4's core media type additions. The audio ones need no entry of
+    /// their own — `audio/mp4` is already here and `base_media_type` strips
+    /// the parameter — but they are asserted so that a future change to
+    /// either cannot silently drop them (spec change log, 14-Apr-2026:
+    /// Opus in MP4, plus a codec-bearing type for AAC LC).
+    #[test]
+    fn epub34_core_media_types() {
+        assert!(is_core_media_type("image/avif"));
+        assert!(is_core_media_type("image/jxl"));
+        assert!(is_core_media_type("audio/mp4; codecs=opus"));
+        assert!(is_core_media_type("audio/mp4; codecs=mp4a.40.2"));
+        // Additions, not reclassifications: both are preferred types.
+        assert!(!is_non_preferred_core_media_type("image/avif"));
+        assert!(!is_non_preferred_core_media_type("image/jxl"));
+        // And nothing image-shaped came along for the ride.
+        assert!(!is_core_media_type("image/heic"));
+        assert!(!is_core_media_type("image/tiff"));
     }
 
     #[test]

@@ -286,6 +286,7 @@ fn check_itemref_rendition_conflicts(
     props: &str,
     path: &str,
     ir: roxmltree::Node,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     let tokens: Vec<&str> = props.split_whitespace().collect();
@@ -329,6 +330,58 @@ fn check_itemref_rendition_conflicts(
             "opf.itemref.deprecated_spread_portrait",
             Vec::new(),
         );
+    }
+    // Vocabulary, not just conflicts (issue #67): an unknown token here went
+    // entirely unreported, where the manifest `item/@properties` equivalent
+    // has always been checked. Two vocabularies apply, per epubcheck's
+    // `RESERVED_ITEMREF_VOCABS`: the unprefixed `ITEMREF_VOCAB` (two names)
+    // and `RenditionVocabs.ITEMREF_VOCAB` under `rendition:`. Any other
+    // prefix is left alone - see the meta-property check for why.
+    const KNOWN_ITEMREF_PROPERTIES: &[&str] = &["page-spread-left", "page-spread-right"];
+    const KNOWN_RENDITION_ITEMREF_PROPERTIES: &[&str] = &[
+        "rendition:layout-pre-paginated",
+        "rendition:layout-reflowable",
+        "rendition:orientation-auto",
+        "rendition:orientation-landscape",
+        "rendition:orientation-portrait",
+        "rendition:spread-auto",
+        "rendition:spread-both",
+        "rendition:spread-landscape",
+        "rendition:spread-none",
+        "rendition:spread-portrait",
+        "rendition:page-spread-center",
+        "rendition:page-spread-left",
+        "rendition:page-spread-right",
+        "rendition:flow-paginated",
+        "rendition:flow-scrolled-continuous",
+        "rendition:flow-scrolled-doc",
+        "rendition:flow-auto",
+        "rendition:align-x-center",
+    ];
+    for token in &tokens {
+        // EPUB 3 only, for the same reason as the meta-property check: an
+        // EPUB 2 `<itemref properties>` is already reported by the EPUB 2
+        // package grammar.
+        let unknown = if !is_epub3 {
+            false
+        } else if token.starts_with("rendition:") {
+            !KNOWN_RENDITION_ITEMREF_PROPERTIES.contains(token)
+        } else if !token.contains(':') {
+            !KNOWN_ITEMREF_PROPERTIES.contains(token)
+        } else {
+            false
+        };
+        if unknown {
+            report.push_node(
+                OPF_027,
+                Severity::Error,
+                format!("unknown spine item property '{token}'"),
+                path.to_string(),
+                ir,
+                "opf.itemref.unknown_property",
+                vec![token.to_string()],
+            );
+        }
     }
 }
 
@@ -1902,6 +1955,54 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             "a11y:certifierReport",
             "a11y:exemption",
         ];
+        // The `media:` meta vocabulary (Media Overlays), the fourth and last
+        // vocabulary reachable from a `meta@property` (issue #67). Four
+        // names, and `active-class`/`playback-active-class` are already read
+        // by name further down for the CSS-029/030 cross-check - they were
+        // consumed without ever being validated as a set.
+        //
+        // epubcheck maps `media:` (and `rendition:`) to an *empty* vocabulary
+        // in the item/itemref/link positions, which makes any name under
+        // those prefixes undefined there. Not implemented: a `media:` token
+        // in a manifest item's properties is not something real books do,
+        // and every position we do check is one a real book can reach.
+        const KNOWN_MEDIA_META_PROPERTIES: &[&str] = &[
+            "media:active-class",
+            "media:duration",
+            "media:narrator",
+            "media:playback-active-class",
+        ];
+        // The *unprefixed* meta property vocabulary (issue #67).
+        // epubcheck's `PackageVocabs.META_VOCAB`, whose names are the
+        // enum constants lower-hyphenated by `EnumVocab`, plus the
+        // separate `META_VOCAB_CAMEL` holding the one camelCase name.
+        // `dictionary-type`, `source-language` and `target-language` come
+        // from the Dictionaries extension and sit in the same vocabulary
+        // there, so they are accepted regardless of profile - as epubcheck
+        // accepts them.
+        //
+        // `pageBreakSource` is EPUB 3.4 (spec change log 02-Jun-2025,
+        // replacing `source-of`); epubcheck has already implemented it, so
+        // this is parity rather than an early feature.
+        const KNOWN_META_PROPERTIES: &[&str] = &[
+            "alternate-script",
+            "authority",
+            "belongs-to-collection",
+            "collection-type",
+            "display-seq",
+            "dictionary-type",
+            "file-as",
+            "group-position",
+            "identifier-type",
+            "meta-auth",
+            "role",
+            "source-language",
+            "source-of",
+            "target-language",
+            "term",
+            "title-type",
+            "pageBreakSource",
+        ];
         for n in md
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "meta")
@@ -1929,6 +2030,44 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         opf_path,
                         n,
                         "opf.metadata.unknown_a11y_property",
+                        vec![property.to_string()],
+                    );
+                }
+                if property.starts_with("media:")
+                    && !KNOWN_MEDIA_META_PROPERTIES.contains(&property)
+                {
+                    report.push_node(
+                        OPF_027,
+                        Severity::Error,
+                        format!("unknown media overlays property '{property}'"),
+                        opf_path,
+                        n,
+                        "opf.metadata.unknown_media_property",
+                        vec![property.to_string()],
+                    );
+                }
+                // A name with no prefix must come from the package meta
+                // vocabulary. A *prefixed* one is left alone: either the
+                // prefix is reserved (handled by the two checks above and
+                // by the media:/dcterms: readers elsewhere) or it is
+                // author-declared, in which case its vocabulary is not ours
+                // to know - and an *undeclared* prefix is OPF-028, a
+                // different message, which is why this cannot simply reject
+                // everything it does not recognise.
+                //
+                // EPUB 3 only: `property` is not an EPUB 2 attribute at all,
+                // and the EPUB 2 package grammar already reports it, so
+                // running this there would be a second finding for one
+                // mistake.
+                if is_epub3 && !property.contains(':') && !KNOWN_META_PROPERTIES.contains(&property)
+                {
+                    report.push_node(
+                        OPF_027,
+                        Severity::Error,
+                        format!("unknown metadata property '{property}'"),
+                        opf_path,
+                        n,
+                        "opf.metadata.unknown_meta_property",
                         vec![property.to_string()],
                     );
                 }
@@ -3018,6 +3157,38 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // (confirmed via real fixtures: "certifierReport"/
         // "certifierCredential" valid, a lowercase "certifierreport"
         // invalid - rel values are case-sensitive).
+        // The unprefixed link-rel vocabulary (issue #67), epubcheck's
+        // `LINKREL_VOCAB`. The five deprecated names above are members of it
+        // too - deprecated, not removed - so they must stay listed here or
+        // they would draw OPF-027 on top of their own OPF-086. `acquire` is
+        // no longer defined in EPUB 3.3 but epubcheck still accepts it for
+        // backward compatibility with the Previews specification, and so do
+        // we; dropping it would be a false positive on every preview
+        // publication.
+        const KNOWN_LINK_RELS: &[&str] = &[
+            "acquire",
+            "alternate",
+            "marc21xml-record",
+            "mods-record",
+            "onix-record",
+            "record",
+            "voicing",
+            "xml-signature",
+            "xmp-record",
+        ];
+        for token in &rel_tokens {
+            if is_epub3 && !token.contains(':') && !KNOWN_LINK_RELS.contains(token) {
+                report.push_node(
+                    OPF_027,
+                    Severity::Error,
+                    format!("unknown link relationship '{token}'"),
+                    opf_path,
+                    link,
+                    "opf.link.unknown_rel",
+                    vec![token.to_string()],
+                );
+            }
+        }
         const KNOWN_A11Y_LINK_RELS: &[&str] = &["a11y:certifierCredential", "a11y:certifierReport"];
         for token in &rel_tokens {
             if token.starts_with("a11y:") && !KNOWN_A11Y_LINK_RELS.contains(token) {
@@ -3374,7 +3545,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
                             // --- Fixed-layout viewport/viewBox checks ---
                             let props = ir.attr_no_ns("properties").unwrap_or("");
-                            check_itemref_rendition_conflicts(props, opf_path, ir, report);
+                            check_itemref_rendition_conflicts(
+                                props, opf_path, ir, is_epub3, report,
+                            );
                             let is_fixed_layout = if props
                                 .split_whitespace()
                                 .any(|p| p == "rendition:layout-reflowable")
@@ -8312,6 +8485,141 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// Issue #67: the three package vocabularies that had no check at all -
+    /// unprefixed `meta@property`, `itemref@properties` and `link@rel`.
+    /// Builds a publication carrying one extra metadata line, one set of
+    /// itemref properties, and one link rel, and returns the reported IDs.
+    fn vocab_ids(meta_extra: &str, itemref_props: &str, link_rel: &str) -> Vec<String> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title id="t">T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {meta_extra}
+    <link rel="{link_rel}" href="rec.xml" media-type="application/xml"/>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="rec" href="rec.xml" media-type="application/xml"/>
+  </manifest>
+  <spine><itemref idref="ch1" properties="{itemref_props}"/></spine>
+</package>"#
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav></body></html>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/rec.xml", "<r/>"),
+            ] {
+                zip.start_file(name, o).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        crate::validate_bytes(buf)
+            .messages
+            .iter()
+            .map(|m| m.id.to_string())
+            .collect()
+    }
+
+    #[test]
+    fn unprefixed_package_vocabularies_are_checked() {
+        // Valid throughout: three real vocabulary members, one per surface.
+        assert!(
+            !vocab_ids(
+                "<meta property=\"file-as\" refines=\"#t\">T, The</meta>",
+                "page-spread-left",
+                "record"
+            )
+            .contains(&"OPF-027".to_string()),
+            "known names must not be reported"
+        );
+        // One unknown name per surface, each reported.
+        for (meta, itemref, rel) in [
+            (
+                "<meta property=\"nonsense\">x</meta>",
+                "page-spread-left",
+                "record",
+            ),
+            ("", "bogusProp", "record"),
+            ("", "page-spread-left", "bogusRel"),
+            // rendition: overrides have their own vocabulary on itemref.
+            ("", "rendition:layout-invented", "record"),
+        ] {
+            assert!(
+                vocab_ids(meta, itemref, rel).contains(&"OPF-027".to_string()),
+                "expected OPF-027 for ({meta:?}, {itemref:?}, {rel:?})"
+            );
+        }
+        // The `media:` vocabulary is four names; a real one used correctly
+        // stays clean, an invented one under the same prefix does not.
+        assert!(
+            !vocab_ids(
+                "<meta property=\"media:duration\">0:30:00</meta>",
+                "page-spread-left",
+                "record"
+            )
+            .contains(&"OPF-027".to_string())
+        );
+        assert!(
+            vocab_ids(
+                "<meta property=\"media:invented\">x</meta>",
+                "page-spread-left",
+                "record"
+            )
+            .contains(&"OPF-027".to_string())
+        );
+        // A prefixed name is *not* ours to judge: an author-declared prefix
+        // carries a vocabulary we don't know, and an undeclared one is
+        // OPF-028, a different message.
+        assert!(
+            !vocab_ids(
+                "<meta property=\"foo:whatever\">x</meta>",
+                "foo:whatever",
+                "foo:whatever"
+            )
+            .contains(&"OPF-027".to_string()),
+            "prefixed names must not draw OPF-027"
+        );
+        // `pageBreakSource` (EPUB 3.4) and the deprecated-but-still-defined
+        // link rels are members, so they draw no OPF-027 - the deprecated
+        // ones keep their own OPF-086 instead.
+        let deprecated = vocab_ids(
+            "<meta property=\"pageBreakSource\" refines=\"#t\">print</meta>",
+            "page-spread-left",
+            "onix-record",
+        );
+        assert!(!deprecated.contains(&"OPF-027".to_string()));
+        assert!(deprecated.contains(&"OPF-086".to_string()));
     }
 
     /// `remote-resources` declared but nothing remote is used: a warning

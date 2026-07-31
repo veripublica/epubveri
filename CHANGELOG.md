@@ -8,6 +8,48 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.8.6] - 2026-07-31
+
+Four package vocabularies that were never checked, and the first two EPUB
+3.4 core media types.
+
+### Added
+
+- **`image/avif` and `image/jxl` are Core Media Types.** Both are in EPUB
+  3.4's core media types table (spec change log: AVIF 06-Oct-2025, JPEG XL
+  23-Jan-2026), so a manifest item declaring either no longer needs a
+  fallback and an `<img>` referencing one is no longer `RSC-032`. EPUB
+  3.4's audio additions — Opus in an MP4 container, and the codec-bearing
+  type for AAC LC — needed no change, since `audio/mp4` was already
+  accepted and the media-type parameter is stripped before comparison;
+  they are now covered by a test so that cannot silently regress.
+
+  This ships **ahead of epubcheck**, which has an open issue for AVIF and
+  none for JXL. The practical difference: a publication targeting EPUB 3.3
+  that uses AVIF draws a fallback error there and none here.
+
+- **Unknown package property names are now reported (`OPF-027`)** in the
+  four positions that had no vocabulary check at all. Manifest
+  `item/@properties` was already checked; these are the rest:
+
+  | position | vocabulary |
+  |---|---|
+  | `meta/@property` | the 16 unprefixed names, plus `pageBreakSource` (EPUB 3.4) |
+  | `meta/@property`, `media:` | `active-class`, `duration`, `narrator`, `playback-active-class` |
+  | `itemref/@properties` | `page-spread-left`/`-right`, plus the 18 `rendition:` overrides |
+  | `link/@rel` | the 9 defined keywords |
+
+  A typo such as `belongs-to-colection` used to pass silently. **A
+  prefixed name is deliberately left alone** — an author-declared prefix
+  carries a vocabulary this tool cannot know, and an *undeclared* prefix
+  is `OPF-028`, a different message. The five deprecated `link/@rel`
+  keywords remain members of their vocabulary, so they keep drawing only
+  their existing `OPF-086` deprecation warning rather than gaining a
+  second finding.
+
+  EPUB 3 only: neither `property` nor `itemref/@properties` is an EPUB 2
+  attribute, and the EPUB 2 package grammar already reports them.
+
 ## [0.8.5] - 2026-07-31
 
 Two EPUB 2 content-model gaps, from one MobileRead post by Doitsu (#140)
