@@ -217,7 +217,7 @@ programmatically.
 crates.io (`cargo add epubveri`, or in your `Cargo.toml`):
 
 ```toml
-epubveri = "0.4"
+epubveri = "0.8"
 ```
 
 Then:

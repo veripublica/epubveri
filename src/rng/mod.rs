@@ -1037,6 +1037,73 @@ mod tests {
         assert!(ok2("<ul><li><p>x</p> t</li></ul>"), "li takes flow");
     }
 
+    /// Doitsu, MobileRead #140: XHTML 1.1 gives `blockquote` the same
+    /// `Block.model` as `body`, so inline elements, `<br/>` and loose text
+    /// directly inside one are content-model errors. `noscript` has the same
+    /// model (`schema/20/rng/xhtml/script.rng`); those three elements are the
+    /// only users of `Block.model` in the whole module set.
+    #[test]
+    fn epub2_blockquote_is_block_level() {
+        let g = xhtml_grammar_epub2();
+        let ok2 = |b: &str| {
+            let x = format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>"
+            );
+            validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .is_empty()
+        };
+        // The reported shape: an anchor, a <br/>, a <span> and bare text.
+        assert!(
+            !ok2("<blockquote><a href=\"#x\">t</a></blockquote>"),
+            "inline in blockquote is an error"
+        );
+        assert!(!ok2("<blockquote><br/></blockquote>"));
+        assert!(!ok2("<blockquote><span>t</span></blockquote>"));
+        assert!(!ok2("<blockquote>loose text</blockquote>"));
+        // `Block.model` is oneOrMore, so an empty blockquote is "incomplete".
+        assert!(!ok2("<blockquote/>"));
+        assert!(
+            !ok2("<noscript>t</noscript>"),
+            "noscript is Block.model too"
+        );
+        // Block children are fine, and the EPUB 3 model stays flow.
+        assert!(ok2("<blockquote><p>t</p></blockquote>"));
+        assert!(ok2(
+            "<blockquote cite=\"u\"><div>t</div><ul><li>x</li></ul></blockquote>"
+        ));
+        assert!(ok2("<noscript><p>t</p></noscript>"));
+        assert!(ok(
+            &xhtml_grammar(),
+            &xhtml_doc("<blockquote>flow is valid in HTML5</blockquote>")
+        ));
+    }
+
+    /// OPS 2.0.1 has no MathML - `schema/20` never includes a MathML grammar -
+    /// so `<math>` in an EPUB 2 document is an error, while SVG (hooked into
+    /// `Block.class`/`Inline.class` by `content.rng`) is fine. EPUB 3 keeps
+    /// both.
+    #[test]
+    fn epub2_has_no_mathml_but_has_svg() {
+        let g = xhtml_grammar_epub2();
+        let ok2 = |b: &str| {
+            let x = format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>"
+            );
+            validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .is_empty()
+        };
+        let math = "<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><mi>x</mi></math>";
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>";
+        assert!(!ok2(&format!("<p>{math}</p>")), "math is not in OPS 2.0.1");
+        assert!(!ok2(math), "nor at block level");
+        assert!(ok2(&format!("<p>{svg}</p>")), "svg is inline in OPS 2.0.1");
+        assert!(ok2(svg), "and block");
+        assert!(
+            ok(&xhtml_grammar(), &xhtml_doc(&format!("<p>{math}</p>"))),
+            "EPUB 3 keeps MathML"
+        );
+    }
+
     #[test]
     fn xhtml_grammar_rejects_obsolete_element() {
         let xml = xhtml_doc("<keygen/>");

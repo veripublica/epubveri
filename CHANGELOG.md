@@ -8,6 +8,40 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.8.5] - 2026-07-31
+
+Two EPUB 2 content-model gaps, from one MobileRead post by Doitsu (#140)
+and the audit it prompted. Both are findings epubcheck reports and we did
+not; nothing here changes EPUB 3 behaviour.
+
+### Fixed
+
+- **`<blockquote>` is block-level in an EPUB 2 document.** XHTML 1.1 gives
+  it the same `Block.model` as `<body>`, so an inline element, a `<br/>` or
+  loose text directly inside one is an `RSC-005`, and an empty one is
+  reported as incomplete. The reported case — an `<a>`, a `<br/>`, a
+  `<span>` and bare text inside a `<blockquote>` — now draws all five of
+  the errors epubcheck draws, where it previously drew none.
+
+  **`<noscript>` has the same model** and had the same gap. Those two and
+  `<body>` are the only three elements in the whole XHTML 1.1 module set
+  that use `Block.model`, so this closes the class rather than the case.
+
+- **`<math>` is no longer accepted in an EPUB 2 document.** OPS 2.0.1 has
+  no MathML — the EPUB 2 schema set never includes a MathML grammar — so
+  epubcheck reports `<math>` there as `RSC-005`, and the expected-element
+  list it prints names `svg` and no `math`. Ours listed `math`, which was
+  both a wrong suggestion and a missing error: MathML had been in the
+  EPUB 2 element pool since that pool was first written, and was the one
+  element in it with no basis in the EPUB 2 schemas. EPUB 3 is unaffected.
+
+  The MathML content-model checks are deliberately *not* switched off for
+  EPUB 2 to match: every `<math>` in an EPUB 2 document is now an error
+  from the grammar itself, so the extra detail can only ever land on a
+  document that is already invalid — and suppressing a check on the
+  grounds that another one covers the case is the shape behind three
+  earlier silent-skip defects.
+
 ## [0.8.4] - 2026-07-30
 
 Three findings epubcheck reports and we did not, all from one MobileRead

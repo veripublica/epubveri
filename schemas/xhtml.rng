@@ -1684,7 +1684,8 @@
   <!-- `tt` being valid here but removed in HTML5 is the false       -->
   <!-- positive. Both fall out of the vocabulary, with no per-        -->
   <!-- element code. `epub:switch` is an EPUB 3 construct and is not  -->
-  <!-- in this pool.                                                 -->
+  <!-- in this pool; neither is `math`, since OPS 2.0.1 has no        -->
+  <!-- MathML at all (see `epub2BothChoice`).                         -->
   <!-- ============================================================ -->
 
   <!-- The EPUB 2 branch's globals: everything `globalAttrs` grants except
@@ -1793,9 +1794,11 @@
          epub2Inline - inline elements + text (a <p>, a heading, a <span>).
          epub2Flow   - both, + text (a <div>, a table cell): permissive on
                        nesting, the same trade the EPUB 3 model makes.
-       Only body and the inline-only containers are constrained; the flow
-       containers stay permissive, so the false-positive surface is just the
-       cases XHTML 1.1 genuinely forbids and epubcheck genuinely reports. -->
+       Only the `Block.model` elements (body, blockquote, noscript - the
+       three, and the only three, that use it in schema/20) and the
+       inline-only containers are constrained; the flow containers stay
+       permissive, so the false-positive surface is just the cases XHTML 1.1
+       genuinely forbids and epubcheck genuinely reports. -->
   <!-- XHTML 1.1's `Block.model` is `oneOrMore Block.mix` - a body must hold
        at least one block element. `zeroOrMore` here meant that a document
        whose every child was rejected reported only the children, where
@@ -1865,7 +1868,8 @@
   </define>
 
   <!-- Block vocabulary. p, headings, address and dt take inline content
-       only; div/blockquote take flow (permissive). -->
+       only; blockquote is block-only (`Block.model`); div takes flow
+       (permissive). -->
   <define name="epub2BlockChoice">
     <choice>
       <element name="p"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
@@ -1878,10 +1882,14 @@
       <element name="address"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
       <element name="pre"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
       <element name="div"><ref name="globalAttrs-epub2"/><ref name="epub2Flow"/></element>
+      <!-- `blockquote` is `Block.model`, not flow: XHTML 1.1 gives it the
+           same model as `body`, so an inline element, a `<br/>` or bare text
+           inside one is an error, and an empty one is "incomplete" (Doitsu,
+           MobileRead #140). -->
       <element name="blockquote">
         <ref name="globalAttrs-epub2"/>
         <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
-        <ref name="epub2Flow"/>
+        <ref name="epub2Block"/>
       </element>
       <element name="hr"><ref name="globalAttrs-epub2"/></element>
       <ref name="olEl-epub2"/>
@@ -1892,11 +1900,14 @@
     </choice>
   </define>
 
-  <!-- Elements XHTML 1.1 permits at both block and inline level. -->
+  <!-- Elements XHTML 1.1 permits at both block and inline level
+       (`Script.class`, `Edit.class`, and OPS 2.0.1's `svg` hook). -->
   <define name="epub2BothChoice">
     <choice>
       <ref name="scriptEl"/>
-      <element name="noscript"><ref name="globalAttrs-epub2"/><ref name="epub2Flow"/></element>
+      <!-- `noscript` is the third and last `Block.model` element in the
+           module set (`script.rng`), block-only even at inline level. -->
+      <element name="noscript"><ref name="globalAttrs-epub2"/><ref name="epub2Block"/></element>
       <element name="del"><ref name="globalAttrs-epub2"/>
         <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
         <optional><attribute name="datetime"><data type="string"/></attribute></optional>
@@ -1907,8 +1918,23 @@
         <optional><attribute name="datetime"><data type="string"/></attribute></optional>
         <ref name="epub2Flow"/>
       </element>
+      <!-- SVG is here because `content.rng` hooks `svg` into both
+           `Block.class` and `Inline.class`. **MathML is not**: OPS 2.0.1 has
+           no MathML at all - `schema/20` never includes a MathML grammar and
+           the word does not appear in it - so epubcheck reports `<math>` in
+           an EPUB 2 document as RSC-005, and its expected-element list (the
+           one Doitsu quoted in MobileRead #140) names `ns:svg` and no
+           `math`. `mathEl` was in this pool from the first EPUB 2 content
+           model (#24) and was the one element in it with no schema/20
+           backing.
+
+           `mathml.rs`'s content-model check is deliberately *not* gated to
+           EPUB 3 to match: every `<math>` in an EPUB 2 document is now an
+           error from this grammar, so the extra arity findings can only ever
+           land on a document that is already invalid - and gating them would
+           be the suppression shape that has bitten this project three
+           times. -->
       <ref name="svgEl"/>
-      <ref name="mathEl"/>
     </choice>
   </define>
 
