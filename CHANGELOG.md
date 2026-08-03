@@ -8,6 +8,54 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.1] - 2026-08-03
+
+Validation is now **linear in manifest size**. A 4,000-item package
+document went from 42.6 s to 0.52 s, and the worst book on the local shelf
+(1,951 items) from 9.4 s to 2.1 s.
+
+No behaviour change: every finding is the same as in 0.9.0, which is what
+made this checkable — the corpus stayed byte-identical through all three
+fixes, and so did the shelf, per book.
+
+### Fixed
+
+- **The SVG-reference lookup was quadratic** and was the whole of it. The
+  `references_svg` half of OPF-015 asked, for each `src`/`href`/`data`/
+  `poster` in each content document, whether that target is an SVG manifest
+  item — as a scan over the manifest that re-normalized (NFC) every path on
+  every attribute. Worse, the scan only stops early when it *finds* an SVG,
+  so the worst case was the common one: a book with no SVG at all. 16
+  million normalizations on a 4,000-item package, 93% of the run. The set
+  of normalized SVG paths is now built once.
+
+- **XPath node-set deduplication was quadratic**, comparing each node
+  against every node kept so far. On a 4,000-item package that made
+  `//opf:item` an 8-million-comparison node set. Now keyed on node
+  identity.
+
+- **`id` uniqueness moved out of Schematron** into `check_duplicate_ids`.
+  It was `count($id-set[normalize-space(@id) = normalize-space(current()/@id)]) = 1`
+  over `//*[@id]`, which rescans every element for every element; XPath 1.0
+  cannot express uniqueness in less than quadratic time. The output is
+  byte-identical, deliberately, and `schemas/package.sch` carries a note at
+  the place the rule used to be — this is a one-off, not a precedent.
+
+- Schema-level Schematron variables are no longer cloned once per context
+  node. Genuinely quadratic when such a variable binds a node set, but
+  measured at ~2% here and recorded as such.
+
+### Internal
+
+- Scaling, measured: 1,000/2,000/4,000/8,000 manifest items now cost
+  0.13/0.26/0.52/1.02 s — doubling for doubling.
+- Four unit tests came with the id-uniqueness port, because its protection
+  had to move with it. One caught a real difference immediately:
+  `Node::attribute("id")` reads as if it means a no-namespace `id` and does
+  not — roxmltree ignores the namespace for a `&str`, so `xml:id` matched
+  too. Neither the corpus nor the shelf pairs `xml:id` with `id`, so both
+  would have stayed green on a behaviour change.
+
 ## [0.9.0] - 2026-08-03
 
 Six ways an ordinary `.epub` could kill the process that validated it, and
@@ -102,6 +150,13 @@ inputs is one.
   Pre-existing, not a regression in this release. It bites one book in 73
   on the local shelf — 1,951 items, 9.4 s — while the median book (35
   items) is instant. Next on the list.
+
+  **Fixed in 0.9.1 — and the diagnosis above was wrong twice.** It was not
+  the RELAX NG derivative engine (that pattern stays a constant 39 nodes
+  across 4,000 children), and EPUB 2 *does* run the package Schematron, so
+  the identical curve there was never evidence of anything. Left standing
+  rather than quietly edited, because a shipped release's notes are a
+  record: see 0.9.1 for what it actually was.
 
 ## [0.8.6] - 2026-07-31
 
