@@ -8,6 +8,58 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.3] - 2026-08-03
+
+A false-positive fix on `<link>` and `<style>` attributes, in both EPUB 2 and
+EPUB 3. Reported by Doitsu on MobileRead (#146).
+
+### Fixed
+
+- **`<link>` had one attribute list serving both grammars**, and it granted
+  only `href`, `type` and `sizes`. Measured against epubcheck's own lists by
+  building a minimal book per attribute: **EPUB 2 rejected 3 of the 7**
+  attributes `link.attlist` allows (`charset`, `hreflang`, `media`), and
+  **EPUB 3 rejected 15 of the 19** in `link.attrs` (`media`, `hreflang`, `as`,
+  `integrity`, `referrerpolicy`, `crossorigin`, `color`, `disabled`, `scope`,
+  `updateviacache`, `workertype`, `imagesrcset`, `imagesizes`,
+  `fetchpriority`, `blocking`).
+
+  The two legal sets are **not nested** — XHTML 1.1 has `charset`/`rev`, HTML5
+  dropped both and added the fifteen — so the definition is split per version
+  rather than widened. Granting the union would have closed the report while
+  making each version accept the other's attributes.
+
+  Why it survived this long: `rel` was never in the list at all. It passed
+  because RDFa grants it to every element, so the universal
+  `<link rel="stylesheet" href="…">` worked and nothing looked wrong until a
+  second attribute appeared. It is now explicit rather than a coincidence.
+
+- **`<style media>` was rejected in EPUB 3**, along with `blocking`. 0.8.3
+  added `media` to the EPUB 2 copy of this element and missed the EPUB 3 one —
+  the same one-directional fix that left `link` shared.
+
+Unchanged on purpose: `sizes` on a `<link>` without `rel="icon"` still errors,
+which is epubcheck's own Schematron assert rather than a grammar rule, and
+`rev` stays valid on an EPUB 3 `<link>` because RDFa grants it there in
+epubcheck's grammar too. Both are pinned by tests, so a future widening of the
+attribute lists cannot silently remove them.
+
+Neither instrument could have found this: the epubcheck corpus carries no
+fixture with `<link media>` at all, and a scan of 255 real books found zero
+uses. Corpus output is byte-identical and the shelf unchanged per book.
+
+### Internal
+
+- **`scripts/preflight.sh`** — runs the publish workflows' guards, plus every
+  check this project's own history has earned, *before* the tag is pushed.
+  Every guard in CI fires after the tag, which is the wrong side of an
+  irreversible upload; 0.9.2's lockfile mismatch would have failed on the
+  tagged commit had it not been caught by hand. Checks version agreement
+  across both manifests and the CHANGELOG, a clean tree, iCloud conflict
+  copies, `git fetch`, whether the version is already published,
+  fmt/clippy/`test --locked`/wasm32, `cargo package --list` for stray files,
+  and all four instruments.
+
 ## [0.9.2] - 2026-08-03
 
 **No library, CLI or WASM changes** — every finding, message and exit code is
