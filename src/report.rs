@@ -87,7 +87,7 @@ impl Position {
     /// error but no parsed node to point at - surfacing the exact spot the
     /// parser failed is far more actionable for a downstream fixer (e.g.
     /// epublift) than a bare file name.
-    pub(crate) fn of_parse_error(err: &roxmltree::Error) -> Position {
+    pub(crate) fn of_parse_error(err: &crate::ocf::XmlError) -> Position {
         let p = err.pos();
         Position {
             line: p.row,

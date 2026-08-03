@@ -156,6 +156,9 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
             );
         }
     }
+    // Reported after the checks, not inside `Ocf::read`: a resource read
+    // from several call sites is one finding, and `read` has no `Report`.
+    ocf::check_resource_limits(&container, &mut report);
     // Bound the RNG engine's pattern-interning cache (see
     // `rng::pattern::clear_intern_cache`) to roughly one book's working set,
     // rather than letting it grow for the life of a long-lived embedded
@@ -608,5 +611,135 @@ mod tests {
             .map(|m| (m.id, m.text.as_str()))
             .collect();
         assert!(fatals.is_empty(), "document is valid; got {fatals:?}");
+    }
+
+    /// Builds a minimal EPUB 3 whose `ch1.xhtml` body is `body` - a
+    /// manifest-declared, spine-referenced resource, so the checks actually
+    /// read it, which is what the resource-limit fixtures below need.
+    fn epub3_with(body: &str) -> Vec<u8> {
+        const OPF: &str = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const NAV: &str = r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav></body></html>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let ch1 = format!(
+            r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body>{body}</body></html>"#
+        );
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/ch1.xhtml", &ch1),
+            ] {
+                z.start_file(name, opts).unwrap();
+                z.write_all(data.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    fn nested_body(depth: usize) -> String {
+        format!(
+            "{}<p>x</p>{}",
+            "<div>".repeat(depth),
+            "</div>".repeat(depth)
+        )
+    }
+
+    /// The headline regression: before the guard this aborted the whole
+    /// process with `fatal runtime error: stack overflow` from a ~1 KB
+    /// file, inside roxmltree's mutually-recursive tokenizer. A Rust stack
+    /// overflow is `SIGABRT`, so an embedder could not catch it - the test
+    /// passing at all *is* the assertion (a regression kills the runner,
+    /// it does not fail an assert).
+    #[test]
+    fn pathological_nesting_does_not_abort_the_process() {
+        let report = crate::validate_bytes(epub3_with(&nested_body(50_000)));
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.text.contains("nesting is deeper")),
+            "expected the depth guard to report; got {:?}",
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        );
+    }
+
+    /// Just past the limit is refused with a reason naming the limit -
+    /// never silently dropped from the checks, which is the failure mode
+    /// the 0.7.12-0.7.14 audits kept turning up.
+    #[test]
+    fn over_limit_nesting_is_reported_with_a_reason() {
+        let report = crate::validate_bytes(epub3_with(&nested_body(crate::ocf::MAX_XML_DEPTH + 1)));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.text.contains("nesting is deeper"))
+            .expect("depth guard should report");
+        assert_eq!(hit.severity, crate::report::Severity::Fatal);
+    }
+
+    /// The false-positive direction, and the one that matters more: the
+    /// deepest document across the 65-book shelf nests 24 elements, so a
+    /// book at that depth must stay clean.
+    #[test]
+    fn real_world_nesting_depth_still_validates() {
+        let report = crate::validate_bytes(epub3_with(&nested_body(24)));
+        assert!(
+            !report
+                .messages
+                .iter()
+                .any(|m| m.text.contains("nesting is deeper")),
+            "24-deep is the real-book worst case and must not trip the guard"
+        );
+    }
+
+    /// A zip bomb: highly compressible bytes past the per-entry cap. Before
+    /// the cap a 400 KB EPUB drove 1.3 GB of peak RSS and still reported
+    /// VALID; now the read is bounded and the skipped resource is named.
+    #[test]
+    fn oversized_entry_is_reported_not_silently_skipped() {
+        // A declared, spine-referenced content document past the cap: the
+        // checks reach for it, so the cap is exercised on the read path.
+        let big =
+            "<p>".to_string() + &"A".repeat(crate::ocf::MAX_ENTRY_BYTES as usize + 1) + "</p>";
+        let report = crate::validate_bytes(epub3_with(&big));
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::LIM_001
+                    || m.text.contains("exceeds the 64 MiB size limit")),
+            "expected LIM-001 for the oversized entry; got {:?}",
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        );
     }
 }

@@ -10,17 +10,196 @@ use crate::ids::*;
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
+/// The deepest element nesting [`parse_xml`] will accept.
+///
+/// roxmltree's tokenizer is mutually recursive (`parse_element` ↔
+/// `parse_content`), so nesting costs stack in proportion to depth and a
+/// deeply-nested document aborts the process. In Rust a stack overflow is
+/// `SIGABRT`, **not** a catchable panic - `catch_unwind` cannot save an
+/// embedder, so this has to be refused before the parser sees it. Measured
+/// on 0.8.6: ~15,000 deep aborts on the 8 MiB main thread and ~4,000 on a
+/// 2 MiB spawned thread (what an embedder or worker actually runs), from a
+/// 1.1 KB file; wasm's smaller stack is lower again.
+///
+/// 256 comes from data, not taste: across the 65-book local shelf the
+/// deepest document nests **24** elements (median 8, p95 11). That leaves
+/// this ~10x above the worst real book and ~15x below the lowest measured
+/// crash threshold, so no real book can reach it and no hostile one can
+/// reach the abort.
+pub(crate) const MAX_XML_DEPTH: usize = 256;
+
+/// Why [`parse_xml`] refused a document.
+///
+/// A thin wrapper over `roxmltree::Error` so the depth guard can report its
+/// own reason instead of borrowing an unrelated parser variant. It exists
+/// only because the guard runs *before* the parse - every call site either
+/// formats this with `{e}` or hands it to [`is_entity_reference_error`] /
+/// `Position::of_parse_error`, which is why adding it touched three
+/// signatures rather than twenty call sites.
+#[derive(Debug)]
+pub(crate) enum XmlError {
+    Parse(roxmltree::Error),
+    /// Nesting exceeded [`MAX_XML_DEPTH`]; carries the depth reached at the
+    /// point the scan gave up (a lower bound, since it stops early).
+    TooDeep(usize),
+}
+
+impl std::fmt::Display for XmlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            XmlError::Parse(e) => write!(f, "{e}"),
+            XmlError::TooDeep(d) => write!(
+                f,
+                "element nesting is deeper than the {MAX_XML_DEPTH}-element limit \
+                 (reached {d}), so the document was not parsed"
+            ),
+        }
+    }
+}
+
+impl XmlError {
+    /// The source position to report, mirroring `roxmltree::Error::pos`.
+    /// The depth guard scans bytes rather than tracking rows, so it points
+    /// at the start of the document - the file name is the actionable part.
+    pub(crate) fn pos(&self) -> roxmltree::TextPos {
+        match self {
+            XmlError::Parse(e) => e.pos(),
+            XmlError::TooDeep(_) => roxmltree::TextPos::new(1, 1),
+        }
+    }
+}
+
+/// Length of a `<!-- -->`-style region starting at `rest[0]`, measured from
+/// `from` and including `end`; the whole remainder when unterminated.
+fn region_len(rest: &[u8], from: usize, end: &[u8]) -> usize {
+    let start = from.min(rest.len());
+    match rest[start..].windows(end.len()).position(|w| w == end) {
+        Some(p) => start + p + end.len(),
+        None => rest.len(),
+    }
+}
+
+/// Length of a `<?…?>` PI or a `<!…>` declaration. Tracks `[`/`]` so a
+/// DOCTYPE's internal subset (which contains its own `>`-bearing
+/// declarations) doesn't end the scan early.
+fn decl_len(rest: &[u8]) -> usize {
+    let (mut j, mut quote, mut brackets) = (2usize, 0u8, 0usize);
+    while j < rest.len() {
+        let c = rest[j];
+        if quote != 0 {
+            if c == quote {
+                quote = 0;
+            }
+        } else if c == b'"' || c == b'\'' {
+            quote = c;
+        } else if c == b'[' {
+            brackets += 1;
+        } else if c == b']' {
+            brackets = brackets.saturating_sub(1);
+        } else if c == b'>' && brackets == 0 {
+            return j + 1;
+        }
+        j += 1;
+    }
+    rest.len()
+}
+
+/// Length of an element tag, and whether it is self-closing. Quote-aware,
+/// because `>` is legal inside an attribute value (`<a title="a>b">`) and
+/// treating it as the tag end would miss the `/` of a self-closing tag and
+/// over-count depth.
+fn tag_len(rest: &[u8]) -> (usize, bool) {
+    let (mut j, mut quote, mut last) = (1usize, 0u8, 0u8);
+    while j < rest.len() {
+        let c = rest[j];
+        if quote != 0 {
+            if c == quote {
+                quote = 0;
+            }
+        } else if c == b'"' || c == b'\'' {
+            quote = c;
+        } else if c == b'>' {
+            return (j + 1, last == b'/');
+        }
+        if !c.is_ascii_whitespace() {
+            last = c;
+        }
+        j += 1;
+    }
+    (rest.len(), false)
+}
+
+/// The nesting depth reached if it exceeds `limit`, else `None`.
+///
+/// Deliberately a raw-byte scan rather than a parse: the entire point is to
+/// run *before* roxmltree's recursive tokenizer touches the text. It skips
+/// the three regions where `<`/`>` are not markup - comments, CDATA
+/// sections and quoted attribute values - so it can neither over-count a
+/// legitimate document into a false positive nor be walked past by nesting
+/// hidden inside a comment. Malformed input is not its problem: anything it
+/// misreads is still handed to the parser, which reports it properly.
+fn depth_exceeding(text: &str, limit: usize) -> Option<usize> {
+    let b = text.as_bytes();
+    let (mut i, mut depth) = (0usize, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &b[i..];
+        if rest.starts_with(b"<!--") {
+            i += region_len(rest, 4, b"-->");
+            continue;
+        }
+        if rest.starts_with(b"<![CDATA[") {
+            i += region_len(rest, 9, b"]]>");
+            continue;
+        }
+        if rest.starts_with(b"<!") || rest.starts_with(b"<?") {
+            i += decl_len(rest);
+            continue;
+        }
+        let Some(&c) = b.get(i + 1) else { break };
+        let closing = c == b'/';
+        // A `<` that starts no name is stray text, not a tag - the parser
+        // owns that verdict, so just step over it.
+        if !closing && !(c.is_ascii_alphabetic() || c == b'_' || c == b':') {
+            i += 1;
+            continue;
+        }
+        let (len, self_closing) = tag_len(rest);
+        if closing {
+            depth = depth.saturating_sub(1);
+        } else if !self_closing {
+            depth += 1;
+            if depth > limit {
+                return Some(depth);
+            }
+        }
+        i += len;
+    }
+    None
+}
+
 /// Parse an XML document, allowing a `<!DOCTYPE>` declaration. Real-world
 /// EPUB content documents commonly have one (e.g. `<!DOCTYPE html>`);
 /// roxmltree rejects any DTD by default as an extra security precaution, but
 /// it already has its own billion-laughs protection regardless of this flag,
 /// so allowing (harmless, common) DOCTYPEs through is safe.
-pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree::Error> {
+///
+/// Nesting depth is *not* something roxmltree can be asked to bound - its
+/// `nodes_limit` counts total nodes, and a real book has 100k+ of them at
+/// depth 20, so no setting of it separates a deep document from a large
+/// one. Hence the explicit pre-parse guard; see [`MAX_XML_DEPTH`].
+pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, XmlError> {
+    if let Some(d) = depth_exceeding(text, MAX_XML_DEPTH) {
+        return Err(XmlError::TooDeep(d));
+    }
     let opts = roxmltree::ParsingOptions {
         allow_dtd: true,
         ..Default::default()
     };
-    roxmltree::Document::parse_with_options(text, opts)
+    roxmltree::Document::parse_with_options(text, opts).map_err(XmlError::Parse)
 }
 
 /// Whether a `roxmltree` parse error is an entity-reference problem — an
@@ -39,11 +218,13 @@ pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, roxmltree
 ///
 /// Any other parse failure (mismatched/unclosed tags, stray `<`, …) is a
 /// genuine well-formedness error nothing else catches.
-pub(crate) fn is_entity_reference_error(err: &roxmltree::Error) -> bool {
+pub(crate) fn is_entity_reference_error(err: &XmlError) -> bool {
     matches!(
         err,
-        roxmltree::Error::UnknownEntityReference(..)
-            | roxmltree::Error::MalformedEntityReference(..)
+        XmlError::Parse(
+            roxmltree::Error::UnknownEntityReference(..)
+                | roxmltree::Error::MalformedEntityReference(..)
+        )
     )
 }
 
@@ -100,19 +281,67 @@ pub struct Ocf {
     archive: ZipArchive<Cursor<Vec<u8>>>,
     /// All entry names, in archive order.
     pub names: Vec<String>,
+    /// Entries [`Ocf::read`] refused for exceeding [`MAX_ENTRY_BYTES`],
+    /// drained by [`check_resource_limits`] at the end of the run.
+    oversized: Vec<String>,
 }
+
+/// The most bytes [`Ocf::read`] will materialise for one container entry.
+///
+/// A bare `read_to_end` on a compressed entry is bounded by the *inflated*
+/// size, not the file's: deflate reaches ~1000:1, so a 400 KB EPUB drove
+/// 1.3 GB of peak RSS here and still reported VALID. Capping the read
+/// bounds that regardless of what the entry's header claims, so a header
+/// lying about its uncompressed size cannot widen it either - which is why
+/// the cap lives on the read rather than on the central directory.
+///
+/// 64 MiB against a measured worst case of **2.1 MB** (largest single entry
+/// across the 65-book local shelf; the largest whole book inflates to
+/// 82 MB), so real books have ~30x headroom on their biggest resource.
+pub(crate) const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
 impl Ocf {
     pub fn has(&self, name: &str) -> bool {
         self.names.iter().any(|n| n == name)
     }
 
-    /// Read a member's bytes (decompressing as needed).
+    /// Read a member's bytes (decompressing as needed), up to
+    /// [`MAX_ENTRY_BYTES`].
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
-        let mut f = self.archive.by_name(name).ok()?;
+        let f = self.archive.by_name(name).ok()?;
         let mut buf = Vec::new();
-        f.read_to_end(&mut buf).ok()?;
+        // One byte past the cap: reading *more* than it is what separates an
+        // oversized entry from one that happens to end exactly on it.
+        f.take(MAX_ENTRY_BYTES + 1).read_to_end(&mut buf).ok()?;
+        if buf.len() as u64 > MAX_ENTRY_BYTES {
+            // Never a silent skip. Returning a bare `None` here would be
+            // indistinguishable from "resource absent" at all ~25 call
+            // sites, and a book with real errors would report clean - the
+            // exact failure the 0.7.12-0.7.14 audit kept finding. The name
+            // is recorded instead and reported once, by name, at the end.
+            if !self.oversized.iter().any(|n| n == name) {
+                self.oversized.push(name.to_string());
+            }
+            return None;
+        }
         Some(buf)
+    }
+}
+
+/// Report every entry [`Ocf::read`] refused for exceeding
+/// [`MAX_ENTRY_BYTES`]. Called once per run, after the checks, so a
+/// resource read from several places is still reported once.
+pub(crate) fn check_resource_limits(ocf: &Ocf, report: &mut Report) {
+    for name in &ocf.oversized {
+        report.push_at(
+            LIM_001,
+            Severity::Error,
+            format!(
+                "resource exceeds the {} MiB size limit and was not checked",
+                MAX_ENTRY_BYTES / (1024 * 1024)
+            ),
+            name.clone(),
+        );
     }
 }
 
@@ -319,7 +548,11 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         }
     }
 
-    let mut ocf = Ocf { archive, names };
+    let mut ocf = Ocf {
+        archive,
+        names,
+        oversized: Vec::new(),
+    };
 
     if ocf.has("mimetype")
         && let Some(b) = ocf.read("mimetype")
@@ -567,5 +800,76 @@ pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
             "ocf.signatures.wrong_root_element",
             Vec::new(),
         );
+    }
+}
+
+#[cfg(test)]
+mod depth_guard_tests {
+    use super::{MAX_XML_DEPTH, depth_exceeding};
+
+    fn nested(depth: usize) -> String {
+        format!("{}x{}", "<d>".repeat(depth), "</d>".repeat(depth))
+    }
+
+    /// The guard exists to stop an abort, so the threshold itself is the
+    /// contract: one under the limit parses, one over is refused.
+    #[test]
+    fn triggers_only_past_the_limit() {
+        assert_eq!(depth_exceeding(&nested(MAX_XML_DEPTH), MAX_XML_DEPTH), None);
+        assert!(depth_exceeding(&nested(MAX_XML_DEPTH + 1), MAX_XML_DEPTH).is_some());
+    }
+
+    /// The measured worst case on the 65-book shelf is 24 deep. A guard
+    /// that rejected real books would be a false positive on every one of
+    /// them, which is worse than the bug it fixes.
+    #[test]
+    fn accepts_the_deepest_real_book() {
+        assert_eq!(depth_exceeding(&nested(24), MAX_XML_DEPTH), None);
+    }
+
+    /// Self-closing and closing tags must decrement, or a long *flat*
+    /// document would accumulate depth it doesn't have - the most likely
+    /// shape of a false positive, since real books are wide, not deep.
+    #[test]
+    fn flat_documents_do_not_accumulate_depth() {
+        let flat = "<r>".to_string() + &"<img/><p>t</p>".repeat(5_000) + "</r>";
+        assert_eq!(depth_exceeding(&flat, MAX_XML_DEPTH), None);
+    }
+
+    /// `<` and `>` are not markup inside comments, CDATA or attribute
+    /// values. Miscounting either way is a bug: over-counting rejects a
+    /// valid book, under-counting lets the abort back in.
+    #[test]
+    fn non_markup_regions_are_not_counted() {
+        let commented = format!("<r><!-- {} --></r>", "<d>".repeat(1_000));
+        assert_eq!(depth_exceeding(&commented, MAX_XML_DEPTH), None);
+
+        let cdata = format!("<r><![CDATA[ {} ]]></r>", "<d>".repeat(1_000));
+        assert_eq!(depth_exceeding(&cdata, MAX_XML_DEPTH), None);
+
+        // `>` is legal inside an attribute value; treating it as the tag
+        // end would hide the `/` and count each tag as an open.
+        let attr_gt = "<r>".to_string() + &r#"<a t="x>y"/>"#.repeat(5_000) + "</r>";
+        assert_eq!(depth_exceeding(&attr_gt, MAX_XML_DEPTH), None);
+    }
+
+    /// A DOCTYPE's internal subset carries its own `>`-bearing
+    /// declarations; ending the scan at the first one would leave the rest
+    /// of the subset to be miscounted as elements.
+    #[test]
+    fn doctype_internal_subset_is_skipped() {
+        let doc = format!(
+            "<!DOCTYPE r [ <!ENTITY a \"x\"> <!ENTITY b \"y\"> ]><r>{}</r>",
+            "<d></d>".repeat(100)
+        );
+        assert_eq!(depth_exceeding(&doc, MAX_XML_DEPTH), None);
+    }
+
+    /// Depth hidden inside a comment is skipped, but depth *after* one
+    /// still counts - the skip must not swallow the rest of the document.
+    #[test]
+    fn scanning_resumes_after_a_skipped_region() {
+        let doc = format!("<r><!-- c -->{}</r>", "<d>".repeat(MAX_XML_DEPTH + 5));
+        assert!(depth_exceeding(&doc, MAX_XML_DEPTH).is_some());
     }
 }

@@ -168,6 +168,18 @@ pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not
 // ADV-003 is reserved for the unknown-type-selector advisory (#28), deferred.
 pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)
 
+// --- Resource limits (epubveri-owned; see the module note) ---
+//
+// The second epubveri-owned family, and owned for the same reason `ADV-*`
+// is: epubcheck defines no code for these because it has no such limit
+// (it streams), and inventing a `PKG-0xx` it doesn't define is exactly what
+// the module note above forbids. Unlike `ADV-*` these are **not** advisory
+// - they are always reported and do affect the exit code, because each one
+// means a resource went unchecked. A distinct family keeps that visible:
+// a `LIM-*` line says "epubveri declined to process this", never "epubcheck
+// would report this".
+pub const LIM_001: &str = "LIM-001"; // a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked
+
 // --- Media Overlays (SMIL) ---
 pub const MED_003: &str = "MED-003"; // a <picture> element's own <img> fallback references a foreign resource
 pub const MED_004: &str = "MED-004"; // an image resource is corrupt
