@@ -8,6 +8,101 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.0] - 2026-08-03
+
+Six ways an ordinary `.epub` could kill the process that validated it, and
+one that made it report a hostile book as valid. A validator's inputs are
+hostile by definition; nothing here had treated them that way.
+
+None of this was visible to the two instruments this project usually
+trusts — the corpus was byte-identical throughout and the shelf unchanged
+per book. Both measure *verdicts on well-formed books*, and none of these
+inputs is one.
+
+### Fixed
+
+- **Deeply nested XML aborted the process.** roxmltree's tokenizer is
+  mutually recursive (`parse_element` ↔ `parse_content`), so nesting costs
+  stack in proportion to depth: a **1.1 KB** file was enough — ~15,000 deep
+  on the 8 MiB main thread, ~4,000 on a 2 MiB worker, which is what an
+  embedder actually runs, and lower again under wasm. A Rust stack overflow
+  is `SIGABRT`, **not** a catchable panic, so `catch_unwind` could not save
+  a consumer; it has to be refused before the parser sees it.
+
+  The guard is a raw-byte pre-parse scan that skips comments, CDATA
+  sections and quoted attribute values. All three matter: nesting hidden in
+  a comment would walk straight past it, and a `>` inside an attribute
+  value (`<a title="a>b">`) would hide a self-closing slash and over-count
+  a *valid* document into a false positive.
+
+  `MAX_XML_DEPTH` is 256, against a measured worst case of **24** across 65
+  real books (median 8, p95 11).
+
+- **A compressed entry could be inflated without bound.** `Ocf::read` did a
+  bare `read_to_end`, so a **400 KB** EPUB drove **1.3 GB** of peak RSS —
+  and still reported `VALID`. The cap sits on the read rather than on the
+  central directory, so an entry whose header lies about its uncompressed
+  size cannot widen it either. 64 MiB, against a measured worst case of
+  2.1 MB (largest single entry across the same 65 books).
+
+- **Deeply nested CSS aborted the process**, in four shapes — nested
+  parens, nested `@media`, nested functions, nested `:is()` — each from a
+  ~1.2 KB stylesheet. Fixed upstream in styloria 0.7.0, whose parsers are
+  now bounded by `MAX_NESTING_DEPTH`; real stylesheets nest **2** deep.
+
+### Added
+
+- **`LIM-001`** — a resource exceeded the size limit and was not checked.
+
+  A new epubveri-owned ID family, owned for the same reason `ADV-*` is:
+  epubcheck defines no code here because it has no such limit, and
+  inventing a `PKG-0xx` it does not define is what `ids.rs` forbids. Unlike
+  `ADV-*` these are **not** advisory — always reported, and they do affect
+  the exit code, because each one means a resource went unchecked.
+
+  Refusing a resource is reported, never silent: a bare `None` would be
+  indistinguishable from "absent" at all ~25 call sites, and a book with
+  real errors would have reported clean — the exact failure the
+  0.7.12–0.7.14 audits kept turning up.
+
+- CSS nesting refusals surface as `CSS-008` with their own rule slug,
+  `css.stylesheet.nesting_too_deep`. The other CSS-008 slugs say the
+  stylesheet is malformed; this one says the parser declined to descend and
+  the content below it went unchecked.
+
+### Changed
+
+- **`styloria` 0.6 → 0.7** (the nesting bound above). Embedders pinning
+  styloria alongside epubveri need the same bump; nothing in epubveri's own
+  API changed.
+- **`tsify-next` → `tsify`** in the wasm bindings. RUSTSEC-2025-0048 flags
+  the fork as unmaintained, and the roles have swapped since it was chosen:
+  upstream resumed (0.5.6, Oct 2025) while the fork's last release was Apr
+  2025. Same version, same `js` feature, same attribute — the generated
+  `.d.ts` is unchanged. No API change for JS consumers.
+- 15 dependency patch updates.
+
+### Internal
+
+- **`cargo audit` runs in CI**, in its own job. Its result depends on the
+  RustSec advisory database rather than on any commit here, so it can turn
+  red without this repo changing; a separate job means the red X names the
+  cause. Warnings do not fail it, only advisories. The tree is currently
+  clean of both.
+
+### Known issue
+
+- **Validation is superlinear in manifest size.** 500 items take 0.37 s,
+  4,000 take 39 s — doubling the manifest roughly sextuples the time. It is
+  the RELAX NG derivative engine over the manifest's repeated `item`
+  children, not the content documents (a book with 4,000 resources and one
+  document costs the same as one with 4,000 documents) and not Schematron
+  (EPUB 2, which has no package Schematron, shows the identical curve).
+
+  Pre-existing, not a regression in this release. It bites one book in 73
+  on the local shelf — 1,951 items, 9.4 s — while the median book (35
+  items) is instant. Next on the list.
+
 ## [0.8.6] - 2026-07-31
 
 Four package vocabularies that were never checked, and the first two EPUB
