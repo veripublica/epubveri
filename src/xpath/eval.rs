@@ -16,7 +16,7 @@
 //! node-set/false rather than erroring — consistent with this project's
 //! "never hard-fail" posture for schema-shaped checks.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use roxmltree::Node;
 
@@ -40,27 +40,6 @@ impl<'a, 'input> NodeRef<'a, 'input> {
             NodeRef::Attr { value, .. } => value.clone(),
         }
     }
-
-    fn same_as(&self, other: &Self) -> bool {
-        match (self, other) {
-            (NodeRef::Elem(a), NodeRef::Elem(b)) => a.id() == b.id(),
-            (
-                NodeRef::Attr {
-                    owner: o1,
-                    local: l1,
-                    ns: n1,
-                    ..
-                },
-                NodeRef::Attr {
-                    owner: o2,
-                    local: l2,
-                    ns: n2,
-                    ..
-                },
-            ) => o1.id() == o2.id() && l1 == l2 && n1 == n2,
-            _ => false,
-        }
-    }
 }
 
 fn element_string_value(n: Node) -> String {
@@ -75,10 +54,47 @@ fn element_string_value(n: Node) -> String {
     s
 }
 
+/// Node identity, in a form that can be hashed — the single definition of
+/// when two `NodeRef`s are the same node.
+///
+/// This replaced a `same_as` predicate rather than sitting beside one: two
+/// definitions of identity would have to be kept in step, and a `dedup`
+/// that disagreed with them would silently drop distinct nodes or keep
+/// duplicates. An attribute is its owner, namespace and local name — and
+/// deliberately *not* its value, matching XPath's notion of an attribute
+/// node.
+#[derive(PartialEq, Eq, Hash)]
+enum NodeKey {
+    Elem(u32),
+    Attr(u32, Option<String>, String),
+}
+
+fn node_key(n: &NodeRef) -> NodeKey {
+    match n {
+        NodeRef::Elem(e) => NodeKey::Elem(e.id().get()),
+        NodeRef::Attr {
+            owner, ns, local, ..
+        } => NodeKey::Attr(owner.id().get(), ns.clone(), local.clone()),
+    }
+}
+
+/// Remove duplicate nodes, keeping the first occurrence in input order.
+///
+/// Hash-keyed rather than a linear scan. The obvious version compares each
+/// node against every node kept so far, which is quadratic in the size of
+/// the node set — invisible on a normal book, but a package document with
+/// 4,000 manifest items made `//opf:item` an 8-million-comparison node set
+/// and `schematron::run` 99% of a 42-second validation. Measured: 4,000
+/// items went 42.6s -> 15.8s on this change alone.
+///
+/// The element case allocates nothing; only attribute nodes clone their two
+/// short names, and that is O(1) each against the O(n) comparisons it
+/// replaces.
 fn dedup(nodes: &mut Vec<NodeRef>) {
+    let mut seen: HashSet<NodeKey> = HashSet::with_capacity(nodes.len());
     let mut out: Vec<NodeRef> = Vec::with_capacity(nodes.len());
     for n in nodes.drain(..) {
-        if !out.iter().any(|o| o.same_as(&n)) {
+        if seen.insert(node_key(&n)) {
             out.push(n);
         }
     }
