@@ -1,0 +1,697 @@
+//! Generate `docs/COVERAGE.md`: a per-message-ID matrix of epubveri against
+//! epubcheck.
+//!
+//! Three of the four inputs are derived, so the document cannot drift from
+//! the code: the ID universe, message text and default severities come from
+//! epubcheck's own sources under `corpus/epubcheck/`, and "which IDs does
+//! epubveri have" from `src/ids.rs`. The fourth is the human-judgment layer —
+//! the `ANN` table below, which is where a full/partial/N-A call and its
+//! reasoning live. That table is the only part worth editing by hand.
+//!
+//! The rule: an epubcheck ID with no constant in `src/ids.rs` is a gap (`x`).
+//! An ID we have is covered, full (`Y`) unless `ANN` marks it partial (`~`)
+//! or not-a-live-check (`⊘`). epubveri's own IDs get their own table.
+//!
+//! **Coverage is over the _live_ denominator**, and that is the one number a
+//! reader takes away, so what leaves the denominator matters: an
+//! epubcheck-suppressed ID, a dead ID, and an epubcheck tooling/meta message
+//! are all `⊘`, and every one of them carries a note saying which. Never move
+//! a real check there — the matrix is a trust signal, and reclassifying a gap
+//! to buy a percentage point trades the asset for the appearance of one.
+//!
+//! Usage:
+//!     cargo run --release -p epubveri-harness --bin coverage
+//!     cargo run --release -p epubveri-harness --bin coverage -- --stdout
+//!
+//! Both paths are resolved from `CARGO_MANIFEST_DIR`, not the working
+//! directory, so this writes the same file from anywhere in the tree.
+//! Ported from `scripts/gen-coverage.py` (2026-08-03); the port writes the
+//! file itself rather than relying on a `>` redirection, which truncates
+//! `COVERAGE.md` to nothing when the generator fails.
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
+use regex::Regex;
+
+/// Status override for an ID, plus the note explaining it. `None` keeps the
+/// derived status (full if `src/ids.rs` has the ID, gap if not) and supplies
+/// only the note — used for gaps we do catch under a different ID, where
+/// "not implemented" would be true of the ID and false of the check.
+type Ann = (&'static str, Option<&'static str>, &'static str);
+
+#[rustfmt::skip]
+const ANN: &[Ann] = &[
+    // --- PKG (reviewed) ---
+    ("PKG-003", Some("partial"),
+        "Emitted only for a literally empty (0-byte) file; a corrupted-but-\
+         nonempty header goes to PKG-004/PKG-008 instead."),
+    ("PKG-020", None,
+        "Not emitted, but the condition IS detected: a missing declared OPF \
+         is reported as OPF-002 (Fatal)."),
+    ("PKG-015", Some("na"),
+        "Dead ID - \"unable to read EPUB contents\" exists only in \
+         DefaultSeverities and the translation bundles; no Java source line \
+         emits it and no scenario expects it (verified 2026-07-26, same shape \
+         as OPF-036). The conditions it reads as covering are reported as \
+         PKG-004/PKG-008."),
+    // --- OPF (reviewed) ---
+    ("OPF-052", None,
+        "Membership in the 273-code MARC relator list epubcheck itself \
+         carries, plus its `oth.` escape hatch; checked on `creator` only, as \
+         epubcheck does (#54)."),
+    ("OPF-044", None,
+        "A spine item whose fallback chain exists but never reaches a content \
+         document (distinct from OPF-043, no fallback at all). Split from \
+         OPF-043 in #41."),
+    ("OPF-010", None,
+        "Not emitted; reference resolution is covered under RSC-007/RSC-012."),
+    ("OPF-016", None,
+        "Not emitted; a rootfile missing `full-path` is caught via the \
+         container.xml RNG grammar (RSC-005)."),
+    ("OPF-017", None,
+        "Not emitted; a rootfile with an empty `full-path` is caught via the \
+         container.xml RNG grammar (RSC-005)."),
+    ("OPF-047", None,
+        "Legacy OEBPS 1.2 backwards-compat syntax - deliberately out of scope \
+         (pre-EPUB format)."),
+    ("OPF-064", None,
+        "Informational profile-selection message - not emitted."),
+    ("NAV-001", Some("na"),
+        "Dead ID - its only call site is `NavChecker`'s constructor under \
+         `version == VERSION_2`, but a NavChecker is only built for an item \
+         where `isNav()` holds, and `isNav()` reads the manifest `properties` \
+         attribute, which only the EPUB 3 handler parses; the CLI's \
+         single-file path guards the same construction with `version == \
+         VERSION_3`. Unreachable from either direction. epubveri used to emit \
+         it, which was a false positive - confirmed against epubcheck's own \
+         output on a real mislabelled book (MobileRead #134, DNSB). An EPUB 2 \
+         book carrying a nav document is still reported through the XHTML 1.1 \
+         content model, exactly as epubcheck reports it."),
+    ("OPF-036", Some("na"),
+        "Dead ID - the video-codec-support note exists only in \
+         MessageId/DefaultSeverities and the translation bundles; nothing in \
+         epubcheck's source emits it and no test expects it (verified #53)."),
+    ("OPF-005", None,
+        "A prefix declaration ending in a name with no URI. Reported instead \
+         of the OPF-004 syntax error, as epubcheck does - its parser ends in a \
+         non-final URI state there (#50)."),
+    ("OPF-006", None,
+        "A prefix declaration whose URI half doesn't parse. Conservative, \
+         matching Java's `new URI(...)`: illegal characters and malformed \
+         percent-escapes only (#50)."),
+    ("OPF-011", Some("na"),
+        "Dead ID - commented out in epubcheck's OPFHandler30 (\"Checked with \
+         Schematron\"), which reports the page-spread-left/-right conflict as \
+         RSC-005. We emit that same RSC-005, and epubcheck's own test expects \
+         it (verified #51)."),
+    ("OPF-021", None,
+        "Unregistered URI scheme in a *DTBook* content document's `<a href \
+         external=\"true\">` - its only call site is DTBookHandler, not the \
+         OPF. Gated behind DTBook validation, which is deliberately out of \
+         scope (owner decision, #52): a legacy DAISY format EPUB 2 permits but \
+         the ecosystem has moved off, same call as OPF-047. We still accept \
+         `application/x-dtbook+xml` as a content type; we just don't validate \
+         those documents. Counted as a gap rather than N/A on purpose - it is \
+         a real check we don't do, and calling it N/A would inflate coverage \
+         with a scope decision."),
+    ("OPF-067", None,
+        "A metadata `<link>` target that is also a manifest item - and, as \
+         epubcheck has it, only when that item is not in the spine (#55)."),
+    // --- RSC (partials confirmed earlier) ---
+    ("RSC-005", Some("partial"),
+        "XHTML content model is real (EPUB 2 XHTML 1.1 grammar + EPUB 3 HTML5 \
+         grammar + Schematron nesting/IDREF rules + closed per-element \
+         attribute allowlists). **SVG is not an opaque subtree** - epubcheck \
+         validates SVG twice, and only the small `forgiving` grammar is \
+         normative (id datatype, title/foreignObject content models, \
+         `epub:type` placement); the full SVG 1.1 grammar runs with \
+         `isNormative=false`, so its findings are RSC-025 usage - which is the \
+         shape `src/svg.rs` already has. Of the three normative rules we do \
+         all three (`epub:type` placement matched to epubcheck's own \
+         allowlist), except the SVG `id` datatype. MathML: both the EPUB \
+         restriction (Presentation-only + `semantics`) and the MathML3 \
+         presentation **content models** are implemented - the arity of \
+         `mfrac`/`msubsup`/`munderover` and the like, and table containment. \
+         Attribute *values* stay permissive throughout (MathML attributes are \
+         unconstrained, `role` accepts any token, `aria-*` unranged) - a \
+         separate surface with its own false-positive risk and much less to \
+         catch."),
+    ("RSC-020", Some("partial"),
+        "Checked: host syntax and scheme (space/comma in host, missing `//`) \
+         on any reference, plus an unencoded space in a manifest href. Not \
+         checked: an unencoded space in a *content document* reference, \
+         backslashes, malformed percent-escapes, and the illegal-character \
+         set. **Correcting an earlier note here**: it claimed a path space is \
+         valid and that this matched epubcheck. It does not - epubcheck parses \
+         every URL twice through galimatias, once with a strict error handler \
+         that turns WHATWG's recoverable warnings into errors, and its own two \
+         sibling fixtures settle it (a `%20` href is PKG-010 warning, an \
+         unencoded one is RSC-020 error). Deliberately left partial \
+         (2026-07-26): galimatias is a Maven dependency rather than vendored, \
+         so the exact rule cannot be read here; the corpus carries one RSC-020 \
+         scenario, which we already pass; and a scan of 61 real books found \
+         exactly one malformed relative URL - the manifest-href space we \
+         already catch. Building strictness against an unreadable reference, \
+         on one test case, for something 60 of 61 books never do is more \
+         likely to invent false positives than to catch defects."),
+    ("RSC-006", None,
+        "Remote stylesheet references (also SVG stylesheet forms)."),
+    ("RSC-030", None,
+        "Any reference starting with `file:` (CSS, XHTML, SVG forms)."),
+    ("RSC-022", Some("na"),
+        "Not a validation check - epubcheck reporting its own Java-runtime \
+         limitation. N/A for epubveri (we check image details via \
+         PKG-021/022)."),
+    ("RSC-024", Some("na"),
+        "Not a distinct check - it is the non-normative half of a pair \
+         (`normative ? RSC_017 : RSC_024`, alongside RSC-005/RSC-025). \
+         epubcheck downgrades to it for validations it runs advisorily; we \
+         have no non-normative mode, so it mirrors internal plumbing rather \
+         than catching anything in a book (verified #57)."),
+    // --- HTM (reviewed) ---
+    ("HTM-002", Some("na"),
+        "Dead ID - epubcheck defines a severity for it but never emits it \
+         anywhere in its source. Not a live check."),
+    ("HTM-005", Some("na"),
+        "Dead ID - epubcheck never emits it anywhere in its source. Not a live \
+         check."),
+    ("HTM-011", Some("na"),
+        "Undeclared entity. epubcheck's own code comment says this \"may never \
+         be reported\" - an undeclared entity is a SAX parse error reported as \
+         RSC-005. epubveri catches the same defect as RSC-016 (fatal). The \
+         defect is covered; the ID itself is effectively dead."),
+    ("HTM-044", Some("na"),
+        "Dead ID - epubcheck never emits it anywhere in its source. Not a live \
+         check."),
+    ("HTM-045", None,
+        "An empty `href=\"\"` resolves to the document itself - legal, so a \
+         usage hint rather than an error (#56)."),
+    // --- CSS (reviewed) ---
+    ("CSS-001", None,
+        "epubcheck flags exactly `direction`/`unicode-bidi` (EPUB 3 only) - we \
+         match it."),
+    ("CSS-006", None,
+        "`position: fixed` (USAGE) - matches epubcheck's first-value-component \
+         == \"fixed\" test."),
+    ("CSS-008", None,
+        "Covers bad-string/bad-url tokens, unterminated rules/blocks, \
+         malformed declaration shapes, malformed selector lists (styloria 0.5) \
+         and over-long `U+` unicode-ranges (styloria 0.6) - epubcheck's whole \
+         live CSS error surface. Two of its error codes are dead and never \
+         raised (`GRAMMAR_INVALID_SELECTOR`, `SCANNER_MALFORMED_ESCAPE`); \
+         selector errors reach CSS-008 via `GRAMMAR_EXPECTING_TOKEN`, and \
+         epubcheck does *not* validate at-rule preludes at all (its \
+         ATRULE_PARAM restriction is `return true`). One deliberate deviation: \
+         selector validation flags only what is malformed under Selectors \
+         Level 4 **and** epubcheck flags, so modern-but-valid selectors its \
+         old parser rejects stay silent."),
+    // --- MED (reviewed) ---
+    ("MED-004", None,
+        "Reserved for a file too short to contain a 4-byte image header, \
+         matching epubcheck; a >=4-byte header that matches nothing is a \
+         declared/actual mismatch (OPF-029). Aligned in #45."),
+];
+
+/// Families whose per-ID full/partial/notes have been reviewed by hand. The
+/// rest are first-pass: "full" there means "epubveri has the ID", not yet
+/// checked for partialness.
+const REVIEWED: &[&str] = &[
+    "PKG", "OPF", "RSC", "HTM", "CSS", "MED", "NAV", "NCX", "ACC", "SCP", "CHK", "INF",
+];
+
+/// Whole families / notable gaps described once, applied to every ID in the
+/// family that epubveri lacks.
+const FAMILY_GAP: &[(&str, &str)] = &[
+    ("SCP", "Scripting checks - not implemented (no SCP family)."),
+    (
+        "ACC",
+        "Accessibility checks - mostly not implemented (only ACC IDs epubveri \
+         has a constant for are covered).",
+    ),
+];
+
+/// Whole families that are N/A for epubveri - not content validation, so their
+/// IDs are excluded from the live denominator (⊘) rather than counted as gaps.
+/// Each such ID gets `FAMILY_NA_NOTE` unless it has its own `ANN` note.
+const NA_FAMILIES: &[&str] = &["CHK", "INF"];
+
+const FAMILY_NA_NOTE: &[(&str, &str)] = &[
+    (
+        "CHK",
+        "epubcheck CLI/tooling message about its *custom message-overrides \
+         file* (a file that renames/re-severities messages) - not EPUB content \
+         validation. epubveri is an embeddable library with no such config \
+         file, so this can never apply.",
+    ),
+    (
+        "INF",
+        "epubcheck meta-message flagging that one of *epubcheck's own* rules is \
+         under review and its severity may change - a note about the tool, not \
+         a finding about the EPUB. Nothing for epubveri to report.",
+    ),
+];
+
+/// A one-line scope note printed under a family's detail header, so a reader
+/// sees *why* a whole family is absent before scanning the rows - these are
+/// deliberate exclusions, not oversights.
+const FAMILY_SCOPE: &[(&str, &str)] = &[
+    (
+        "SCP",
+        "All scripting-check IDs are SUPPRESSED by default in epubcheck (no \
+         live check), so there is nothing here to implement.",
+    ),
+    (
+        "CHK",
+        "Every CHK ID is an epubcheck CLI/tooling message about its custom \
+         message-overrides file - not EPUB content validation. N/A for an \
+         embeddable library, not a gap.",
+    ),
+    (
+        "INF",
+        "epubcheck meta-messages about the review status of epubcheck's own \
+         rules - not findings about the EPUB. N/A, not a gap.",
+    ),
+    (
+        "ACC",
+        "epubcheck defines many ACC IDs but SUPPRESSES all but two by default; \
+         epubveri implements both live ones.",
+    ),
+];
+
+const FAM_ORDER: &[&str] = &[
+    "PKG", "OCF", "OPF", "RSC", "HTM", "CSS", "MED", "NAV", "NCX", "ACC", "SCP", "CHK", "INF",
+];
+
+fn lookup<'a>(table: &'a [(&str, &str)], key: &str) -> Option<&'a str> {
+    table.iter().find(|(k, _)| *k == key).map(|(_, v)| *v)
+}
+
+fn ann_for(id: &str) -> Option<&'static Ann> {
+    ANN.iter().find(|(k, _, _)| *k == id)
+}
+
+/// Sort key shared by every ID list: family name, then the number as a
+/// number - so OPF-9 precedes OPF-10, which a plain string sort would not.
+fn id_key(id: &str) -> (String, u32) {
+    let (fam, num) = id.split_once('-').unwrap_or((id, "0"));
+    (fam.to_string(), num.parse().unwrap_or(0))
+}
+
+fn fam_key(fam: &str) -> (usize, String) {
+    (
+        FAM_ORDER.iter().position(|f| *f == fam).unwrap_or(99),
+        fam.to_string(),
+    )
+}
+
+/// One row of the per-ID table.
+struct Row {
+    id: String,
+    desc: String,
+    ec_mark: &'static str,
+    ev_mark: &'static str,
+    note: String,
+}
+
+/// A family's rows plus its `[full, partial, none, na, total]` tally, kept
+/// together because every ID contributes to both.
+struct Family {
+    name: String,
+    rows: Vec<Row>,
+    counts: [usize; 5],
+}
+
+/// Index of `fam`'s slot, appending it if this is its first ID. Families stay
+/// in first-seen order until the final sort, exactly as the dict they replace.
+fn fam_slot(fams: &mut Vec<Family>, fam: &str) -> usize {
+    match fams.iter().position(|f| f.name == fam) {
+        Some(i) => i,
+        None => {
+            fams.push(Family {
+                name: fam.to_string(),
+                rows: Vec::new(),
+                counts: [0; 5],
+            });
+            fams.len() - 1
+        }
+    }
+}
+
+/// Python's `round()` is half-to-even; Rust's `f64::round` is half-away-from-
+/// zero. They differ only on an exact `.5`, which the coverage percentage can
+/// land on - matching the original keeps the published number stable across
+/// the port.
+fn round_half_even(x: f64) -> i64 {
+    let f = x.floor();
+    let diff = x - f;
+    let f = f as i64;
+    match diff.partial_cmp(&0.5) {
+        Some(std::cmp::Ordering::Less) => f,
+        Some(std::cmp::Ordering::Greater) => f + 1,
+        _ if f % 2 == 0 => f,
+        _ => f + 1,
+    }
+}
+
+fn main() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+    let ec = root.join("corpus/epubcheck/src/main/resources/com/adobe/epubcheck/messages");
+    let ecj = root.join("corpus/epubcheck/src/main/java/com/adobe/epubcheck/messages");
+    if !ecj.is_dir() {
+        eprintln!("epubcheck sources not found at {}", ecj.display());
+        eprintln!("this needs the corpus submodule checked out");
+        std::process::exit(1);
+    }
+
+    let read = |p: PathBuf| -> String {
+        // Lossy on purpose: MessageBundle.properties is not valid UTF-8, and
+        // the replacement characters land in text we truncate anyway.
+        match std::fs::read(&p) {
+            Ok(b) => String::from_utf8_lossy(&b).into_owned(),
+            Err(e) => {
+                eprintln!("cannot read {}: {e}", p.display());
+                std::process::exit(1);
+            }
+        }
+    };
+
+    // --- 1. epubcheck ID universe (MessageId.java) ---
+    // Match the enum NAME (always XXX_NNN), not the string literal -
+    // epubcheck's literals are inconsistent (some use "HTM_054" with an
+    // underscore instead of "HTM-054"). Normalize to hyphens.
+    let mid = read(ecj.join("MessageId.java"));
+    let re_id = Regex::new(r"(?m)^\s*([A-Z]+)_([0-9]+)\(").unwrap();
+    let mut ec_ids: Vec<String> = re_id
+        .captures_iter(&mid)
+        .map(|c| format!("{}-{}", &c[1], &c[2]))
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    ec_ids.sort_by_key(|i| id_key(i));
+
+    // --- 2. epubcheck message text (MessageBundle.properties) ---
+    let bundle = read(ec.join("MessageBundle.properties"));
+    let re_text = Regex::new(r"^([A-Z]+)_([0-9]+)=(.*)$").unwrap();
+    let mut text: HashMap<String, String> = HashMap::new();
+    for line in bundle.lines() {
+        if let Some(c) = re_text.captures(line) {
+            text.insert(
+                format!("{}-{}", &c[1], &c[2]),
+                c[3].trim().trim_matches('"').to_string(),
+            );
+        }
+    }
+
+    // --- 3. epubcheck severity (DefaultSeverities.java) ---
+    let sevsrc = read(ecj.join("DefaultSeverities.java"));
+    let re_sev = Regex::new(r"MessageId\.([A-Z]+)_([0-9]+),\s*Severity\.([A-Z]+)").unwrap();
+    let mut sev: HashMap<String, String> = HashMap::new();
+    for c in re_sev.captures_iter(&sevsrc) {
+        let s = &c[3];
+        let capitalized = format!("{}{}", &s[..1], s[1..].to_lowercase());
+        sev.insert(format!("{}-{}", &c[1], &c[2]), capitalized);
+    }
+
+    // --- 4. epubveri IDs + inline comments (ids.rs) ---
+    // The trailing `// comment` is OPTIONAL - some IDs (e.g. RSC-005) have
+    // none, and requiring it would wrongly drop them from epubveri's coverage.
+    let ids_rs = read(root.join("src/ids.rs"));
+    let re_ev =
+        Regex::new(r#"pub const [A-Z0-9_]+: &str = "([A-Z]+-[0-9]+)";(?:\s*//\s*(.*))?"#).unwrap();
+    let mut ev: HashMap<String, String> = HashMap::new();
+    for c in re_ev.captures_iter(&ids_rs) {
+        let comment = c.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+        ev.insert(c[1].to_string(), comment.to_string());
+    }
+
+    // --- build rows ---
+    let re_ws = Regex::new(r"\s+").unwrap();
+    let mut fams: Vec<Family> = Vec::new();
+
+    for iid in &ec_ids {
+        let fam = iid.split('-').next().unwrap().to_string();
+
+        let raw = text.get(iid).cloned().unwrap_or_default();
+        let mut desc = re_ws.replace_all(&raw, " ").into_owned();
+        if desc.chars().count() > 90 {
+            desc = desc.chars().take(87).collect::<String>() + "...";
+        }
+        if desc.is_empty() {
+            desc = "_(no message text in epubcheck's bundle)_".to_string();
+        }
+
+        let have = ev.contains_key(iid);
+        let ann = ann_for(iid);
+        let suppressed = sev.get(iid).map(|s| s == "Suppressed").unwrap_or(false);
+
+        // A whole-family N/A: an epubcheck tooling / meta message, not content
+        // validation. ⊘ on our side, excluded from the live denominator, with
+        // a note saying why (so it reads as a deliberate exclusion).
+        if NA_FAMILIES.contains(&fam.as_str()) && ann.map(|a| a.1) != Some(Some("partial")) {
+            let note = ann
+                .map(|a| a.2)
+                .or_else(|| lookup(FAMILY_NA_NOTE, &fam))
+                .unwrap_or("N/A.");
+            let i = fam_slot(&mut fams, &fam);
+            fams[i].rows.push(Row {
+                id: iid.clone(),
+                desc,
+                ec_mark: "Y",
+                ev_mark: "⊘",
+                note: note.to_string(),
+            });
+            fams[i].counts[3] += 1;
+            fams[i].counts[4] += 1;
+            continue;
+        }
+
+        // Not a real validation check for epubveri (e.g. an epubcheck
+        // runtime-limitation message) - excluded from the live denominator.
+        if let Some(a) = ann
+            && a.1 == Some("na")
+        {
+            let i = fam_slot(&mut fams, &fam);
+            fams[i].rows.push(Row {
+                id: iid.clone(),
+                desc,
+                ec_mark: "Y",
+                ev_mark: "⊘",
+                note: a.2.to_string(),
+            });
+            fams[i].counts[3] += 1;
+            fams[i].counts[4] += 1;
+            continue;
+        }
+
+        let (ev_mark, note, slot): (&str, String, usize) = if suppressed && !have {
+            // epubcheck disabled this ID by default -> not a real check, N/A.
+            (
+                "⊘",
+                "epubcheck-suppressed (disabled by default) — not a gap".to_string(),
+                3,
+            )
+        } else if suppressed && have {
+            let tail = ann
+                .map(|a| a.2.to_string())
+                .unwrap_or_else(|| ev.get(iid).cloned().unwrap_or_default());
+            (
+                "Y+",
+                format!("epubveri reports this; epubcheck suppresses it (we are stricter). {tail}"),
+                0, // counts as covered (a live check we do)
+            )
+        } else if !have {
+            let note = ann
+                .map(|a| a.2)
+                .or_else(|| lookup(FAMILY_GAP, &fam))
+                .unwrap_or("Not implemented.");
+            ("x", note.to_string(), 2)
+        } else if ann.map(|a| a.1) == Some(Some("partial")) {
+            ("~", ann.unwrap().2.to_string(), 1)
+        } else {
+            let note = match ann.map(|a| a.2).unwrap_or("") {
+                "" => ev.get(iid).cloned().unwrap_or_default(),
+                n => n.to_string(),
+            };
+            ("Y", note, 0)
+        };
+
+        let i = fam_slot(&mut fams, &fam);
+        fams[i].rows.push(Row {
+            id: iid.clone(),
+            desc,
+            ec_mark: if suppressed { "⊘" } else { "Y" },
+            ev_mark,
+            note,
+        });
+        fams[i].counts[slot] += 1;
+        fams[i].counts[4] += 1;
+    }
+
+    fams.sort_by_key(|f| fam_key(&f.name));
+
+    // epubveri-owned IDs (in ids.rs but not epubcheck)
+    let ec_set: HashSet<&String> = ec_ids.iter().collect();
+    let mut own: Vec<String> = ev.keys().filter(|k| !ec_set.contains(k)).cloned().collect();
+    own.sort_by_key(|i| id_key(i));
+
+    // --- emit ---
+    let mut o: Vec<String> = vec!["# epubveri coverage vs epubcheck\n".into()];
+    o.push(
+        "A per-message-ID transparency matrix: for every epubcheck message ID, \
+         does epubveri implement the same check? This is honest-not-hype — the \
+         gaps are as visible as the coverage.\n"
+            .into(),
+    );
+    o.push("**Methodology.**\n".into());
+    o.push(
+        "- The ID universe is epubcheck's own `MessageId.java` (epubveri \
+         adopted epubcheck's ID scheme, so almost every ID here is \
+         epubcheck's — the signal is the *epubveri* column).\n"
+            .into(),
+    );
+    o.push(
+        "- **Coverage is over the _live_ denominator** = epubcheck's total \
+         minus every ID that isn't a live *content-validation* check: the ones \
+         epubcheck **suppresses** by default, plus its runtime/tooling/meta \
+         messages (⊘ below). Not implementing those is not a gap - each such \
+         row carries a note saying why it's out of scope, so the exclusions \
+         read as deliberate, not as oversights. A raw \"X of 298\" would badly \
+         understate real coverage.\n"
+            .into(),
+    );
+    o.push(
+        "- Status: **Y** full · **~** partial (epubcheck flags cases we \
+         don't — see the note) · **x** not implemented (a real gap) · **⊘** \
+         not a live content check — epubcheck-suppressed, a dead ID, or an \
+         epubcheck runtime/tooling/meta message; **the row's note says \
+         which**.\n"
+            .into(),
+    );
+    o.push(
+        "- **Review status.** Families marked *reviewed* below have had each \
+         ID's full/partial status checked against the source by hand. The rest \
+         are *first-pass*: **x**/**⊘** are reliable (derived from the code + \
+         epubcheck's severities), but a **Y** there means only \"epubveri has \
+         this ID\" and hasn't yet been checked for partialness — treat those \
+         as provisional.\n"
+            .into(),
+    );
+    o.push(
+        "- _Generated by `cargo run -p epubveri-harness --bin coverage` — \
+         regenerate rather than hand-editing; the status/notes annotations \
+         live in `harness/src/coverage.rs`._\n"
+            .into(),
+    );
+
+    // family summary
+    o.push("## Summary by family\n".into());
+    o.push("| Family | full | partial | gap | ⊘ N/A | live | coverage | review |".into());
+    o.push("|---|---:|---:|---:|---:|---:|---:|:---:|".into());
+    let mut tot = [0usize; 5];
+    for f in &fams {
+        let c = f.counts;
+        for i in 0..5 {
+            tot[i] += c[i];
+        }
+        let live = c[4] - c[3];
+        let cov = if live > 0 {
+            format!("{}/{}", c[0] + c[1], live)
+        } else {
+            "—".to_string()
+        };
+        let rv = if REVIEWED.contains(&f.name.as_str()) {
+            "reviewed"
+        } else {
+            "first-pass"
+        };
+        o.push(format!(
+            "| {} | {} | {} | {} | {} | {} | {} | {} |",
+            f.name, c[0], c[1], c[2], c[3], live, cov, rv
+        ));
+    }
+    let live = tot[4] - tot[3];
+    o.push(format!(
+        "| **All** | **{}** | **{}** | **{}** | **{}** | **{}** | **{}/{}** | |",
+        tot[0],
+        tot[1],
+        tot[2],
+        tot[3],
+        live,
+        tot[0] + tot[1],
+        live
+    ));
+    o.push(String::new());
+    let covered = tot[0] + tot[1];
+    o.push(format!(
+        "**epubveri implements {covered} of {live} live epubcheck checks \
+         (~{}%)** — {} fully, {} partially — plus {} checks of its own \
+         (`ADV-*` and viewport/data-* extras). {} epubcheck IDs are suppressed \
+         or non-checks and don't count.\n",
+        round_half_even(100.0 * covered as f64 / live as f64),
+        tot[0],
+        tot[1],
+        own.len(),
+        tot[3]
+    ));
+
+    // per-ID detail
+    o.push("## Per-ID detail\n".into());
+    for f in &fams {
+        let rv = if REVIEWED.contains(&f.name.as_str()) {
+            "reviewed"
+        } else {
+            "first-pass — `Y` = has-the-ID, not yet checked for partialness"
+        };
+        o.push(format!("### {}  _({rv})_\n", f.name));
+        if let Some(scope) = lookup(FAMILY_SCOPE, &f.name) {
+            o.push(format!("> **Scope:** {scope}\n"));
+        }
+        o.push("| ID | Checks | epubcheck | epubveri | Notes |".into());
+        o.push("|---|---|:---:|:---:|---|".into());
+        for r in &f.rows {
+            o.push(format!(
+                "| {} | {} | {} | {} | {} |",
+                r.id,
+                r.desc.replace('|', "\\|"),
+                r.ec_mark,
+                r.ev_mark,
+                r.note.replace('|', "\\|")
+            ));
+        }
+        o.push(String::new());
+    }
+
+    // epubveri-owned
+    if !own.is_empty() {
+        o.push("## epubveri-owned IDs (not in epubcheck)\n".into());
+        o.push("| ID | Checks | epubcheck | epubveri |".into());
+        o.push("|---|---|:---:|:---:|".into());
+        for iid in &own {
+            o.push(format!(
+                "| {iid} | {} | — | Y |",
+                ev.get(iid).cloned().unwrap_or_default()
+            ));
+        }
+        o.push(String::new());
+    }
+
+    let out = o.join("\n");
+    let have_ec = ev.keys().filter(|k| ec_set.contains(k)).count();
+
+    if std::env::args().any(|a| a == "--stdout") {
+        print!("{out}");
+    } else {
+        let dest = root.join("docs/COVERAGE.md");
+        if let Err(e) = std::fs::write(&dest, &out) {
+            eprintln!("cannot write {}: {e}", dest.display());
+            std::process::exit(1);
+        }
+        eprintln!("wrote {}", dest.display());
+    }
+    eprintln!(
+        "\n[epubcheck IDs: {} | epubveri has: {have_ec} | epubveri-owned: {}]",
+        ec_ids.len(),
+        own.len()
+    );
+}

@@ -14,6 +14,12 @@ path = "src/corpus.rs"
 name = "hostile"
 path = "src/hostile.rs"
 
+# docs/COVERAGE.md generator: reads epubcheck's message sources and our
+# src/ids.rs, so the published matrix cannot drift from either.
+[[bin]]
+name = "coverage"
+path = "src/coverage.rs"
+
 [dependencies]
 epubveri = { path = ".." }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
