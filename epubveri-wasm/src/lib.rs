@@ -20,7 +20,7 @@
 //! ```
 
 use serde::Serialize;
-use tsify_next::Tsify;
+use tsify::Tsify;
 use wasm_bindgen::prelude::*;
 
 /// One EPUB's validation result — the envelope's `inputs[i]` object without

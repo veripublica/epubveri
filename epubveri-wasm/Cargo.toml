@@ -27,7 +27,14 @@ crate-type = ["cdylib", "rlib"]
 epubveri = { path = ".." }
 wasm-bindgen = "0.2"
 serde = { version = "1", features = ["derive"] }
-# tsify-next = the maintained tsify fork; derives both serde (de)serialization
-# and a real TypeScript `.d.ts` for the returned types, and pulls in
-# serde-wasm-bindgen (the JS<->Rust ABI bridge) transitively.
-tsify-next = { version = "0.5", features = ["js"] }
+# tsify derives both serde (de)serialization and a real TypeScript `.d.ts`
+# for the returned types, and pulls in serde-wasm-bindgen (the JS<->Rust ABI
+# bridge) transitively.
+#
+# This was `tsify-next` until 2026-08-03. That fork existed because upstream
+# tsify had gone unmaintained - and the roles have since swapped: upstream
+# resumed (0.5.6, Oct 2025) and RUSTSEC-2025-0048 now flags *the fork* as
+# unmaintained (its last release was Apr 2025), advising tsify. Same version
+# number, same `js` feature, same `#[tsify(…)]` attribute, so the move is the
+# import path and this line.
+tsify = { version = "0.5", features = ["js"] }

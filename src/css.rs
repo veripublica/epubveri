@@ -298,6 +298,13 @@ pub(crate) fn check(
             // reports every CSS parse problem as CSS-008, but "the range is
             // malformed" points somewhere quite different from "the block is".
             spanned::SyntaxErrorKind::InvalidUnicodeRange => "css.stylesheet.invalid_unicode_range",
+            // styloria 0.7's nesting bound. Its own slug because this one is
+            // not a defect in the CSS the way the others are - it says the
+            // parser declined to descend further, and the stylesheet below
+            // that point went unchecked. Real stylesheets nest 2 deep, so
+            // reaching 256 means generated or hostile input; reporting it
+            // under a shared "malformed" slug would hide which it was.
+            spanned::SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
         };
         report.push_full(
             CSS_008,

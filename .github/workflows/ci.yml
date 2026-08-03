@@ -49,3 +49,27 @@ jobs:
 
       - name: Build epubveri-wasm for wasm32
         run: cargo build -p epubveri-wasm --target wasm32-unknown-unknown --locked
+
+  # Supply chain. Split from `check` on purpose: this job's result depends on
+  # the RustSec advisory database, not on our commit, so it can turn red
+  # without anything here changing - and when it does, that is news rather
+  # than a broken build. Keeping it separate means the red X names the cause.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      # The action is the maintained path (it caches the advisory DB and
+      # annotates the diff); `cargo install cargo-audit` per run is a slow
+      # source build for the same answer.
+      #
+      # Scope note: today's tree is clean of *vulnerabilities* but carries one
+      # unmaintained-crate warning, and warnings do not fail this job - only
+      # an actual advisory does. That is the intent: an unmaintained
+      # dependency is a thing to plan around, a vulnerability is a thing to
+      # stop for.
+      - name: Audit dependencies
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
