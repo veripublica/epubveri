@@ -12,3 +12,8 @@ __pycache__/
 # Local-only project context / history — not for publication (owner decision).
 /CLAUDE.md
 /docs/PROGRESS_LOG.md
+
+# Claude Code per-machine settings. Local, not project content — and iCloud
+# makes conflict copies of them ("settings.local 2.json"), the same class of
+# stray file that once shipped inside the 0.7.2 npm tarball.
+/.claude/settings.local*.json
