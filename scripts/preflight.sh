@@ -181,15 +181,21 @@ else
   # failure - but a silent absence would be, since it is the only instrument
   # that sees real books.
   SHELF="$HOME/epubveri-shelf/diff-shelf.sh"
+  SHELF_BASE="${SHELF_BASE:-baseline}"
   if [ -x "$SHELF" ]; then
     cargo build --release --bin epubveri >/dev/null 2>&1
-    if OUT=$("$SHELF" 2>&1); then
-      if grep -q "no change" <<< "$OUT"; then ok "shelf: no change per book"; else
-        bad "shelf changed — inspect per book"
-        printf '%s\n' "$OUT" | tail -20 | sed 's/^/        /'
-      fi
+    OUT=$("$SHELF" "$SHELF_BASE" 2>&1)
+    # A *missing* snapshot is a setup gap, not a regression. Failing the
+    # release for it would be wrong and would teach you to ignore the verdict;
+    # passing quietly would hide that the only real-book check never ran.
+    if grep -qi "no snapshot" <<< "$OUT"; then
+      skip "shelf: no '$SHELF_BASE' snapshot — run '$SHELF save' on the LAST"
+      echo "        released build, so the next release has something to diff against"
+    elif grep -q "no change" <<< "$OUT"; then
+      ok "shelf: no change per book vs '$SHELF_BASE'"
     else
-      bad "shelf diff failed (no baseline? run '$SHELF save' first)"
+      bad "shelf changed vs '$SHELF_BASE' — inspect per book"
+      printf '%s\n' "$OUT" | tail -20 | sed 's/^/        /'
     fi
   else
     skip "shelf not on this machine ($SHELF) — the only real-book check is absent"
