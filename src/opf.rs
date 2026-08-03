@@ -1418,6 +1418,82 @@ fn decode_utf32(bytes: &[u8], big_endian: bool) -> String {
         .collect()
 }
 
+/// RSC-005: `id` attributes must be unique within the package document.
+///
+/// Ported out of `schemas/package.sch`, which expressed it as
+/// `count($id-set[normalize-space(@id) = normalize-space(current()/@id)]) = 1`
+/// over `<let name="id-set" value="//*[@id]"/>`. That is quadratic as
+/// written — every element carrying an `id` rescans every other one — and it
+/// measured 11.5s of a 15.5s validation on a 4,000-item package document.
+/// XPath 1.0 cannot express uniqueness in less than quadratic time, so the
+/// rule moved here instead of being rewritten; two linear passes replace it.
+///
+/// **The output is deliberately byte-identical to the Schematron version**,
+/// which is what lets the corpus check this port at all: the shelf never
+/// exercises it (0 of 73 books), while the corpus has two dedicated
+/// scenarios — `attr-id-duplicate-error.opf` and
+/// `attr-id-duplicate-with-spaces-error.opf`, each "reported 2 times (once
+/// for each ID)".
+///
+/// Four things therefore have to stay exactly as they were, and each is a
+/// way this could drift silently:
+///
+/// 1. One finding per *occurrence*, not per duplicated value — hence the
+///    second pass, in document order, rather than reporting from the map.
+/// 2. The text carries the **normalized** id, as `<value-of>` did.
+/// 3. RSC-005 / `Error` / located at the OPF / **no rule slug**, because
+///    Schematron findings carry none and adding one would change
+///    `--format json`.
+/// 4. `*[@id]` matches an element in any namespace but only a
+///    **no-namespace** `id`; `xml:id` is a different attribute and the rule
+///    never saw it. This one bit first: `Node::attribute("id")` looks like
+///    it means that and does not — given a `&str` roxmltree ignores the
+///    namespace — so the attribute is matched explicitly below.
+fn check_duplicate_ids(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    // Mirrors the engine's own `normalize-space`, not XPath's definition of
+    // it: `split_whitespace` is Unicode-aware where XPath 1.0 lists only
+    // #x20/#x9/#xD/#xA. Matching the engine is what keeps the output
+    // identical — if that function is ever made spec-exact, this follows it.
+    fn normalize_space(s: &str) -> String {
+        s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    // `select_context_nodes` walks `root_element().descendants()`, which
+    // includes the root element itself, in document order. Both passes
+    // below use the same walk so the set and the order match the rule's.
+    // Not `Node::attribute("id")`: given a plain `&str` roxmltree ignores the
+    // namespace, so that matches `xml:id` as readily as `id` — which the
+    // Schematron `*[@id]` never did (an unprefixed name in an XPath node
+    // test is the *null* namespace). Verified against roxmltree 0.21, and
+    // pinned by `xml_id_is_a_different_attribute` below.
+    let ids = || {
+        doc.root_element()
+            .descendants()
+            .filter(|n| n.is_element())
+            .filter_map(|n| {
+                n.attributes()
+                    .find(|a| a.namespace().is_none() && a.name() == "id")
+                    .map(|a| (n, normalize_space(a.value())))
+            })
+    };
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for (_, id) in ids() {
+        *counts.entry(id).or_insert(0) += 1;
+    }
+    for (node, id) in ids() {
+        if counts.get(&id).is_some_and(|&c| c > 1) {
+            report.push_at_pos(
+                RSC_005,
+                Severity::Error,
+                format!("duplicate id \"{id}\""),
+                opf_path,
+                Position::of(node),
+            );
+        }
+    }
+}
+
 /// EPUB 3 §3.9 (XML conformance): decodes the OPF's raw bytes into text,
 /// detecting its real encoding from a BOM or (for BOM-less UTF-32, per the
 /// XML spec's own Appendix F autodetection) a `00 00 00 '<'`/`'<' 00 00 00`
@@ -1851,6 +1927,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // carries the position of the context element the rule matched, so
     // Schematron output now gets line/column too (previously it was the
     // one documented family that couldn't).
+    check_duplicate_ids(&doc, opf_path, report);
     for (message, position) in crate::schematron::run(&crate::schematron::package_schema(), &doc) {
         report.push_at_pos(RSC_005, Severity::Error, message, opf_path, position);
     }
@@ -7651,6 +7728,68 @@ fn check_font_obfuscation(
 #[cfg(test)]
 mod tests {
     use super::is_valid_dc_date;
+
+    /// The four semantics `check_duplicate_ids` inherited when it moved out
+    /// of `schemas/package.sch`. The shelf never exercises this rule (0 of
+    /// 73 books) and the corpus has only two scenarios, so these pin the
+    /// parts a port can silently get wrong.
+    mod duplicate_ids {
+        use crate::report::Report;
+
+        fn ids_reported(package_body: &str) -> Vec<(String, u32)> {
+            let xml = format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" xmlns:xml="http://www.w3.org/XML/1998/namespace" version="3.0">{package_body}</package>"#
+            );
+            let doc = crate::ocf::parse_xml(&xml).expect("fixture must parse");
+            let mut report = Report::new();
+            super::super::check_duplicate_ids(&doc, "c.opf", &mut report);
+            report
+                .messages
+                .iter()
+                .map(|m| (m.text.clone(), m.position.map(|p| p.column).unwrap_or(0)))
+                .collect()
+        }
+
+        /// One finding per *occurrence*, not one per duplicated value - the
+        /// corpus states it as "reported 2 times (once for each ID)".
+        #[test]
+        fn reports_once_per_occurrence() {
+            let out = ids_reported(r#"<a id="x"/><b id="x"/><c id="x"/>"#);
+            assert_eq!(out.len(), 3, "three elements share the id: {out:?}");
+            assert!(out.iter().all(|(t, _)| t == r#"duplicate id "x""#));
+            // Distinct positions, so each points at its own element.
+            let cols: std::collections::BTreeSet<u32> = out.iter().map(|(_, c)| *c).collect();
+            assert_eq!(cols.len(), 3, "each occurrence gets its own position");
+        }
+
+        /// Uniqueness is judged after whitespace normalization, and the
+        /// *normalized* value is what the message prints.
+        #[test]
+        fn normalizes_whitespace_before_comparing() {
+            let out = ids_reported("<a id=\" x \"/><b id=\"x\"/>");
+            assert_eq!(out.len(), 2, "` x ` and `x` are the same id: {out:?}");
+            assert!(
+                out.iter().all(|(t, _)| t == r#"duplicate id "x""#),
+                "the message carries the normalized id: {out:?}"
+            );
+        }
+
+        /// `*[@id]` meant a no-namespace `id`. An `xml:id` is a different
+        /// attribute and the Schematron rule never saw it.
+        #[test]
+        fn xml_id_is_a_different_attribute() {
+            assert!(
+                ids_reported(r#"<a id="x"/><b xml:id="x"/>"#).is_empty(),
+                "xml:id must not collide with id"
+            );
+        }
+
+        /// The far more common case: nothing to say.
+        #[test]
+        fn distinct_ids_are_silent() {
+            assert!(ids_reported(r#"<a id="x"/><b id="y"/>"#).is_empty());
+        }
+    }
 
     /// These tables are keyed lookups - `RESERVED_PREFIXES` by prefix,
     /// `ALLOWED_EXTERNAL_IDENTIFIERS` by media type. A duplicated key makes

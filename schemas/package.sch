@@ -15,22 +15,36 @@
   date-format regex, and @refines-as-relative-URL. Those are left for a
   later increment once (if) the engine grows those functions.
 
-  Covers: id uniqueness across the whole package document; unique-identifier
-  resolving to a real dc:identifier; dcterms:modified occurring exactly
-  once; @refines fragment targets existing.
+  Covers: unique-identifier resolving to a real dc:identifier;
+  dcterms:modified occurring exactly once; @refines fragment targets
+  existing. (id uniqueness used to be here too — see the note below.)
 -->
 <schema xmlns="http://purl.oclc.org/dsdl/schematron">
   <ns uri="http://www.idpf.org/2007/opf" prefix="opf"/>
   <ns uri="http://purl.org/dc/elements/1.1/" prefix="dc"/>
 
-  <let name="id-set" value="//*[@id]"/>
+  <!-- id uniqueness ("duplicate id ...", RSC-005) is NOT here: it lives in
+       `check_duplicate_ids` in src/opf.rs, and this note exists so that
+       reading this file does not leave you thinking the rule was forgotten.
 
-  <pattern id="id-unique">
-    <rule context="*[@id]">
-      <assert test="count($id-set[normalize-space(@id) = normalize-space(current()/@id)]) = 1"
-        >duplicate id "<value-of select="normalize-space(@id)"/>"</assert>
-    </rule>
-  </pattern>
+       It was expressed here as
+         <let name="id-set" value="//*[@id]"/>
+         <rule context="*[@id]">
+           <assert test="count($id-set[normalize-space(@id)
+                                       = normalize-space(current()/@id)]) = 1"/>
+       which is quadratic: each element carrying an id rescans every other
+       one. On a 4,000-item package document that single rule was 11.5s of a
+       15.5s validation. XPath 1.0 has no way to say "unique" in less than
+       quadratic time, so it moved to Rust rather than being rewritten — one
+       hash pass. The Rust reports byte-identically (one finding per
+       occurrence, normalized id in the text, no rule slug), which is what
+       keeps the corpus a real check on it.
+
+       This is the exception, not a precedent: a rule belongs in this file
+       unless it is provably not expressible here at acceptable cost.
+
+       `$id-set` went with it: that rule was its only user, and it was this
+       schema's only schema-level `let`. -->
 
   <!-- EPUB 3 only, same reasoning (and the same fix) as opf-date-cardinality
        below: epubcheck's package schema is where this rule lives, and that
