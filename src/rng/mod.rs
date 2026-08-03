@@ -753,6 +753,119 @@ mod tests {
         }
     }
 
+    /// `<link>` and `<style>` attribute sets, per version. Reported by Doitsu
+    /// (MobileRead #146) as `<link media>` drawing RSC-005 on both versions;
+    /// the report understated it, as they usually do. `link` had one shared
+    /// definition serving both grammars and granting only href/type/sizes,
+    /// so EPUB 2 was missing 3 of its 7 legal attributes and EPUB 3 fifteen
+    /// of nineteen.
+    ///
+    /// **The two sets are not nested**, which is why one definition could not
+    /// serve both: XHTML 1.1 has `charset`/`rev`, HTML5 dropped them and added
+    /// the fifteen. So the negative halves below are the real content of this
+    /// test — granting the union would "fix" the report and quietly make each
+    /// version accept the other's attributes.
+    ///
+    /// `rev` is deliberately absent from the negative list: it is granted to
+    /// every element by the RDFa global set, in epubcheck's grammar as well as
+    /// ours (`common.attrs.rdfa.rev?`), so it is legal on an EPUB 3 `link`
+    /// through a different route. `rel` arrives the same way, which is exactly
+    /// what hid this bug — the common `<link rel="stylesheet" href="...">`
+    /// passed, so nothing looked wrong until a second attribute appeared.
+    #[test]
+    fn link_and_style_attributes_per_version() {
+        let doc = |h: &str| {
+            format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title>{h}</head><body><p>x</p></body></html>"
+            )
+        };
+        let two = xhtml_grammar_epub2();
+        let three = xhtml_grammar();
+        let ok = |g: &Grammar, h: &str| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&doc(h)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+        let link = |a: &str| format!(r#"<link href="s.css" rel="stylesheet" {a}/>"#);
+
+        // epubcheck schema/20/rng/xhtml/link.rng, `link.attlist`.
+        for a in [
+            r#"charset="utf-8""#,
+            r#"hreflang="en""#,
+            r#"type="text/css""#,
+            r#"rev="stylesheet""#,
+            r#"media="all""#,
+        ] {
+            assert!(ok(&two, &link(a)), "EPUB 2 link accepts {a}");
+        }
+        // epubcheck schema/30/mod/html5/meta.rnc, `link.attrs`.
+        for a in [
+            r#"media="all""#,
+            r#"hreflang="en""#,
+            r#"as="style""#,
+            r#"integrity="sha384-x""#,
+            r#"referrerpolicy="no-referrer""#,
+            r#"crossorigin="anonymous""#,
+            r##"color="#fff""##,
+            r#"disabled="disabled""#,
+            r#"scope="/""#,
+            r#"updateviacache="none""#,
+            r#"workertype="classic""#,
+            r#"imagesrcset="a.png 1x""#,
+            r#"imagesizes="100vw""#,
+            r#"fetchpriority="high""#,
+            r#"blocking="render""#,
+        ] {
+            assert!(ok(&three, &link(a)), "EPUB 3 link accepts {a}");
+        }
+
+        // Negative: neither version inherits the other's, and neither list
+        // became a wildcard.
+        assert!(
+            !ok(&three, &link(r#"charset="utf-8""#)),
+            "EPUB 3 link rejects charset (HTML5 dropped it)"
+        );
+        for a in [
+            r#"crossorigin="anonymous""#,
+            r#"as="style""#,
+            r#"integrity="x""#,
+        ] {
+            assert!(!ok(&two, &link(a)), "EPUB 2 link rejects {a}");
+        }
+        for g in [&two, &three] {
+            assert!(!ok(g, &link(r#"wibble="x""#)), "link is not a wildcard");
+            assert!(
+                !ok(g, r#"<style frobnicate="x">p{color:red}</style>"#),
+                "style is not a wildcard"
+            );
+        }
+
+        // `style` is type/media/blocking in HTML5 (meta.rnc:254). `media` was
+        // added to the EPUB 2 copy in 0.8.3 and the EPUB 3 copy was missed -
+        // the same one-directional fix that left `link` shared.
+        for s in [
+            r#"<style media="all">p{color:red}</style>"#,
+            r#"<style blocking="render">p{color:red}</style>"#,
+        ] {
+            assert!(ok(&three, s), "EPUB 3 style accepts {s}");
+        }
+        assert!(
+            ok(&two, r#"<style media="all">p{color:red}</style>"#),
+            "EPUB 2 style keeps media (0.8.3)"
+        );
+
+        // The `sizes` Schematron assert (only on rel="icon", matching
+        // epubcheck's epub-xhtml-30.sch:310) lives outside the grammar, so
+        // granting `sizes` here must not be read as weakening it. Both shapes
+        // are grammar-valid; `xhtml.sch` is what separates them.
+        assert!(
+            ok(&three, &link(r#"sizes="16x16""#)),
+            "grammar allows sizes"
+        );
+    }
+
     /// #58, grammar round: the rest of XHTML 1.1's `a` and `img` attribute
     /// sets. OPS 2.0.1 assembles `a.attlist` from four included modules and
     /// we carried only the hypertext module's half, so `<a name="x">` - the

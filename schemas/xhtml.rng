@@ -76,8 +76,14 @@
       <choice>
         <ref name="metaEl"/>
         <ref name="linkEl"/>
+        <!-- epubcheck's style.attrs (schema/30/mod/html5/meta.rnc:254) is
+             type/media/blocking. `media` was added to the EPUB 2 copy below
+             in 0.8.3 and this copy was missed - the same one-directional fix
+             that left `link` shared. -->
         <element name="style"><ref name="globalAttrsCore"/>
           <optional><attribute name="type"><data type="string"/></attribute></optional>
+          <optional><attribute name="media"><data type="string"/></attribute></optional>
+          <optional><attribute name="blocking"><data type="string"/></attribute></optional>
           <text/>
         </element>
         <element name="base">
@@ -118,9 +124,23 @@
       <optional><attribute name="charset"><data type="string"/></attribute></optional>
     </element>
   </define>
+  <!-- EPUB 3 (HTML5) <link>. The attribute list is epubcheck's own
+       `link.attrs` from schema/30/mod/html5/meta.rnc; EPUB 2 gets its own
+       definition below, because XHTML 1.1's list is a *different* set, not a
+       subset (it has charset/rev, which HTML5 dropped, and lacks the fifteen
+       HTML5 additions). Sharing one definition between the two is what
+       produced Doitsu's report, MobileRead #146. -->
   <define name="linkEl">
     <element name="link">
       <ref name="globalAttrsCore"/>
+      <!-- Explicit, though `rel` is also in the RDFa global set: relying on
+           that coincidence is what hid this whole gap. `<link rel="stylesheet"
+           href="...">` passed because RDFa grants `rel` to every element, so
+           the common case worked and only a *second* attribute exposed that
+           `link` had almost no list of its own. epubcheck makes `rel`
+           REQUIRED here; left optional deliberately, since requiring it is a
+           restrictive change that belongs with its own measurement. -->
+      <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
       <!-- #33: found by the unit-test/corpus fallout of excepting `type`
            from the wildcard for input/button/a/script's own rules -
@@ -130,8 +150,45 @@
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <!-- #33: found by the corpus fallout of excepting `sizes` from the
            wildcard for img/source's own rules - <link rel="icon"
-           sizes="..."> was relying entirely on the wildcard. -->
+           sizes="..."> was relying entirely on the wildcard.
+           NOTE: xhtml.sch additionally asserts sizes only on rel="icon",
+           matching epubcheck's epub-xhtml-30.sch:310. Granting it here does
+           not weaken that; the test suite pins both halves. -->
       <optional><attribute name="sizes"><data type="string"/></attribute></optional>
+      <optional><attribute name="media"><data type="string"/></attribute></optional>
+      <optional><attribute name="hreflang"><data type="string"/></attribute></optional>
+      <optional><attribute name="as"><data type="string"/></attribute></optional>
+      <optional><attribute name="integrity"><data type="string"/></attribute></optional>
+      <optional><attribute name="referrerpolicy"><data type="string"/></attribute></optional>
+      <optional><attribute name="crossorigin"><data type="string"/></attribute></optional>
+      <optional><attribute name="color"><data type="string"/></attribute></optional>
+      <optional><attribute name="disabled"><data type="string"/></attribute></optional>
+      <optional><attribute name="scope"><data type="string"/></attribute></optional>
+      <optional><attribute name="updateviacache"><data type="string"/></attribute></optional>
+      <optional><attribute name="workertype"><data type="string"/></attribute></optional>
+      <optional><attribute name="imagesrcset"><data type="string"/></attribute></optional>
+      <optional><attribute name="imagesizes"><data type="string"/></attribute></optional>
+      <optional><attribute name="fetchpriority"><data type="string"/></attribute></optional>
+      <optional><attribute name="blocking"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <!-- EPUB 2 (XHTML 1.1) <link>, from epubcheck's
+       schema/20/rng/xhtml/link.rng `link.attlist`. Note charset and rev,
+       which HTML5 has no equivalent for. `globalAttrsCore` rather than
+       `globalAttrs-epub2` matches its siblings in headContentsCommon-epub2
+       (meta/style/base all use it); narrowing the EPUB 2 global set is #66's
+       job and is deliberately not touched here. -->
+  <define name="linkEl-epub2">
+    <element name="link">
+      <ref name="globalAttrsCore"/>
+      <optional><attribute name="charset"><data type="string"/></attribute></optional>
+      <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="hreflang"><data type="string"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="rel"><data type="string"/></attribute></optional>
+      <optional><attribute name="rev"><data type="string"/></attribute></optional>
+      <optional><attribute name="media"><data type="string"/></attribute></optional>
     </element>
   </define>
 
@@ -1740,7 +1797,7 @@
           <optional><attribute name="name"><data type="string"/></attribute></optional>
           <optional><attribute name="scheme"><data type="string"/></attribute></optional>
         </element>
-        <ref name="linkEl"/>
+        <ref name="linkEl-epub2"/>
         <element name="style"><ref name="globalAttrsCore"/>
           <optional><attribute name="type"><data type="string"/></attribute></optional>
           <optional><attribute name="media"><data type="string"/></attribute></optional>
