@@ -3922,6 +3922,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // deliberately deferred, separate extension), so it must not treat an
     // SVG doc's absence from `doc_class_names` as "no CSS found."
     let xhtml_doc_paths: HashSet<String> = content_docs.iter().cloned().collect();
+    // The NFC-normalized paths of every SVG resource in the manifest, built
+    // once here rather than rebuilt per reference.
+    //
+    // The `references_svg` check below asks, for each `src`/`href`/`data`/
+    // `poster` in each content document, whether that target is an SVG
+    // manifest item. Asking it as a scan over `items` re-normalized every
+    // manifest path on every attribute — n references x m items — and
+    // because the scan only stops early when it *finds* an SVG, the worst
+    // case was the common one: a book with no SVG at all. On a 4,000-item
+    // package that was 16 million `nfc` calls and 93% of the run.
+    let svg_manifest_paths: HashSet<String> = items
+        .values()
+        .filter(|(_, mt)| mt.trim() == "image/svg+xml")
+        .map(|(res, _)| nfc(res))
+        .collect();
     // Content documents are validated against the version's own content model:
     // EPUB 3 is XHTML5, EPUB 2 is XHTML 1.1 + OPS 2.0.1 - different
     // vocabularies in both directions (`big`/`tt` valid only in EPUB 2, the
@@ -5709,10 +5724,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         continue;
                     }
                     let target = nfc(&resolve(&dir, v.split('#').next().unwrap_or(v)));
-                    if items
-                        .values()
-                        .any(|(res, mt)| nfc(res) == target && mt.trim() == "image/svg+xml")
-                    {
+                    if svg_manifest_paths.contains(&target) {
                         references_svg = true;
                         break;
                     }
