@@ -8,6 +8,12 @@ publish = false
 name = "corpus"
 path = "src/corpus.rs"
 
+# Adversarial-input generator and runner. Separate binary because it shares
+# nothing with the corpus measurement: different inputs, different question.
+[[bin]]
+name = "hostile"
+path = "src/hostile.rs"
+
 [dependencies]
 epubveri = { path = ".." }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
