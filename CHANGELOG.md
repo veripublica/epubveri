@@ -8,6 +8,44 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.2] - 2026-08-03
+
+**No library, CLI or WASM changes** — every finding, message and exit code is
+identical to 0.9.1. `src/`, `schemas/`, `build.rs` and the wasm bindings are
+untouched. A patch, so consumers pick it up (or ignore it) without touching
+their manifests.
+
+Measured rather than asserted, because "no change" is the one claim that is
+easy to make and easy to get wrong: the epubcheck corpus is byte-identical at
+981 scenarios (98.8% exact-ID recall, 4 false positives), and the 73-book
+local shelf diffs to no change per book.
+
+### Internal
+
+- **The measurement tooling is Python-free.** `scripts/gen-coverage.py`, the
+  last of it, became a third harness binary (`cargo run -p epubveri-harness
+  --bin coverage`), after `corpus.py` and the hostile-input pair. Its output
+  is byte-identical to the Python original's apart from the line naming the
+  generator, which is how the port was verified.
+
+  Two deliberate departures, both closing a hazard rather than copying it: it
+  writes `docs/COVERAGE.md` itself instead of being redirected into it (`>`
+  truncates the file before the generator produces a byte, so a crash left an
+  empty matrix behind a clean-looking shell), and it resolves paths from
+  `CARGO_MANIFEST_DIR` rather than the working directory — the trap that made
+  `corpus.py` silently produce nothing when run from the repo root.
+
+- **The release guards read the manifest version with `jq`**, not an inline
+  `python3` one-liner, in both `publish-crate.yml` and `publish-npm.yml`.
+  `cargo metadata` still supplies the JSON, since it is cargo's own parse of
+  the manifest — the same source `cargo publish` reads. `jq -e` is
+  load-bearing: a bare filter prints nothing and exits 0 when it matches
+  nothing, which would compare the tag against an empty string and pass.
+
+- **styloria 0.7.1** is pinned (lockfile only; the `styloria = "0.7"` range
+  already admitted it). That release carries no library change either — it is
+  the same `jq` fix in styloria's own guard.
+
 ## [0.9.1] - 2026-08-03
 
 Validation is now **linear in manifest size**. A 4,000-item package
