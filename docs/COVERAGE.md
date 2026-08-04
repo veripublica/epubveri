@@ -20,7 +20,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 22 | 1 | 1 | 1 | 24 | 23/24 | reviewed |
 | OPF | 75 | 0 | 6 | 14 | 81 | 75/81 | reviewed |
-| RSC | 27 | 2 | 0 | 4 | 29 | 29/29 | reviewed |
+| RSC | 26 | 3 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **186** | **3** | **7** | **102** | **196** | **189/196** | |
+| **All** | **185** | **4** | **7** | **102** | **196** | **189/196** | |
 
-**epubveri implements 189 of 196 live epubcheck checks (~96%)** — 186 fully, 3 partially — plus 5 checks of its own (`ADV-*` and viewport/data-* extras). 102 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 189 of 196 live epubcheck checks (~96%)** — 185 fully, 4 partially — plus 5 checks of its own (`ADV-*` and viewport/data-* extras). 102 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -185,7 +185,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-013 | Fragment identifier is used in a reference to a stylesheet resource. | Y | Y | a stylesheet reference has a URL fragment identifier |
 | RSC-014 | Fragment identifier defines an incompatible resource type. | Y | Y | a hyperlink targets an incompatible resource type (e.g. an SVG symbol) |
 | RSC-015 | A fragment identifier is required for svg use tag references. | Y | Y | an SVG "use" element's href has no fragment identifier |
-| RSC-016 | Fatal Error while parsing file: %1$s | Y | Y | a malformed or unknown XML entity reference |
+| RSC-016 | Fatal Error while parsing file: %1$s | Y | ~ | Implemented, with one measured and deliberate divergence: a named HTML entity (`&nbsp;` and friends) under an **XHTML 1.0** doctype. epubcheck bundles `xhtml1-strict.dtd` but does not resolve it, so it emits HTM-004 for the doctype *and* a FATAL RSC-016 per entity; we bundle the entity list, resolve them, and emit HTM-004 only. Verified against epubcheck 5.3.0 with a minimal book (2026-08-04) - an earlier note here asserted the opposite about epubcheck and was wrong. **The verdict never differs**: the irregular doctype is already an error on our side, so such a book is INVALID either way. Not matched on purpose, because a FATAL makes the document unparseable and drops every other finding in it - one real book had 15 fatals and 1 other finding on a file whose siblings each produced ~300 (the silent-skip class the 0.7.12-0.7.14 audits were about). What matters is finding and reporting the defects; escalating one of them to fatal costs the rest. |
 | RSC-017 | Warning while parsing file: %1$s | Y | Y | a deprecated construct is used (e.g. epub:switch) |
 | RSC-018 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | RSC-019 | EPUBs with Multiple Renditions should contain a META-INF/metadata.xml file. | Y | Y | a multi-rendition publication has no META-INF/metadata.xml |

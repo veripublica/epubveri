@@ -155,6 +155,22 @@ const ANN: &[Ann] = &[
          already catch. Building strictness against an unreadable reference, \
          on one test case, for something 60 of 61 books never do is more \
          likely to invent false positives than to catch defects."),
+    ("RSC-016", Some("partial"),
+        "Implemented, with one measured and deliberate divergence: a named \
+         HTML entity (`&nbsp;` and friends) under an **XHTML 1.0** doctype. \
+         epubcheck bundles `xhtml1-strict.dtd` but does not resolve it, so it \
+         emits HTM-004 for the doctype *and* a FATAL RSC-016 per entity; we \
+         bundle the entity list, resolve them, and emit HTM-004 only. \
+         Verified against epubcheck 5.3.0 with a minimal book (2026-08-04) - \
+         an earlier note here asserted the opposite about epubcheck and was \
+         wrong. **The verdict never differs**: the irregular doctype is \
+         already an error on our side, so such a book is INVALID either way. \
+         Not matched on purpose, because a FATAL makes the document \
+         unparseable and drops every other finding in it - one real book had \
+         15 fatals and 1 other finding on a file whose siblings each produced \
+         ~300 (the silent-skip class the 0.7.12-0.7.14 audits were about). \
+         What matters is finding and reporting the defects; escalating one of \
+         them to fatal costs the rest."),
     ("RSC-006", None,
         "Remote stylesheet references (also SVG stylesheet forms)."),
     ("RSC-030", None,
