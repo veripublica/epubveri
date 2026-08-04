@@ -262,8 +262,9 @@ pub const OPF_084: &str = "OPF-084"; // a dictionary collection link targets nei
 // Real epubcheck's feature-file scenarios label several distinct
 // sub-conditions "OPF-004c"/"OPF-007a"/"OPF-007b"/"OPF-007c" - but (like
 // the earlier "HTM-060a" case) these are Gherkin-authoring sub-case
-// labels, not real distinct message IDs: `scripts/corpus.py`'s own
-// `ID_RE` strips the trailing lowercase letter when parsing expectations,
+// labels, not real distinct message IDs: the corpus harness's own
+// `ID_RE` (`harness/src/corpus.rs`) strips the trailing lowercase letter
+// when parsing expectations,
 // so the real, scored ID is plain OPF-004/OPF-007 in every case.
 pub const OPF_004: &str = "OPF-004"; // the prefix attribute value has a syntax error
 pub const OPF_028: &str = "OPF-028"; // an undeclared (and non-reserved) prefix is used

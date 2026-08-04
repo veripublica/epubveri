@@ -910,8 +910,9 @@ const MARC_RELATORS: &[&str] = &[
 /// the Dublin Core elements namespace (OPF-007), and a reserved prefix
 /// redeclared to a *different* URI than its own default (OPF-007,
 /// pre-existing check) - all four conditions share the single OPF-007
-/// message ID (confirmed: `scripts/corpus.py`'s own ID-matching strips
-/// the "a"/"b"/"c" Gherkin sub-case suffixes real epubcheck's feature
+/// message ID (confirmed: the corpus harness's own ID-matching in
+/// `harness/src/corpus.rs` strips the "a"/"b"/"c" Gherkin sub-case
+/// suffixes real epubcheck's feature
 /// file uses to label them). Returns the declared name->URI map for the
 /// caller's own OPF-028 (undeclared-prefix-usage) checking.
 fn check_prefix_declaration(
