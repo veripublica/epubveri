@@ -20,6 +20,12 @@ path = "src/hostile.rs"
 name = "coverage"
 path = "src/coverage.rs"
 
+# epubcheck-vs-epubveri differ. Needs a JVM and epubcheck's jar (both outside
+# this project's dependency tree, found under the gitignored corpus/tools/).
+[[bin]]
+name = "compare"
+path = "src/compare.rs"
+
 [dependencies]
 epubveri = { path = ".." }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
