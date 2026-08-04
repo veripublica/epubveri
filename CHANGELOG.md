@@ -8,6 +8,71 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.6] - 2026-08-04
+
+Three checks epubcheck makes and we did not, one false positive, and the last
+implementable rows of the coverage matrix.
+
+### Added
+
+- **A `@font-face` `src` naming a resource the publication does not contain is
+  now reported (RSC-007).** Found on a reader's book, where `page_styles.css`
+  asked for `fonts/00001.ttf` and no such entry existed: epubcheck reported it
+  and we said nothing, because the lookup fell through silently when it missed.
+
+  Which ID applies turns on whether the font is *declared*, not on whether the
+  file is *there*: a manifest item whose file is absent is RSC-001's business,
+  and only a reference to something nothing declares is RSC-007. Conflating the
+  two invents RSC-007s on books that should draw RSC-001 alone.
+
+- **A `<rootfile>` that cannot say where the package document is now gets its
+  own message** — OPF-016 when `full-path` is missing, OPF-017 when it is
+  empty. Both were previously filtered out in silence, so a `container.xml`
+  with a typo'd attribute name reported only "no usable rootfile found" and
+  left the reader to work out which of the two mistakes they had made.
+
+  Reported for every `<rootfile>` whatever its media type, as epubcheck does,
+  and a whitespace-only path counts as empty.
+
+- **`--advisory` gains ADV-003: a CSS type selector naming an element no
+  vocabulary defines.** `h4a { … }` is valid CSS that matches nothing — a typo
+  for `h4` or `.h4a` that no tool reports, because nothing is wrong with it as
+  CSS. Advisory only; it never affects the verdict, and epubcheck has no
+  opinion here.
+
+  The known-name set is derived rather than listed: XHTML names are extracted
+  from the grammar this validator itself uses, so the two cannot drift apart.
+  **A hyphenated name is always accepted** — HTML requires a custom element's
+  name to contain a hyphen, so any such name is legal somewhere and cannot be
+  judged from a stylesheet. That single rule is what keeps the check quiet
+  enough to be worth having: across 84 real books it produces one finding, and
+  that one is genuine.
+
+  Requires styloria 0.8.
+
+### Fixed
+
+- **`<menu>` was rejected in EPUB 3 and should not have been.** HTML5 carries
+  it with `<ul>`'s content model and epubcheck accepts it. EPUB 2 is the
+  opposite and is unchanged: `menu` lives only in `legacy.rng`, which OPS 2.0.1
+  does not include.
+
+### Notes
+
+- The coverage matrix moves to **191 of 194 live epubcheck checks (~98%)**,
+  from 189/196. Two of those rows were implemented (OPF-016/017); the other two
+  left the denominator after being checked against epubcheck's source *and* its
+  test suite — OPF-010 is a dead ID, and PKG-020 is unreachable for whole-EPUB
+  input, since the condition it tests is caught earlier and fatally as OPF-002.
+  All three remaining gaps are now deliberate scope decisions.
+
+- **RSC-016 is now marked partial rather than complete**, documenting a
+  divergence that was already there: for a named HTML entity under an XHTML 1.0
+  doctype, epubcheck emits a fatal error per entity and we resolve the entity
+  and report the doctype instead. Both tools call such a book invalid; what
+  differs is that a fatal there costs every other finding in the file. See
+  `docs/COVERAGE.md` for the reasoning.
+
 ## [0.9.5] - 2026-08-04
 
 Two more differences from epubcheck, both found by running it against epubveri
