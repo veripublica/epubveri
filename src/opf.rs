@@ -6917,7 +6917,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     check_font_obfuscation(ocf, &items, &name_index, report);
     check_image_signatures(ocf, &items, &name_index, report);
     check_html_declared_as_xhtml(ocf, &items, &name_index, report);
-    check_external_identifiers(ocf, &items, &name_index, opf_path, report);
+    check_external_identifiers(ocf, &items, &name_index, opf_path, is_epub3, report);
     check_dictionaries(
         &pkg,
         is_dictionary_pub,
@@ -7480,8 +7480,19 @@ fn check_external_identifiers(
     items: &HashMap<String, (String, String)>,
     name_index: &HashMap<String, String>,
     opf_path: &str,
+    is_epub3: bool,
     report: &mut Report,
 ) {
+    // EPUB 3 only. epubcheck's OPF-073 lives in `DeclarationHandler`, which
+    // its EPUB 2 path never installs: measured against 5.3.0 with two minimal
+    // books, a non-spine SVG carrying `-//W3C//DTD SVG 20010904//EN` and an
+    // NCX carrying the right public id with a wrong system id. Both draw
+    // OPF-073 from us; epubcheck reports neither in a `version="2.0"` package
+    // and does report the SVG one in a 3.0 package. Found by the differ on a
+    // real book (2026-08-04).
+    if !is_epub3 {
+        return;
+    }
     for (path, mt) in items.values() {
         let Some((_, allowed_public, allowed_system)) = ALLOWED_EXTERNAL_IDENTIFIERS
             .iter()

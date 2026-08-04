@@ -377,6 +377,18 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // `ZipArchive::len()` reporting only 5. Scanned manually here, on the
     // raw bytes, before they're moved into the archive reader.
     let duplicate_entry_name = find_exact_duplicate_entry(&bytes);
+    // PKG-005 reads the **local file header**, not the central directory.
+    // The two carry independent extra fields, and tools routinely put an
+    // NTFS timestamp in the central directory only: one shelf book has 0
+    // bytes local and 36 central, so `extra_data()` (central) made us report
+    // an error epubcheck does not - it reads the first 30 bytes of the file
+    // (OCFZipChecker), and so do we now. mimetype must be the first entry,
+    // which is checked separately, so offset 0 is its local header.
+    let first_local_extra_len = if bytes.len() >= 30 && bytes.starts_with(b"PK\x03\x04") {
+        u16::from_le_bytes([bytes[28], bytes[29]])
+    } else {
+        0
+    };
     let mut archive = match ZipArchive::new(Cursor::new(bytes)) {
         Ok(a) => a,
         Err(e) => {
@@ -432,7 +444,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             if i == 0 {
                 first_name = name.clone();
                 first_stored = f.compression() == zip::CompressionMethod::Stored;
-                first_has_extra = f.extra_data().is_some_and(|d| !d.is_empty());
+                first_has_extra = first_local_extra_len != 0;
             }
             // PKG-009/011/012: checked per path *segment* (a directory
             // name is a file name too), on every real entry regardless of
