@@ -753,6 +753,62 @@ mod tests {
         }
     }
 
+    /// `id` and `lang`/`xml:lang` datatypes, which differ by version — the
+    /// gap the epubcheck differ found on 2026-08-04 (one book we called VALID
+    /// and epubcheck gave 407 errors: 127 digit-initial ids, 280 empty langs).
+    ///
+    /// **The EPUB 3 half is the whole risk.** HTML5 types `id` as
+    /// `datatype.html5.token` (`\S+`, so `id="1"` is fine) and
+    /// `common.data.langcode` as `"" | xsd:language` — the empty string is
+    /// explicitly valid. XHTML 1.1 is stricter on both (`xsd:ID`, i.e. an
+    /// NCName; and a bare `xsd:language`). Applying the EPUB 2 rule
+    /// version-wide would invent errors on every EPUB 3 book using `lang=""`
+    /// or a numeric id, which is why the datatypes are split rather than
+    /// tightened in the shared define.
+    #[test]
+    fn id_and_lang_datatypes_are_stricter_on_epub2() {
+        let doc = |a: &str| {
+            format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head><body><p {a}>x</p></body></html>"
+            )
+        };
+        let two = xhtml_grammar_epub2();
+        let three = xhtml_grammar();
+        let ok = |g: &Grammar, a: &str| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&doc(a)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+
+        // XHTML 1.1 only: an NCName cannot start with a digit or contain a
+        // colon, and a language code has no empty form.
+        for a in [r#"id="1""#, r#"id="a:b""#, r#"lang="""#, r#"xml:lang="""#] {
+            assert!(!ok(&two, a), "EPUB 2 rejects {a}");
+            assert!(ok(&three, a), "EPUB 3 accepts {a}");
+        }
+
+        // Valid in both, so the rule cannot have been implemented as "reject
+        // everything".
+        for a in [
+            r#"id="a1""#,
+            r#"id="_x""#,
+            r#"lang="en""#,
+            r#"xml:lang="tr-TR""#,
+        ] {
+            assert!(ok(&two, a), "EPUB 2 accepts {a}");
+            assert!(ok(&three, a), "EPUB 3 accepts {a}");
+        }
+
+        // Invalid in both: html5's token is `\S+`, so empty and
+        // whitespace-bearing ids fail the looser rule too.
+        for a in [r#"id="""#, r#"id="a b""#] {
+            assert!(!ok(&two, a), "EPUB 2 rejects {a}");
+            assert!(!ok(&three, a), "EPUB 3 rejects {a}");
+        }
+    }
+
     /// `<link>` and `<style>` attribute sets, per version. Reported by Doitsu
     /// (MobileRead #146) as `<link media>` drawing RSC-005 on both versions;
     /// the report understated it, as they usually do. `link` had one shared

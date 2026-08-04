@@ -25,6 +25,13 @@
 //! and can be overridden:
 //!     EPUBCHECK_JAR=… EPUBCHECK_JAVA=… cargo run --release -p epubveri-harness --bin compare -- <paths…>
 //!
+//! **Rebuild with `--workspace` after changing a schema.** This binary links
+//! the epubveri library, and the grammars are embedded into it at compile
+//! time by `build.rs`. A plain `cargo build --release` builds the root package
+//! only, leaving a stale `compare` that reports the *previous* schema's
+//! findings — silently, and looking exactly like "the fix did nothing". That
+//! happened on the first change this tool was used to verify.
+//!
 //! Usage:
 //!     … --bin compare -- ~/epubveri-shelf          # every .epub under a dir
 //!     … --bin compare -- book.epub other.epub
