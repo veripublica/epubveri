@@ -27,7 +27,7 @@ const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 
 /// Real SVG 1.1 element vocabulary. A false negative here is far safer
 /// than a false positive, since `RSC-025` findings are usage-level (Info).
-const SVG_ELEMENTS: &[&str] = &[
+pub(crate) const SVG_ELEMENTS: &[&str] = &[
     "svg",
     "g",
     "defs",

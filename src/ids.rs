@@ -166,6 +166,7 @@ pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has 
 pub const ADV_001: &str = "ADV-001"; // a declaration uses a property CSS does not define (usage)
 pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not define (usage)
 // ADV-003 is reserved for the unknown-type-selector advisory (#28), deferred.
+pub const ADV_003: &str = "ADV-003"; // a CSS type selector names an element no vocabulary defines (usage, #28)
 pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)
 
 // --- Resource limits (epubveri-owned; see the module note) ---

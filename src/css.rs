@@ -390,6 +390,29 @@ pub(crate) fn check(
     // which epubcheck does not check. Off by default, so the default output is
     // byte-identical. Positions map through `origin` like every CSS finding.
     if advisory {
+        for r in styloria::spanned::parse_stylesheet(css).rules {
+            let styloria::spanned::Rule::Qualified(q) = &r.node else {
+                continue;
+            };
+            for name in styloria::type_selector_names(&q.prelude) {
+                if is_known_element_name(&name.node) {
+                    continue;
+                }
+                report.push_full(
+                    ADV_003,
+                    Severity::Usage,
+                    format!(
+                        "'{}' is not an element in any vocabulary this document can use; \
+                         the selector matches nothing",
+                        name.node
+                    ),
+                    css_path,
+                    origin.position(css, name.span.start),
+                    "css.selector.unknown_element",
+                    vec![name.node.to_string()],
+                );
+            }
+        }
         for d in validate_stylesheet(css) {
             let (id, rule, text, params) = advisory_fields(&d);
             report.push_full(
@@ -403,6 +426,92 @@ pub(crate) fn check(
             );
         }
     }
+}
+
+/// Is this a name a type selector could legitimately match?
+///
+/// **Derived, not listed.** The XHTML names come out of `XHTML_RNG` itself, so
+/// this cannot drift from the grammar the validator actually uses; SVG and
+/// MathML reuse the lists their own checks already carry. A hand-written
+/// fourth copy would be the thing that goes stale.
+///
+/// **A hyphen means yes, always.** HTML requires a custom element's name to
+/// contain one (`<my-widget>`), so any hyphenated name is a legal element
+/// somewhere and cannot be judged from here. That single rule is what makes
+/// this check low-noise enough to exist: without it every author component
+/// would be flagged.
+fn is_known_element_name(name: &str) -> bool {
+    use std::collections::HashSet;
+    use std::sync::OnceLock;
+    static NAMES: OnceLock<HashSet<String>> = OnceLock::new();
+    let lower = name.to_ascii_lowercase();
+    if lower.contains('-') {
+        return true;
+    }
+    let set = NAMES.get_or_init(|| {
+        let mut set: HashSet<String> = HashSet::new();
+        // Every `element name="…"` the XHTML grammar declares, both versions.
+        let rng = crate::rng::XHTML_RNG;
+        let mut rest = rng;
+        while let Some(i) = rest.find("element name=\"") {
+            rest = &rest[i + 14..];
+            if let Some(j) = rest.find('"') {
+                let n = &rest[..j];
+                // `epub:trigger` and friends: the local name is what a CSS
+                // type selector writes.
+                set.insert(n.rsplit(':').next().unwrap_or(n).to_ascii_lowercase());
+                rest = &rest[j..];
+            }
+        }
+        // Elements HTML once had or still has but our grammars do not carry:
+        // the presentational set OPS 2.0.1 excludes with `legacy.rng`, plus a
+        // few current-but-rare ones. **Styling them is not a typo** — an
+        // author writing `center { … }` is targeting real markup, and the
+        // shelf proved the point: of the first eight findings this check
+        // produced, five were `center`, `strike` and `rtc`. Without this the
+        // rule flags legacy stylesheets rather than mistakes.
+        const HISTORICAL: &[&str] = &[
+            "acronym",
+            "applet",
+            "basefont",
+            "bgsound",
+            "big",
+            "blink",
+            "center",
+            "dir",
+            "font",
+            "frame",
+            "frameset",
+            "isindex",
+            "keygen",
+            "listing",
+            "marquee",
+            "menuitem",
+            "nobr",
+            "noembed",
+            "noframes",
+            "plaintext",
+            "rb",
+            "rtc",
+            "spacer",
+            "strike",
+            "tt",
+            "xmp",
+        ];
+        set.extend(HISTORICAL.iter().map(|e| e.to_string()));
+        set.extend(
+            crate::svg::SVG_ELEMENTS
+                .iter()
+                .map(|e| e.to_ascii_lowercase()),
+        );
+        set.extend(
+            crate::mathml::PRESENTATION_ELEMENTS
+                .iter()
+                .map(|e| e.to_ascii_lowercase()),
+        );
+        set
+    });
+    set.contains(&lower)
 }
 
 /// The `(id, rule, text, params)` for one styloria advisory diagnostic. `Usage`
@@ -961,6 +1070,45 @@ pub(crate) fn selector_class_names_spanned(css: &str) -> Vec<Spanned<String>> {
         }
     }
     names
+}
+
+#[cfg(test)]
+mod adv003_tests {
+    use super::is_known_element_name;
+
+    /// #28 (JSWolf, MobileRead #92): `h4a` is a type selector for an element
+    /// that exists nowhere — valid CSS that matches nothing, so a typo for
+    /// `h4` or `.h4a` is invisible without a lint.
+    ///
+    /// **The rule's whole difficulty is not flagging real names**, and the
+    /// shelf measured it: the first version produced eight findings on 84
+    /// books, of which five were `center`, `strike` and `rtc` — real elements
+    /// an author may legitimately style. After the historical list the count
+    /// is one, and that one (`tdiv`) is genuine. A lint that fires once on a
+    /// real corpus is the goal, not a defect.
+    #[test]
+    fn only_names_no_vocabulary_defines_are_unknown() {
+        // The reported case, and a clear invention.
+        assert!(!is_known_element_name("h4a"));
+        assert!(!is_known_element_name("zzz"));
+
+        // XHTML, from the grammar itself.
+        for n in ["h4", "div", "p", "span", "table", "body", "menu"] {
+            assert!(is_known_element_name(n), "{n} is XHTML");
+        }
+        // SVG and MathML reuse their own checks' lists.
+        assert!(is_known_element_name("circle"));
+        assert!(is_known_element_name("mfrac"));
+        // Obsolete but real: styling them is not a mistake.
+        for n in ["center", "strike", "font", "tt", "rtc", "rb"] {
+            assert!(is_known_element_name(n), "{n} is historical but real");
+        }
+        // Any hyphenated name is a legal custom element and unjudgeable here.
+        assert!(is_known_element_name("my-widget"));
+        assert!(is_known_element_name("x-"));
+        // Case-insensitive, since CSS type selectors are for HTML.
+        assert!(is_known_element_name("DIV"));
+    }
 }
 
 #[cfg(test)]

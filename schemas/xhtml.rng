@@ -1126,7 +1126,21 @@
   </define>
 
   <define name="ulEl">
-    <element name="ul"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl"/></zeroOrMore></element>
+    <!-- A CHOICE, not a sequence. RELAX NG defaults to sequence, so listing
+         `menu` beside `ul` here without this made `ulEl` mean "a ul followed
+         by a menu" - the corpus went from 4 false positives to 9 and 50 shelf
+         books changed on the first build.
+
+         HTML5's `menu` is a list of commands with `ul`'s content model, and
+         epubcheck accepts it in EPUB 3; we rejected it, a false positive found
+         while measuring the ADV-003 selector lint (#28). EPUB 2 is a different
+         answer and stays as it is: `menu` lives only in `legacy.rng`, which
+         OPS 2.0.1 does not include, and epubcheck rejects it there. Both
+         halves checked against epubcheck 5.3.0. -->
+    <choice>
+      <element name="ul"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl"/></zeroOrMore></element>
+      <element name="menu"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl"/></zeroOrMore></element>
+    </choice>
   </define>
 
   <define name="dlEl">

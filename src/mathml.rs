@@ -38,7 +38,7 @@ pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
 /// Keep it derived from the grammar. "Deliberately generous" was the previous
 /// note here and it was still nine elements short, because a hand-written
 /// list is generous only about the elements its author thought of.
-const PRESENTATION_ELEMENTS: &[&str] = &[
+pub(crate) const PRESENTATION_ELEMENTS: &[&str] = &[
     "mi",
     "mn",
     "mo",
