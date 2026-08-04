@@ -5750,7 +5750,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     advisory,
                     report,
                 );
-                check_exempt_font_usage(&css_text, &dir, &items, &path, origin, report);
+                check_exempt_font_usage(&css_text, &dir, &items, &path, origin, is_epub3, report);
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
                 let inline_classes = crate::css::selector_class_names(&sheet);
                 if inline_classes.iter().any(|c| is_media_overlay_class(c)) {
@@ -6586,6 +6586,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             &items,
             &path,
             crate::css::CssOrigin::File { bytes: None },
+            is_epub3,
             report,
         );
         let sheet = styloria::Parser::parse_stylesheet(&css_text);
@@ -7664,12 +7665,28 @@ const OBFUSCATION_ALGORITHM: &str = "http://www.idpf.org/2008/embedding";
 /// reporting a non-problem (reported by Doitsu on the MobileRead forum).
 /// The finding is the non-standard font format; the fallback exemption is
 /// why it is Info rather than an error.
+/// EPUB 2 blesses a *wider* set of font types than the Core Media Types, and
+/// epubcheck's own EPUB 2 branch says so: `OPFChecker.isBlessedFontMimetype20`
+/// accepts anything starting `font/`, `application/font` or
+/// `application/x-font`, plus `application/vnd.ms-opentype`. Two shelf books
+/// declare `application/x-font-truetype`, which is blessed there and drew this
+/// note from us and nothing from epubcheck — found by the differ, 2026-08-04.
+/// Info severity, so it never changed a verdict, but it was still us reporting
+/// on markup that is fine for its version.
+fn blessed_font_type_epub2(mt: &str) -> bool {
+    mt.starts_with("font/")
+        || mt.starts_with("application/font")
+        || mt.starts_with("application/x-font")
+        || mt == "application/vnd.ms-opentype"
+}
+
 fn check_exempt_font_usage(
     css: &str,
     dir: &str,
     items: &HashMap<String, (String, String)>,
     path: &str,
     origin: crate::css::CssOrigin,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     for u in crate::css::font_face_src_urls_spanned(css) {
@@ -7680,6 +7697,7 @@ fn check_exempt_font_usage(
         if let Some((_, mt)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
             && !crate::cmt::is_core_media_type(mt)
             && !crate::cmt::is_exempt_video(mt)
+            && (is_epub3 || !blessed_font_type_epub2(mt))
         {
             report.push_full(
                 CSS_007,
@@ -8459,6 +8477,41 @@ mod tests {
         assert!(is_resource_reference_for_test("audio", "src"));
         assert!(is_resource_reference_for_test("track", "src"));
         assert!(is_resource_reference_for_test("object", "data"));
+    }
+
+    /// EPUB 2 blesses a wider set of font types than the Core Media Types, so
+    /// CSS-007 must not fire there for one of them. epubcheck's own EPUB 2
+    /// branch (`OPFChecker.isBlessedFontMimetype20`) accepts anything starting
+    /// `font/`, `application/font` or `application/x-font`, plus
+    /// `application/vnd.ms-opentype`.
+    ///
+    /// Two shelf books declare `application/x-font-truetype` and drew this
+    /// note from us and nothing from epubcheck. Info severity, so no verdict
+    /// changed — but it was still a report on markup that is fine for its
+    /// version, which is the class that matters for trust.
+    #[test]
+    fn epub2_blesses_more_font_types_than_epub3() {
+        for mt in [
+            "application/x-font-truetype",
+            "application/x-font-ttf",
+            "application/font-woff",
+            "font/woff2",
+            "application/vnd.ms-opentype",
+        ] {
+            assert!(super::blessed_font_type_epub2(mt), "EPUB 2 blesses {mt}");
+        }
+        // Not a font type at all, so the check still has something to catch.
+        for mt in ["image/png", "application/octet-stream", "text/css"] {
+            assert!(
+                !super::blessed_font_type_epub2(mt),
+                "EPUB 2 does not bless {mt}"
+            );
+        }
+        // The EPUB 3 side is unchanged and narrower: these are not Core Media
+        // Types, so an EPUB 3 book still draws the note.
+        assert!(!crate::cmt::is_core_media_type(
+            "application/x-font-truetype"
+        ));
     }
 
     /// CSS-007 must name the media type that made it fire, and point at the
