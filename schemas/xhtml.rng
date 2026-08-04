@@ -1207,15 +1207,6 @@
     <element name="tr"><ref name="globalAttrs"/><zeroOrMore><ref name="cellEl"/></zeroOrMore></element>
   </define>
 
-  <define name="rowGroupOrRow">
-    <choice>
-      <element name="thead"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
-      <element name="tbody"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
-      <element name="tfoot"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
-      <ref name="trEl"/>
-    </choice>
-  </define>
-
   <define name="tableEl">
     <element name="table">
       <ref name="globalAttrs"/>
@@ -1225,24 +1216,45 @@
           <choice><value type="token"></value><value>1</value></choice>
         </attribute>
       </optional>
-      <interleave>
-        <optional>
-          <element name="caption"><ref name="globalAttrs"/><ref name="flowContent"/></element>
-        </optional>
+      <!-- ORDERED, unlike the rest of this schema (#48). HTML5's table model
+           is `caption?, colgroup*, thead?, (tbody* | tr+), tfoot?` and the
+           order is normative: `<tfoot>` before `<tbody>` is an error, which
+           is what epubcheck reports and we did not.
+
+           This is a deliberate exception to the schema-wide "permissive on
+           nesting order" stance, taken because the input space is small
+           enough to verify exhaustively rather than argued about: all six
+           permutations of thead/tbody/tfoot were built as EPUB 3 books and
+           handed to epubcheck 5.3.0, and exactly one - this one - is valid.
+           The EPUB 2 model below is ordered too, and differently: XHTML 1.1
+           wants tfoot *before* tbody. Same enumeration, opposite answer. -->
+      <optional>
+        <element name="caption"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      </optional>
+      <zeroOrMore>
+        <element name="colgroup">
+          <ref name="globalAttrs"/>
+          <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
+          <zeroOrMore>
+            <element name="col">
+              <ref name="globalAttrs"/>
+              <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
+            </element>
+          </zeroOrMore>
+        </element>
+      </zeroOrMore>
+      <optional>
+        <element name="thead"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+      </optional>
+      <choice>
         <zeroOrMore>
-          <element name="colgroup">
-            <ref name="globalAttrs"/>
-            <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
-            <zeroOrMore>
-              <element name="col">
-                <ref name="globalAttrs"/>
-                <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
-              </element>
-            </zeroOrMore>
-          </element>
+          <element name="tbody"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
         </zeroOrMore>
-        <zeroOrMore><ref name="rowGroupOrRow"/></zeroOrMore>
-      </interleave>
+        <oneOrMore><ref name="trEl"/></oneOrMore>
+      </choice>
+      <optional>
+        <element name="tfoot"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+      </optional>
     </element>
   </define>
 
@@ -2204,25 +2216,32 @@
            so a table with no rows at all is an error - an empty `<table/>`
            is what Doitsu reported (MobileRead #126). HTML5 relaxed this to
            `tbody*`, so the EPUB 3 `tableEl` above stays permissive.
-           `interleave` keeps this a *cardinality* rule rather than an
-           ordering one: columns may still appear anywhere, matching the
-           schema-wide "permissive on nesting order" stance. -->
-      <interleave>
-        <zeroOrMore>
-          <choice>
-            <element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><ref name="colEl-epub2"/></zeroOrMore></element>
-            <ref name="colEl-epub2"/>
-          </choice>
-        </zeroOrMore>
-        <oneOrMore>
-          <choice>
+           It is now ORDERED as well (#48): `thead?, tfoot?, tbody+` - note
+           that XHTML 1.1 wants tfoot *before* tbody, the opposite of HTML5.
+           Verified by building all six permutations as EPUB 2 books and
+           asking epubcheck 5.3.0: exactly one is valid, and it is not the one
+           EPUB 3 accepts. `tr+` remains the alternative for a table with no
+           row groups at all. -->
+      <zeroOrMore>
+        <choice>
+          <element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><ref name="colEl-epub2"/></zeroOrMore></element>
+          <ref name="colEl-epub2"/>
+        </choice>
+      </zeroOrMore>
+      <choice>
+        <group>
+          <optional>
             <element name="thead"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-            <element name="tbody"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          </optional>
+          <optional>
             <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
-            <ref name="trEl-epub2"/>
-          </choice>
-        </oneOrMore>
-      </interleave>
+          </optional>
+          <oneOrMore>
+            <element name="tbody"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+          </oneOrMore>
+        </group>
+        <oneOrMore><ref name="trEl-epub2"/></oneOrMore>
+      </choice>
     </element>
   </define>
 

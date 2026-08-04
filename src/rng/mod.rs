@@ -738,18 +738,93 @@ mod tests {
             assert!(!ok(&two, empty), "EPUB 2 rejects {empty}");
             assert!(ok(&three, empty), "EPUB 3 accepts {empty}");
         }
-        // Populated ones stay valid in both, and a table's columns may still
-        // appear in any order relative to its rows - the rule added here is
-        // cardinality, not sequence.
+        // Populated ones stay valid in both.
+        //
+        // The columns-after-rows shape used to be asserted valid here, on the
+        // grounds that this rule was cardinality and not sequence. #48 made
+        // the table model ordered, and epubcheck agrees: it rejects
+        // `<table><tr/><colgroup/></table>` in *both* versions. The assertion
+        // was encoding our own permissive stance rather than epubcheck's
+        // behaviour, so it moved to the rejected list below.
         for full in [
             "<ol><li>x</li></ol>",
             "<ul><li>x</li></ul>",
             "<dl><dt>t</dt><dd>d</dd></dl>",
             "<table><tr><td>v</td></tr></table>",
-            "<table><tr><td>v</td></tr><colgroup><col/></colgroup></table>",
+            "<table><colgroup><col/></colgroup><tr><td>v</td></tr></table>",
         ] {
             assert!(ok(&two, full), "EPUB 2 accepts {full}");
             assert!(ok(&three, full), "EPUB 3 accepts {full}");
+        }
+        let cols_after = "<table><tr><td>v</td></tr><colgroup><col/></colgroup></table>";
+        assert!(!ok(&two, cols_after), "EPUB 2 rejects columns after rows");
+        assert!(!ok(&three, cols_after), "EPUB 3 rejects columns after rows");
+    }
+
+    /// #48: table row groups are ORDERED, and the two versions want opposite
+    /// orders. XHTML 1.1's model ends in `thead?, tfoot?, tbody+`; HTML5's is
+    /// `thead?, (tbody* | tr+), tfoot?`. So `<thead><tfoot><tbody>` is the
+    /// only valid arrangement in EPUB 2 and `<thead><tbody><tfoot>` the only
+    /// one in EPUB 3 — a shape that is valid in one version is an error in
+    /// the other.
+    ///
+    /// This is a deliberate exception to the schema's "permissive on nesting
+    /// order" stance, and it was taken only because the input space is small
+    /// enough to settle by enumeration rather than by argument: all six
+    /// permutations were built as books in both versions and handed to
+    /// epubcheck 5.3.0, twelve runs, and our answers now match all twelve.
+    ///
+    /// No book on the 83-title shelf has a table carrying both `tfoot` and
+    /// `tbody`, so the shelf cannot judge this either way — the enumeration
+    /// is the evidence, not the shelf's silence.
+    #[test]
+    fn table_row_groups_are_ordered_and_the_orders_differ_by_version() {
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let two = xhtml_grammar_epub2();
+        let three = xhtml_grammar();
+        let ok = |g: &Grammar, b: &str| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&doc(b)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+        let head = "<thead><tr><td>h</td></tr></thead>";
+        let body = "<tbody><tr><td>b</td></tr></tbody>";
+        let foot = "<tfoot><tr><td>f</td></tr></tfoot>";
+        let table =
+            |parts: [&str; 3]| format!("<table>{}{}{}</table>", parts[0], parts[1], parts[2]);
+
+        // The one valid arrangement per version — and each is invalid in the
+        // other, which is the half that a single-version test would miss.
+        let xhtml11 = table([head, foot, body]);
+        let html5 = table([head, body, foot]);
+        assert!(ok(&two, &xhtml11), "EPUB 2 accepts thead,tfoot,tbody");
+        assert!(!ok(&three, &xhtml11), "EPUB 3 rejects thead,tfoot,tbody");
+        assert!(ok(&three, &html5), "EPUB 3 accepts thead,tbody,tfoot");
+        assert!(!ok(&two, &html5), "EPUB 2 rejects thead,tbody,tfoot");
+
+        // Every other permutation is invalid in both.
+        for parts in [
+            [body, head, foot],
+            [body, foot, head],
+            [foot, head, body],
+            [foot, body, head],
+        ] {
+            let t = table(parts);
+            assert!(!ok(&two, &t), "EPUB 2 rejects {t}");
+            assert!(!ok(&three, &t), "EPUB 3 rejects {t}");
+        }
+
+        // Shapes with no row groups at all are untouched by the ordering.
+        for t in [
+            "<table><tr><td>v</td></tr></table>",
+            "<table><caption>c</caption><tr><td>v</td></tr></table>",
+        ] {
+            assert!(ok(&two, t), "EPUB 2 accepts {t}");
+            assert!(ok(&three, t), "EPUB 3 accepts {t}");
         }
     }
 
