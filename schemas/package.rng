@@ -143,7 +143,15 @@
           </oneOrMore>
         </element>
         <element name="spine">
-          <ref name="anyAttributes"/>
+          <!-- OPF 2.0.1's spine attlist (epubcheck schema/20/rng/opf20.rng)
+               is exactly optional `id` plus `toc` - not the EPUB 3 wildcard.
+               `page-progression-direction` is an EPUB 3 addition and drew
+               nothing from us in a 2.0 package until 2026-08-04, found in a
+               MobileRead #148 output diff and confirmed against epubcheck
+               locally. `toc`'s *requiredness* is deliberately not encoded
+               here; a missing one is reported by its own check. -->
+          <optional><attribute name="id"><data type="string"/></attribute></optional>
+          <optional><attribute name="toc"><data type="string"/></attribute></optional>
           <oneOrMore>
             <choice>
               <ref name="itemrefEl-epub2"/>

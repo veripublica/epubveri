@@ -753,6 +753,59 @@ mod tests {
         }
     }
 
+    /// OPF 2.0.1's `<spine>` takes only `id` and `toc`; EPUB 3 added
+    /// `page-progression-direction`. Our EPUB 2 package grammar used the same
+    /// attribute wildcard as the EPUB 3 one, so an EPUB 3 attribute in a 2.0
+    /// package drew nothing. Found in the output diff patrik posted at
+    /// MobileRead #148 and confirmed against epubcheck 5.3.0 locally.
+    ///
+    /// The EPUB 3 half is the guard: `page-progression-direction` is valid
+    /// there, and epubcheck reports zero errors on the same book declared 3.0.
+    #[test]
+    fn epub2_spine_takes_only_id_and_toc() {
+        // `dcterms:modified` is an EPUB 3 construct and must not appear in the
+        // 2.0 package - a synthetic fixture that carries it is invalid input,
+        // and charging its findings to the rule under test is the mistake
+        // `harness/src/wrap.rs` once made against the whole corpus.
+        let pkg = |version: &str, spine_attrs: &str| {
+            let modified = if version == "3.0" {
+                r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#
+            } else {
+                ""
+            };
+            format!(
+                r#"<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:identifier id="id">urn:uuid:1</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language>
+{modified}</metadata>
+<manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine {spine_attrs}><itemref idref="c"/></spine></package>"#
+            )
+        };
+        let ok = |g: &Grammar, version: &str, attrs: &str| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&pkg(version, attrs))
+                    .unwrap()
+                    .root_element(),
+            )
+            .is_empty()
+        };
+        let two = package_grammar_epub2();
+        let three = package_grammar();
+
+        assert!(ok(&two, "2.0", r#"toc="ncx""#), "EPUB 2 accepts toc");
+        assert!(ok(&two, "2.0", r#"id="s" toc="ncx""#), "EPUB 2 accepts id");
+        assert!(
+            !ok(&two, "2.0", r#"toc="ncx" page-progression-direction="rtl""#),
+            "EPUB 2 rejects page-progression-direction"
+        );
+        assert!(
+            ok(&three, "3.0", r#"page-progression-direction="rtl""#),
+            "EPUB 3 accepts page-progression-direction"
+        );
+    }
+
     /// `id` and `lang`/`xml:lang` datatypes, which differ by version — the
     /// gap the epubcheck differ found on 2026-08-04 (one book we called VALID
     /// and epubcheck gave 407 errors: 127 digit-initial ids, 280 empty langs).
