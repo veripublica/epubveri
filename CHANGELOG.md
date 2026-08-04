@@ -8,6 +8,35 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.5] - 2026-08-04
+
+Two more differences from epubcheck, both found by running it against epubveri
+over the same books.
+
+### Added
+
+- **Table row groups are now checked for order, and the two EPUB versions want
+  opposite orders.** XHTML 1.1 ends its table model in `thead?, tfoot?,
+  tbody+`; HTML5 has `thead?, (tbody* | tr+), tfoot?`. So
+  `<thead><tfoot><tbody>` is the only valid arrangement in **EPUB 2** and
+  `<thead><tbody><tfoot>` the only one in **EPUB 3** — a table that is correct
+  in one version is an error in the other. Column groups are ordered with the
+  rows too: `<table><tr…/><colgroup…/></table>` is an error in both.
+
+  This is a deliberate exception to the schema's otherwise permissive stance on
+  nesting order, taken because the rule is small enough to verify exhaustively:
+  all six permutations were built as books in both versions and checked against
+  epubcheck — twelve cases, twelve agreements.
+
+### Fixed
+
+- **`CSS-007` no longer fires on EPUB 2 fonts that EPUB 2 allows.** The
+  "non-Core-Media-Type font" note was applied version-wide, but EPUB 2 blesses
+  a wider set — anything under `font/`, `application/font` or
+  `application/x-font`, plus `application/vnd.ms-opentype`. A book declaring
+  `application/x-font-truetype` drew an informational note it should not have.
+  EPUB 3 is unchanged and still reports it.
+
 ## [0.9.4] - 2026-08-04
 
 Six fixes to EPUB 2 validation, found by running **epubcheck itself** against
