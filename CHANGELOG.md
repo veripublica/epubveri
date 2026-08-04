@@ -8,6 +8,63 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.4] - 2026-08-04
+
+Six fixes to EPUB 2 validation, found by running **epubcheck itself** against
+epubveri over 83 real books and diffing the findings. Two were errors we
+reported on valid books; four were things we missed. Agreement on the shelf
+went from 74 to 76 of 83 books matching epubcheck's message-ID set exactly.
+
+### Fixed
+
+- **`PKG-005` fired on valid books.** The "mimetype entry must have no extra
+  field" check read the ZIP **central directory**; the rule is about the
+  **local file header**, which is what epubcheck reads and what a streaming
+  reader sees. The two are independent, and tools routinely write an NTFS
+  timestamp into the central directory only — one book had 0 bytes local and
+  36 central, and was wrongly marked INVALID.
+
+- **`OPF-073` fired on EPUB 2 books.** The DOCTYPE external-identifier check is
+  EPUB 3 only; epubcheck's lives in a handler its EPUB 2 path never installs.
+  A `version="2.0"` book with a non-SVG-1.1 doctype on an SVG image was
+  wrongly marked INVALID.
+
+### Added
+
+- **`id`, `lang` and `xml:lang` are datatype-checked in EPUB 2.** XHTML 1.1
+  types `id` as `xsd:ID` (an NCName — no leading digit, no colon) and the
+  language attributes as a bare `xsd:language`. One book reported VALID by
+  epubveri and 407 errors by epubcheck on these alone; we now match it exactly.
+
+  **EPUB 3 is unchanged and deliberately looser** — HTML5 allows `id="1"` and
+  an explicitly empty `lang=""`, so applying the EPUB 2 rule version-wide
+  would have invented errors on well-formed EPUB 3 books.
+
+- **`PKG-022` now runs independently of `OPF-029`.** A file mislabelled twice
+  over — a `.jpg` name, an `image/jpeg` declaration, PNG bytes — drew only the
+  declared-type error, because the file-extension check sat in the other
+  branch of the same test. They compare different things and epubcheck reports
+  both.
+
+- **EPUB 2's `<spine>` takes only `id` and `toc`.** `page-progression-direction`
+  is an EPUB 3 addition and was silently accepted in a 2.0 package.
+
+- **Nine HTML5-only global attributes are rejected in EPUB 2**: `about`,
+  `accesskey`, `autocapitalize`, `autofocus`, `content`, `contenteditable`,
+  `datatype`, `draggable`, `enterkeyhint`. XHTML 1.1's `Common.attrib` is
+  seven attributes and we granted the EPUB 3 set.
+
+  Two of the nine are still accepted where XHTML 1.1 genuinely declares them —
+  `content` on `<meta>`, `accesskey` on `<a>` and `<area>` — and ARIA, the
+  event handlers, ITS, microdata, RDFa and `role` are untouched.
+
+### Internal
+
+- **A new `compare` harness** runs epubcheck and epubveri over the same books
+  and diffs their findings by message ID. Every fix above came from it. It
+  needs a JVM and epubcheck's jar, neither of which is a dependency of this
+  crate; both live outside the published package.
+
 ## [0.9.3] - 2026-08-03
 
 A false-positive fix on `<link>` and `<style>` attributes, in both EPUB 2 and
