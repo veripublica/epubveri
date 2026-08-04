@@ -46,9 +46,14 @@ const ANN: &[Ann] = &[
     ("PKG-003", Some("partial"),
         "Emitted only for a literally empty (0-byte) file; a corrupted-but-\
          nonempty header goes to PKG-004/PKG-008 instead."),
-    ("PKG-020", None,
-        "Not emitted, but the condition IS detected: a missing declared OPF \
-         is reported as OPF-002 (Fatal)."),
+    ("PKG-020", Some("na"),
+        "Unreachable for the input this tool accepts (verified 2026-08-04). \
+         `OPFChecker.checkPackage` asks whether the container holds the \
+         package document - but `OCFChecker` asks the same question of the \
+         same container first, for every rootfile, and returns on failure \
+         with OPF-002 (Fatal), which we emit identically. The only path that \
+         reaches PKG-020 is `-mode opf` on an `http(s)` URL, a standalone \
+         mode we do not have. No scenario expects it."),
     ("PKG-015", Some("na"),
         "Dead ID - \"unable to read EPUB contents\" exists only in \
          DefaultSeverities and the translation bundles; no Java source line \
@@ -64,14 +69,17 @@ const ANN: &[Ann] = &[
         "A spine item whose fallback chain exists but never reaches a content \
          document (distinct from OPF-043, no fallback at all). Split from \
          OPF-043 in #41."),
-    ("OPF-010", None,
-        "Not emitted; reference resolution is covered under RSC-007/RSC-012."),
+    ("OPF-010", Some("na"),
+        "Dead ID - \"error resolving reference\" appears only in MessageId \
+         and DefaultSeverities; no Java line emits it and no scenario expects \
+         it (verified 2026-08-04, sixth of its kind after OPF-036, OPF-011, \
+         PKG-015, NAV-001). Reference resolution is reported under \
+         RSC-007/RSC-012."),
     ("OPF-016", None,
-        "Not emitted; a rootfile missing `full-path` is caught via the \
-         container.xml RNG grammar (RSC-005)."),
+        "Reported for every `<rootfile>`, whatever its media type - \
+         epubcheck's handler asks for the path before it looks at the type."),
     ("OPF-017", None,
-        "Not emitted; a rootfile with an empty `full-path` is caught via the \
-         container.xml RNG grammar (RSC-005)."),
+        "Whitespace-only counts as empty, matching epubcheck's `trim()`."),
     ("OPF-047", None,
         "Legacy OEBPS 1.2 backwards-compat syntax - deliberately out of scope \
          (pre-EPUB format)."),

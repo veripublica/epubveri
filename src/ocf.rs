@@ -619,6 +619,41 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
         }
     };
 
+    // OPF-016/017: a `<rootfile>` that cannot say where its package document
+    // is. Reported on *every* rootfile, whatever its media type - epubcheck's
+    // handler runs before it looks at the type, so a mistyped rootfile still
+    // gets told its full-path is missing rather than being passed over in
+    // silence. Both cases then drop out of `paths` below, as they must: there
+    // is no path to follow.
+    for rf in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "rootfile")
+    {
+        match rf.attr_no_ns("full-path") {
+            None => report.push_node(
+                OPF_016,
+                Severity::Error,
+                "element \"rootfile\" is missing required attribute \"full-path\"",
+                CONTAINER,
+                rf,
+                "ocf.rootfile.missing_full_path",
+                vec![],
+            ),
+            // Whitespace-only counts as empty, matching epubcheck's
+            // `fullPath.trim().isEmpty()`.
+            Some(p) if p.trim().is_empty() => report.push_node(
+                OPF_017,
+                Severity::Error,
+                "attribute \"full-path\" on element \"rootfile\" must not be empty",
+                CONTAINER,
+                rf,
+                "ocf.rootfile.empty_full_path",
+                vec![],
+            ),
+            Some(_) => {}
+        }
+    }
+
     // RSC-003: need at least one <rootfile> with the OPF media type and a full-path.
     let paths: Vec<String> = doc
         .descendants()
@@ -628,7 +663,7 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
                 && n.attr_no_ns("media-type") == Some("application/oebps-package+xml")
         })
         .filter_map(|n| n.attr_no_ns("full-path"))
-        .filter(|p| !p.is_empty())
+        .filter(|p| !p.trim().is_empty())
         .map(String::from)
         .collect();
 

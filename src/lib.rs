@@ -249,6 +249,13 @@ mod tests {
 
     /// A minimal valid EPUB 3, for checks whose behaviour differs by version.
     fn epub3_minimal() -> Vec<u8> {
+        epub3_with_container(None)
+    }
+
+    /// The same book with `META-INF/container.xml` replaced - for checks that
+    /// live in the container document itself, where the rest of the book has
+    /// to stay valid so nothing else reports.
+    fn epub3_with_container(container: Option<&str>) -> Vec<u8> {
         const OPF: &str = r#"<?xml version="1.0"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
@@ -283,7 +290,7 @@ mod tests {
             z.write_all(b"application/epub+zip").unwrap();
             let opts = zip::write::SimpleFileOptions::default();
             for (name, data) in [
-                ("META-INF/container.xml", CONTAINER),
+                ("META-INF/container.xml", container.unwrap_or(CONTAINER)),
                 ("OEBPS/content.opf", OPF),
                 ("OEBPS/nav.xhtml", NAV),
                 ("OEBPS/ch1.xhtml", CH1),
@@ -379,6 +386,61 @@ mod tests {
     /// any test that only counted messages, and would make `-v` a lie: the
     /// same invocation would mean one thing in epubcheck and another here,
     /// which defeats the compatibility the flag exists for.
+    /// A `<rootfile>` that cannot say where the package document is gets its
+    /// own message, rather than only contributing to "no usable rootfile
+    /// found". Both were silently filtered out before, so a container.xml
+    /// with a typo'd attribute name reported RSC-003 and left the user to
+    /// guess which of the two mistakes they had made.
+    #[test]
+    fn a_rootfile_with_no_usable_full_path_says_so() {
+        let container = |rootfile: &str| {
+            format!(
+                r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>{rootfile}</rootfiles>
+</container>"#
+            )
+        };
+        let ids = |rootfile: &str| {
+            let r = crate::validate_bytes(epub3_with_container(Some(&container(rootfile))));
+            r.messages
+                .iter()
+                .map(|m| m.id.to_string())
+                .collect::<Vec<_>>()
+        };
+        const MT: &str = r#"media-type="application/oebps-package+xml""#;
+
+        assert!(ids(&format!("<rootfile {MT}/>")).contains(&crate::ids::OPF_016.to_string()));
+        assert!(
+            ids(&format!(r#"<rootfile full-path="" {MT}/>"#))
+                .contains(&crate::ids::OPF_017.to_string())
+        );
+        // Whitespace-only is empty too, matching epubcheck's `trim()`. The
+        // old filter tested `is_empty()`, so "   " passed as a path and the
+        // book was then reported for a missing OPF at that name.
+        assert!(
+            ids(&format!(r#"<rootfile full-path="   " {MT}/>"#))
+                .contains(&crate::ids::OPF_017.to_string())
+        );
+        // Reported whatever the media type says: epubcheck's handler asks
+        // for the path before it looks at the type, so a rootfile that is
+        // wrong in both ways still hears about the path.
+        assert!(
+            ids(r#"<rootfile media-type="application/oops"/>"#)
+                .contains(&crate::ids::OPF_016.to_string())
+        );
+
+        let clean = ids(&format!(
+            r#"<rootfile full-path="OEBPS/content.opf" {MT}/>"#
+        ));
+        assert!(
+            !clean
+                .iter()
+                .any(|id| id == crate::ids::OPF_016 || id == crate::ids::OPF_017),
+            "a well-formed rootfile reports neither: {clean:?}"
+        );
+    }
+
     #[test]
     fn a_requested_epub_version_wins_over_the_declared_one() {
         let check = |bytes: Vec<u8>, requested: Option<&str>| {

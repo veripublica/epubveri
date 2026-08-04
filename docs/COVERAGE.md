@@ -18,8 +18,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
-| PKG | 22 | 1 | 1 | 1 | 24 | 23/24 | reviewed |
-| OPF | 75 | 0 | 6 | 14 | 81 | 75/81 | reviewed |
+| PKG | 22 | 1 | 0 | 2 | 23 | 23/23 | reviewed |
+| OPF | 77 | 0 | 3 | 15 | 80 | 77/80 | reviewed |
 | RSC | 26 | 3 | 0 | 4 | 29 | 29/29 | reviewed |
 | HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **185** | **4** | **7** | **102** | **196** | **189/196** | |
+| **All** | **187** | **4** | **3** | **104** | **194** | **191/194** | |
 
-**epubveri implements 189 of 196 live epubcheck checks (~96%)** — 185 fully, 4 partially — plus 6 checks of its own (`ADV-*` and viewport/data-* extras). 102 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 191 of 194 live epubcheck checks (~98%)** — 187 fully, 4 partially — plus 6 checks of its own (`ADV-*` and viewport/data-* extras). 104 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -57,7 +57,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | PKG-016 | Use only lowercase characters for the EPUB file extension for maximum compatibility. | Y | Y | the file's own ".epub" extension is not lowercase |
 | PKG-017 | Uncommon EPUB file extension. | Y | Y | uncommon file extension on an EPUB 2 book (warning) |
 | PKG-018 | The EPUB file could not be found. | Y | Y | the input file does not exist (CLI-level) |
-| PKG-020 | OPF file "%1$s" could not be found. | Y | x | Not emitted, but the condition IS detected: a missing declared OPF is reported as OPF-002 (Fatal). |
+| PKG-020 | OPF file "%1$s" could not be found. | Y | ⊘ | Unreachable for the input this tool accepts (verified 2026-08-04). `OPFChecker.checkPackage` asks whether the container holds the package document - but `OCFChecker` asks the same question of the same container first, for every rootfile, and returns on failure with OPF-002 (Fatal), which we emit identically. The only path that reaches PKG-020 is `-mode opf` on an `http(s)` URL, a standalone mode we do not have. No scenario expects it. |
 | PKG-021 | Corrupted image file encountered. | Y | Y | an image resource is corrupt (its bytes don't match any known image format) |
 | PKG-022 | Wrong file extension for image. The image is a "%1$s" file but has the file extension "... | Y | Y | an image resource's file extension doesn't match its actual format |
 | PKG-023 | Validating the EPUB against version 2.0, default validation profile will be used. | Y | Y | a validation profile was requested for an EPUB 2 book (usage) |
@@ -79,14 +79,14 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-007 | Re-declaration of reserved prefix "%1$s". | Y | Y | a reserved vocabulary prefix is redeclared |
 | OPF-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
-| OPF-010 | Error resolving reference: "%1$s". | Y | x | Not emitted; reference resolution is covered under RSC-007/RSC-012. |
+| OPF-010 | Error resolving reference: "%1$s". | Y | ⊘ | Dead ID - "error resolving reference" appears only in MessageId and DefaultSeverities; no Java line emits it and no scenario expects it (verified 2026-08-04, sixth of its kind after OPF-036, OPF-011, PKG-015, NAV-001). Reference resolution is reported under RSC-007/RSC-012. |
 | OPF-011 | itemref can’t have both page-spread-right and page-spread-left properties. | Y | ⊘ | Dead ID - commented out in epubcheck's OPFHandler30 ("Checked with Schematron"), which reports the page-spread-left/-right conflict as RSC-005. We emit that same RSC-005, and epubcheck's own test expects it (verified #51). |
 | OPF-012 | Item property "%1$s" is not defined for media type "%2$s". | Y | Y | Data Navigation Document isn't application/xhtml+xml |
 | OPF-013 | Resource "%1$s" is declared with MIME type "%2$s" in content, but has MIME type "%3$s" ... | Y | Y | a declared type attribute doesn't match the resource's actual media-type |
 | OPF-014 | The property "%1$s" should be declared in the OPF file. | Y | Y | a content property (remote-resources/scripted/svg) is used but not declared |
 | OPF-015 | The property "%1$s" should not be declared in the OPF file. | Y | Y | a content property is declared but not needed |
-| OPF-016 | The element "rootfile" is missing its required attribute "full-path". | Y | x | Not emitted; a rootfile missing `full-path` is caught via the container.xml RNG grammar (RSC-005). |
-| OPF-017 | The attribute "full-path" on element "rootfile" must not be empty. | Y | x | Not emitted; a rootfile with an empty `full-path` is caught via the container.xml RNG grammar (RSC-005). |
+| OPF-016 | The element "rootfile" is missing its required attribute "full-path". | Y | Y | Reported for every `<rootfile>`, whatever its media type - epubcheck's handler asks for the path before it looks at the type. |
+| OPF-017 | The attribute "full-path" on element "rootfile" must not be empty. | Y | Y | Whitespace-only counts as empty, matching epubcheck's `trim()`. |
 | OPF-018 | The "remote-resources" property was declared in the Package Document, but no reference ... | Y | Y | a content property is declared but not needed (warning variant) |
 | OPF-019 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-020 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
