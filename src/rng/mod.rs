@@ -761,6 +761,57 @@ mod tests {
         assert!(!ok(&three, cols_after), "EPUB 3 rejects columns after rows");
     }
 
+    /// #65: a rejected element nested inside another rejected element must
+    /// still be named. #60 fixed the flat-sibling case by taking the
+    /// `After(content, rest)` continuation; the issue's remaining half was
+    /// that nesting needs recovery to resume at more than one level.
+    ///
+    /// **Attempted reproduction 2026-08-04 and could not:** three shapes —
+    /// plain nesting, a `<nav>` inside an `<li>` inside a `<nav>`, and a body
+    /// whose every child is a rejected `<nav>` — all name every occurrence
+    /// that exists. epubcheck reports roughly twice the number of elements
+    /// present in the same files, which is its double-reporting inside an
+    /// invalid container, not us under-reporting. The issue's "five reported,
+    /// two by us" predates #60 and the `Block.model` body fix.
+    ///
+    /// Pinned rather than closed on a guess: if the recovery ever stops
+    /// descending again, this fails.
+    #[test]
+    fn every_nested_rejected_element_is_named() {
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let two = xhtml_grammar_epub2();
+        let count = |b: &str| {
+            validate_node_report(
+                &two,
+                roxmltree::Document::parse(&doc(b)).unwrap().root_element(),
+            )
+            .iter()
+            .filter(|b| b.describe().0.contains(r#"element "nav" is not allowed"#))
+            .count()
+        };
+
+        // Two levels, twice over: four <nav>, four reports.
+        assert_eq!(
+            count("<nav><nav><p>a</p></nav></nav><p>x</p><nav><nav><p>b</p></nav></nav>"),
+            4,
+            "flat and nested together"
+        );
+        // A rejected element buried inside a valid one inside a rejected one.
+        assert_eq!(
+            count("<nav><ol><li><nav><p>a</p></nav></li></ol></nav>"),
+            2,
+            "nesting through a valid intermediate"
+        );
+        // Three levels deep.
+        assert_eq!(
+            count("<nav><nav><nav><p>a</p></nav></nav></nav>"),
+            3,
+            "three levels"
+        );
+    }
+
     /// #48: table row groups are ORDERED, and the two versions want opposite
     /// orders. XHTML 1.1's model ends in `thead?, tfoot?, tbody+`; HTML5's is
     /// `thead?, (tbody* | tr+), tfoot?`. So `<thead><tfoot><tbody>` is the
