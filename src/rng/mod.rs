@@ -753,6 +753,72 @@ mod tests {
         }
     }
 
+    /// #66, first slice: the nine HTML5-only global attributes that XHTML 1.1
+    /// does not have. Chosen by measurement, not by reading — each of the 213
+    /// attributes our shared global set grants was put on its own `<p>` in one
+    /// EPUB 2 book and handed to epubcheck 5.3.0, which rejects 56: these nine
+    /// and the 47 `aria-*`. It *accepts* all 80 event handlers, the whole ITS
+    /// set, microdata, most of RDFa and `role`, so the "209 extra" figure this
+    /// project carried was wrong about both the size and the composition.
+    ///
+    /// `aria-*` is deliberately still granted — a separate, larger decision.
+    ///
+    /// **Two of the nine are per-element attributes in XHTML 1.1, and removing
+    /// them from the globals broke those elements.** `content` is on `<meta>`
+    /// (meta.rng) — ten false positives on one shelf book before it was put
+    /// back — and `accesskey` is on `<a>` and `<area>` (hypertext.rng,
+    /// csismap.rng, both included by content.rng; the form modules that also
+    /// declare it are not). "Not global" and "not valid anywhere" are
+    /// different questions, and a probe that puts an attribute on a `<p>` only
+    /// answers the first. The shelf caught `content` and could not have caught
+    /// `accesskey`: no book on it uses `<a accesskey>`.
+    #[test]
+    fn epub2_drops_the_html5_only_globals() {
+        let doc = |b: &str| {
+            format!("<html {XHTML_NS_DECLS}><head><title>t</title></head><body>{b}</body></html>")
+        };
+        let two = xhtml_grammar_epub2();
+        let three = xhtml_grammar();
+        let ok = |g: &Grammar, b: &str| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&doc(b)).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+
+        for a in [
+            "about",
+            "accesskey",
+            "autocapitalize",
+            "autofocus",
+            "content",
+            "contenteditable",
+            "datatype",
+            "draggable",
+            "enterkeyhint",
+        ] {
+            let el = format!(r#"<p {a}="x">t</p>"#);
+            assert!(!ok(&two, &el), "EPUB 2 rejects {a} as a global");
+            assert!(ok(&three, &el), "EPUB 3 accepts {a}");
+        }
+
+        // Still granted where XHTML 1.1 actually declares them.
+        assert!(
+            ok(&two, r##"<p><a href="#x" accesskey="k">t</a></p>"##),
+            "EPUB 2 keeps accesskey on <a>"
+        );
+
+        // Deliberately still shared, pending their own decision.
+        assert!(
+            ok(
+                &two,
+                r#"<p role="doc-footnote" aria-label="x" onclick="f()">t</p>"#
+            ),
+            "aria/role/event handlers are not part of this slice"
+        );
+    }
+
     /// OPF 2.0.1's `<spine>` takes only `id` and `toc`; EPUB 3 added
     /// `page-progression-direction`. Our EPUB 2 package grammar used the same
     /// attribute wildcard as the EPUB 3 one, so an EPUB 3 attribute in a 2.0

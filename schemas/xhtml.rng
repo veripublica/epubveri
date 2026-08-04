@@ -275,8 +275,38 @@
 
   <!-- globals minus epub:type/epub:trigger; used on head/metadata elements,
        where epubcheck flags epub:type as invalid. -->
+  <!-- Global attributes HTML5 has and XHTML 1.1 does not, so EPUB 2 must
+       not inherit them. Measured rather than assumed (2026-08-04): each
+       of the 213 attributes `globalAttrsRest` grants was put on its own
+       `<p>` in one EPUB 2 book and handed to epubcheck 5.3.0. It rejects
+       56 - these nine plus the 47 `aria-*` - and *accepts* the rest,
+       including all 80 event handlers, the whole ITS set, microdata,
+       most of RDFa, and `role`. A note here previously put the figure at
+       209 and named those families as the bulk of it; that was wrong.
+
+       `aria-*` is deliberately still shared: removing it is a much
+       larger call (ARIA is retrofitted into real EPUB 2 books, and no
+       book on the 83-title shelf uses it, so the shelf cannot judge it)
+       and belongs with its own decision, not smuggled in here.
+
+       Note the shape of what epubcheck keeps: `role` is accepted while
+       every `aria-*` is rejected, and RDFa survives except `about`,
+       `content` and `datatype`. Neither line is one you would guess. -->
+  <define name="html5OnlyGlobals">
+    <optional><attribute name="about"><data type="string"/></attribute></optional>
+    <optional><attribute name="accesskey"><data type="token"/></attribute></optional>
+    <optional><attribute name="autocapitalize"><data type="token"/></attribute></optional>
+    <optional><attribute name="autofocus"><data type="token"/></attribute></optional>
+    <optional><attribute name="content"><data type="string"/></attribute></optional>
+    <optional><attribute name="contenteditable"><data type="token"/></attribute></optional>
+    <optional><attribute name="datatype"><data type="string"/></attribute></optional>
+    <optional><attribute name="draggable"><data type="token"/></attribute></optional>
+    <optional><attribute name="enterkeyhint"><data type="token"/></attribute></optional>
+  </define>
+
   <define name="globalAttrsCore">
     <ref name="identityAttrs"/>
+    <ref name="html5OnlyGlobals"/>
     <ref name="globalAttrsRest"/>
   </define>
 
@@ -302,8 +332,6 @@
         <choice><value>yes</value><value>no</value></choice>
       </attribute>
     </optional>
-    <optional><attribute name="accesskey"><data type="token"/></attribute></optional>
-    <optional><attribute name="contenteditable"><data type="token"/></attribute></optional>
     <optional><attribute name="spellcheck"><data type="token"/></attribute></optional>
 
     <!-- HTML5 microdata (epubcheck schema/30 mod/html5/microdata.rnc).
@@ -365,12 +393,9 @@
          aEl-epub2, area) and grant `rel` here instead - one definition,
          valid everywhere, matching real epubcheck (RDFA grants `rel`
          globally too, not just on <a>). -->
-    <optional><attribute name="about"><data type="string"/></attribute></optional>
     <optional><attribute name="property"><data type="string"/></attribute></optional>
     <optional><attribute name="typeof"><data type="string"/></attribute></optional>
     <optional><attribute name="vocab"><data type="string"/></attribute></optional>
-    <optional><attribute name="content"><data type="string"/></attribute></optional>
-    <optional><attribute name="datatype"><data type="string"/></attribute></optional>
     <optional><attribute name="resource"><data type="string"/></attribute></optional>
     <optional><attribute name="rel"><data type="string"/></attribute></optional>
     <optional><attribute name="rev"><data type="string"/></attribute></optional>
@@ -397,15 +422,11 @@
     <optional><attribute name="epub:prefix"><data type="string"/></attribute></optional>
 
     <!-- HTML5 interaction/editing globals (mod/html5/applications.rnc). -->
-    <optional><attribute name="draggable"><data type="token"/></attribute></optional>
     <optional><attribute name="inputmode"><data type="token"/></attribute></optional>
-    <optional><attribute name="enterkeyhint"><data type="token"/></attribute></optional>
-    <optional><attribute name="autocapitalize"><data type="token"/></attribute></optional>
     <optional><attribute name="popover"><data type="token"/></attribute></optional>
 
     <!-- Core-scripting non-event globals (mod/html5/common.rnc /
          core-scripting.rnc). -->
-    <optional><attribute name="autofocus"><data type="token"/></attribute></optional>
     <optional><attribute name="nonce"><data type="string"/></attribute></optional>
 
     <!-- #34 slice B: the generic on* event-handler set (mod/html5/
@@ -1840,8 +1861,19 @@
   <define name="headContentsCommon-epub2">
     <zeroOrMore>
       <choice>
+        <!-- XHTML 1.1's meta.attlist (schema/20/rng/xhtml/meta.rng): I18n plus
+             http-equiv, name, content, scheme. `content` and `http-equiv` used
+             to arrive through the shared global set; when the nine HTML5-only
+             globals were split off, `content` went with them and every EPUB 2
+             book with `<meta name="…" content="…">` started erroring - ten
+             findings on one shelf book, zero from epubcheck. The probe that
+             chose the nine put each attribute on a `<p>`, which answers "is
+             this global?" and not "does any element declare it". Check the
+             latter before removing anything from a shared set. -->
         <element name="meta"><ref name="globalAttrsCore-epub2"/>
+          <optional><attribute name="http-equiv"><data type="string"/></attribute></optional>
           <optional><attribute name="name"><data type="string"/></attribute></optional>
+          <optional><attribute name="content"><data type="string"/></attribute></optional>
           <optional><attribute name="scheme"><data type="string"/></attribute></optional>
         </element>
         <ref name="linkEl-epub2"/>
@@ -2057,6 +2089,14 @@
   <define name="aEl-epub2">
     <element name="a">
       <ref name="globalAttrs-epub2"/>
+      <!-- `accesskey` is not in XHTML 1.1's Common.attrib, so it left the
+           shared global set with the other HTML5-only ones - but hypertext.rng
+           and csismap.rng declare it, and content.rng includes both, so it is
+           valid here and on `<area>`. Forms is not included, which is why the
+           other three modules that declare it do not matter. No book on the
+           shelf uses `<a accesskey>`, so this came from the schema rather than
+           from a measurement; that is the point of reading it. -->
+      <optional><attribute name="accesskey"><data type="string"/></attribute></optional>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <optional><attribute name="download"><data type="string"/></attribute></optional>
