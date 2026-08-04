@@ -5750,7 +5750,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     advisory,
                     report,
                 );
-                check_exempt_font_usage(&css_text, &dir, &items, &path, origin, is_epub3, report);
+                crate::opf::check_exempt_font_usage(
+                    &css_text,
+                    &dir,
+                    &crate::opf::ResourceView {
+                        items: &items,
+                        name_index: &name_index,
+                    },
+                    &path,
+                    origin,
+                    is_epub3,
+                    report,
+                );
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
                 let inline_classes = crate::css::selector_class_names(&sheet);
                 if inline_classes.iter().any(|c| is_media_overlay_class(c)) {
@@ -6583,7 +6594,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         check_exempt_font_usage(
             &css_text,
             &dir,
-            &items,
+            &ResourceView {
+                items: &items,
+                name_index: &name_index,
+            },
             &path,
             crate::css::CssOrigin::File { bytes: None },
             is_epub3,
@@ -7680,20 +7694,46 @@ fn blessed_font_type_epub2(mt: &str) -> bool {
         || mt == "application/vnd.ms-opentype"
 }
 
+/// What the manifest declares and what the container actually holds. Bundled
+/// because this check needs both for the same path and always together: a
+/// declared item whose file is absent is RSC-001's business, a reference to
+/// something nothing declares is RSC-007's.
+struct ResourceView<'a> {
+    items: &'a HashMap<String, (String, String)>,
+    name_index: &'a HashMap<String, String>,
+}
+
 fn check_exempt_font_usage(
     css: &str,
     dir: &str,
-    items: &HashMap<String, (String, String)>,
+    res: &ResourceView<'_>,
     path: &str,
     origin: crate::css::CssOrigin,
     is_epub3: bool,
     report: &mut Report,
 ) {
+    let (items, name_index) = (res.items, res.name_index);
     for u in crate::css::font_face_src_urls_spanned(css) {
         if is_external(&u.node) {
             continue;
         }
         let resolved = nfc(&resolve(dir, &u.node));
+        let declared = items.values().any(|(ip, _)| nfc(ip) == resolved);
+        if !declared && !name_index.contains_key(&resolved) {
+            report.push_full(
+                RSC_007,
+                Severity::Error,
+                format!(
+                    "reference to a resource missing from the publication: '{}'",
+                    u.node
+                ),
+                path,
+                origin.position(css, u.span.start),
+                "css.font_face.missing_target",
+                vec![u.node.clone()],
+            );
+            continue;
+        }
         if let Some((_, mt)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
             && !crate::cmt::is_core_media_type(mt)
             && !crate::cmt::is_exempt_video(mt)
@@ -8477,6 +8517,63 @@ mod tests {
         assert!(is_resource_reference_for_test("audio", "src"));
         assert!(is_resource_reference_for_test("track", "src"));
         assert!(is_resource_reference_for_test("object", "data"));
+    }
+
+    /// A `@font-face` src naming something the publication does not contain.
+    /// Found on MobileRead #150's book: `src: url(fonts/00001.ttf)` with no
+    /// such entry drew nothing from us and RSC-007 from epubcheck — the
+    /// lookup used `if let Some(...)` and said nothing when it missed, the
+    /// silent-skip shape again.
+    ///
+    /// **The two cases must not be confused, and the corpus enforces it.**
+    /// epubcheck picks the ID by whether the font is *declared*: a manifest
+    /// item whose file is absent is RSC-001 (its own check), and only a
+    /// reference to something nothing declares is RSC-007. A first version
+    /// tested container presence alone and put three extra RSC-007s on
+    /// `package-manifest-fonts-missing-error`, which expects RSC-001 alone.
+    #[test]
+    fn font_face_target_missing_from_the_publication() {
+        let css = "@font-face{font-family:X;src:url(f.ttf)}";
+        let run = |declared: bool, present: bool| {
+            let mut items = std::collections::HashMap::new();
+            if declared {
+                items.insert(
+                    "f".to_string(),
+                    ("f.ttf".to_string(), "font/ttf".to_string()),
+                );
+            }
+            let mut name_index = std::collections::HashMap::new();
+            if present {
+                name_index.insert("f.ttf".to_string(), "f.ttf".to_string());
+            }
+            let mut report = crate::report::Report::default();
+            crate::opf::check_exempt_font_usage(
+                css,
+                "",
+                &crate::opf::ResourceView {
+                    items: &items,
+                    name_index: &name_index,
+                },
+                "s.css",
+                crate::css::CssOrigin::File { bytes: None },
+                true,
+                &mut report,
+            );
+            report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_007)
+                .count()
+        };
+
+        assert_eq!(run(false, false), 1, "nothing declares it and it is absent");
+        assert_eq!(run(true, false), 0, "declared but absent is RSC-001's job");
+        assert_eq!(run(true, true), 0, "declared and present is fine");
+        assert_eq!(
+            run(false, true),
+            0,
+            "present but undeclared is OPF-003's job, not this one"
+        );
     }
 
     /// EPUB 2 blesses a wider set of font types than the Core Media Types, so
