@@ -775,14 +775,27 @@ const EPUB2_XHTML_PUBLIC_IDS: [&str; 2] = [
 /// (`&nbsp;`, `&eacute;`, …) - a different question from whether the doctype
 /// is the one EPUB 2 wants, and previously answered with the same list.
 ///
-/// epubcheck bundles `xhtml1-strict.dtd` and `xhtml1-transitional.dtd`
+/// Conflating the two meant an XHTML 1.0 book got a **fatal** RSC-016 per
+/// `&nbsp;`, and, because the document then failed to parse, was dropped from
+/// every DOM check: one real book had 15 fatals and 1 other finding on a file
+/// whose siblings each produced ~300. Found on a real book added to the shelf
+/// 2026-07-26.
+///
+/// **CORRECTION (2026-08-04): the reason originally given here was wrong, and
+/// this list is now a deliberate divergence rather than a match.** It read:
+/// "epubcheck bundles `xhtml1-strict.dtd` and `xhtml1-transitional.dtd`
 /// alongside the 1.1 and OEB ones, so it resolves `&nbsp;` in an XHTML 1.0
-/// document perfectly well - and separately reports HTM-004 for the
-/// identifier. Conflating the two meant an XHTML 1.0 book got a **fatal**
-/// RSC-016 per `&nbsp;`, and, because the document then failed to parse, was
-/// dropped from every DOM check: one real book had 15 fatals and 1 other
-/// finding on a file whose siblings each produced ~300. Found on a real book
-/// added to the shelf 2026-07-26.
+/// document perfectly well". It does bundle them — but it does *not* resolve
+/// the entity. Verified against epubcheck 5.3.0 with a minimal book (XHTML
+/// 1.0 Strict doctype, one `&nbsp;`): it emits HTM-004 *and* `FATAL(RSC-016)
+/// The entity "nbsp" was referenced, but not declared`. We emit only HTM-004.
+///
+/// Keeping our behaviour, for now, is a judgement rather than an oversight:
+/// the divergence is a *false negative* (the safe direction), matching would
+/// mean emitting the heaviest verdict there is on a book most reading systems
+/// render fine, and the blast radius is one book in 83 on the shelf. Revisit
+/// if a user reports the disagreement — the trade is compatibility against a
+/// fatal, and that is the owner's call, not a code-comment's.
 ///
 /// Frameset is deliberately absent: epubcheck does not bundle that DTD
 /// either, so it could not resolve those entities.
