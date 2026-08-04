@@ -7587,17 +7587,24 @@ fn check_image_signatures(
                     path.as_str(),
                 );
             }
-            Some(actual) if actual != *mt => {
-                report.push_at(
-                    OPF_029,
-                    Severity::Error,
-                    format!(
-                        "image '{path}' is declared as '{mt}' but its actual format is '{actual}'"
-                    ),
-                    path.as_str(),
-                );
-            }
             Some(actual) => {
+                // Two independent axes, and epubcheck reports both when both
+                // are wrong: OPF-029 compares the *declared media type* to the
+                // sniffed format, PKG-022 the *file extension* to it. PKG-022
+                // used to sit in an `else` arm here, so a file that was
+                // mislabelled twice over - `<item media-type="image/jpeg">` on
+                // a `.jpg` name holding a PNG - drew only OPF-029 and the
+                // extension was never looked at. Found by the differ, 2026-08-04.
+                if actual != *mt {
+                    report.push_at(
+                        OPF_029,
+                        Severity::Error,
+                        format!(
+                            "image '{path}' is declared as '{mt}' but its actual format is '{actual}'"
+                        ),
+                        path.as_str(),
+                    );
+                }
                 let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 if !crate::image::conventional_extensions(actual).contains(&ext.as_str()) {
                     report.push_at(
