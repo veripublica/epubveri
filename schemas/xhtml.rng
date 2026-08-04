@@ -137,9 +137,22 @@
            that coincidence is what hid this whole gap. `<link rel="stylesheet"
            href="...">` passed because RDFa grants `rel` to every element, so
            the common case worked and only a *second* attribute exposed that
-           `link` had almost no list of its own. epubcheck makes `rel`
-           REQUIRED here; left optional deliberately, since requiring it is a
-           restrictive change that belongs with its own measurement. -->
+           `link` had almost no list of its own.
+
+           Optional, and MEASURED so (2026-08-04) - do not "fix" this to
+           required. epubcheck's `link.attrs` does write `link.attrs.rel`
+           without a `?`, which reads as required, but `<head>` admits `<link>`
+           through *several* alternatives: `common.elem.metadata` is extended
+           by `link.elem` (rel required) AND by `link.rdfa.elem.metadata`
+           (which has no rel at all), with `link.elem.phrasing` covering the
+           microdata form in the body. Requiring rel would therefore reject
+           epubcheck's own `epub3/06-content-document/files/microdata-valid
+           .xhtml`, which carries `<link itemprop="bar" href="bar"/>` - no rel
+           - in both head and body, and is named valid.
+
+           Note what would NOT have caught the mistake: zero of 255 real books
+           have a rel-less `<link>`, so the shelf would have stayed silent.
+           Same blind spot that let the attribute gap above survive. -->
       <optional><attribute name="rel"><data type="string"/></attribute></optional>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
       <!-- #33: found by the unit-test/corpus fallout of excepting `type`

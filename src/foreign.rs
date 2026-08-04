@@ -385,3 +385,58 @@ pub(crate) fn check_content_doc(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// EPUB 3.4 (spec editor's issue w3c/epubcheck#1654): a resource
+    /// referenced only from `<script src>` is exempt from the
+    /// foreign-resource fallback requirement.
+    ///
+    /// **This needs no code — `check_content_doc` walks `img`/`embed`/
+    /// `input[type=image]`/`math@altimg` plus the `picture`/`audio`/`video`
+    /// subtrees, and `script` is in none of them, so a script target has
+    /// never entered the check.** It is asserted so that a future widening
+    /// of that walk cannot silently take the exemption away, which is the
+    /// same reason `cmt::epub34_core_media_types` pins the 3.4 audio types
+    /// it did not have to add.
+    ///
+    /// The negative half is what gives it teeth: the identical resource
+    /// referenced from `<embed>` *does* draw RSC-032, so this test fails if
+    /// the exemption is ever lost, rather than passing because the fixture
+    /// was toothless.
+    #[test]
+    fn script_src_is_exempt_from_the_fallback_requirement() {
+        let mut items = HashMap::new();
+        items.insert(
+            "w".to_string(),
+            ("mod.wasm".to_string(), "application/wasm".to_string()),
+        );
+        let status = build_resource_status(&items, &HashMap::new());
+        // No fallback declared, and application/wasm is not a Core Media
+        // Type, so the resource is foreign with nothing to rescue it.
+        assert!(!status["mod.wasm"].reaches_core_via_fallback);
+
+        let findings = |body: &str| {
+            let doc = format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
+            );
+            let d = roxmltree::Document::parse(&doc).unwrap();
+            let mut report = Report::default();
+            check_content_doc(&d, "ch.xhtml", "", &status, &mut report);
+            report.messages.iter().filter(|m| m.id == RSC_032).count()
+        };
+
+        assert_eq!(
+            findings(r#"<script src="mod.wasm" type="application/wasm"></script>"#),
+            0,
+            "a <script src> target is exempt (EPUB 3.4)"
+        );
+        assert_eq!(
+            findings(r#"<embed src="mod.wasm" type="application/wasm"/>"#),
+            1,
+            "the same resource from <embed> is not exempt - the test has teeth"
+        );
+    }
+}
