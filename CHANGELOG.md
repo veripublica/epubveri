@@ -8,6 +8,27 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A stray run of text is now reported where it actually is, instead of on the
+  element containing it** (#68). Every loose run in a file used to collapse onto
+  its parent's single line, column and element path: sixteen findings in one
+  real book all said `line 8, col 1` and `/h:html[1]/h:body[1]`. They now carry
+  their own positions and `…/text()[n]` paths — identical to what the dedicated
+  EPUB 2 rule reported before the grammar absorbed it in 0.7.x.
+
+  No finding was added or removed, so the verdict, the corpus and the shelf are
+  all byte-identical; what changed is that a consumer can act on the finding.
+  An editor can jump to the text, and a repair tool can wrap *that* run rather
+  than guessing which of sixteen candidates was meant. The defect only surfaced
+  from downstream use, since every instrument here compares verdicts and counts.
+
+  Internally the blame is a `Blame::Text` variant carrying the run, rather than
+  a fourth `ElementFault` carrying its parent — the two disagree about which
+  node is at fault, and the type now says which one it is.
+
 ## [0.9.6] - 2026-08-04
 
 Three checks epubcheck makes and we did not, one false positive, and the last

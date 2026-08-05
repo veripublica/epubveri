@@ -419,9 +419,11 @@ impl<'a> Env<'a> {
                 } else {
                     let d = self.text_deriv(&cur, s);
                     if is_not_allowed(&d) {
-                        // Loose text not allowed: report (at the containing
-                        // element) and skip, keeping `cur`.
-                        blames.push(Blame::Element(parent, ElementFault::TextNotAllowed));
+                        // Loose text not allowed: report *the run itself* and
+                        // skip, keeping `cur`. Blaming `parent` here was #68 -
+                        // every stray run in a document collapsed onto the
+                        // parent's single line:column.
+                        blames.push(Blame::Text(n));
                     } else {
                         cur = d;
                     }
@@ -535,11 +537,13 @@ fn is_not_allowed(p: &Pat) -> bool {
     matches!(**p, Pattern::NotAllowed)
 }
 
-/// Which way an element broke the content model - the four distinct faults an
+/// Which way an element broke the content model - the three distinct faults an
 /// [`Blame::Element`] can stand for. Kept separate because they need different
 /// wording: an element that is simply misplaced is *not* the same as one whose
 /// content or attributes are the problem, and reporting all of them as "not
-/// allowed here" would be plainly wrong for three of the four cases.
+/// allowed here" would be plainly wrong for two of the three cases. Stray
+/// character data was a fourth until #68 moved it to [`Blame::Text`], where it
+/// can carry the offending node instead of its parent.
 /// Which way an attribute broke the content model. An attribute *name* that
 /// isn't permitted here and a permitted attribute with an invalid *value* are
 /// different problems and need different wording - "not allowed here" is
@@ -560,8 +564,6 @@ pub enum ElementFault {
     /// tail - empty when the position admits only wildcard-named content, in
     /// which case no suggestion is made.
     NotAllowed(Vec<String>),
-    /// Non-whitespace character data is not permitted directly in this element.
-    TextNotAllowed,
     /// The element is missing a required attribute.
     MissingAttribute,
     /// The element's content is incomplete - a required child is absent.
@@ -592,13 +594,24 @@ fn qualified_attribute_name(a: &roxmltree::Attribute) -> String {
 }
 
 /// Where content-model validation failed (issues #17/#18): an element (tagged
-/// with *how* it failed, see [`ElementFault`]), or a specific present attribute
-/// of one. The [`Attribute`](Blame::Attribute) case lets the diagnostic pin
-/// `@name` (with a real position + element path) when the violation is
-/// attribute-level (e.g. `attribute "role" is not allowed here`), rather than
-/// only naming the containing element.
+/// with *how* it failed, see [`ElementFault`]), a run of character data, or a
+/// specific present attribute of an element. The [`Attribute`](Blame::Attribute)
+/// case lets the diagnostic pin `@name` (with a real position + element path)
+/// when the violation is attribute-level (e.g. `attribute "role" is not allowed
+/// here`), rather than only naming the containing element.
+///
+/// [`Text`](Blame::Text) is a variant rather than a fifth [`ElementFault`]
+/// because the two carry *different nodes*, and conflating them cost real
+/// precision (issue #68): loose text was blamed on its containing element, so
+/// every stray run in a file reported the same line and the same path. Nothing
+/// downstream could tell them apart, let alone act on one. The offending node
+/// here is the text run itself; the containing element only supplies the name
+/// the message reads back ("stray text … directly in `body`").
 pub enum Blame<'d, 'i> {
     Element(roxmltree::Node<'d, 'i>, ElementFault),
+    /// A run of non-whitespace character data where the model admits none.
+    /// The node is the **text node**, not its parent - see [`Blame::is_text`].
+    Text(roxmltree::Node<'d, 'i>),
     Attribute(
         roxmltree::Node<'d, 'i>,
         roxmltree::Attribute<'d, 'i>,
@@ -607,19 +620,27 @@ pub enum Blame<'d, 'i> {
 }
 
 impl<'d, 'i> Blame<'d, 'i> {
-    /// The element whose source position anchors this finding (the containing
-    /// element for an attribute-level blame).
+    /// The node whose source position anchors this finding: the element itself,
+    /// the offending text run, or the element containing the blamed attribute.
     pub fn node(&self) -> roxmltree::Node<'d, 'i> {
         match self {
-            Blame::Element(n, _) | Blame::Attribute(n, ..) => *n,
+            Blame::Element(n, _) | Blame::Text(n) | Blame::Attribute(n, ..) => *n,
         }
+    }
+
+    /// Whether [`node`](Blame::node) is a text run rather than an element, so
+    /// the caller can build a `…/text()[n]` path instead of resolving to the
+    /// containing element. Callers that ignore this silently report the parent,
+    /// which is exactly the defect #68 fixed.
+    pub fn is_text(&self) -> bool {
+        matches!(self, Blame::Text(_))
     }
 
     /// The specific attribute this finding pins, when attribute-level.
     pub fn attribute(&self) -> Option<roxmltree::Attribute<'d, 'i>> {
         match self {
             Blame::Attribute(_, a, _) => Some(*a),
-            Blame::Element(..) => None,
+            Blame::Element(..) | Blame::Text(_) => None,
         }
     }
 
@@ -659,11 +680,6 @@ impl<'d, 'i> Blame<'d, 'i> {
                         }
                         t
                     }
-                    ElementFault::TextNotAllowed => {
-                        format!(
-                            "stray text is not allowed directly in \"{name}\"; wrap it in an element"
-                        )
-                    }
                     ElementFault::MissingAttribute => {
                         format!("element \"{name}\" is missing a required attribute")
                     }
@@ -672,6 +688,27 @@ impl<'d, 'i> Blame<'d, 'i> {
                     }
                 };
                 (text, params)
+            }
+            // The message names the *containing* element even though the
+            // finding is anchored at the text run - "stray text directly in
+            // body" is what the author needs to hear, and a text node has no
+            // name of its own. A run always has an element parent here (the
+            // walk only reaches it from inside one); the fallback keeps the
+            // message honest rather than printing an empty name.
+            Blame::Text(n) => {
+                let name = n.parent().filter(|p| p.is_element()).map_or_else(
+                    || "the document".to_string(),
+                    |p| format!("\"{}\"", p.tag_name().name()),
+                );
+                let params = n
+                    .parent()
+                    .filter(|p| p.is_element())
+                    .map(|p| vec![p.tag_name().name().to_string()])
+                    .unwrap_or_default();
+                (
+                    format!("stray text is not allowed directly in {name}; wrap it in an element"),
+                    params,
+                )
             }
             Blame::Attribute(_, a, fault) => {
                 let name = qualified_attribute_name(a);

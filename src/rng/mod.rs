@@ -233,6 +233,12 @@ mod tests {
             .into_iter()
             .map(|b| match b {
                 Blame::Element(n, _) => n.tag_name().name().to_string(),
+                // Named for the parent it sits in, since a text run has no
+                // name of its own - "text(in ol)" reads as what it is.
+                Blame::Text(n) => format!(
+                    "text(in {})",
+                    n.parent().map_or("?", |p| p.tag_name().name())
+                ),
                 Blame::Attribute(_, a, _) => format!("@{}", a.name()),
             })
             .collect()
@@ -261,9 +267,10 @@ mod tests {
 
     #[test]
     fn blame_describe_names_the_offending_node() {
-        let doc = roxmltree::Document::parse("<ol a=\"1\"><p>x</p></ol>").unwrap();
+        let doc = roxmltree::Document::parse("<ol a=\"1\">loose<p>x</p></ol>").unwrap();
         let ol = doc.root_element();
         let p = ol.children().find(|n| n.is_element()).unwrap();
+        let loose = ol.children().find(roxmltree::Node::is_text).unwrap();
         let a = ol.attributes().next().unwrap();
 
         let cases: [(Blame, &str); 5] = [
@@ -272,7 +279,9 @@ mod tests {
                 "element \"p\" is not allowed here",
             ),
             (
-                Blame::Element(ol, ElementFault::TextNotAllowed),
+                // #68: the blame carries the text run, and the message still
+                // names the parent - the two are different nodes on purpose.
+                Blame::Text(loose),
                 "stray text is not allowed directly in \"ol\"; wrap it in an element",
             ),
             (
@@ -1419,6 +1428,57 @@ mod tests {
         assert!(!report("<p>a</p><br/><p>b</p>").is_empty());
         // But a body of only block elements is fine.
         assert!(report("<h1>T</h1><p>a</p><ul><li>x</li></ul>").is_empty());
+    }
+
+    /// Issue #68: each stray run is blamed on *itself*, not on the element
+    /// containing it, so several runs in one parent stay tellable apart.
+    ///
+    /// This is the whole point of `Blame::Text` and nothing else asserts it.
+    /// Before the fix all three findings below carried the same node - the
+    /// `<body>` - which meant the same line, the same column and the same
+    /// element path. Detection was unaffected, so **neither the corpus nor the
+    /// shelf could see the difference**; only a consumer trying to act on a
+    /// finding could, which is how it went unnoticed. Assert on the nodes
+    /// rather than the message: the message names the parent by design, so it
+    /// is identical for all three either way and would pass on the old code.
+    #[test]
+    fn stray_text_is_blamed_on_the_run_not_its_parent() {
+        let g = xhtml_grammar_epub2();
+        let x = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+             <body>one<p>a</p>two<p>b</p>three</body></html>"
+        );
+        let doc = roxmltree::Document::parse(&x).unwrap();
+        let blames = validate_node_report(&g, doc.root_element());
+
+        let runs: Vec<_> = blames
+            .iter()
+            .filter(|b| b.is_text())
+            .map(super::Blame::node)
+            .collect();
+        assert_eq!(runs.len(), 3, "one blame per stray run");
+        for n in &runs {
+            assert!(n.is_text(), "the blamed node must be the run itself");
+        }
+        // The three are distinct nodes with distinct text - the property that
+        // makes them individually addressable.
+        let texts: Vec<_> = runs.iter().map(|n| n.text().unwrap_or("")).collect();
+        assert_eq!(texts, ["one", "two", "three"]);
+
+        // And the path built from them pins each run, rather than resolving up
+        // to the shared parent. This is what a consumer actually reads.
+        let paths: Vec<_> = runs
+            .iter()
+            .map(|n| crate::xmlext::node_path_text(*n).path)
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                "/h:html[1]/h:body[1]/text()[1]",
+                "/h:html[1]/h:body[1]/text()[2]",
+                "/h:html[1]/h:body[1]/text()[3]",
+            ]
+        );
     }
 
     /// XHTML 1.1 `<p>` (and headings, address, dt) take inline content only,

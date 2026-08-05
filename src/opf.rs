@@ -11,6 +11,50 @@ use crate::ocf::{Ocf, parse_xml};
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::{NodeExt, attr_no_ns_node, attr_ns_node};
 
+/// Report one RELAX NG [`Blame`](crate::rng::Blame) as RSC-005, routing it to
+/// the `push_node*` variant that pins the right thing: `@name` for an attribute
+/// fault, `…/text()[n]` for a stray run, the element otherwise.
+///
+/// Shared by the package-document and content-document call sites rather than
+/// written out at each. The two had identical copies of a two-way match, and
+/// when `Blame::Text` arrived (#68) a copy would have been the natural place to
+/// forget it - which is precisely the bug being fixed, one layer up.
+fn push_blame(report: &mut Report, location: &str, rule: &'static str, blame: &crate::rng::Blame) {
+    let (text, params) = blame.describe();
+    if let Some(a) = blame.attribute() {
+        report.push_node_attr(
+            RSC_005,
+            Severity::Error,
+            text,
+            location,
+            blame.node(),
+            a,
+            rule,
+            params,
+        );
+    } else if blame.is_text() {
+        report.push_node_text(
+            RSC_005,
+            Severity::Error,
+            text,
+            location,
+            blame.node(),
+            rule,
+            params,
+        );
+    } else {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            text,
+            location,
+            blame.node(),
+            rule,
+            params,
+        );
+    }
+}
+
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
 fn parent_dir(path: &str) -> String {
     match path.rfind('/') {
@@ -1897,28 +1941,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             crate::rng::package_grammar_epub2()
         };
         for blame in crate::rng::validate_node_report(&grammar, pkg) {
-            let (text, params) = blame.describe();
-            match blame.attribute() {
-                Some(a) => report.push_node_attr(
-                    RSC_005,
-                    Severity::Error,
-                    text,
-                    opf_path,
-                    blame.node(),
-                    a,
-                    rule,
-                    params,
-                ),
-                None => report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    text,
-                    opf_path,
-                    blame.node(),
-                    rule,
-                    params,
-                ),
-            }
+            push_blame(report, opf_path, rule, &blame);
         }
     }
 
@@ -4257,28 +4280,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 {
                     continue;
                 }
-                let (text, params) = blame.describe();
-                match blame.attribute() {
-                    Some(a) => report.push_node_attr(
-                        RSC_005,
-                        Severity::Error,
-                        text,
-                        path.clone(),
-                        blame.node(),
-                        a,
-                        rule,
-                        params,
-                    ),
-                    None => report.push_node(
-                        RSC_005,
-                        Severity::Error,
-                        text,
-                        path.clone(),
-                        blame.node(),
-                        rule,
-                        params,
-                    ),
-                }
+                push_blame(report, &path, rule, &blame);
             }
             // EPUB 3 content-model nesting constraints (Schematron), reported as
             // RSC-005 at the offending element, matching epubcheck.
