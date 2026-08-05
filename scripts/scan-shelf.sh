@@ -10,8 +10,8 @@
 # tool untrustworthy to integrate against.
 #
 # Usage:
-#   scripts/scan-shelf.sh ~/epubveri-shelf            # scan every .epub under it
-#   scripts/scan-shelf.sh ~/epubveri-shelf --advisory # include ADV-* findings
+#   scripts/scan-shelf.sh ~/Documents/Projects/ebook-shelf            # every .epub under it
+#   scripts/scan-shelf.sh ~/Documents/Projects/ebook-shelf --advisory # include ADV-*
 #
 # Reading the output:
 #

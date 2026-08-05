@@ -33,9 +33,9 @@
 //! happened on the first change this tool was used to verify.
 //!
 //! Usage:
-//!     … --bin compare -- ~/epubveri-shelf          # every .epub under a dir
+//!     … --bin compare -- ~/Documents/Projects/ebook-shelf   # every .epub under a dir
 //!     … --bin compare -- book.epub other.epub
-//!     … --bin compare -- --verbose ~/epubveri-shelf   # per-book detail
+//!     … --bin compare -- --verbose ~/Documents/Projects/ebook-shelf   # per-book detail
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

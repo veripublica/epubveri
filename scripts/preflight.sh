@@ -180,7 +180,10 @@ else
   # The shelf is local-only and machine-specific, so its absence is not a
   # failure - but a silent absence would be, since it is the only instrument
   # that sees real books.
-  SHELF="$HOME/epubveri-shelf/diff-shelf.sh"
+  # Shared with epubsana since 2026-08-05, hence the neutral name and the
+  # override: the shelf is one canonical corpus for both projects, and only
+  # this repo's scripts should assume where it sits.
+  SHELF="${SHELF:-$HOME/Documents/Projects/ebook-shelf/diff-shelf.sh}"
   SHELF_BASE="${SHELF_BASE:-baseline}"
   if [ -x "$SHELF" ]; then
     cargo build --release --bin epubveri >/dev/null 2>&1
