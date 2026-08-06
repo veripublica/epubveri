@@ -55,6 +55,81 @@ fn push_blame(report: &mut Report, location: &str, rule: &'static str, blame: &c
     }
 }
 
+/// A manifest item whose href is remote and which nothing in the publication
+/// references (#70).
+///
+/// epubcheck's `OPFChecker30.checkItemAfterResourceValidation`: audio, video,
+/// Flash and fonts may legitimately live outside the container, so they are
+/// exempt; anything else remote and unreferenced is **RSC-006**, downgraded to
+/// the usage-level **RSC-006b** when the publication has scripts, since a
+/// script could fetch it at runtime. The same `HAS_SCRIPTS` downgrade already
+/// governs OPF-018b and OPF-096b here.
+///
+/// Also OPF-097, which the caller's loop skipped for every external href. That
+/// skip is right for `data:`/`mailto:` — there is no resource to be
+/// unreferenced — and wrong for a remote one, which is an ordinary
+/// publication resource that simply happens to live elsewhere.
+///
+/// EPUB 3 only: the whole branch is on `OPFChecker30`, and EPUB 2 has no
+/// remote-resource allowance to check against.
+#[allow(clippy::too_many_arguments)]
+fn check_unreferenced_remote_item(
+    item: roxmltree::Node,
+    href: &str,
+    remote_resource_refs: &HashSet<String>,
+    book_has_scripts: bool,
+    is_epub3: bool,
+    opf_path: &str,
+    report: &mut Report,
+) {
+    if !is_epub3 {
+        return;
+    }
+    let mt = item.attr_no_ns("media-type").unwrap_or_default();
+    if crate::cmt::is_audio_video_or_font(mt) || mt == "application/x-shockwave-flash" {
+        return;
+    }
+    // A remote XHTML item is already reported, unconditionally and without
+    // needing to know whether anything references it, by the manifest check
+    // that owns "a content document can never be remote". Reporting here too
+    // gave two RSC-006 for one item where epubcheck gives one.
+    if crate::cmt::base_media_type(mt) == "application/xhtml+xml" {
+        return;
+    }
+    if remote_resource_refs.contains(href) {
+        return;
+    }
+    let (id, severity) = if book_has_scripts {
+        (RSC_006B, Severity::Usage)
+    } else {
+        (RSC_006, Severity::Error)
+    };
+    report.push_node(
+        id,
+        severity,
+        if book_has_scripts {
+            format!(
+                "remote resource '{href}' is never referenced; check that a script retrieves it"
+            )
+        } else {
+            format!("remote resource '{href}' is not allowed in this context")
+        },
+        opf_path,
+        item,
+        "opf.manifest_item.remote_never_referenced",
+        vec![href.to_string()],
+    );
+    report.push_node(
+        OPF_097,
+        Severity::Usage,
+        format!("'{href}' is declared in the manifest, but no content document references it"),
+        opf_path,
+        item,
+        "opf.manifest_item.never_referenced",
+        vec![href.to_string()],
+    );
+}
+
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
 fn parent_dir(path: &str) -> String {
     match path.rfind('/') {
@@ -875,57 +950,180 @@ const DEFAULT_VOCAB_URIS: &[&str] = &[
 ];
 
 const DC_ELEMENTS_NS: &str = "http://purl.org/dc/elements/1.1/";
+/// One way a `prefix` attribute value can be malformed, and the message ID
+/// epubcheck picks for it.
+#[derive(Debug, PartialEq)]
+enum PrefixFault {
+    /// OPF-004: leading or trailing whitespace around the whole value.
+    Syntax,
+    /// OPF-004a: a mapping with no prefix before the colon.
+    EmptyPrefix,
+    /// OPF-004b: the prefix is not an NCName.
+    NotNcName(String),
+    /// OPF-004c: the prefix is not immediately followed by its colon.
+    NoColon(Option<String>),
+    /// OPF-004d: no space between the colon and the URI.
+    NoSpace(Option<String>),
+    /// OPF-004e: something other than a plain space separates them.
+    IllegalSpace(Option<String>),
+    /// OPF-004f: illegal whitespace between two mappings.
+    IllegalWhitespaceBetween(Option<String>),
+    /// OPF-005: the value ends with a prefix that has no URI after it.
+    MissingUri(Option<String>),
+}
 
-/// Parses a `prefix`/`epub:prefix` attribute value (a whitespace-
-/// separated list of `name:` `URI` pairs) leniently, tolerating two real
-/// syntax-error shapes a corpus fixture exercises (a name with no colon
-/// at all; a colon separated from its name by whitespace) - each
-/// increments the OPF-004 count but still best-effort records the pair
-/// (rather than dropping it), so a later "is this prefix declared" check
-/// doesn't cascade into a spurious second finding for a name that IS
-/// present, just syntactically malformed.
-fn parse_prefix_value(value: &str) -> (HashMap<String, String>, usize, Option<String>) {
-    let tokens: Vec<&str> = value.split_whitespace().collect();
-    let mut pairs = HashMap::new();
-    let mut errors = 0;
-    // A trailing `name:` with no URI after it - OPF-005 rather than OPF-004.
-    // epubcheck's parser ends in its URI state there, and URI is not one of
-    // its FINAL_STATES, so it reports "URI for prefix doesn't exist" *instead
-    // of* a syntax error, not in addition to one.
-    let mut dangling = None;
-    let mut i = 0;
-    while i < tokens.len() {
-        let tok = tokens[i];
-        if let Some(name) = tok.strip_suffix(':') {
-            if name.is_empty() {
-                // A bare ":" names no prefix at all - a syntax error.
-                errors += 1;
-                i += 1;
-            } else if i + 1 < tokens.len() {
-                pairs.insert(name.to_string(), tokens[i + 1].to_string());
-                i += 2;
-            } else {
-                dangling = Some(name.to_string());
-                i += 1;
-            }
-        } else if i + 1 < tokens.len() && tokens[i + 1] == ":" {
-            errors += 1;
-            if i + 2 < tokens.len() {
-                pairs.insert(tok.to_string(), tokens[i + 2].to_string());
-                i += 3;
-            } else {
-                i += 2;
-            }
-        } else if i + 1 < tokens.len() {
-            errors += 1;
-            pairs.insert(tok.to_string(), tokens[i + 1].to_string());
-            i += 2;
-        } else {
-            errors += 1;
-            i += 1;
+/// Parses a `prefix`/`epub:prefix` attribute value.
+///
+/// A character-level port of epubcheck's `PrefixDeclarationParser`, whose
+/// grammar is
+///
+/// ```text
+/// prefixes = mapping , { whitespace, { whitespace } , mapping } ;
+/// mapping  = prefix , ":" , space , { space } , ? xsd:anyURI ? ;
+/// prefix   = ? xsd:NCName ? ;
+/// space    = #x20 ;
+/// whitespace = (#x20 | #x9 | #xD | #xA) ;
+/// ```
+///
+/// It is ported rather than approximated because each state reports its own
+/// message ID (#70), and the distinctions live below the level a
+/// `split_whitespace()` tokenizer can see: `foaf:  URI` (two spaces) is
+/// *valid*, `foaf:\tURI` is OPF-004e. Both were measured against epubcheck
+/// one book at a time before this was written, along with the two defects
+/// the old tokenizer had beyond the IDs - `: URI` produced two findings
+/// where epubcheck produces one, and a non-NCName prefix produced none at
+/// all.
+///
+/// Known gap: OPF-004f needs whitespace that Guava's `CharMatcher.whitespace()`
+/// accepts but that is not one of space/tab/CR/LF - a vertical tab, say.
+/// Tab-separated mappings are legal and measured as such.
+fn parse_prefix_value(value: &str) -> (HashMap<String, String>, Vec<PrefixFault>) {
+    #[derive(Clone, Copy, PartialEq)]
+    enum State {
+        Start,
+        Prefix,
+        PrefixEnd,
+        Space,
+        Uri,
+        Whitespace,
+    }
+    // `accepted` is the run this state consumes; `allowed` is the subset of
+    // that run which is not an error. The two differ only for Space and
+    // Whitespace, which is exactly where OPF-004e/f come from.
+    fn accepted(state: State, c: char) -> bool {
+        match state {
+            State::Start | State::Space | State::Whitespace => c.is_whitespace(),
+            State::Prefix => !c.is_whitespace() && c != ':',
+            State::PrefixEnd => c == ':',
+            State::Uri => !c.is_whitespace(),
         }
     }
-    (pairs, errors, dangling)
+    fn allowed(state: State, c: char) -> bool {
+        match state {
+            State::Start => false,
+            State::Space => c == ' ',
+            State::Whitespace => matches!(c, ' ' | '\t' | '\r' | '\n'),
+            _ => true,
+        }
+    }
+
+    let chars: Vec<char> = value.chars().collect();
+    let mut pairs = HashMap::new();
+    let mut faults = Vec::new();
+    let mut state = State::Start;
+    let mut prefix: Option<String> = None;
+    let mut pos = 0usize;
+    let mut run = String::new();
+
+    while pos < chars.len() {
+        // `consume`: the maximal run of `accepted` characters from here, plus
+        // the ones inside it that are not `allowed`.
+        run.clear();
+        let mut bad = String::new();
+        while pos < chars.len() && accepted(state, chars[pos]) {
+            run.push(chars[pos]);
+            if !allowed(state, chars[pos]) {
+                bad.push(chars[pos]);
+            }
+            pos += 1;
+        }
+        match state {
+            State::Start => {
+                prefix = None;
+                if !run.is_empty() {
+                    faults.push(PrefixFault::Syntax);
+                }
+                state = State::Prefix;
+            }
+            State::Prefix => {
+                if run.is_empty() {
+                    faults.push(PrefixFault::EmptyPrefix);
+                } else if !crate::ncx::is_valid_ncname(&run) {
+                    faults.push(PrefixFault::NotNcName(run.clone()));
+                } else {
+                    prefix = Some(run.clone());
+                }
+                state = State::PrefixEnd;
+            }
+            State::PrefixEnd => {
+                if run.is_empty() {
+                    // Skip whitespace looking for the colon: if one turns up
+                    // the mapping merely spaced it wrongly, and if not there
+                    // is no colon at all. epubcheck reports OPF-004c either
+                    // way and only the next state differs.
+                    while pos < chars.len() && chars[pos].is_whitespace() && chars[pos] != ':' {
+                        pos += 1;
+                    }
+                    let at_colon = pos < chars.len() && chars[pos] == ':';
+                    faults.push(PrefixFault::NoColon(prefix.take()));
+                    state = if at_colon {
+                        State::PrefixEnd
+                    } else {
+                        State::Uri
+                    };
+                } else {
+                    state = State::Space;
+                }
+            }
+            State::Space => {
+                if run.is_empty() {
+                    faults.push(PrefixFault::NoSpace(prefix.take()));
+                } else if !bad.is_empty() {
+                    faults.push(PrefixFault::IllegalSpace(prefix.clone()));
+                }
+                state = State::Uri;
+            }
+            State::Uri => {
+                if let Some(p) = prefix.take() {
+                    pairs.insert(p, run.clone());
+                }
+                state = State::Whitespace;
+            }
+            State::Whitespace => {
+                if !bad.is_empty() {
+                    faults.push(PrefixFault::IllegalWhitespaceBetween(prefix.clone()));
+                }
+                state = State::Prefix;
+            }
+        }
+        // A state whose run was empty consumed nothing; the character that
+        // stopped it is re-read by the next state, exactly as epubcheck's
+        // `reader.reset()` arranges. Guard against standing still.
+        if run.is_empty() && matches!(state, State::Prefix) && pos < chars.len() {
+            // Start -> Prefix with no whitespace consumed: fine, the next
+            // iteration reads the same character in the Prefix state.
+        }
+    }
+
+    // "string ends with a single prefix": any non-final state means the value
+    // stopped mid-mapping, which is OPF-005 rather than a syntax error.
+    if !matches!(state, State::Start | State::Prefix | State::Whitespace) {
+        faults.push(PrefixFault::MissingUri(prefix.take()));
+    }
+    if state == State::Prefix && !run.is_empty() {
+        faults.push(PrefixFault::Syntax); // trailing whitespace
+    }
+    (pairs, faults)
 }
 
 /// Whether a prefix declaration's URI half would fail to parse as a URI -
@@ -1006,27 +1204,68 @@ fn check_prefix_declaration(
     node: roxmltree::Node,
     report: &mut Report,
 ) -> HashMap<String, String> {
-    let (pairs, syntax_errors, dangling) = parse_prefix_value(prefix_attr.value());
-    for _ in 0..syntax_errors {
-        report.push_at_pos(
-            OPF_004,
-            Severity::Error,
-            "the \"prefix\" attribute value has a syntax error",
-            path,
-            Position::of(node),
-        );
+    let (pairs, faults) = parse_prefix_value(prefix_attr.value());
+    for fault in &faults {
+        let (id, severity, text) = match fault {
+            PrefixFault::Syntax => (
+                OPF_004,
+                Severity::Error,
+                "the \"prefix\" attribute value has a syntax error".to_string(),
+            ),
+            PrefixFault::EmptyPrefix => (
+                OPF_004A,
+                Severity::Error,
+                "a prefix declaration is missing its prefix".to_string(),
+            ),
+            PrefixFault::NotNcName(p) => (
+                OPF_004B,
+                Severity::Error,
+                format!("the prefix \"{p}\" is not a valid non-colonized name"),
+            ),
+            PrefixFault::NoColon(p) => (
+                OPF_004C,
+                Severity::Error,
+                match p {
+                    Some(p) => {
+                        format!("the prefix \"{p}\" must be followed immediately by a colon")
+                    }
+                    None => "a prefix must be followed immediately by a colon".to_string(),
+                },
+            ),
+            PrefixFault::NoSpace(p) => (
+                OPF_004D,
+                Severity::Error,
+                match p {
+                    Some(p) => {
+                        format!("the prefix \"{p}\" must be separated from its URI by a space")
+                    }
+                    None => "a prefix must be separated from its URI by a space".to_string(),
+                },
+            ),
+            PrefixFault::IllegalSpace(p) => (
+                OPF_004E,
+                Severity::Error,
+                match p {
+                    Some(p) => format!("illegal whitespace between the prefix \"{p}\" and its URI"),
+                    None => "illegal whitespace between a prefix and its URI".to_string(),
+                },
+            ),
+            PrefixFault::IllegalWhitespaceBetween(_) => (
+                OPF_004F,
+                Severity::Error,
+                "illegal whitespace between prefix mappings".to_string(),
+            ),
+            PrefixFault::MissingUri(p) => (
+                OPF_005,
+                Severity::Error,
+                match p {
+                    Some(p) => format!("no URI was declared for the prefix \"{p}\""),
+                    None => "no URI was declared for a prefix".to_string(),
+                },
+            ),
+        };
+        report.push_at_pos(id, severity, text, path, Position::of(node));
     }
-    // OPF-005 (#50): the value ends with a prefix that has no URI after it.
-    if let Some(name) = &dangling {
-        report.push_at_pos(
-            OPF_005,
-            Severity::Error,
-            format!("no URI was declared for the prefix \"{name}\""),
-            path,
-            Position::of(node),
-        );
-    }
-    // OPF-006 (#50): the URI half doesn't parse as a URI.
     for (name, uri) in &pairs {
         if is_unparseable_uri(uri) {
             report.push_at_pos(
@@ -4118,6 +4357,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // never appear here are what OPF-097 reports. Collected across the whole
     // walk, since any document may be the one that uses a given resource.
     let mut resource_refs: HashSet<String> = HashSet::new();
+    // The same question for *remote* targets, which `resource_refs` cannot
+    // answer: it only ever records references that are not external. Needed
+    // book-wide, because "no reference to this remote item exists anywhere"
+    // is what selects RSC-006/RSC-006b below.
+    let mut remote_resource_refs: HashSet<String> = HashSet::new();
     let mut pending_dtd_fix: Option<(usize, String, crate::htm::DtdShift)> = None;
     for path in content_docs {
         if let Some((from, p, sh)) = pending_dtd_fix.take() {
@@ -5584,9 +5828,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 && let Some(v) = node
                     .attr_no_ns("href")
                     .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")))
-                && !is_external(v)
             {
-                resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+                if is_external(v) {
+                    // A remote target is still a reference, and the
+                    // unreferenced-remote-item check (#70) turns on whether
+                    // one exists anywhere. `resource_refs` cannot hold it -
+                    // it stores resolved container paths - so it goes to the
+                    // remote set instead. This generic href/xlink:href site
+                    // is what catches SVG's `<font-face-uri xlink:href>`,
+                    // whose media type gives no hint that it is a font.
+                    if is_remote_url(v) {
+                        remote_resource_refs.insert(strip_url_fragment(v).trim().to_string());
+                    }
+                } else {
+                    resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+                }
             }
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
                 if let Some(v) = node.attr_no_ns(attr) {
@@ -6139,6 +6395,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // reference, which is always RSC-006 instead (declared or not;
         // confirmed via `resources-remote-iframe-undeclared-error` etc.,
         // where only RSC-006 is expected, never RSC-008 too).
+        remote_resource_refs.extend(remote_refs.iter().cloned());
         for r in &remote_refs {
             if restricted_remote_refs.contains(r) {
                 continue;
@@ -6395,6 +6652,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
                 check_prefix_usage(v, &declared_prefixes, doc_path, n, report);
+            }
+        }
+        // A standalone SVG has no XHTML href walk, so its remote references
+        // have to be collected here or the unreferenced-remote-item check
+        // (#70) sees none. `<font-face-uri xlink:href>` is the case that
+        // matters: the manifest gives such a font a media type like
+        // `application/vnd.dafont`, which no font-type test recognises, so
+        // the reference is the only thing that makes it legitimate.
+        for n in d.descendants().filter(|n| n.is_element()) {
+            if let Some(v) = n
+                .attribute(("http://www.w3.org/1999/xlink", "href"))
+                .or_else(|| n.attr_no_ns("href"))
+                && is_remote_url(v)
+            {
+                remote_resource_refs.insert(strip_url_fragment(v).trim().to_string());
             }
         }
         // OPF-014: a standalone SVG content document embedding a remote
@@ -6718,6 +6990,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if is_remote_url(&u) {
                 css_has_remote = true;
                 let u = strip_url_fragment(&u);
+                // A stylesheet asking for a remote font *is* a reference to
+                // it, and RSC-006/RSC-006b turn on whether one exists
+                // anywhere. Without this, three corpus fixtures whose only
+                // use of a remote font is `@font-face` were reported as
+                // unreferenced.
+                remote_resource_refs.insert(u.clone());
                 if !remote_manifest.contains_key(&u) {
                     report.push_at_rule(
                         RSC_008,
@@ -6788,6 +7066,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let Some(href) = item.attr_no_ns("href") else {
                     continue;
                 };
+                // A remote item is judged on its own terms: it has no
+                // container path to resolve, and epubcheck runs a separate
+                // branch for it (`OPFChecker30.checkItemAfterResourceValidation`).
+                if is_remote_url(href) {
+                    check_unreferenced_remote_item(
+                        item,
+                        href,
+                        &remote_resource_refs,
+                        book_has_scripts,
+                        is_epub3,
+                        opf_path,
+                        report,
+                    );
+                    continue;
+                }
                 if is_external(href) {
                     continue;
                 }
@@ -9974,11 +10267,11 @@ mod tests {
     /// the same defect.
     #[test]
     fn prefix_declaration_missing_its_uri() {
-        let (pairs, errors, dangling) =
-            super::parse_prefix_value("foaf: http://xmlns.com/foaf/ x:");
-        assert_eq!(dangling.as_deref(), Some("x"), "the trailing prefix");
+        use super::PrefixFault;
+        let (pairs, faults) = super::parse_prefix_value("foaf: http://xmlns.com/foaf/ x:");
         assert_eq!(
-            errors, 0,
+            faults,
+            [PrefixFault::MissingUri(Some("x".to_string()))],
             "OPF-005 replaces the syntax error, it doesn't add"
         );
         assert_eq!(
@@ -9986,14 +10279,91 @@ mod tests {
             Some("http://xmlns.com/foaf/")
         );
 
-        // A bare ":" names no prefix, so it stays an ordinary syntax error.
-        let (_, errors, dangling) = super::parse_prefix_value("http://example.org :");
-        assert!(dangling.is_none(), "a bare colon declares no prefix");
-        assert!(errors > 0);
+        // A bare ":" names no prefix. The whole value is read as one
+        // malformed mapping plus a second, prefix-less one: "http" is taken
+        // as a prefix whose colon is followed by "//example.org" with no
+        // space (OPF-004d), then the bare ":" is an empty prefix (OPF-004a)
+        // with nothing after it (OPF-005). Confirmed against epubcheck on
+        // this exact value - the expectation written here first was wrong,
+        // and the parser was right.
+        let (_, faults) = super::parse_prefix_value("http://example.org :");
+        assert_eq!(
+            faults,
+            [
+                PrefixFault::NoSpace(Some("http".to_string())),
+                PrefixFault::EmptyPrefix,
+                PrefixFault::MissingUri(None),
+            ],
+            "got {faults:?}"
+        );
 
-        // A well-formed declaration produces neither.
-        let (_, errors, dangling) = super::parse_prefix_value("foaf: http://xmlns.com/foaf/");
-        assert_eq!((errors, dangling), (0, None));
+        // A well-formed declaration produces nothing at all.
+        assert!(
+            super::parse_prefix_value("foaf: http://xmlns.com/foaf/")
+                .1
+                .is_empty()
+        );
+    }
+
+    /// #70: every state of epubcheck's `PrefixDeclarationParser` reports its
+    /// own message ID, and the distinctions are below what a
+    /// `split_whitespace()` tokenizer can see. Each row was measured against
+    /// epubcheck 5.3.0, one book per case.
+    ///
+    /// Two of them are not ID changes but defects the old tokenizer had:
+    /// `: URI` produced two findings where epubcheck produces one, and a
+    /// prefix that is not an NCName produced none at all.
+    #[test]
+    fn prefix_value_faults_match_epubchecks_state_machine() {
+        use super::PrefixFault::*;
+        let faults = |v: &str| format!("{:?}", super::parse_prefix_value(v).1);
+        for (value, want) in [
+            (
+                "foaf: http://x",
+                format!("{:?}", Vec::<super::PrefixFault>::new()),
+            ),
+            (": http://x", format!("{:?}", vec![EmptyPrefix])),
+            (
+                "1foaf: http://x",
+                format!("{:?}", vec![NotNcName("1foaf".into())]),
+            ),
+            (
+                "foaf : http://x",
+                format!("{:?}", vec![NoColon(Some("foaf".into()))]),
+            ),
+            (
+                "foaf http://x",
+                format!("{:?}", vec![NoColon(Some("foaf".into()))]),
+            ),
+            (
+                "foaf:http://x",
+                format!("{:?}", vec![NoSpace(Some("foaf".into()))]),
+            ),
+            // Two spaces are legal; a tab is not. This pair is the reason the
+            // tokenizer had to go.
+            (
+                "foaf:  http://x",
+                format!("{:?}", Vec::<super::PrefixFault>::new()),
+            ),
+            (
+                "foaf:\thttp://x",
+                format!("{:?}", vec![IllegalSpace(Some("foaf".into()))]),
+            ),
+            // Tab *between* mappings is legal - measured, not assumed.
+            (
+                "a: http://x\tb: http://y",
+                format!("{:?}", Vec::<super::PrefixFault>::new()),
+            ),
+            (
+                "1foaf : http://x",
+                format!("{:?}", vec![NotNcName("1foaf".into()), NoColon(None)]),
+            ),
+        ] {
+            assert_eq!(faults(value), want, "for {value:?}");
+        }
+        // Both mappings survive when the value is clean.
+        let (pairs, _) = super::parse_prefix_value("a: http://x\tb: http://y");
+        assert_eq!(pairs.len(), 2);
     }
 
     /// #70: the three special prefix-mapping faults each have their own

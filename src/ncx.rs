@@ -146,7 +146,7 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
     }
 }
 
-fn is_valid_ncname(s: &str) -> bool {
+pub(crate) fn is_valid_ncname(s: &str) -> bool {
     let mut chars = s.chars();
     let Some(first) = chars.next() else {
         return false;

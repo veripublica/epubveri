@@ -52,16 +52,45 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   form epubcheck splits out for exactly that case. The severity was already
   right and only the ID was wrong.
 
+- **A `prefix` attribute is now parsed the way epubcheck parses it** (#70), so
+  each malformation reports the ID epubcheck reports: OPF-004a (no prefix before
+  the colon), OPF-004b (the prefix is not an NCName), OPF-004c (no colon
+  immediately after it), OPF-004d (no space before the URI), OPF-004e (something
+  other than a plain space there). The old tokenizer split on whitespace, which
+  cannot see the distinction that matters — `prefix="foaf:  URI"` (two spaces)
+  is valid, `prefix="foaf:\tURI"` is not.
+
+  Two of these were defects rather than renames: `prefix=": URI"` produced two
+  findings where epubcheck produces one, and a prefix that is not an NCName
+  (`prefix="1foaf: URI"`) produced **none at all**. Twelve values were measured
+  against epubcheck, one book each, and all twelve now agree.
+
+- **An unreferenced remote manifest item is reported** (#70), as RSC-006 — or
+  the usage-level RSC-006b when the publication has scripts, since a script
+  could fetch it at runtime. We reported nothing at all for this: neither the
+  error, nor its usage form, nor the OPF-097 that accompanies it, because the
+  unreferenced-item check skipped every external href. Audio, video, fonts and
+  Flash stay exempt, as they may legitimately live outside the container.
+
+  This needed remote references to be tracked publication-wide, which they were
+  not — a remote font reached only from a CSS `@font-face` or an SVG
+  `<font-face-uri>` looked unreferenced. Three corpus fixtures said so before
+  the collection was fixed.
+
 ### Changed
 
-- **The coverage matrix reads 200 of 210 (~95%), not 191 of 194 (~98%)** (#70).
+- **The coverage matrix reads 207 of 210 (~99%), not 191 of 194 (~98%)** (#70).
   `harness/src/coverage.rs` extracted epubcheck's IDs with a regex requiring the
   enum name to end in digits, so all 17 whose name ends in a letter were absent
   from the universe the matrix is built over — 16 of them live checks. The
-  denominator was missing them and the published percentage was overstated. Ten
-  gaps remain: `OPF-004a`…`f` (epubcheck picks those from a character-level
-  state machine we have not ported), `RSC-006b`, and the three long-standing
-  scope decisions.
+  denominator was missing them and the published percentage was overstated —
+  the honest figure was 196 of 210 before the checks above closed eleven of the
+  gaps. The three that remain are the long-standing scope decisions (`OPF-021`
+  DTBook, `OPF-047` OEBPS 1.2, the informational `OPF-064`).
+
+  `OPF-004f` is implemented but effectively unreachable: it needs whitespace
+  that Guava's `CharMatcher.whitespace()` accepts and that is not one of
+  space/tab/CR/LF. Tab-separated mappings are legal, measured.
 
 - **The corpus harness no longer credits us for message IDs we do not emit, so
   the headline recall figure moves from 98.8% to 97.9%.** No check regressed —
@@ -71,8 +100,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `HTM_060a`/`HTM_060b`/`OPF-004a`…`f`/`OPF-007a`…`c`/`RSC-006b`/`RSC-007w` as
   distinct constants with their own severities. Six scenarios were scored as
   hits for a bare ID epubcheck never prints. Five have since been earned back by
-  the OPF-007 and RSC-007w work above, so recall reads 98.7%; the last is
-  `OPF-004c`.
+  the OPF-007 and RSC-007w work above, and the last by the `prefix` parser, so
+  exact-ID recall is back to 98.8% — this time without the over-crediting.
 
   The same belief had propagated into the validator: `check_prefix_declaration`
   documented its single-ID design as *confirmed* by the harness stripping "the

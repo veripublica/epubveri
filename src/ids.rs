@@ -56,6 +56,9 @@ pub const RSC_004: &str = "RSC-004"; // a resource is encrypted; its content is 
 // id; and a missing EPUB 3 navigation document.
 pub const RSC_005: &str = "RSC-005";
 pub const RSC_006: &str = "RSC-006"; // a remote resource is referenced from an HTML "a" element
+// Same defect, usage-level: an unreferenced remote manifest item in a book
+// that has scripts, which could fetch it at runtime.
+pub const RSC_006B: &str = "RSC-006b";
 pub const RSC_007: &str = "RSC-007"; // a reference points to a resource missing from the publication
 // The warning form, and the only case epubcheck splits out: an EPUB 3 package
 // `<link href>` whose target is not in the container.
@@ -284,7 +287,16 @@ pub const OPF_084: &str = "OPF-084"; // a dictionary collection link targets nei
 // `ID_RE` (`harness/src/corpus.rs`) strips the trailing lowercase letter
 // when parsing expectations,
 // so the real, scored ID is plain OPF-004/OPF-007 in every case.
+// epubcheck's `PrefixDeclarationParser` is a character-level state machine and
+// each state reports its own code. The bare OPF-004 is leading/trailing
+// whitespace around the whole value; the lettered ones are per-mapping faults.
 pub const OPF_004: &str = "OPF-004"; // the prefix attribute value has a syntax error
+pub const OPF_004A: &str = "OPF-004a"; // a mapping has no prefix before its colon
+pub const OPF_004B: &str = "OPF-004b"; // the prefix is not an NCName
+pub const OPF_004C: &str = "OPF-004c"; // the prefix is not immediately followed by a colon
+pub const OPF_004D: &str = "OPF-004d"; // no space between the colon and the URI
+pub const OPF_004E: &str = "OPF-004e"; // illegal whitespace between the prefix and its URI
+pub const OPF_004F: &str = "OPF-004f"; // illegal whitespace between two mappings
 pub const OPF_028: &str = "OPF-028"; // an undeclared (and non-reserved) prefix is used
 pub const OPF_089: &str = "OPF-089"; // an "alternate" link is combined with another rel keyword
 pub const OPF_094: &str = "OPF-094"; // a "record"/"voicing" link is missing a media-type
