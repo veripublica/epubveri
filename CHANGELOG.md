@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.8] - 2026-08-06
 
 ### Fixed
 
@@ -77,45 +77,6 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `<font-face-uri>` looked unreferenced. Three corpus fixtures said so before
   the collection was fixed.
 
-### Changed
-
-- **The coverage matrix reads 207 of 210 (~99%), not 191 of 194 (~98%)** (#70).
-  `harness/src/coverage.rs` extracted epubcheck's IDs with a regex requiring the
-  enum name to end in digits, so all 17 whose name ends in a letter were absent
-  from the universe the matrix is built over — 16 of them live checks. The
-  denominator was missing them and the published percentage was overstated —
-  the honest figure was 196 of 210 before the checks above closed eleven of the
-  gaps. The three that remain are the long-standing scope decisions (`OPF-021`
-  DTBook, `OPF-047` OEBPS 1.2, the informational `OPF-064`).
-
-  `OPF-004f` is implemented but effectively unreachable: it needs whitespace
-  that Guava's `CharMatcher.whitespace()` accepts and that is not one of
-  space/tab/CR/LF. Tab-separated mappings are legal, measured.
-
-- **The corpus harness no longer credits us for message IDs we do not emit, so
-  the headline recall figure moves from 98.8% to 97.9%.** No check regressed —
-  the harness stripped the trailing letter from lettered IDs on the stated but
-  unverified grounds that it was "a Gherkin-authoring convention … not part of
-  the reported message id". It is part of it: `MessageId.java` declares
-  `HTM_060a`/`HTM_060b`/`OPF-004a`…`f`/`OPF-007a`…`c`/`RSC-006b`/`RSC-007w` as
-  distinct constants with their own severities. Six scenarios were scored as
-  hits for a bare ID epubcheck never prints. Five have since been earned back by
-  the OPF-007 and RSC-007w work above, and the last by the `prefix` parser, so
-  exact-ID recall is back to 98.8% — this time without the over-crediting.
-
-  The same belief had propagated into the validator: `check_prefix_declaration`
-  documented its single-ID design as *confirmed* by the harness stripping "the
-  a/b/c Gherkin sub-case suffixes". An instrument is not a source about the
-  thing it measures.
-
-- **The `compare` harness now sees epubcheck's lettered IDs at all.** Its
-  extraction regex required `[A-Z]+-[0-9]+`, which matches neither `HTM_060b`
-  (underscore) nor `OPF-086b` (trailing letter), so those lines were dropped
-  from epubcheck's side of the diff and every such ID appeared as one "only we
-  report" — a false-positive candidate manufactured by the instrument. Shelf
-  agreement goes from 97 to 100 of 104 books, two of the three gained by fixing
-  the harness rather than the validator.
-
 - **A misplaced element no longer cascades findings onto everything inside it**
   (#69). When an element was rejected as "not allowed here", its subtree was
   then checked against *the parent's* content model — the model the element had
@@ -155,6 +116,45 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   and widened by #69 (the attributes of a misplaced element never reached the
   grammar before); the grammar's finding is now suppressed when the DOM check is
   verified to have already reported that exact attribute.
+
+### Changed
+
+- **The coverage matrix reads 207 of 210 (~99%), not 191 of 194 (~98%)** (#70).
+  `harness/src/coverage.rs` extracted epubcheck's IDs with a regex requiring the
+  enum name to end in digits, so all 17 whose name ends in a letter were absent
+  from the universe the matrix is built over — 16 of them live checks. The
+  denominator was missing them and the published percentage was overstated —
+  the honest figure was 196 of 210 before the checks above closed eleven of the
+  gaps. The three that remain are the long-standing scope decisions (`OPF-021`
+  DTBook, `OPF-047` OEBPS 1.2, the informational `OPF-064`).
+
+  `OPF-004f` is implemented but effectively unreachable: it needs whitespace
+  that Guava's `CharMatcher.whitespace()` accepts and that is not one of
+  space/tab/CR/LF. Tab-separated mappings are legal, measured.
+
+- **The corpus harness no longer credits us for message IDs we do not emit, so
+  the headline recall figure moves from 98.8% to 97.9%.** No check regressed —
+  the harness stripped the trailing letter from lettered IDs on the stated but
+  unverified grounds that it was "a Gherkin-authoring convention … not part of
+  the reported message id". It is part of it: `MessageId.java` declares
+  `HTM_060a`/`HTM_060b`/`OPF-004a`…`f`/`OPF-007a`…`c`/`RSC-006b`/`RSC-007w` as
+  distinct constants with their own severities. Six scenarios were scored as
+  hits for a bare ID epubcheck never prints. Five have since been earned back by
+  the OPF-007 and RSC-007w work above, and the last by the `prefix` parser, so
+  exact-ID recall is back to 98.8% — this time without the over-crediting.
+
+  The same belief had propagated into the validator: `check_prefix_declaration`
+  documented its single-ID design as *confirmed* by the harness stripping "the
+  a/b/c Gherkin sub-case suffixes". An instrument is not a source about the
+  thing it measures.
+
+- **The `compare` harness now sees epubcheck's lettered IDs at all.** Its
+  extraction regex required `[A-Z]+-[0-9]+`, which matches neither `HTM_060b`
+  (underscore) nor `OPF-086b` (trailing letter), so those lines were dropped
+  from epubcheck's side of the diff and every such ID appeared as one "only we
+  report" — a false-positive candidate manufactured by the instrument. Shelf
+  agreement goes from 97 to 100 of 104 books, two of the three gained by fixing
+  the harness rather than the validator.
 
 ## [0.9.7] - 2026-08-05
 
