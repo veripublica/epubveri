@@ -228,7 +228,13 @@ pub const HTM_048: &str = "HTM-048"; // fixed-layout SVG doc's root <svg> has no
 pub const HTM_056: &str = "HTM-056"; // viewport content is missing the width or height key
 pub const HTM_057: &str = "HTM-057"; // viewport width/height value fails the format grammar
 pub const HTM_059: &str = "HTM-059"; // viewport width or height key appears more than once
-pub const HTM_060: &str = "HTM-060"; // extra viewport meta, or viewport on a reflowable doc (usage)
+// epubcheck has no bare `HTM-060`: `MessageId` declares only `HTM_060a` and
+// `HTM_060b`, and — unlike its `OPF_086b("OPF-086b")` neighbour — spells both
+// with underscores in the value it prints. Odd, and mirrored anyway: the whole
+// point of adopting the ID scheme is that a toolchain grepping epubcheck's
+// output finds ours. We shipped `HTM-060`, which matches nothing.
+pub const HTM_060A: &str = "HTM_060a"; // a secondary viewport meta in a fixed-layout doc (usage)
+pub const HTM_060B: &str = "HTM_060b"; // a viewport meta in a reflowable doc (usage)
 
 // --- XML/encoding/doctype, misc attributes ---
 pub const HTM_010: &str = "HTM-010"; // an unrecognized epub: namespace URI is bound (informative)

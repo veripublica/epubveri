@@ -106,8 +106,14 @@
     </rule>
   </pattern>
 
+  <!-- EPUB 3 only, exactly like dc:title below and for the same reason.
+       `package-30.rnc` types it `datatype.string.nonempty`; EPUB 2's
+       `opf20.rng` gives dc:language `DC.metadata-common-content`, which
+       permits an empty value - only dc:identifier there takes
+       `DC.metadata-required-content`. An empty dc:language in EPUB 2 is
+       OPF-055 (hand-coded in opf.rs), not RSC-005. -->
   <pattern id="opf-language-not-empty">
-    <rule context="dc:language">
+    <rule context="opf:package[starts-with(@version, '3')]/opf:metadata/dc:language">
       <assert test="string-length(normalize-space(.)) &gt; 0"
         >dc:language must be a string with length at least 1</assert>
     </rule>

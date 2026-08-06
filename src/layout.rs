@@ -38,8 +38,8 @@ pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: 
 
     for m in metas.iter().skip(1) {
         report.push_node(
-            HTM_060,
-            Severity::Info,
+            HTM_060A,
+            Severity::Usage,
             "additional viewport meta elements are not checked",
             path,
             *m,
@@ -65,8 +65,8 @@ pub(crate) fn check_reflowable_viewport(d: &roxmltree::Document, path: &str, rep
     });
     if let Some(n) = viewport {
         report.push_node(
-            HTM_060,
-            Severity::Info,
+            HTM_060B,
+            Severity::Usage,
             "viewport metadata is not checked in reflowable content documents",
             path,
             n,
@@ -266,7 +266,7 @@ mod tests {
         let mut report = Report::new();
         check_xhtml_viewport(&d, "content.xhtml", &mut report);
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
-        assert_eq!(ids, vec![HTM_060, HTM_060]);
+        assert_eq!(ids, vec![HTM_060A, HTM_060A]);
     }
 
     #[test]
@@ -276,7 +276,7 @@ mod tests {
         let mut report = Report::new();
         check_reflowable_viewport(&d, "content.xhtml", &mut report);
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
-        assert_eq!(ids, vec![HTM_060]);
+        assert_eq!(ids, vec![HTM_060B]);
     }
 
     #[test]

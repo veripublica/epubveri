@@ -12,6 +12,54 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **An empty `dc:identifier` no longer produces three findings where epubcheck
+  produces one.** A self-closing `<dc:identifier opf:scheme="UUID"/>` drew
+  OPF-072 ("metadata element is empty"), OPF-085 ("'' does not look like a valid
+  UUID") and NCX-001 ("dtb:uid does not match ''") on top of the schema's own
+  RSC-005. epubcheck reads the element's text as `getPrivateData(TEXT)`, gets
+  null, and skips the block that would emit any of them. Only the RSC-005
+  remains.
+
+- **OPF-085 now judges only the identifier the package publishes under.**
+  epubcheck's single call site sits inside `idAttr.equals(uniqueIdent)`, so a
+  secondary `dc:identifier` — a Calibre UUID, an ISBN — is never checked. We
+  checked every one, so a book carrying one malformed secondary UUID got a
+  warning epubcheck does not give.
+
+- **An empty `dc:language` is OPF-055, not OPF-072 plus RSC-005.** epubcheck
+  handles `dc:*` names through an if/else-if chain whose final `else` alone
+  reaches OPF-072; `identifier`, `date`, `title` and `language` all take an
+  earlier branch. Our exclusion list had only `title` and `date`. The stray
+  RSC-005 came from the Schematron requiring a non-empty `dc:language` in both
+  versions — `opf20.rng` gives it `DC.metadata-common-content`, so it is EPUB 3
+  only, exactly like `dc:title`.
+
+- **`HTM-060` is not an epubcheck message ID.** epubcheck declares `HTM_060a`
+  (a secondary viewport meta in a fixed-layout document) and `HTM_060b` (a
+  viewport meta in a reflowable one), both USAGE. We emitted a bare `HTM-060` at
+  INFO for both cases — an ID no epubcheck output contains, so a toolchain
+  filtering on epubcheck's IDs would never match it. Now split, and at USAGE.
+
+### Changed
+
+- **The corpus harness no longer credits us for message IDs we do not emit, so
+  the headline recall figure moves from 98.8% to 97.9%.** No check regressed —
+  the harness stripped the trailing letter from lettered IDs on the stated but
+  unverified grounds that it was "a Gherkin-authoring convention … not part of
+  the reported message id". It is part of it: `MessageId.java` declares
+  `HTM_060a`/`HTM_060b`/`OPF-004a`…`f`/`OPF-007a`…`c`/`RSC-006b`/`RSC-007w` as
+  distinct constants with their own severities. Six scenarios were scored as
+  hits for a bare ID epubcheck never prints; they are now honest misses, and the
+  remaining lettered IDs are a real, newly-visible gap.
+
+- **The `compare` harness now sees epubcheck's lettered IDs at all.** Its
+  extraction regex required `[A-Z]+-[0-9]+`, which matches neither `HTM_060b`
+  (underscore) nor `OPF-086b` (trailing letter), so those lines were dropped
+  from epubcheck's side of the diff and every such ID appeared as one "only we
+  report" — a false-positive candidate manufactured by the instrument. Shelf
+  agreement goes from 97 to 100 of 104 books, two of the three gained by fixing
+  the harness rather than the validator.
+
 - **A misplaced element no longer cascades findings onto everything inside it**
   (#69). When an element was rejected as "not allowed here", its subtree was
   then checked against *the parent's* content model — the model the element had

@@ -709,10 +709,39 @@ fn is_valid_uuid(uuid: &str) -> bool {
 /// actually look like one.
 fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
     const OPF_NS: &str = "http://www.idpf.org/2007/opf";
+    // Only the *publication* identifier, i.e. the one `unique-identifier`
+    // points at. epubcheck's single OPF-085 call site sits inside
+    // `if (idAttr.trim().equals(uniqueIdent))`, so a secondary `dc:identifier`
+    // - a Calibre UUID, an ISBN, a scheme-tagged duplicate - is never judged.
+    // We were checking every one of them, which is a false positive on any
+    // book that carries a second, malformed UUID it does not publish under.
+    let unique_id = doc
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "package")
+        .and_then(|p| p.attribute("unique-identifier"))
+        .map(str::trim);
     for n in doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
     {
+        let is_unique = n
+            .attribute("id")
+            .map(str::trim)
+            .is_some_and(|id| !id.is_empty() && Some(id) == unique_id);
+        if !is_unique {
+            continue;
+        }
+        // epubcheck reads the element's text as `getPrivateData(TEXT)` and
+        // does nothing at all when it is null - an element with no text node
+        // whatsoever. So `<dc:identifier opf:scheme="UUID"/>` draws no
+        // OPF-085; the empty value is already an RSC-005 from the schema
+        // (`DC.metadata-required-content` in `opf20.rng`), and adding "'' is
+        // not a valid UUID" on top says nothing the reader doesn't have.
+        // Note this is *not* the same as trimming to empty: whitespace-only
+        // text is non-null there, and does still report.
+        if !n.children().any(|c| c.is_text()) {
+            continue;
+        }
         let text: String = n
             .descendants()
             .filter(|t| t.is_text())
@@ -2319,9 +2348,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // `schemas/package.sch`'s own version-scoped pattern); EPUB 2
             // is more lenient - a real corpus fixture expects only a
             // warning.
+            // `dc:language` shares this branch in epubcheck (`"title".equals
+            // (name) || "language".equals(name)`, then one EPUB 2 emptiness
+            // check for both), so an empty one is OPF-055 here too - not
+            // OPF-072, and not the RSC-005 the Schematron used to raise.
             for n in md
                 .children()
-                .filter(|n| n.is_element() && n.tag_name().name() == "title")
+                .filter(|n| n.is_element() && matches!(n.tag_name().name(), "title" | "language"))
             {
                 let text: String = n
                     .descendants()
@@ -2329,10 +2362,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter_map(|t| t.text())
                     .collect();
                 if text.trim().is_empty() {
+                    let name = n.tag_name().name();
                     report.push_at_pos(
                         OPF_055,
                         Severity::Warning,
-                        "dc:title is empty",
+                        format!("dc:{name} is empty"),
                         opf_path,
                         Position::of(n),
                     );
@@ -2383,15 +2417,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
         // OPF-072 (usage, EPUB 2 only): a `dc:*` metadata element with no
         // text. epubcheck reports each empty one; in EPUB 3 an empty element
-        // is a schema error instead, so this is version-scoped. `title` and
-        // `date` are excluded because they have their own, more specific
-        // empty/invalid checks above (OPF-055 / OPF-054), and reporting both
-        // would double up on the one element.
+        // is a schema error instead, so this is version-scoped.
+        //
+        // The exclusions are not a judgement call - they are epubcheck's own
+        // branch structure. `OPFHandler` walks the `dc:*` names through an
+        // if/else-if chain and only its final `else` reaches OPF_072, so the
+        // four names that take an earlier branch can never produce it:
+        // `identifier`, `date`, `title` and `language`. Each has a more
+        // specific check instead (nothing at all for a bare empty
+        // `identifier`; OPF-054 / OPF-055 / OPF-055 for the rest).
+        //
+        // We had only `title` and `date`, so an empty `dc:identifier` drew a
+        // spurious OPF-072 and an empty `dc:language` drew OPF-072 where
+        // epubcheck gives OPF-055.
         if is_epub2 {
             for n in md.children().filter(|n| {
                 n.is_element()
                     && n.tag_name().namespace() == Some(DC_ELEMENTS_NS)
-                    && !matches!(n.tag_name().name(), "title" | "date")
+                    && !matches!(
+                        n.tag_name().name(),
+                        "identifier" | "date" | "title" | "language"
+                    )
             }) {
                 let text: String = n
                     .descendants()
@@ -10237,6 +10283,150 @@ mod tests {
         assert_eq!(
             rules(epub_with_metadata("2.0", "<dc:date></dc:date>")).len(),
             0
+        );
+        // ...and so are identifier and language, which is the half this
+        // originally got wrong. epubcheck's `dc:*` handling is an
+        // if/else-if chain whose final `else` alone reaches OPF_072, and
+        // all four of these take an earlier branch. Measured one book each
+        // against epubcheck 5.3.0: an empty `dc:language` is OPF-055 there
+        // and an empty `dc:identifier` draws nothing but the schema's own
+        // RSC-005.
+        assert_eq!(
+            rules(epub_with_metadata("2.0", "<dc:language></dc:language>")).len(),
+            0,
+            "an empty dc:language is OPF-055, not OPF-072"
+        );
+        assert_eq!(
+            rules(epub2_with_metadata_block(
+                "<dc:identifier id=\"id\" opf:scheme=\"UUID\"/>\
+                 <dc:title>T</dc:title><dc:language>en</dc:language>"
+            ))
+            .len(),
+            0,
+            "an empty dc:identifier is the schema's business, not OPF-072"
+        );
+    }
+
+    /// An EPUB 2 book whose whole `<metadata>` body is supplied by the test —
+    /// `epub_with_metadata` always writes its own valid `dc:identifier`, and
+    /// these cases are *about* that element. `opf:` is bound here because the
+    /// EPUB 2 `scheme` attribute lives in it.
+    fn epub2_with_metadata_block(metadata: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf">{metadata}</metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// An empty `dc:identifier` must not cascade. epubcheck reads its text as
+    /// `getPrivateData(TEXT)` and does nothing at all when that is null, so
+    /// the *only* finding is the schema's RSC-005 - no "'' is not a valid
+    /// UUID" (OPF-085), and no NCX-001 either, since the `UNIQUE_IDENT`
+    /// feature NCX-001 is guarded on is recorded in the same skipped block.
+    ///
+    /// A real shelf book (`opf:scheme="UUID"` on a self-closing identifier)
+    /// drew three findings from us where epubcheck draws one.
+    #[test]
+    fn an_empty_unique_identifier_reports_only_the_schema_error() {
+        let ids = |bytes: Vec<u8>| {
+            let mut v = crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        const TAIL: &str = "<dc:title>T</dc:title><dc:language>en</dc:language>";
+        let empty = ids(epub2_with_metadata_block(&format!(
+            "<dc:identifier id=\"id\" opf:scheme=\"UUID\"/>{TAIL}"
+        )));
+        assert!(
+            !empty.contains(&crate::ids::OPF_085),
+            "an identifier with no text node at all is not an invalid UUID, got {empty:?}"
+        );
+        assert!(
+            !empty.contains(&crate::ids::NCX_001),
+            "and nothing may be compared against it, got {empty:?}"
+        );
+        // A malformed UUID that *is* present still reports - the guard is
+        // "no text node", not "trims to empty".
+        assert!(
+            ids(epub2_with_metadata_block(&format!(
+                "<dc:identifier id=\"id\" opf:scheme=\"UUID\">not-a-uuid</dc:identifier>{TAIL}"
+            )))
+            .contains(&crate::ids::OPF_085),
+            "a present but malformed UUID is still OPF-085"
+        );
+    }
+
+    /// OPF-085 judges only the identifier `unique-identifier` points at.
+    /// epubcheck's single call site sits inside
+    /// `idAttr.trim().equals(uniqueIdent)`, so a secondary `dc:identifier` -
+    /// a Calibre UUID, an ISBN - is never checked. We checked every one.
+    #[test]
+    fn opf_085_ignores_identifiers_the_package_does_not_publish_under() {
+        let has_085 = |bytes: Vec<u8>| {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::OPF_085)
+        };
+        const GOOD: &str = "<dc:identifier id=\"id\">urn:uuid:12345678-1234-1234-1234-123456789abc\
+                            </dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language>";
+        assert!(
+            !has_085(epub2_with_metadata_block(&format!(
+                "{GOOD}<dc:identifier opf:scheme=\"UUID\">not-a-uuid</dc:identifier>"
+            ))),
+            "a second, non-unique identifier is not the publication's own"
+        );
+        // The same malformed value *as* the unique identifier still reports,
+        // so this narrows the check rather than disabling it.
+        assert!(
+            has_085(epub2_with_metadata_block(
+                "<dc:identifier id=\"id\" opf:scheme=\"UUID\">not-a-uuid</dc:identifier>\
+                 <dc:title>T</dc:title><dc:language>en</dc:language>"
+            )),
+            "the publication's own malformed UUID is still OPF-085"
         );
     }
 

@@ -32,7 +32,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
 | **All** | **187** | **4** | **3** | **104** | **194** | **191/194** | |
 
-**epubveri implements 191 of 194 live epubcheck checks (~98%)** — 187 fully, 4 partially — plus 6 checks of its own (`ADV-*` and viewport/data-* extras). 104 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 191 of 194 live epubcheck checks (~98%)** — 187 fully, 4 partially — plus 5 checks of its own (`ADV-*` and viewport/data-* extras). 104 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -410,5 +410,4 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-002 | an at-rule uses a descriptor it does not define (usage) | — | Y |
 | ADV-003 | a CSS type selector names an element no vocabulary defines (usage, #28) | — | Y |
 | ADV-004 | an EPUB 2 package document is written in EPUB 3 (usage, #62) | — | Y |
-| HTM-060 | extra viewport meta, or viewport on a reflowable doc (usage) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |

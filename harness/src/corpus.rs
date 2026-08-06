@@ -44,11 +44,23 @@ struct Scenario {
 
 fn id_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // A trailing lowercase letter (e.g. "HTM-060a"/"HTM-060b") is a
-    // Gherkin-authoring convention to label sub-cases of the same real
-    // epubcheck code, not part of the reported message id - matched but
-    // not captured, so "HTM-060a" scores as "HTM-060".
-    RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,4}-\d{2,4})[a-z]?\b").unwrap())
+    // The trailing lowercase letter is part of the id, and the separator is
+    // not load-bearing.
+    //
+    // This used to strip the letter, on the stated grounds that "HTM-060a"/
+    // "HTM-060b" were a Gherkin-authoring convention for sub-cases of one
+    // real code. That was never checked and is false: `MessageId.java`
+    // declares `HTM_060a` and `HTM_060b` as distinct enum constants with
+    // their own severities, and epubcheck prints `USAGE(HTM_060b)` at
+    // runtime. Stripping it scored a tool reporting a bare "HTM-060" - which
+    // matches nothing epubcheck emits - as a hit, and did the same for
+    // OPF-004a..f, OPF-007a..c, RSC-006b and RSC-007w.
+    //
+    // The separator does need normalizing, because epubcheck is inconsistent
+    // about it: the Gherkin features write `HTM-060a`, the runtime prints
+    // `HTM_060a`, and `OPF_086b` prints with a hyphen. Both sides are folded
+    // to `-` so the comparison is about the id, not the punctuation.
+    RE.get_or_init(|| Regex::new(r"\b([A-Z]{2,4})[-_](\d{2,4}[a-z]?)\b").unwrap())
 }
 
 fn check_re() -> &'static Regex {
@@ -247,7 +259,7 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
         if line.starts_with('|') {
             let ids: Vec<String> = id_re()
                 .captures_iter(line)
-                .map(|c| c[1].to_string())
+                .map(|c| format!("{}-{}", &c[1], &c[2]))
                 .collect();
             if !ids.is_empty() {
                 let target = if table_mode == Some(TableMode::Warn) {
@@ -269,7 +281,7 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
         if line.contains("is reported") && !line.contains("reported 0 times") {
             let ids: Vec<String> = id_re()
                 .captures_iter(line)
-                .map(|c| c[1].to_string())
+                .map(|c| format!("{}-{}", &c[1], &c[2]))
                 .collect();
             // The corpus states a severity on every one of these steps and
             // it is not decoration: "usage X" means the book stays valid.
@@ -551,7 +563,7 @@ fn run(path: &Path, cli_profile: Option<&str>) -> Run {
 fn normalize_id(id: &str) -> String {
     id_re()
         .captures(id)
-        .map(|c| c[1].to_string())
+        .map(|c| format!("{}-{}", &c[1], &c[2]))
         .unwrap_or_else(|| id.to_string())
 }
 

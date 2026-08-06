@@ -43,12 +43,25 @@ use std::process::Command;
 
 use regex::Regex;
 
+/// Fold an id to one spelling so the two sides are comparable.
+///
+/// epubcheck is inconsistent about the separator in its lettered ids - it
+/// prints `HTM_060b` but `OPF-086b` - so both are folded to `-`.
+fn canon_id(id: &str) -> String {
+    id.replacen('_', "-", 1)
+}
+
 /// `SEVERITY(ID): path(line,col): message`
 fn epubcheck_ids(out: &str) -> BTreeMap<String, usize> {
-    let re = Regex::new(r"(?m)^(FATAL|ERROR|WARNING|INFO|USAGE)\(([A-Z]+-[0-9]+)\)").unwrap();
+    // The id may carry a trailing lowercase letter (`HTM_060b`, `OPF-086b`,
+    // `RSC-007w`) and may use either separator. Matching only
+    // `[A-Z]+-[0-9]+` skipped those lines entirely, so epubcheck's side of
+    // the diff never contained them and every one showed up as an id "only
+    // we report" - a false-positive candidate manufactured by the harness.
+    let re = Regex::new(r"(?m)^(FATAL|ERROR|WARNING|INFO|USAGE)\(([A-Z]+[-_][0-9]+[a-z]?)\)").unwrap();
     let mut m = BTreeMap::new();
     for c in re.captures_iter(out) {
-        *m.entry(c[2].to_string()).or_insert(0) += 1;
+        *m.entry(canon_id(&c[2])).or_insert(0) += 1;
     }
     m
 }
@@ -58,7 +71,7 @@ fn epubveri_ids(path: &Path) -> BTreeMap<String, usize> {
     match epubveri::validate_path(path) {
         Ok(report) => {
             for msg in &report.messages {
-                *m.entry(msg.id.to_string()).or_insert(0) += 1;
+                *m.entry(canon_id(msg.id)).or_insert(0) += 1;
             }
         }
         Err(e) => {

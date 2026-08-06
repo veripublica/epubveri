@@ -61,7 +61,15 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
             );
         }
         // NCX-001: the dtb:uid doesn't match the package's identifier.
-        if content.trim() != package_uid.trim() {
+        //
+        // Nothing to compare against when the package has no identifier
+        // *value*. epubcheck guards this on
+        // `featureReport.hasFeature(UNIQUE_IDENT)`, and that feature is only
+        // recorded inside `OPFHandler`'s `if (idval != null)` - so a book
+        // whose `<dc:identifier/>` is empty draws no NCX-001 there. Reporting
+        // one says the dtb:uid "does not match ''", which blames the NCX for
+        // a defect in the OPF that is already reported on its own.
+        if !package_uid.trim().is_empty() && content.trim() != package_uid.trim() {
             report.push_at_pos(
                 NCX_001,
                 Severity::Error,
