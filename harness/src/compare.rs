@@ -58,7 +58,8 @@ fn epubcheck_ids(out: &str) -> BTreeMap<String, usize> {
     // `[A-Z]+-[0-9]+` skipped those lines entirely, so epubcheck's side of
     // the diff never contained them and every one showed up as an id "only
     // we report" - a false-positive candidate manufactured by the harness.
-    let re = Regex::new(r"(?m)^(FATAL|ERROR|WARNING|INFO|USAGE)\(([A-Z]+[-_][0-9]+[a-z]?)\)").unwrap();
+    let re =
+        Regex::new(r"(?m)^(FATAL|ERROR|WARNING|INFO|USAGE)\(([A-Z]+[-_][0-9]+[a-z]?)\)").unwrap();
     let mut m = BTreeMap::new();
     for c in re.captures_iter(out) {
         *m.entry(canon_id(&c[2])).or_insert(0) += 1;

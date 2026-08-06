@@ -57,6 +57,9 @@ pub const RSC_004: &str = "RSC-004"; // a resource is encrypted; its content is 
 pub const RSC_005: &str = "RSC-005";
 pub const RSC_006: &str = "RSC-006"; // a remote resource is referenced from an HTML "a" element
 pub const RSC_007: &str = "RSC-007"; // a reference points to a resource missing from the publication
+// The warning form, and the only case epubcheck splits out: an EPUB 3 package
+// `<link href>` whose target is not in the container.
+pub const RSC_007W: &str = "RSC-007w";
 pub const RSC_008: &str = "RSC-008"; // a remote resource is used but not declared in the manifest
 pub const RSC_009: &str = "RSC-009"; // a non-SVG image is referenced with a URL fragment identifier
 pub const RSC_010: &str = "RSC-010"; // a toc nav link targets a resource that isn't a Content Document
@@ -82,7 +85,13 @@ pub const RSC_026: &str = "RSC-026"; // a URL is path-absolute or escapes the co
 // --- OPF package document (dedicated codes, used verbatim) ---
 pub const OPF_005: &str = "OPF-005"; // a prefix declaration has no URI after the prefix name
 pub const OPF_006: &str = "OPF-006"; // a prefix declaration's URI is not a valid URI
+// epubcheck's `VocabUtil.checkPrefixes` is one if/else-if chain per mapping,
+// so exactly one of these four can fire for a given prefix. The bare OPF-007
+// is the chain's `else`.
 pub const OPF_007: &str = "OPF-007"; // a reserved vocabulary prefix is redeclared
+pub const OPF_007A: &str = "OPF-007a"; // the reserved "_" prefix is declared
+pub const OPF_007B: &str = "OPF-007b"; // a prefix is mapped to a default-vocabulary URI
+pub const OPF_007C: &str = "OPF-007c"; // a prefix is mapped to the Dublin Core elements namespace
 pub const OPF_001: &str = "OPF-001"; // error parsing the EPUB version
 pub const OPF_002: &str = "OPF-002"; // the OPF file was not found in the EPUB
 pub const OPF_029: &str = "OPF-029"; // a resource's declared media-type doesn't match its actual (sniffed) format

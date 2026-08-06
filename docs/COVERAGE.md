@@ -19,9 +19,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 22 | 1 | 0 | 2 | 23 | 23/23 | reviewed |
-| OPF | 77 | 0 | 3 | 15 | 80 | 77/80 | reviewed |
-| RSC | 26 | 3 | 0 | 4 | 29 | 29/29 | reviewed |
-| HTM | 20 | 0 | 0 | 28 | 20 | 20/20 | reviewed |
+| OPF | 83 | 0 | 9 | 15 | 92 | 83/92 | reviewed |
+| RSC | 27 | 3 | 1 | 4 | 31 | 30/31 | reviewed |
+| HTM | 22 | 0 | 0 | 29 | 22 | 22/22 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 9 | 0 | 0 | 2 | 9 | 9/9 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **187** | **4** | **3** | **104** | **194** | **191/194** | |
+| **All** | **196** | **4** | **10** | **105** | **210** | **200/210** | |
 
-**epubveri implements 191 of 194 live epubcheck checks (~98%)** — 187 fully, 4 partially — plus 5 checks of its own (`ADV-*` and viewport/data-* extras). 104 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 200 of 210 live epubcheck checks (~95%)** — 196 fully, 4 partially — plus 5 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -74,9 +74,18 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-002 | The OPF file "%1$s" was not found in the EPUB. | Y | Y | the OPF file was not found in the EPUB |
 | OPF-003 | Item "%1$s" exists in the EPUB, but is not declared in the OPF manifest. | Y | Y | a container resource isn't listed in the manifest (usage) |
 | OPF-004 | Invalid prefix declaration: leading or trailing whitespace is not allowed. | Y | Y | the prefix attribute value has a syntax error |
+| OPF-004a | Invalid prefix declaration: found empty prefix. | Y | x | Not implemented. |
+| OPF-004b | Invalid prefix "%1$s": must be a valid non-colonized name (aka "NCName"). | Y | x | Not implemented. |
+| OPF-004c | Invalid prefix declaration: prefix "%1$s" must be immediately followed by a colon chara... | Y | x | Not implemented. |
+| OPF-004d | Invalid prefix declaration: prefix "%1$s" must be separated by its URI with a space. | Y | x | Not implemented. |
+| OPF-004e | Invalid prefix declaration: found illegal whitespace between prefix and URI. | Y | x | Not implemented. |
+| OPF-004f | Invalid prefix declaration: found illegal whitespace between prefix mappings. | Y | x | Not implemented. |
 | OPF-005 | Invalid prefix declaration: URI for prefix "%1$s" doesn’t exist. | Y | Y | A prefix declaration ending in a name with no URI. Reported instead of the OPF-004 syntax error, as epubcheck does - its parser ends in a non-final URI state there (#50). |
 | OPF-006 | Invalid prefix declaration: URI "%1$s" is not a valid URI. | Y | Y | A prefix declaration whose URI half doesn't parse. Conservative, matching Java's `new URI(...)`: illegal characters and malformed percent-escapes only (#50). |
 | OPF-007 | Re-declaration of reserved prefix "%1$s". | Y | Y | a reserved vocabulary prefix is redeclared |
+| OPF-007a | Invalid prefix mapping: prefix "_" must not be declared. | Y | Y | the reserved "_" prefix is declared |
+| OPF-007b | Invalid prefix mapping: default vocabulary "%1$s" must not be re-declared. | Y | Y | a prefix is mapped to a default-vocabulary URI |
+| OPF-007c | Invalid prefix mapping: a prefix to the Dublin Core /elements/1.1/ namespace must not b... | Y | Y | a prefix is mapped to the Dublin Core elements namespace |
 | OPF-008 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-009 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-010 | Error resolving reference: "%1$s". | Y | ⊘ | Dead ID - "error resolving reference" appears only in MessageId and DefaultSeverities; no Java line emits it and no scenario expects it (verified 2026-08-04, sixth of its kind after OPF-036, OPF-011, PKG-015, NAV-001). Reference resolution is reported under RSC-007/RSC-012. |
@@ -88,6 +97,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-016 | The element "rootfile" is missing its required attribute "full-path". | Y | Y | Reported for every `<rootfile>`, whatever its media type - epubcheck's handler asks for the path before it looks at the type. |
 | OPF-017 | The attribute "full-path" on element "rootfile" must not be empty. | Y | Y | Whitespace-only counts as empty, matching epubcheck's `trim()`. |
 | OPF-018 | The "remote-resources" property was declared in the Package Document, but no reference ... | Y | Y | a content property is declared but not needed (warning variant) |
+| OPF-018b | The "remote-resources" property was declared in the Package Document, but no reference ... | Y | Y | same, but usage-level: the book uses scripting, which could reference a remote resource dynamically |
 | OPF-019 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-020 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | OPF-021 | Use of non-registered URI scheme type in href: "%1$s". | Y | x | Unregistered URI scheme in a *DTBook* content document's `<a href external="true">` - its only call site is DTBookHandler, not the OPF. Gated behind DTBook validation, which is deliberately out of scope (owner decision, #52): a legacy DAISY format EPUB 2 permits but the ecosystem has moved off, same call as OPF-047. We still accept `application/x-dtbook+xml` as a content type; we just don't validate those documents. Counted as a gap rather than N/A on purpose - it is a real check we don't do, and calling it N/A would inflate coverage with a scope decision. |
@@ -152,6 +162,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-084 | Found an EPUB Dictionary collection containing resource "%1$s" which is neither a Searc... | Y | Y | a dictionary collection link targets neither a Search Key Map nor an XHTML doc |
 | OPF-085 | dc:identifier" value "%1$s" is marked as a UUID, but is an invalid UUID. | Y | Y | a urn:uuid: dc:identifier isn't a valid UUID |
 | OPF-086 | Property "%1$s" is deprecated. Consider using %2$s instead. | Y | Y | warning: a deprecated rendition property/value or deprecated meta viewport |
+| OPF-086b | epub:type value "%1$s" is deprecated. Consider using %2$s instead. | Y | Y | same family, usage-level: a deprecated epub:type semantic value |
 | OPF-087 | epub:type value "%1$s" is not allowed on documents of type "%2$s". | Y | Y | epub:type value only restates its host element's own native semantic (usage) |
 | OPF-088 | Unrecognized epub:type value "%1$s". | Y | Y | epub:type value isn't in the default vocabulary (usage) |
 | OPF-089 | The "alternate" link rel keyword cannot be paired with other keywords. | Y | Y | an "alternate" link is combined with another rel keyword |
@@ -162,6 +173,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-094 | The "media-type" attribute is required for "%1$s" links. | Y | Y | a "record"/"voicing" link is missing a media-type |
 | OPF-095 | The "media-type" attribute of "voicing" links must be an audio MIME type, but found "%1... | Y | Y | a "voicing" link's media-type isn't an audio type |
 | OPF-096 | Non-linear content must be reachable, but found no hyperlink to "%1$s". | Y | Y | non-linear content isn't reachable from the reading order |
+| OPF-096b | No hyperlink was found to non-linear document "%1$s", please check that it can be reach... | Y | Y | same, but usage-level: the book uses scripting, which could add reachability dynamically |
 | OPF-097 | Resource "%1$s" is listed in the manifest, but no reference to it was found in content ... | Y | Y | a manifest resource that no document references (usage) |
 | OPF-098 | The "href" attribute must reference resources, not elements in the package document, bu... | Y | Y | a link target must not reference a manifest item id |
 | OPF-099 | The manifest must not list the package document. | Y | Y | a manifest item references the package document itself |
@@ -176,7 +188,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-004 | File "%1$s" is encrypted, its content will not be checked. | Y | Y | a resource is encrypted; its content is not checked (INFO) |
 | RSC-005 | Error while parsing file: %1$s | Y | ~ | XHTML content model is real (EPUB 2 XHTML 1.1 grammar + EPUB 3 HTML5 grammar + Schematron nesting/IDREF rules + closed per-element attribute allowlists). **SVG is not an opaque subtree** - epubcheck validates SVG twice, and only the small `forgiving` grammar is normative (id datatype, title/foreignObject content models, `epub:type` placement); the full SVG 1.1 grammar runs with `isNormative=false`, so its findings are RSC-025 usage - which is the shape `src/svg.rs` already has. Of the three normative rules we do all three (`epub:type` placement matched to epubcheck's own allowlist), except the SVG `id` datatype. MathML: both the EPUB restriction (Presentation-only + `semantics`) and the MathML3 presentation **content models** are implemented - the arity of `mfrac`/`msubsup`/`munderover` and the like, and table containment. Attribute *values* stay permissive throughout (MathML attributes are unconstrained, `role` accepts any token, `aria-*` unranged) - a separate surface with its own false-positive risk and much less to catch. |
 | RSC-006 | Remote resource reference is not allowed in this context; resource "%1$s" must be locat... | Y | Y | Remote stylesheet references (also SVG stylesheet forms). |
+| RSC-006b | Resource "%1$s" is located outside the EPUB Container; please check the resource is ret... | Y | x | Not implemented. |
 | RSC-007 | Referenced resource "%1$s" could not be found in the EPUB. | Y | Y | a reference points to a resource missing from the publication |
+| RSC-007w | Referenced resource "%1$s" could not be found in the EPUB. | Y | Y |  |
 | RSC-008 | Referenced resource "%1$s" is not declared in the OPF manifest. | Y | Y | a remote resource is used but not declared in the manifest |
 | RSC-009 | A non-SVG image resource should not be defined with a fragment identifier. | Y | Y | a non-SVG image is referenced with a URL fragment identifier |
 | RSC-010 | Reference to non-standard resource type found. | Y | Y | a toc nav link targets a resource that isn't a Content Document |
@@ -222,6 +236,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM-012 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-013 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-014 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
+| HTM-014a | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-015 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-016 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | HTM-017 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
@@ -255,6 +270,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM-057 | Viewport "%1$s" value must be a positive number or the keyword "device-%1$s | Y | Y | viewport width/height value fails the format grammar |
 | HTM-058 | HTML documents must be encoded in UTF-8, but UTF-16 was detected. | Y | Y | content document isn't UTF-8 encoded |
 | HTM-059 | Viewport "%1$s" property must not be defined more than once, but found values [%2$s]. | Y | Y | viewport width or height key appears more than once |
+| HTM-060a | EPUB reading systems must ignore secondary viewport meta elements in fixed-layout docum... | Y | Y | a secondary viewport meta in a fixed-layout doc (usage) |
+| HTM-060b | EPUB reading systems must ignore viewport meta elements in reflowable documents; viewpo... | Y | Y | a viewport meta in a reflowable doc (usage) |
 | HTM-061 | %1$s" is not a valid custom data attribute (it must have at least one character after t... | Y | Y | an invalid data-* attribute name |
 
 ### CSS  _(reviewed)_

@@ -40,7 +40,28 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   INFO for both cases — an ID no epubcheck output contains, so a toolchain
   filtering on epubcheck's IDs would never match it. Now split, and at USAGE.
 
+- **The three special prefix-mapping faults now carry their own IDs, and only
+  one can fire per mapping** (#70). `prefix="_: …"` is OPF-007a, a prefix mapped
+  to a default-vocabulary URI is OPF-007b, one mapped to the Dublin Core
+  elements namespace is OPF-007c; the bare OPF-007 is left for its real case, a
+  reserved prefix redeclared. epubcheck's `VocabUtil.checkPrefixes` is an
+  if/else-if chain, so `prefix="_: http://purl.org/dc/elements/1.1/"` gave us two
+  findings against its one; it is a chain here too now.
+
+- **A missing EPUB 3 package `<link href>` target is RSC-007w**, the warning
+  form epubcheck splits out for exactly that case. The severity was already
+  right and only the ID was wrong.
+
 ### Changed
+
+- **The coverage matrix reads 200 of 210 (~95%), not 191 of 194 (~98%)** (#70).
+  `harness/src/coverage.rs` extracted epubcheck's IDs with a regex requiring the
+  enum name to end in digits, so all 17 whose name ends in a letter were absent
+  from the universe the matrix is built over — 16 of them live checks. The
+  denominator was missing them and the published percentage was overstated. Ten
+  gaps remain: `OPF-004a`…`f` (epubcheck picks those from a character-level
+  state machine we have not ported), `RSC-006b`, and the three long-standing
+  scope decisions.
 
 - **The corpus harness no longer credits us for message IDs we do not emit, so
   the headline recall figure moves from 98.8% to 97.9%.** No check regressed —
@@ -49,8 +70,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the reported message id". It is part of it: `MessageId.java` declares
   `HTM_060a`/`HTM_060b`/`OPF-004a`…`f`/`OPF-007a`…`c`/`RSC-006b`/`RSC-007w` as
   distinct constants with their own severities. Six scenarios were scored as
-  hits for a bare ID epubcheck never prints; they are now honest misses, and the
-  remaining lettered IDs are a real, newly-visible gap.
+  hits for a bare ID epubcheck never prints. Five have since been earned back by
+  the OPF-007 and RSC-007w work above, so recall reads 98.7%; the last is
+  `OPF-004c`.
+
+  The same belief had propagated into the validator: `check_prefix_declaration`
+  documented its single-ID design as *confirmed* by the harness stripping "the
+  a/b/c Gherkin sub-case suffixes". An instrument is not a source about the
+  thing it measures.
 
 - **The `compare` harness now sees epubcheck's lettered IDs at all.** Its
   extraction regex required `[A-Z]+-[0-9]+`, which matches neither `HTM_060b`

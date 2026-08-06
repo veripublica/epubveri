@@ -978,16 +978,28 @@ const MARC_RELATORS: &[&str] = &[
 ];
 
 /// Validates a `prefix`/`epub:prefix` attribute's declared value: syntax
-/// errors (OPF-004), the reserved prefix `_` (OPF-007), a prefix mapped
-/// to one of the 4 default-vocabulary URIs (OPF-007), a prefix mapped to
-/// the Dublin Core elements namespace (OPF-007), and a reserved prefix
-/// redeclared to a *different* URI than its own default (OPF-007,
-/// pre-existing check) - all four conditions share the single OPF-007
-/// message ID (confirmed: the corpus harness's own ID-matching in
-/// `harness/src/corpus.rs` strips the "a"/"b"/"c" Gherkin sub-case
-/// suffixes real epubcheck's feature
-/// file uses to label them). Returns the declared name->URI map for the
-/// caller's own OPF-028 (undeclared-prefix-usage) checking.
+/// errors (OPF-004), the reserved prefix `_` (OPF-007a), a prefix mapped to
+/// one of the 4 default-vocabulary URIs (OPF-007b), a prefix mapped to the
+/// Dublin Core elements namespace (OPF-007c), and a reserved prefix
+/// redeclared to a *different* URI than its own default (bare OPF-007).
+/// Returns the declared name->URI map for the caller's own OPF-028
+/// (undeclared-prefix-usage) checking.
+///
+/// **This comment used to say all four shared the single OPF-007 ID, and
+/// cited the corpus harness as confirmation** - that its ID matching "strips
+/// the a/b/c Gherkin sub-case suffixes real epubcheck's feature file uses to
+/// label them". They are not Gherkin labels: `MessageId.java` declares
+/// OPF_007a/b/c as constants and epubcheck emits them. The harness was
+/// wrong, and its error was read as evidence and designed into the
+/// validator - which is the whole reason #70 exists. An instrument is not a
+/// source about the thing it measures.
+///
+/// Still coarse, and knowingly: `syntax_errors` is a count, so every syntax
+/// fault reports the bare OPF-004 where epubcheck picks one of
+/// OPF-004a..OPF-004f from a character-level state machine
+/// (`PrefixDeclarationParser`). Splitting those means porting that machine,
+/// and getting it subtly wrong invents errors on an attribute most EPUB 3
+/// books carry - so it is tracked in #70 rather than guessed at here.
 fn check_prefix_declaration(
     prefix_attr: roxmltree::Attribute,
     path: &str,
@@ -1026,10 +1038,19 @@ fn check_prefix_declaration(
             );
         }
     }
+    // OPF-007's four cases, as an if/else-if chain rather than four
+    // independent `if`s, because that is what epubcheck's
+    // `VocabUtil.checkPrefixes` is: at most one finding per mapping. Written
+    // as independent tests, a `_` prefix pointed at the Dublin Core namespace
+    // drew two findings from us and one from epubcheck.
+    //
+    // Each case also has its own message ID there (#70). We reported the bare
+    // OPF-007 for all four, which is the ID of the *last* case only, so three
+    // of them named a code epubcheck does not emit for that condition.
     for (name, uri) in &pairs {
         if name == "_" {
             report.push_node_attr(
-                OPF_007,
+                OPF_007A,
                 Severity::Error,
                 "the prefix \"_\" must not be declared",
                 path,
@@ -1038,10 +1059,9 @@ fn check_prefix_declaration(
                 "opf.prefix.reserved_underscore",
                 Vec::new(),
             );
-        }
-        if DEFAULT_VOCAB_URIS.contains(&uri.as_str()) {
+        } else if DEFAULT_VOCAB_URIS.contains(&uri.as_str()) {
             report.push_node_attr(
-                OPF_007,
+                OPF_007B,
                 Severity::Error,
                 format!("prefix '{name}' must not be assigned to a default-vocabulary URI"),
                 path,
@@ -1050,10 +1070,9 @@ fn check_prefix_declaration(
                 "opf.prefix.assigned_to_default_vocab_uri",
                 vec![name.clone()],
             );
-        }
-        if uri == DC_ELEMENTS_NS {
+        } else if uri == DC_ELEMENTS_NS {
             report.push_node_attr(
-                OPF_007,
+                OPF_007C,
                 Severity::Error,
                 format!("prefix '{name}' must not be mapped to the Dublin Core elements namespace"),
                 path,
@@ -1062,8 +1081,7 @@ fn check_prefix_declaration(
                 "opf.prefix.assigned_to_dc_namespace",
                 vec![name.clone()],
             );
-        }
-        if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| n == name)
+        } else if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| n == name)
             && uri != default_uri
         {
             report.push_node_attr(
@@ -3455,8 +3473,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
         let resolved = resolve(&base_dir, href);
         if !name_index.contains_key(&nfc(&resolved)) {
+            // RSC-007w, not RSC-007: epubcheck's `checkUndeclaredReference`
+            // splits this one case out by ID, `version == VERSION_3 &&
+            // reference.type == LINK`, and it is the *warning* form. We
+            // already had the severity right and the ID wrong (#70).
+            //
+            // The EPUB 2 arm keeps the ID it had rather than taking
+            // epubcheck's error-level bare RSC-007, because OPF 2.0 has no
+            // package `<link>` to begin with, so which of us is right there
+            // is unmeasured. Not worth a restrictive change on a shape no
+            // book can legally contain.
             report.push_node_attr(
-                RSC_007,
+                if is_epub3 { RSC_007W } else { RSC_007 },
                 Severity::Warning,
                 format!("link references a missing resource '{href}'"),
                 opf_path,
@@ -9966,6 +9994,69 @@ mod tests {
         // A well-formed declaration produces neither.
         let (_, errors, dangling) = super::parse_prefix_value("foaf: http://xmlns.com/foaf/");
         assert_eq!((errors, dangling), (0, None));
+    }
+
+    /// #70: the three special prefix-mapping faults each have their own
+    /// epubcheck ID, and `VocabUtil.checkPrefixes` is an if/else-if chain, so
+    /// at most one fires per mapping.
+    ///
+    /// Both halves matter. We used to emit the bare OPF-007 for all four
+    /// cases — an ID epubcheck emits only for the last — and to test them
+    /// independently, so `_` mapped to the Dublin Core namespace produced two
+    /// findings against epubcheck's one.
+    #[test]
+    fn each_prefix_mapping_fault_has_its_own_id_and_fires_once() {
+        let ids_for = |prefix: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id" prefix="{prefix}">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let d = roxmltree::Document::parse(&opf).unwrap();
+            let pkg = d.root_element();
+            let attr = super::attr_no_ns_node(pkg, "prefix").unwrap();
+            let mut report = crate::report::Report::new();
+            super::check_prefix_declaration(attr, "OEBPS/content.opf", pkg, &mut report);
+            report
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| id.starts_with("OPF-007"))
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(ids_for("_: http://example.org/x"), [crate::ids::OPF_007A]);
+        assert_eq!(
+            ids_for("x: http://idpf.org/epub/vocab/package/meta/#"),
+            [crate::ids::OPF_007B],
+            "a default-vocabulary URI"
+        );
+        assert_eq!(
+            ids_for("x: http://purl.org/dc/elements/1.1/"),
+            [crate::ids::OPF_007C],
+            "the Dublin Core elements namespace"
+        );
+        assert_eq!(
+            ids_for("dcterms: http://example.org/not-dcterms"),
+            [crate::ids::OPF_007],
+            "a reserved prefix redeclared is the chain's else, and keeps the bare id"
+        );
+        // The chain, not four independent tests: `_` is also mapped to the
+        // Dublin Core namespace here, and only the first case may report.
+        assert_eq!(
+            ids_for("_: http://purl.org/dc/elements/1.1/"),
+            [crate::ids::OPF_007A],
+            "one finding per mapping, not one per matching condition"
+        );
+        // A clean declaration says nothing at all.
+        assert!(ids_for("foaf: http://xmlns.com/foaf/spec/").is_empty());
     }
 
     /// OPF-006 (#50): the URI half has to parse as a URI. Deliberately

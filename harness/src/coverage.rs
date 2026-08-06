@@ -317,9 +317,13 @@ fn ann_for(id: &str) -> Option<&'static Ann> {
 
 /// Sort key shared by every ID list: family name, then the number as a
 /// number - so OPF-9 precedes OPF-10, which a plain string sort would not.
-fn id_key(id: &str) -> (String, u32) {
-    let (fam, num) = id.split_once('-').unwrap_or((id, "0"));
-    (fam.to_string(), num.parse().unwrap_or(0))
+fn id_key(id: &str) -> (String, u32, String) {
+    let (fam, rest) = id.split_once('-').unwrap_or((id, "0"));
+    // A lettered id sorts immediately after its own number, not as 0:
+    // OPF-004, OPF-004a, ... OPF-004f, OPF-005.
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let letter: String = rest[digits.len()..].to_string();
+    (fam.to_string(), digits.parse().unwrap_or(0), letter)
 }
 
 fn fam_key(fam: &str) -> (usize, String) {
@@ -401,11 +405,18 @@ fn main() {
     };
 
     // --- 1. epubcheck ID universe (MessageId.java) ---
-    // Match the enum NAME (always XXX_NNN), not the string literal -
-    // epubcheck's literals are inconsistent (some use "HTM_054" with an
-    // underscore instead of "HTM-054"). Normalize to hyphens.
+    // Match the enum NAME, not the string literal - epubcheck's literals are
+    // inconsistent (some use "HTM_054" with an underscore instead of
+    // "HTM-054"). Normalize to hyphens.
+    //
+    // The name may end in a lowercase letter, and 17 of them do
+    // (`HTM_060a`, `OPF_004a`..`f`, `OPF_007a`..`c`, `RSC_007w`, ...).
+    // Requiring digits at the end dropped every one of them from the ID
+    // universe, so the matrix was computed against a denominator that was
+    // missing 16 live checks and the published percentage was overstated
+    // (#70).
     let mid = read(ecj.join("MessageId.java"));
-    let re_id = Regex::new(r"(?m)^\s*([A-Z]+)_([0-9]+)\(").unwrap();
+    let re_id = Regex::new(r"(?m)^\s*([A-Z]+)_([0-9]+[a-z]?)\(").unwrap();
     let mut ec_ids: Vec<String> = re_id
         .captures_iter(&mid)
         .map(|c| format!("{}-{}", &c[1], &c[2]))
@@ -416,7 +427,7 @@ fn main() {
 
     // --- 2. epubcheck message text (MessageBundle.properties) ---
     let bundle = read(ec.join("MessageBundle.properties"));
-    let re_text = Regex::new(r"^([A-Z]+)_([0-9]+)=(.*)$").unwrap();
+    let re_text = Regex::new(r"^([A-Z]+)_([0-9]+[a-z]?)=(.*)$").unwrap();
     let mut text: HashMap<String, String> = HashMap::new();
     for line in bundle.lines() {
         if let Some(c) = re_text.captures(line) {
@@ -429,7 +440,7 @@ fn main() {
 
     // --- 3. epubcheck severity (DefaultSeverities.java) ---
     let sevsrc = read(ecj.join("DefaultSeverities.java"));
-    let re_sev = Regex::new(r"MessageId\.([A-Z]+)_([0-9]+),\s*Severity\.([A-Z]+)").unwrap();
+    let re_sev = Regex::new(r"MessageId\.([A-Z]+)_([0-9]+[a-z]?),\s*Severity\.([A-Z]+)").unwrap();
     let mut sev: HashMap<String, String> = HashMap::new();
     for c in re_sev.captures_iter(&sevsrc) {
         let s = &c[3];
@@ -441,12 +452,16 @@ fn main() {
     // The trailing `// comment` is OPTIONAL - some IDs (e.g. RSC-005) have
     // none, and requiring it would wrongly drop them from epubveri's coverage.
     let ids_rs = read(root.join("src/ids.rs"));
+    // Our own literals are inconsistent for the same reason epubcheck's are
+    // - `HTM_060a` mirrors the separator epubcheck prints, `OPF-086b` the one
+    // it prints there - so accept either and fold to `-` for the join.
     let re_ev =
-        Regex::new(r#"pub const [A-Z0-9_]+: &str = "([A-Z]+-[0-9]+)";(?:\s*//\s*(.*))?"#).unwrap();
+        Regex::new(r#"pub const [A-Z0-9_]+: &str = "([A-Z]+[-_][0-9]+[a-z]?)";(?:\s*//\s*(.*))?"#)
+            .unwrap();
     let mut ev: HashMap<String, String> = HashMap::new();
     for c in re_ev.captures_iter(&ids_rs) {
         let comment = c.get(2).map(|m| m.as_str().trim()).unwrap_or("");
-        ev.insert(c[1].to_string(), comment.to_string());
+        ev.insert(c[1].replacen('_', "-", 1), comment.to_string());
     }
 
     // --- build rows ---
