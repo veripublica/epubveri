@@ -8,6 +8,50 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A misplaced element no longer cascades findings onto everything inside it**
+  (#69). When an element was rejected as "not allowed here", its subtree was
+  then checked against *the parent's* content model — the model the element had
+  just failed. Nested `<span>`s inside a `<span>` misplaced in a `<blockquote>`
+  each drew their own error: on one real book we reported 944 where epubcheck
+  reports 316, the surplus being entirely depths 2 and 3.
+
+  The subtree is now checked against the misplaced element's **own** model, as
+  epubcheck does. That corrects the same bug in the other direction too, which
+  is the half worth noting: a `<div>` inside that misplaced `<span>` is legal in
+  the blockquote model and illegal in span's, so it was silently *missed*. It is
+  now reported. One book went from 16 findings to 243, matching epubcheck
+  exactly.
+
+  Elements the grammar defines nowhere (`<center>`, `<font>`, an HTML5 `<nav>`
+  in EPUB 2) keep the previous behaviour — they have no model of their own to
+  check against, and epubcheck reports their bad contents too (#24).
+
+  Across the 104-book shelf: five books changed, all now at or below epubcheck's
+  finding count, and 97 of 104 agree with it on the ID set exactly.
+
+- **EPUB 2's `<map>` no longer admits the EPUB 3 vocabulary.** The EPUB 2 branch
+  referenced the EPUB 3 `map`, whose content model is HTML5 flow content, so
+  `<section>`/`<figure>`/`<nav>` and friends were accepted four steps from the
+  root via `body > p > map`. Known and recorded as a harmless permissiveness
+  gap; it stopped being harmless once #69's fix resolved an element's model by
+  reachability through the grammar, at which point it also handed EPUB 2 the
+  EPUB 3 model for shared element names.
+
+  XHTML 1.1's `id`-required and `alt`-required constraints on `map`/`area` are
+  deliberately **not** adopted here — both are restrictive changes with their
+  own false-positive risk, and this one is about closing the leak.
+
+- **An obsolete attribute is no longer reported twice.** `clear`, `align` and
+  the rest were reported by both the DOM check and the grammar, so `<p
+  clear="all">` produced two findings where epubcheck produces one. Pre-existing,
+  and widened by #69 (the attributes of a misplaced element never reached the
+  grammar before); the grammar's finding is now suppressed when the DOM check is
+  verified to have already reported that exact attribute.
+
 ## [0.9.7] - 2026-08-05
 
 ### Fixed

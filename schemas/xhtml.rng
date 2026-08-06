@@ -982,30 +982,65 @@
     </element>
   </define>
 
+  <define name="areaEl">
+    <element name="area">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="shape"><data type="token"/></attribute></optional>
+      <optional><attribute name="coords"><data type="string"/></attribute></optional>
+      <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="alt"><data type="string"/></attribute></optional>
+      <optional><attribute name="target"><data type="token"/></attribute></optional>
+      <!-- #33: area.attrs (embed.rnc). NOT referrerpolicy - confirmed
+           absent from epubcheck's own area.attrs (only phrase.rnc's
+           `a` gets it; a concrete case of epubcheck's schema
+           diverging from the plain HTML spec, per this epic's own
+           method note - mirror epubcheck, not the spec). -->
+      <optional><attribute name="download"><data type="string"/></attribute></optional>
+      <optional><attribute name="ping"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
   <define name="mapEl">
     <element name="map">
       <ref name="globalAttrs"/>
       <optional><attribute name="name"><data type="string"/></attribute></optional>
       <interleave>
-        <zeroOrMore>
-          <element name="area">
-            <ref name="globalAttrs"/>
-            <optional><attribute name="shape"><data type="token"/></attribute></optional>
-            <optional><attribute name="coords"><data type="string"/></attribute></optional>
-            <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
-            <optional><attribute name="alt"><data type="string"/></attribute></optional>
-            <optional><attribute name="target"><data type="token"/></attribute></optional>
-            <!-- #33: area.attrs (embed.rnc). NOT referrerpolicy - confirmed
-                 absent from epubcheck's own area.attrs (only phrase.rnc's
-                 `a` gets it; a concrete case of epubcheck's schema
-                 diverging from the plain HTML spec, per this epic's own
-                 method note - mirror epubcheck, not the spec). -->
-            <optional><attribute name="download"><data type="string"/></attribute></optional>
-            <optional><attribute name="ping"><data type="string"/></attribute></optional>
-          </element>
-        </zeroOrMore>
+        <zeroOrMore><ref name="areaEl"/></zeroOrMore>
         <ref name="flowContent"/>
       </interleave>
+    </element>
+  </define>
+
+  <!-- EPUB 2's own `map`. Until #69 the EPUB 2 branch referenced `mapEl`
+       above, whose content is `flowContent` - the *EPUB 3* pool. That was
+       recorded as a known, deliberate leftover ("map is close to extinct in
+       real EPUBs; the one row of the table not matched"), and as a
+       permissiveness gap it was indeed near-harmless.
+
+       It stopped being harmless once anything reasoned over the grammar by
+       *reachability*: `html -> body -> p -> map -> flowContent` put every
+       HTML5 element - section, figure, nav, video, math - inside the EPUB 2
+       grammar's reachable set, four steps from the root. #69's fix resolves a
+       misplaced element's own content model that way, so the leak silently
+       handed EPUB 2 the EPUB 3 model for `span`, and made `nav` look like an
+       element EPUB 2 has. A permissiveness gap in one place became a
+       correctness bug somewhere else entirely.
+
+       XHTML 1.1 (csismap.rng) is `(Block.class | area)+`. Deliberately NOT
+       taken from it here: `map.attlist` is `CommonIdRequired.attrib` and
+       `area` requires `alt`. Both are real XHTML 1.1 constraints and both are
+       *restrictive* changes with their own false-positive risk, so they are
+       left for a change that is about `map` rather than about #69. -->
+  <define name="mapEl-epub2">
+    <element name="map">
+      <ref name="globalAttrs-epub2"/>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <oneOrMore>
+        <choice>
+          <ref name="areaEl"/>
+          <ref name="epub2BlockChoice"/>
+        </choice>
+      </oneOrMore>
     </element>
   </define>
 
@@ -2024,7 +2059,7 @@
           <ref name="epub2Flow"/>
         </interleave>
       </element>
-      <ref name="mapEl"/>
+      <ref name="mapEl-epub2"/>
       <ref name="epub2BothChoice"/>
     </choice>
   </define>

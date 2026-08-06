@@ -1331,6 +1331,97 @@ mod tests {
         );
     }
 
+    /// #69. A misplaced element whose *name* the grammar does have is
+    /// descended into against **its own** content model, not against the
+    /// position it was rejected at.
+    ///
+    /// `<blockquote>` takes XHTML 1.1's `Block.model`, so a `<span>` in it is
+    /// misplaced - but a `<span>` inside that `<span>` is perfectly ordinary,
+    /// and scoring it against the *blockquote* model reported it too. On one
+    /// real book that turned epubcheck's 316 findings into 944: depth 1 was
+    /// right and depths 2 and 3 were invented. epubcheck reports the
+    /// outermost only, and the whole nest is one defect.
+    #[test]
+    fn a_misplaced_element_does_not_cascade_onto_its_descendants() {
+        let g = xhtml_grammar_epub2();
+        assert_eq!(
+            fail_locals(
+                &g,
+                &format!(
+                    "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>\
+                     <blockquote><span>a<span>b<span>c</span></span></span></blockquote>\
+                     </body></html>"
+                )
+            ),
+            ["span", "blockquote"],
+            "the outermost span once, then blockquote's own incomplete content"
+        );
+    }
+
+    /// The same rule read in the other direction, and the half that is a
+    /// *missing* finding rather than an invented one: `<div>` is legal in the
+    /// `<blockquote>` model the span was rejected against, and illegal in
+    /// span's own. Checking the subtree against the parent's model therefore
+    /// stayed silent on it, where epubcheck reports it. One fix, both
+    /// directions - which is why the two halves are pinned together.
+    #[test]
+    fn a_misplaced_element_subtree_is_judged_by_its_own_model() {
+        let g = xhtml_grammar_epub2();
+        assert_eq!(
+            fail_locals(
+                &g,
+                &format!(
+                    "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>\
+                     <blockquote><span><div>x</div></span></blockquote></body></html>"
+                )
+            ),
+            ["span", "div", "blockquote"],
+            "span misplaced, and the div inside it illegal in span's own model"
+        );
+        // ...and a child that IS legal in that model stays silent.
+        assert_eq!(
+            fail_locals(
+                &g,
+                &format!(
+                    "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>\
+                     <blockquote><span><em>x</em></span></blockquote></body></html>"
+                )
+            ),
+            ["span", "blockquote"],
+            "em is ordinary inside a span, misplaced or not"
+        );
+    }
+
+    /// EPUB 2's `<map>` must not be a door into the EPUB 3 vocabulary.
+    ///
+    /// It was one until #69: the EPUB 2 branch referenced the EPUB 3 `mapEl`,
+    /// whose content is `flowContent`, so `html > body > p > map` put every
+    /// HTML5 element four steps from the EPUB 2 root. That was known and
+    /// judged harmless as a permissiveness gap - and it stopped being
+    /// harmless the moment anything resolved an element's model by
+    /// reachability, which is exactly what the two tests above do.
+    #[test]
+    fn epub2_map_does_not_admit_the_epub3_vocabulary() {
+        let two = xhtml_grammar_epub2();
+        let body = "<p><map name=\"m\"><section>x</section></map></p>";
+        assert!(
+            fail_locals(
+                &two,
+                &format!(
+                    "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+                     <body>{body}</body></html>"
+                )
+            )
+            .contains(&"section".to_string()),
+            "an HTML5 element inside an EPUB 2 <map> is still an HTML5 element"
+        );
+        // EPUB 3's own map is untouched: flow content there is correct.
+        assert!(ok(
+            &xhtml_grammar(),
+            &xhtml_doc("<p><map name=\"m\"><span>x</span></map></p>")
+        ));
+    }
+
     /// The flip side: descending must not re-report the rejected container\'s
     /// text as a loose-text error. `<ol><span>x</span></ol>` blames the
     /// `<span>` once - not a second time for the `x` inside it.

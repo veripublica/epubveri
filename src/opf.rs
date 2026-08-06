@@ -4280,6 +4280,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 {
                     continue;
                 }
+                // `check_dom`/`check_dom_epub2` ran earlier over this same
+                // document and report obsolete attributes under their own
+                // rule. Where both fire we emit one attribute twice, and
+                // epubcheck emits it once.
+                //
+                // Asked of the report rather than assumed, the same shape as
+                // the entity suppression above: the two checks own overlapping
+                // but not nested sets (`clear` is obsolete *and* absent from
+                // the grammar; a misspelt attribute is only the latter), so a
+                // claim that one covers the other would be the exact kind of
+                // belief that keeps turning out false here.
+                //
+                // This predates #69 - `<p clear="all">` already drew both -
+                // but #69 widened its reach: the attributes of a *misplaced*
+                // element never reached the grammar at all before, so on one
+                // shelf book ten `<br clear>` went from one finding each to
+                // two.
+                if let crate::rng::Blame::Attribute(node, a, _) = &blame
+                    && let here = crate::xmlext::node_path_attr(*node, *a)
+                    && report.messages.iter().any(|m| {
+                        m.rule == Some("htm.obsolete_attribute")
+                            && m.location.as_deref() == Some(path.as_str())
+                            && m.element_path.as_ref().is_some_and(|p| p.path == here.path)
+                    })
+                {
+                    continue;
+                }
                 push_blame(report, &path, rule, &blame);
             }
             // EPUB 3 content-model nesting constraints (Schematron), reported as

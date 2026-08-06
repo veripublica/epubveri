@@ -38,6 +38,26 @@ fn is_ws(s: &str) -> bool {
     s.chars().all(char::is_whitespace)
 }
 
+/// Does this name class name `{ns}local` *outright*?
+///
+/// Deliberately not `NameClass::contains`, which is the wrong question here.
+/// `contains` answers "would this class accept the name", so every wildcard
+/// (`anyName`, `nsName`, and the `except` forms) answers yes - and the XHTML
+/// grammar has wildcards, for foreign subtrees. Asking `contains` when
+/// resolving an element's own model reported that the grammar has a model for
+/// `<center>` and `<font>`, elements it deliberately defines nowhere, and the
+/// wildcard's content model is not theirs.
+fn names_exactly(nc: &NameClass, ns: &str, local: &str) -> bool {
+    match nc {
+        NameClass::Name { ns: n, local: l } => n == ns && l == local,
+        NameClass::Choice(a, b) => names_exactly(a, ns, local) || names_exactly(b, ns, local),
+        NameClass::AnyName
+        | NameClass::AnyNameExcept(_)
+        | NameClass::NsName { .. }
+        | NameClass::NsNameExcept { .. } => false,
+    }
+}
+
 /// `applyAfter f p` — replace each `after(p1, k)` continuation `k` inside `p`
 /// with `after(p1, f(k))`, distributing over choice. (No `Ref` appears here:
 /// it only runs on `startTagOpenDeriv` results, which are after/choice/empty.)
@@ -51,20 +71,86 @@ fn apply_after<F: Fn(Pat) -> Pat>(p: &Pat, f: &F) -> Pat {
 
 struct Env<'a> {
     defs: &'a [Pat],
+    start: Pat,
     nullable_memo: RefCell<HashMap<usize, bool>>,
     nullable_busy: RefCell<HashSet<usize>>,
     open_memo: RefCell<HashMap<(usize, String, String), Pat>>,
     open_busy: RefCell<HashSet<usize>>,
+    /// Every `Element` pattern reachable from `start`, built on first use.
+    /// Only consulted after a rejection, so a valid document never pays for it.
+    elem_pool: RefCell<Option<Vec<Pat>>>,
+    elem_memo: RefCell<HashMap<(String, String), Option<Pat>>>,
 }
 
 impl<'a> Env<'a> {
-    fn new(defs: &'a [Pat]) -> Self {
+    fn new(defs: &'a [Pat], start: Pat) -> Self {
         Self {
             defs,
+            start,
             nullable_memo: RefCell::new(HashMap::new()),
             nullable_busy: RefCell::new(HashSet::new()),
             open_memo: RefCell::new(HashMap::new()),
             open_busy: RefCell::new(HashSet::new()),
+            elem_pool: RefCell::new(None),
+            elem_memo: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// The grammar's own model for an element of this name, or `None` if the
+    /// grammar does not define one anywhere reachable — epubcheck's "not
+    /// allowed *anywhere*" as against "not allowed *here*".
+    ///
+    /// Reachability from `start` is the point, not a flat scan of `defs`:
+    /// `xhtml.rng` holds both versions' grammars in one file and defines `span` twice
+    /// (EPUB 3 phrasing content at one site, `epub2Inline` at another), so a
+    /// flat scan would hand the EPUB 2 branch the EPUB 3 model and quietly
+    /// accept HTML5 content inside a rejected EPUB 2 element.
+    fn element_model(&self, ns: &str, local: &str) -> Option<Pat> {
+        let key = (ns.to_string(), local.to_string());
+        if let Some(hit) = self.elem_memo.borrow().get(&key) {
+            return hit.clone();
+        }
+        if self.elem_pool.borrow().is_none() {
+            let mut pool = Vec::new();
+            self.collect_elements(&self.start.clone(), &mut pool, &mut HashSet::new());
+            *self.elem_pool.borrow_mut() = Some(pool);
+        }
+        let found = self
+            .elem_pool
+            .borrow()
+            .as_ref()
+            .expect("just populated")
+            .iter()
+            .filter(|p| match &***p {
+                Pattern::Element(nc, _) => names_exactly(nc, ns, local),
+                _ => false,
+            })
+            .cloned()
+            .reduce(choice);
+        self.elem_memo.borrow_mut().insert(key, found.clone());
+        found
+    }
+
+    fn collect_elements(&self, p: &Pat, out: &mut Vec<Pat>, visited: &mut HashSet<usize>) {
+        match &**p {
+            Pattern::Element(_, content) => {
+                out.push(p.clone());
+                self.collect_elements(content, out, visited);
+            }
+            Pattern::Choice(a, b)
+            | Pattern::Interleave(a, b)
+            | Pattern::Group(a, b)
+            | Pattern::After(a, b) => {
+                self.collect_elements(a, out, visited);
+                self.collect_elements(b, out, visited);
+            }
+            Pattern::OneOrMore(a) | Pattern::List(a) | Pattern::Attribute(_, a) => {
+                self.collect_elements(a, out, visited)
+            }
+            Pattern::Ref(i) if visited.insert(*i) => {
+                self.collect_elements(&self.defs[*i], out, visited)
+            }
+            _ => {}
         }
     }
 
@@ -365,12 +451,13 @@ impl<'a> Env<'a> {
     // even when errors were found, so nullability is no longer the oracle.
     /// Validate `parent`'s children against pattern `p`.
     ///
-    /// `in_rejected` is set when descending *into* an element that was itself
-    /// already rejected (for diagnostics - see the call site). In that mode
-    /// loose text is ignored: the container is gone, so its text can't be
-    /// "not allowed here" against a model it was never going to satisfy, and
-    /// scoring it would double-report. Element children are still checked, so
-    /// a bad element nested inside a bad container is still found.
+    /// `in_rejected` marks the one descent that still passes the *parent's*
+    /// pattern down: into an element the grammar defines nowhere, so it has no
+    /// model of its own to offer (see the call site). In that mode loose text
+    /// is ignored - the container is gone, so its text can't be "not allowed
+    /// here" against a model it was never going to satisfy, and scoring it
+    /// would double-report. Element children are still checked, so a bad
+    /// element nested inside a bad container is still found.
     fn children_deriv<'d, 'i>(
         &self,
         p: &Pat,
@@ -392,15 +479,44 @@ impl<'a> Env<'a> {
                     let mut expected = Vec::new();
                     self.expected_names(&cur, &mut expected, &mut HashSet::new());
                     blames.push(Blame::Element(n, ElementFault::NotAllowed(expected)));
-                    // Descend into the rejected element and check its children
-                    // against this same position, for diagnostics only - the
-                    // returned pattern is discarded so siblings still see the
-                    // pre-rejection `cur`. A rejected container can hold errors
-                    // of its own, and reporting only the container hides them:
-                    // an obsolete `<center>` wrapping obsolete `<font>`/`<s>`
-                    // would report just the `<center>` and stay silent on the
-                    // rest, where epubcheck names each (issue #24).
-                    let _ = self.children_deriv(&cur, n, blames, true);
+                    // Descend into the rejected element against *its own* model
+                    // from the grammar, not against `cur`. The returned pattern
+                    // is discarded either way, so siblings still see the
+                    // pre-rejection `cur`.
+                    //
+                    // Checking the subtree against `cur` - the parent's model -
+                    // is what #69 was: a misplaced element's descendants were
+                    // scored against a model they were never in the scope of.
+                    // Nested `<span>`s inside a `<span>` misplaced in
+                    // `<blockquote>` each drew their own "not allowed here"
+                    // (one real book: we reported 944 where epubcheck reports
+                    // 316, the surplus being entirely depth 2 and 3), while a
+                    // `<div>` inside that same `<span>` - legal in the
+                    // blockquote model, illegal in span's - was *missed*. Same
+                    // root cause, both directions.
+                    //
+                    // `element_model` returning `None` means the grammar has
+                    // no element of this name *anywhere* - an obsolete
+                    // `<center>`, an HTML5 `<nav>` in EPUB 2 - so there is no
+                    // model to check the subtree against. Then, and only then,
+                    // fall back to the pre-#69 behaviour of descending with
+                    // `cur`: that is what names the obsolete `<font>`/`<s>`
+                    // buried inside a `<center>`, which epubcheck does report
+                    // and which #24 exists for.
+                    //
+                    // The two branches are not interchangeable, and measuring
+                    // one shape does not settle the other. epubcheck's own
+                    // messages keep them apart too - "not allowed *here*" for
+                    // an element the grammar has, "not allowed *anywhere*" for
+                    // one it doesn't.
+                    match self.element_model(ns, local) {
+                        Some(model) => {
+                            let _ = self.child_deriv(&model, n, blames);
+                        }
+                        None => {
+                            let _ = self.children_deriv(&cur, n, blames, true);
+                        }
+                    }
                     continue;
                 }
                 cur = self.child_deriv(&cur, n, blames);
@@ -762,7 +878,7 @@ pub fn validate_node_report<'d, 'i>(
     grammar: &Grammar,
     root: roxmltree::Node<'d, 'i>,
 ) -> Vec<Blame<'d, 'i>> {
-    let env = Env::new(&grammar.defs);
+    let env = Env::new(&grammar.defs, grammar.start.clone());
     let mut blames = Vec::new();
     let p = env.child_deriv(&grammar.start, root, &mut blames);
     // Validity is "no blames": recovery may leave `p` nullable even after
