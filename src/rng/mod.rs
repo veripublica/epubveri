@@ -947,15 +947,18 @@ mod tests {
             "EPUB 2 keeps accesskey on <a>"
         );
 
-        // ARIA and `role` are deliberately still shared, pending their own
-        // decision (#66's ARIA half, held for the desktop shelf). The event
-        // handlers are no longer: `content.rng` never includes `events.rng`,
-        // so OPS 2.0.1 has no event-handler attributes at all, and epubcheck
-        // rejects `onclick`/`onload`/`onerror` in EPUB 2 - measured, one book
-        // each.
+        // ARIA and `role` went with them in the end - see
+        // `xhtml_grammar_epub2_has_no_role_or_aria`. The event handlers are
+        // the clearest case: `content.rng` never includes `events.rng`, the
+        // same exclusion that removes Forms, so OPS 2.0.1 has no
+        // event-handler attributes at all.
         assert!(
-            ok(&two, r#"<p role="doc-footnote" aria-label="x">t</p>"#),
-            "aria/role are not part of this slice"
+            !ok(&two, r#"<p role="doc-footnote" aria-label="x">t</p>"#),
+            "OPS 2.0.1 predates WAI-ARIA by four years"
+        );
+        assert!(
+            ok(&three, r#"<p role="doc-footnote" aria-label="x">t</p>"#),
+            "EPUB 3 has them"
         );
         assert!(
             !ok(&two, r#"<p onclick="f()">t</p>"#),
@@ -1940,17 +1943,21 @@ mod tests {
         assert!(ok(&xhtml_grammar(), &xml));
     }
 
+    /// EPUB 2 has no `role` and no `aria-*` (#66).
+    ///
+    /// This asserted the opposite while the ARIA half of #66 was held back.
+    /// The chronology is why epubcheck rejects all 48: OPS 2.0.1 was finalised
+    /// 2010-09-04, WAI-ARIA 1.0 became a Recommendation 2014-03-20, so
+    /// `schema/20` could not have carried them.
     #[test]
-    fn xhtml_grammar_epub2_accepts_role_and_aria_globals() {
-        // globalAttrsCore is shared with the EPUB 2 grammar; #34 doesn't
-        // decide EPUB 2/XHTML 1.1 correctness for these HTML5-only
-        // families (tracked separately for the #36 cutover), but pre-#36
-        // behavior must stay identical to the wildcard's on both grammars.
+    fn xhtml_grammar_epub2_has_no_role_or_aria() {
         let xml = format!(
             "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
              <body><p role=\"note\" aria-label=\"x\">hi</p></body></html>"
         );
-        assert!(ok(&xhtml_grammar_epub2(), &xml));
+        assert!(!ok(&xhtml_grammar_epub2(), &xml));
+        // The EPUB 3 half is the guard: they are ordinary globals there.
+        assert!(ok(&xhtml_grammar(), &xml));
     }
 
     // #34 slice B: on* event-handler attributes.

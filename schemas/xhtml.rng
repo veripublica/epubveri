@@ -349,18 +349,29 @@
         <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
       </attribute>
     </optional>
-    <ref name="ariaAttrs"/>
   </define>
 
-    <!-- ARIA states/properties and `role`, factored out of
-       `globalAttrsRest` so the EPUB 2 set can keep them while dropping
-       everything else (#66). epubcheck rejects all 48 of these in EPUB 2
-       - measured, one book per attribute - so this is a deliberate
-       divergence, not an oversight: the owner is holding it until the
-       ~170-book desktop shelf can measure the blast radius, because
-       being wrong here means telling an author their accessibility
-       markup invalidates the book, and the laptop shelf has 0 of 60
-       EPUB 2 books using any of them. -->
+    <!-- ARIA states/properties and `role`. EPUB 3 only: `globalAttrsRest`
+       references this, `globalAttrsRest-epub2` does not (#66).
+
+       epubcheck rejects all 48 in EPUB 2 - measured, one book per attribute -
+       and the reason is chronological rather than editorial: OPS 2.0.1 was
+       finalised 2010-09-04 and WAI-ARIA 1.0 only became a W3C Recommendation
+       on 2014-03-20, so `schema/20` could not have contained them.
+
+       This was held back for a while on the grounds that being wrong here
+       means telling an author their accessibility markup invalidates their
+       book, and that the shelf could not see the affected population. What
+       changed is that four independent looks for that population came up
+       empty: 0 of 60 EPUB 2 books on the shelf use ARIA (and 0 declare any
+       accessibility metadata at all), the DAISY Consortium's own accessible
+       EPUB 2 sample uses none, and the one EPUB 3 -> EPUB 2 conversion on the
+       shelf carried 374 `epub:type` leftovers but no ARIA. The EPUB 2-era
+       accessibility tradition was NCX/DTBook, not ARIA.
+
+       Not proof of absence, and recorded as such: the owner's call was to
+       match epubcheck now and fix from a real report if one arrives, which is
+       how every other false positive in this project has been found. -->
   <define name="ariaAttrs">
     <optional><attribute name="role"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>

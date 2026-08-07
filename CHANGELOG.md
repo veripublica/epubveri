@@ -36,12 +36,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   On the reported book — the IDPF `cc-shared-culture` sample — these three take
   us from **38 errors to 2**, which is what epubcheck reports.
 
-- **EPUB 2 no longer grants 147 global attributes XHTML 1.1 does not have**
+- **EPUB 2 no longer grants the 195 global attributes XHTML 1.1 does not have**
   (#66). `globalAttrsRest` was shared with EPUB 3, so an EPUB 2 document was
   granted 207 attribute names where XHTML 1.1's `Common.attrib` grants seven.
   The event handlers, RDFa, microdata, ITS and the HTML5 globals are gone;
-  every one of the 147 was measured against epubcheck **one book per
-  attribute**, and it rejects all 147.
+  every one of the 147 non-ARIA names was measured against epubcheck **one book
+  per attribute**, and it rejects all 147; `role` and a sample of `aria-*` were
+  measured the same way.
 
   Two are relocated rather than dropped: XHTML 1.1 gives `tabindex` to
   `a`/`area`/`object` and `xml:space` to `pre`/`script`/`style`, so they move
@@ -56,16 +57,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   event-handler attributes at all — not even `onload` on `<body>`. A test
   asserting the opposite has been inverted.
 
-  **`aria-*` and `role` are deliberately still granted**, split out as
-  `ariaAttrs`. epubcheck rejects all 48, but being wrong there means telling an
-  author their accessibility markup invalidates the book, and the laptop shelf
-  cannot see the affected population: 0 of its 60 EPUB 2 books use a single one
-  (re-measured 2026-08-07; the 51 EPUB 3 books use them 447 times, so the zero
-  is real and not a broken scan). That half waits for the ~170-book desktop
-  shelf.
+  **`role` and the 47 `aria-*` go too**, completing #66. epubcheck rejects all
+  48, and the reason is chronological rather than editorial: OPS 2.0.1 was
+  finalised 2010-09-04 and WAI-ARIA 1.0 only became a W3C Recommendation on
+  2014-03-20, so `schema/20` could not have carried them.
 
-  Blast radius on the 114-book shelf: **one book, 54 findings, all `hidden`,
-  and epubcheck reports exactly the same 54.**
+  This half was held back while the shelf could not see the population it would
+  affect. Four independent looks then came up empty: 0 of 60 EPUB 2 books on the
+  shelf use ARIA and 0 declare any accessibility metadata at all; the DAISY
+  Consortium's own accessible EPUB 2 sample uses none; and the one EPUB 3 →
+  EPUB 2 conversion on the shelf carried 374 `epub:type` leftovers but no ARIA.
+  The EPUB 2-era accessibility tradition was NCX/DTBook. That is not proof of
+  absence, and it is not recorded as one — the call was to match epubcheck now
+  and fix from a real report if one arrives.
+
+  Blast radius on the 115-book shelf: **one book, 54 findings, all `hidden`,
+  and epubcheck reports exactly the same 54.** The ARIA half moves nothing at
+  all, which is the same silence that made it undecidable from the shelf.
 
 - **RSC-026 now applies to every reference, not just manifest hrefs.** epubcheck
   performs this check in `URLChecker`, its single URL-resolution point, so it
