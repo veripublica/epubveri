@@ -313,10 +313,113 @@
   <!-- Identical to `globalAttrsCore` but for the two datatypes above. -->
   <define name="globalAttrsCore-epub2">
     <ref name="identityAttrs-epub2"/>
-    <ref name="globalAttrsRest"/>
+    <ref name="globalAttrsRest-epub2"/>
   </define>
 
-  <define name="globalAttrsRest">
+  <!-- #66. XHTML 1.1's `Common.attrib` is exactly seven attributes - `class`,
+       `dir`, `id`, `lang`, `style`, `title`, `xml:lang` - and the last three
+       come from `identityAttrs-epub2` above, so this holds the other four.
+       EPUB 2 used to share `globalAttrsRest` with EPUB 3 and so granted 207
+       names where XHTML 1.1 grants seven.
+
+       Every one of the 147 names dropped here was measured against epubcheck
+       5.3.0, **one book per attribute**, and rejected by all 147 - the event
+       handlers, RDFa, microdata, ITS, and the HTML5 globals. Batching them
+       into one document was tried once before and lied (a fatal truncated the
+       run at attribute 59 and the survivors looked accepted), which is why
+       this costs 147 JVM starts instead of one.
+
+       ARIA and `role` are the deliberate exception, kept via `ariaAttrs` -
+       see that define. `tabindex` and `xml:space` are NOT dropped but
+       *relocated*: schema/20 gives them to specific elements (a/area/object,
+       and pre/script/style), so they move onto those element definitions
+       rather than disappearing. That distinction is the whole lesson of the
+       previous slice, where `content` and `accesskey` were removed as
+       "not global" and broke `<meta>` and `<a>`, which legitimately declare
+       them. "Not global" and "not valid anywhere" are different questions;
+       the test applied here is absence from all 25 modules `content.rng`
+       includes. -->
+  <define name="globalAttrsRest-epub2">
+    <optional><attribute name="class"><data type="string"/></attribute></optional>
+    <optional><attribute name="style"><data type="string"/></attribute></optional>
+    <optional><attribute name="title"><data type="string"/></attribute></optional>
+    <optional>
+      <attribute name="dir">
+        <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
+      </attribute>
+    </optional>
+    <ref name="ariaAttrs"/>
+  </define>
+
+    <!-- ARIA states/properties and `role`, factored out of
+       `globalAttrsRest` so the EPUB 2 set can keep them while dropping
+       everything else (#66). epubcheck rejects all 48 of these in EPUB 2
+       - measured, one book per attribute - so this is a deliberate
+       divergence, not an oversight: the owner is holding it until the
+       ~170-book desktop shelf can measure the blast radius, because
+       being wrong here means telling an author their accessibility
+       markup invalidates the book, and the laptop shelf has 0 of 60
+       EPUB 2 books using any of them. -->
+  <define name="ariaAttrs">
+    <optional><attribute name="role"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-busy"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-current"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-describedby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-details"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-disabled"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-errormessage"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-flowto"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-haspopup"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-hidden"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-invalid"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-keyshortcuts"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-label"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-labelledby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-live"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-owns"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-relevant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
+
+    <!-- #36: the rest of ARIA 1.2's states/properties - #34 slice A only
+           added the *global* ones (per-role-scoped ones were out of scope
+           there). Real epubcheck corpus fixture edupub-heading-aria-role-
+           valid.xhtml uses aria-level outside any role-pairing machinery
+           we implement, so - same as everywhere else in this epic - kept
+           as simple permissive globals rather than building real
+           role/attribute-pairing validation. -->
+    <optional><attribute name="aria-checked"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-expanded"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-pressed"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-selected"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-activedescendant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-autocomplete"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colcount"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colindex"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-colspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-level"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-modal"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-multiline"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-multiselectable"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-orientation"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-placeholder"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-posinset"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-setsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-readonly"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-required"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowcount"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowindex"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-sort"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuemax"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuemin"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuenow"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-valuetext"><data type="string"/></attribute></optional>
+  </define>
+
+<define name="globalAttrsRest">
     <optional><attribute name="class"><data type="string"/></attribute></optional>
     <optional><attribute name="style"><data type="string"/></attribute></optional>
     <optional><attribute name="title"><data type="string"/></attribute></optional>
@@ -526,62 +629,7 @@
          role tokens, and several aria-* values have real enum/idref
          constraints - both are real value-level work out of #34's scope
          ("role token-value validation can be a follow-up", issue #34). -->
-    <optional><attribute name="role"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-busy"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-current"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-describedby"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-details"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-disabled"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-errormessage"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-flowto"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-haspopup"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-hidden"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-invalid"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-keyshortcuts"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-label"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-labelledby"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-live"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-owns"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-relevant"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
-
-    <!-- #36: the rest of ARIA 1.2's states/properties - #34 slice A only
-           added the *global* ones (per-role-scoped ones were out of scope
-           there). Real epubcheck corpus fixture edupub-heading-aria-role-
-           valid.xhtml uses aria-level outside any role-pairing machinery
-           we implement, so - same as everywhere else in this epic - kept
-           as simple permissive globals rather than building real
-           role/attribute-pairing validation. -->
-    <optional><attribute name="aria-checked"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-expanded"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-pressed"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-selected"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-activedescendant"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-autocomplete"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-colcount"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-colindex"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-colspan"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-level"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-modal"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-multiline"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-multiselectable"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-orientation"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-placeholder"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-posinset"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-setsize"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-readonly"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-required"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-rowcount"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-rowindex"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-rowspan"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-sort"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-valuemax"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-valuemin"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-valuenow"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-valuetext"><data type="string"/></attribute></optional>
+    <ref name="ariaAttrs"/>
 
     <!-- #36: found by the cutover - <meta http-equiv="..." content="...">
          is one of the two most common <meta> shapes in real EPUB 3
@@ -985,6 +1033,7 @@
   <define name="areaEl">
     <element name="area">
       <ref name="globalAttrs"/>
+      <optional><attribute name="tabindex"><data type="integer"/></attribute></optional>
       <optional><attribute name="shape"><data type="token"/></attribute></optional>
       <optional><attribute name="coords"><data type="string"/></attribute></optional>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
@@ -1939,6 +1988,7 @@
         </element>
         <ref name="linkEl-epub2"/>
         <element name="style"><ref name="globalAttrsCore-epub2"/>
+          <optional><attribute name="xml:space"><choice><value>default</value><value>preserve</value></choice></attribute></optional>
           <optional><attribute name="type"><data type="string"/></attribute></optional>
           <optional><attribute name="media"><data type="string"/></attribute></optional>
           <text/>
@@ -2077,7 +2127,16 @@
       <element name="h5"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
       <element name="h6"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
       <element name="address"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
-      <element name="pre"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
+      <!-- #66: `xml:space` and `tabindex` left `globalAttrsRest-epub2`
+           because XHTML 1.1 does not make them global - but it does give
+           them to particular elements, so they are relocated here rather
+           than dropped. `pre.attlist` (text.rng), `script.attlist`,
+           `style.attlist` take xml:space; `a.attlist` (hypertext.rng),
+           `area.attlist` (csismap.rng) and `object.attlist` take tabindex.
+           Verified against epubcheck: it accepts all of these. -->
+      <element name="pre"><ref name="globalAttrs-epub2"/>
+        <optional><attribute name="xml:space"><choice><value>default</value><value>preserve</value></choice></attribute></optional>
+        <ref name="epub2Inline"/></element>
       <element name="div"><ref name="globalAttrs-epub2"/><ref name="epub2Flow"/></element>
       <!-- `blockquote` is `Block.model`, not flow: XHTML 1.1 gives it the
            same model as `body`, so an inline element, a `<br/>` or bare text
@@ -2146,7 +2205,9 @@
          target.rng     target
          csismap.rng    shape, coords, usemap
 
-       `accesskey`/`tabindex` are already covered by globalAttrs. -->
+       `accesskey` and `tabindex` are declared below rather than inherited:
+       neither is in XHTML 1.1's Common.attrib, so both left the shared
+       global set (#66), and hypertext.rng declares both here. -->
   <define name="aEl-epub2">
     <element name="a">
       <ref name="globalAttrs-epub2"/>
@@ -2158,6 +2219,7 @@
            shelf uses `<a accesskey>`, so this came from the schema rather than
            from a measurement; that is the point of reading it. -->
       <optional><attribute name="accesskey"><data type="string"/></attribute></optional>
+      <optional><attribute name="tabindex"><data type="integer"/></attribute></optional>
       <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <optional><attribute name="download"><data type="string"/></attribute></optional>
@@ -2177,6 +2239,8 @@
   <define name="objectEl-epub2">
     <element name="object">
       <ref name="globalAttrs-epub2"/>
+      <!-- object.attlist declares tabindex; it is not global in XHTML 1.1. -->
+      <optional><attribute name="tabindex"><data type="integer"/></attribute></optional>
       <optional><attribute name="data"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <!-- XHTML 1.1 `Length` (pixels or percentage), text in schema/20 (#43). -->

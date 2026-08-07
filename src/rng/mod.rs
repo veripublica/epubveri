@@ -944,14 +944,21 @@ mod tests {
             "EPUB 2 keeps accesskey on <a>"
         );
 
-        // Deliberately still shared, pending their own decision.
+        // ARIA and `role` are deliberately still shared, pending their own
+        // decision (#66's ARIA half, held for the desktop shelf). The event
+        // handlers are no longer: `content.rng` never includes `events.rng`,
+        // so OPS 2.0.1 has no event-handler attributes at all, and epubcheck
+        // rejects `onclick`/`onload`/`onerror` in EPUB 2 - measured, one book
+        // each.
         assert!(
-            ok(
-                &two,
-                r#"<p role="doc-footnote" aria-label="x" onclick="f()">t</p>"#
-            ),
-            "aria/role/event handlers are not part of this slice"
+            ok(&two, r#"<p role="doc-footnote" aria-label="x">t</p>"#),
+            "aria/role are not part of this slice"
         );
+        assert!(
+            !ok(&two, r#"<p onclick="f()">t</p>"#),
+            "the Events module is not in OPS 2.0.1"
+        );
+        assert!(ok(&three, r#"<p onclick="f()">t</p>"#), "EPUB 3 has them");
     }
 
     /// OPF 2.0.1's `<spine>` takes only `id` and `toc`; EPUB 3 added
@@ -1931,13 +1938,23 @@ mod tests {
         assert!(!ok(&xhtml_grammar(), &xml));
     }
 
+    /// EPUB 2 has no event-handler attributes at all (#66).
+    ///
+    /// This test used to assert the opposite. `content.rng` includes 25
+    /// modules and `events.rng` is not among them - the same exclusion that
+    /// removes the Forms module - so `onload` and `onclick` are declared
+    /// nowhere in OPS 2.0.1, not even on `<body>`. epubcheck rejects both,
+    /// measured one book per attribute; the assertion was encoding our own
+    /// permissiveness rather than epubcheck's behaviour.
     #[test]
-    fn xhtml_grammar_epub2_accepts_generic_event_handlers() {
+    fn xhtml_grammar_epub2_has_no_event_handlers() {
         let xml = format!(
             "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
              <body onload=\"init()\"><p onclick=\"hi()\">hi</p></body></html>"
         );
-        assert!(ok(&xhtml_grammar_epub2(), &xml));
+        assert!(!ok(&xhtml_grammar_epub2(), &xml));
+        // The EPUB 3 half is the guard: they are ordinary globals there.
+        assert!(ok(&xhtml_grammar(), &xml));
     }
 
     // #34 slice C: RDFA 1.1 global attributes.

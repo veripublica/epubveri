@@ -12,6 +12,37 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **EPUB 2 no longer grants 147 global attributes XHTML 1.1 does not have**
+  (#66). `globalAttrsRest` was shared with EPUB 3, so an EPUB 2 document was
+  granted 207 attribute names where XHTML 1.1's `Common.attrib` grants seven.
+  The event handlers, RDFa, microdata, ITS and the HTML5 globals are gone;
+  every one of the 147 was measured against epubcheck **one book per
+  attribute**, and it rejects all 147.
+
+  Two are relocated rather than dropped: XHTML 1.1 gives `tabindex` to
+  `a`/`area`/`object` and `xml:space` to `pre`/`script`/`style`, so they move
+  onto those elements. That distinction is what the previous slice got wrong,
+  when `content` and `accesskey` were removed as "not global" and broke
+  `<meta>` and `<a>`, which declare them. The test applied here is absence from
+  all 25 modules `content.rng` includes — `<a tabindex>`, `<pre xml:space>` and
+  `<object tabindex>` were each checked against epubcheck afterwards.
+
+  The Events module is the headline surprise: `content.rng` never includes
+  `events.rng`, the same exclusion that removes Forms, so OPS 2.0.1 has no
+  event-handler attributes at all — not even `onload` on `<body>`. A test
+  asserting the opposite has been inverted.
+
+  **`aria-*` and `role` are deliberately still granted**, split out as
+  `ariaAttrs`. epubcheck rejects all 48, but being wrong there means telling an
+  author their accessibility markup invalidates the book, and the laptop shelf
+  cannot see the affected population: 0 of its 60 EPUB 2 books use a single one
+  (re-measured 2026-08-07; the 51 EPUB 3 books use them 447 times, so the zero
+  is real and not a broken scan). That half waits for the ~170-book desktop
+  shelf.
+
+  Blast radius on the 114-book shelf: **one book, 54 findings, all `hidden`,
+  and epubcheck reports exactly the same 54.**
+
 - **RSC-026 now applies to every reference, not just manifest hrefs.** epubcheck
   performs this check in `URLChecker`, its single URL-resolution point, so it
   lands on every URL it resolves; ours sat on the manifest alone. A content
