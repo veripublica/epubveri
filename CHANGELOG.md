@@ -25,6 +25,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   unchanged; the corpus and the shelf are byte-identical. Unkeyed findings on
   the 115-book shelf go 291 → 287.
 
+- **Every finding a real book produces now carries a `rule`.** Sixteen further
+  check sites were unkeyed — `CSS-028`, `PKG-010`, `OPF-072`, `ACC-009`,
+  `OPF-090`, `RSC-004`, `OPF-030`, `NCX-001`, `OPF-052`, `OPF-003`, `NCX-006`,
+  `PKG-022`, `PKG-006`, `OPF-096b`, `OPF-053`, `OPF-029` — and most now carry
+  `params` as well. Across the 115-book shelf, unkeyed findings go **287 → 0**
+  of 23,254.
+
+  Counts, IDs, messages and positions are unchanged; corpus and shelf are
+  byte-identical. 124 push sites in the source are still unkeyed, but none of
+  them fires on any of the 115 books; they are named one at a time as evidence
+  arrives rather than in bulk, because a rule slug is a semi-public key and a
+  wrong name shipped is worse than no name at all.
+
   Two tests hold it: every pattern in both schemas must have a unique `@id`
   (without one a finding would publish a shared `…unnamed_pattern` key, which
   is worse than `None` because it looks real), and the slug derivation is

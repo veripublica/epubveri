@@ -811,12 +811,14 @@ fn check_font_face_spanned(
     // `@font-face` it sees, so a reader comparing the two outputs isn't
     // left wondering which tool missed an embedded font. Anchored at the
     // `@font-face` keyword; nothing about the rule is wrong.
-    report.push_at_pos(
+    report.push_full(
         CSS_028,
         Severity::Usage,
         "@font-face declaration",
         css_path,
         origin.position(css, name_span.start),
+        "css.font_face.declared",
+        Vec::new(),
     );
     if is_effectively_empty_spanned(block_values) {
         // An empty block has no token to point at, so anchor CSS-019 at the

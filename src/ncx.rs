@@ -70,7 +70,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
         // one says the dtb:uid "does not match ''", which blames the NCX for
         // a defect in the OPF that is already reported on its own.
         if !package_uid.trim().is_empty() && content.trim() != package_uid.trim() {
-            report.push_at_pos(
+            report.push_full(
                 NCX_001,
                 Severity::Error,
                 format!(
@@ -80,6 +80,8 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
                 ),
                 ncx_path,
                 Position::of(meta),
+                "ncx.uid.package_identifier_mismatch",
+                vec![content.trim().to_string(), package_uid.trim().to_string()],
             );
         }
     }
@@ -458,12 +460,14 @@ fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Rep
         .filter_map(|n| n.text())
         .collect();
     if text.trim().is_empty() {
-        report.push_at_pos(
+        report.push_full(
             NCX_006,
             Severity::Usage,
             "empty text label",
             ncx_path,
             Position::of(text_el),
+            "ncx.nav_label.empty_text",
+            Vec::new(),
         );
     }
 }

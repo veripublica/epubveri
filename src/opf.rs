@@ -2749,7 +2749,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .collect();
             if !is_valid_dc_date(text.trim()) {
                 if is_epub3 {
-                    report.push_at_pos(
+                    report.push_full(
                         OPF_053,
                         Severity::Warning,
                         format!(
@@ -2758,6 +2758,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         ),
                         opf_path,
                         Position::of(n),
+                        "opf.metadata.date_syntax_not_recommended",
+                        vec![text.trim().to_string()],
                     );
                 } else {
                     report.push_at_pos(
@@ -2804,12 +2806,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .collect();
                 if text.trim().is_empty() {
                     let name = n.tag_name().name();
-                    report.push_at_pos(
+                    report.push_full(
                         OPF_072,
                         Severity::Usage,
                         format!("dc:{name} metadata element is empty"),
                         opf_path,
                         Position::of(n),
+                        "opf.metadata.empty_element",
+                        vec![format!("dc:{name}")],
                     );
                 }
             }
@@ -2865,12 +2869,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if let Some(role) = n.attribute((OPF_NS_ROLE, "role")) {
                 let valid = MARC_RELATORS.contains(&role) || role.starts_with("oth.");
                 if !valid {
-                    report.push_at_pos(
+                    report.push_full(
                         OPF_052,
                         Severity::Error,
                         format!("'{role}' is not a recognized MARC relator code"),
                         opf_path,
                         Position::of(n),
+                        "opf.metadata.unknown_marc_relator",
+                        vec![role.to_string()],
                     );
                 }
             }
@@ -2915,7 +2921,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     );
                 }
                 None => {
-                    report.push_at_pos(
+                    report.push_full(
                         OPF_030,
                         Severity::Error,
                         format!(
@@ -2923,6 +2929,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         ),
                         opf_path,
                         Position::of(pkg),
+                        "opf.package.unique_identifier_unresolved",
+                        vec![uid.to_string()],
                     );
                 }
             }
@@ -3130,12 +3138,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // EPUB 3 only (issue #9: a legacy .otf font wrongly flagged in an
             // EPUB 2 book that epubcheck reports clean).
             if is_epub3 && crate::cmt::is_non_preferred_core_media_type(mt) {
-                report.push_at_pos(
+                report.push_full(
                     OPF_090,
                     Severity::Usage,
                     format!("media-type '{mt}' is a non-preferred (but valid) Core Media Type"),
                     opf_path,
                     Position::of(item),
+                    "opf.manifest_item.non_preferred_media_type",
+                    vec![mt.to_string()],
                 );
             }
             if mt == "text/x-oeb1-css" {
@@ -3187,12 +3197,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     );
                 }
                 if resolved.contains(' ') {
-                    report.push_at_pos(
+                    report.push_full(
                         PKG_010,
                         Severity::Warning,
                         format!("resource '{resolved}' has a space in its name"),
                         opf_path,
                         Position::of(item),
+                        "opf.manifest_item.filename_contains_space",
+                        vec![resolved.clone()],
                     );
                 }
                 if resolved_nfc == opf_own_name {
@@ -4344,11 +4356,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 continue;
             }
             if !manifest_paths.contains(&key) {
-                report.push_at(
+                report.push_at_rule(
                     OPF_003,
                     Severity::Usage,
                     format!("container resource '{name}' is not listed in the manifest"),
                     opf_path,
+                    "opf.container.resource_not_in_manifest",
+                    vec![name.to_string()],
                 );
             }
         }
@@ -5408,12 +5422,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     && c.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
             });
             if !n.has_attr_no_ns("alttext") && !has_annotation {
-                report.push_at_pos(
+                report.push_full(
                     ACC_009,
                     Severity::Usage,
                     "MathML markup has no alternative text",
                     path.clone(),
                     Position::of(n),
+                    "htm.mathml.no_alternative_text",
+                    Vec::new(),
                 );
             }
         }
@@ -6749,7 +6765,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             } else {
                 (OPF_096, Severity::Error)
             };
-            report.push_at_pos(
+            report.push_full(
                 id,
                 severity,
                 format!(
@@ -6758,6 +6774,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 ),
                 opf_path,
                 *itemref_pos,
+                "opf.spine.non_linear_unreachable",
+                vec![path.to_string()],
             );
         }
     }
@@ -8194,22 +8212,26 @@ fn check_image_signatures(
                 // a `.jpg` name holding a PNG - drew only OPF-029 and the
                 // extension was never looked at. Found by the differ, 2026-08-04.
                 if actual != *mt {
-                    report.push_at(
+                    report.push_at_rule(
                         OPF_029,
                         Severity::Error,
                         format!(
                             "image '{path}' is declared as '{mt}' but its actual format is '{actual}'"
                         ),
                         path.as_str(),
+                        "opf.manifest_item.declared_media_type_mismatch",
+                        vec![mt.to_string(), actual.to_string()],
                     );
                 }
                 let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
                 if !crate::image::conventional_extensions(actual).contains(&ext.as_str()) {
-                    report.push_at(
+                    report.push_at_rule(
                         PKG_022,
                         Severity::Warning,
                         format!("image '{path}' has a file extension that doesn't match its actual format '{actual}'"),
                         path.as_str(),
+                        "opf.manifest_item.extension_format_mismatch",
+                        vec![ext.clone(), actual.to_string()],
                     );
                 }
             }

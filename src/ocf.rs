@@ -536,10 +536,12 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // tools can sniff the media type at a fixed byte offset without a
     // full ZIP parse).
     if first_name != "mimetype" {
-        report.push(
+        report.push_rule(
             PKG_006,
             Severity::Error,
             "The 'mimetype' file must be the first entry in the EPUB ZIP",
+            "ocf.mimetype.not_first_entry",
+            Vec::new(),
         );
     } else {
         if !first_stored {
@@ -803,12 +805,14 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         .filter(|n| n.is_element() && n.tag_name().name() == "CipherReference")
     {
         if let Some(uri) = n.attr_no_ns("URI") {
-            report.push_at_pos(
+            report.push_full(
                 RSC_004,
                 Severity::Info,
                 format!("File \"{uri}\" is encrypted; its content will not be checked"),
                 ENC,
                 Position::of(n),
+                "ocf.resource.encrypted_not_checked",
+                vec![uri.to_string()],
             );
         }
     }
