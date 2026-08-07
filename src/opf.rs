@@ -5875,6 +5875,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if !is_external(v) && is_resource_reference(node, attr) {
                         resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
                     }
+                    // RSC-026: the reference resolves above the container
+                    // root, or is path-absolute. epubcheck applies this in
+                    // `URLChecker`, its single resolution point, so it lands
+                    // on *every* URL it resolves - we had it on manifest
+                    // hrefs only. It is additive with RSC-007: a leaking
+                    // reference is both outside the container and missing
+                    // from it, and epubcheck reports both.
+                    if !is_external(v)
+                        && !v.trim().is_empty()
+                        && href_leaks_container_root(&dir, v.trim())
+                    {
+                        report.push_node(
+                            RSC_026,
+                            Severity::Error,
+                            format!("'{v}' leaks outside the container"),
+                            path.clone(),
+                            node,
+                            "opf.content_document.reference_leaks_container_root",
+                            vec![v.to_string()],
+                        );
+                    }
                     if v.trim_start().starts_with("file:") {
                         report.push_node(
                             RSC_030,
@@ -8143,6 +8164,22 @@ fn check_exempt_font_usage(
     for u in crate::css::font_face_src_urls_spanned(css) {
         if is_external(&u.node) {
             continue;
+        }
+        // RSC-026, same rule as every other url() - `@font-face src` is
+        // walked here rather than by the generic CSS url pass, so the check
+        // has to be repeated. The two walks are disjoint (measured: a
+        // `background: url()` draws it there, a `src: url()` only here), so
+        // this cannot double-report.
+        if href_leaks_container_root(dir, &u.node) {
+            report.push_full(
+                RSC_026,
+                Severity::Error,
+                format!("'{}' leaks outside the container", u.node),
+                path,
+                origin.position(css, u.span.start),
+                "css.font_face.leaks_container_root",
+                vec![u.node.clone()],
+            );
         }
         let resolved = nfc(&resolve(dir, &u.node));
         let declared = items.values().any(|(ip, _)| nfc(ip) == resolved);

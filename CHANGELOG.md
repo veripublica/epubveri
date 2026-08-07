@@ -12,6 +12,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **RSC-026 now applies to every reference, not just manifest hrefs.** epubcheck
+  performs this check in `URLChecker`, its single URL-resolution point, so it
+  lands on every URL it resolves; ours sat on the manifest alone. A content
+  document's `src`/`href`, a CSS `url()` and an `@font-face src` that resolve
+  above the container root — or are path-absolute — are now reported too.
+
+  The shape real books carry is a stylesheet at the container *root* asking for
+  `url(../Fonts/x.ttf)`; one shelf book has eight, and epubcheck reports all
+  eight. It is additive with RSC-001/007/008: a leaking reference is both
+  outside the container and missing from it, and epubcheck reports both.
+
 - **An unresolvable `unique-identifier` no longer switches off the NCX's other
   checks.** Only NCX-001/NCX-004 need the package identifier — they compare
   `dtb:uid` against it — but the whole NCX block was gated on it, so a book

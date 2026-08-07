@@ -334,6 +334,26 @@ pub(crate) fn check(
         if is_external(&url) {
             continue;
         }
+        // RSC-026: the url() resolves above the container root, or is
+        // path-absolute. epubcheck applies this in `URLChecker`, its single
+        // URL-resolution point, so every CSS url() goes through it too - we
+        // had it on manifest hrefs only. Additive with the RSC-001/007/008
+        // split below: a leaking url is both outside the container and
+        // missing from it, and epubcheck reports both.
+        //
+        // The shape that found this is a stylesheet at the container *root*
+        // asking for `url(../Fonts/x.ttf)`, which real books do carry.
+        if crate::opf::href_leaks_container_root(base_dir, &url) {
+            report.push_full(
+                RSC_026,
+                Severity::Error,
+                format!("'{url}' leaks outside the container"),
+                css_path,
+                pos,
+                "css.url.leaks_container_root",
+                vec![url.clone()],
+            );
+        }
         let resolved = nfc(&resolve(base_dir, &url));
         let declared = manifest_paths.contains(&resolved);
         let present = name_index.contains_key(&resolved);
@@ -1592,6 +1612,45 @@ mod tests {
         let css = "@media screen {\n  body { background: url(missing.png); }\n}";
         let pos = pos_of(&run_report(css, &empty_index()), RSC_007);
         assert_eq!(pos.line, 2);
+    }
+
+    /// RSC-026: a url() that resolves above the container root. epubcheck
+    /// applies this in `URLChecker`, its single URL-resolution point, so it
+    /// lands on every url it resolves; we had it on manifest hrefs only.
+    ///
+    /// The shape that found it is a stylesheet at the container *root*
+    /// asking for `url(../Fonts/x.ttf)` — one shelf book, eight of them.
+    /// Additive with the RSC-001/007/008 split: epubcheck reports both.
+    #[test]
+    fn a_url_escaping_the_container_root_is_rsc_026() {
+        let leaks = |base: &str, css: &str| {
+            let mut report = Report::new();
+            check(
+                css,
+                "s.css",
+                base,
+                &empty_index(),
+                &HashSet::new(),
+                CssOrigin::File { bytes: None },
+                false,
+                &mut report,
+            );
+            report.messages.iter().filter(|m| m.id == RSC_026).count()
+        };
+        // From the container root, `..` escapes immediately.
+        assert_eq!(leaks("", "p { background: url(../x.png); }"), 1);
+        // A path-absolute url is the other half of the same rule.
+        assert_eq!(leaks("", "p { background: url(/x.png); }"), 1);
+        // One directory deep, a single `..` lands back on the root and is
+        // fine - the check is about escaping, not about `..` appearing.
+        assert_eq!(leaks("OEBPS", "p { background: url(../x.png); }"), 0);
+        assert_eq!(leaks("OEBPS", "p { background: url(../../x.png); }"), 1);
+        // Ordinary relative and remote urls say nothing.
+        assert_eq!(leaks("OEBPS", "p { background: url(img/x.png); }"), 0);
+        assert_eq!(
+            leaks("", "p { background: url(https://example.org/x.png); }"),
+            0
+        );
     }
 
     #[test]
