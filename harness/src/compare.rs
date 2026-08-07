@@ -144,6 +144,13 @@ fn main() {
     let mut only_ours: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut only_theirs: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut agreed = 0usize;
+    // An ID both tools report, but in materially different numbers. The ID-set
+    // diff cannot see this: a book where we report 5 of something and epubcheck
+    // reports 500 counts as "agreed". JSWolf's MobileRead #165 book was exactly
+    // that shape - the sets matched and the totals differed by 31 - which is
+    // what prompted collecting it here, since the counts were already being
+    // gathered and thrown away.
+    let mut count_gaps: Vec<(String, String, usize, usize)> = Vec::new();
 
     for book in &books {
         let name = book.file_name().unwrap().to_string_lossy().to_string();
@@ -177,6 +184,13 @@ fn main() {
 
         if mine.is_empty() && hers.is_empty() {
             agreed += 1;
+        }
+        for (id, &theirs_n) in &theirs {
+            if let Some(&ours_n) = ours.get(id)
+                && ours_n != theirs_n
+            {
+                count_gaps.push((id.clone(), name.clone(), ours_n, theirs_n));
+            }
         }
         for id in &mine {
             only_ours
@@ -226,6 +240,23 @@ fn main() {
         "IDs only EPUBCHECK reports — coverage gaps (or its own known-dead IDs)",
         &only_theirs,
     );
+
+    if !count_gaps.is_empty() {
+        // Ordered by how far apart the two are, not by absolute size: a 1 vs 20
+        // is a bigger signal than 400 vs 410.
+        count_gaps.sort_by(|a, b| {
+            let ratio = |x: &(String, String, usize, usize)| {
+                (x.2.max(x.3) as f64) / (x.2.min(x.3).max(1) as f64)
+            };
+            ratio(b).partial_cmp(&ratio(a)).unwrap()
+        });
+        println!("--- same ID, different counts (the ID-set diff cannot see these) ---");
+        for (id, book, ours_n, theirs_n) in count_gaps.iter().take(15) {
+            let book: String = book.chars().take(44).collect();
+            println!("  {id:<9} ours {ours_n:>5}  epubcheck {theirs_n:>5}   {book}");
+        }
+        println!("  ({} in total)\n", count_gaps.len());
+    }
 
     println!(
         "\n{agreed} of {} book(s) agreed on the ID set exactly.",
