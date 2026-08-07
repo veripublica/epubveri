@@ -8,6 +8,27 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`@refines` without its `#` is now an error, as epubcheck reports it**
+  (Doitsu, MobileRead #163). `<meta refines="title" property="title-type">`
+  drew a warning from us and an ERROR from epubcheck, so the *verdict* differed
+  — its book was INVALID and ours VALID, which is the worst shape a divergence
+  can take. epubcheck's Schematron compares `@refines` against
+  `concat('#', @id)`, so a bare id fails the "must refine a title property"
+  assertion. Seven of those assertions are now ported: `title-type`,
+  `authority`, `term`, `identifier-type`, `role`, `collection-type` and
+  `source-of`.
+
+- **The RSC-017 "use a fragment identifier" warning was far too broad.** It
+  fired on any non-fragment `@refines`; epubcheck reports it only when the value
+  resolves to an actual manifest item's `href` — the case where a publication
+  resource was named instead of an id. A bare id with a missing `#` drew a
+  warning epubcheck never gives. The message now names the item id it should
+  have pointed at, as epubcheck's does.
+
 ## [0.9.9] - 2026-08-07
 
 ### Fixed

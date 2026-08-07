@@ -936,10 +936,26 @@ fn is_well_formed_ncname_or_prefixed(value: &str) -> bool {
 
 /// Small per-`<meta>` checks that need their own dedicated code/severity
 /// rather than the uniform RSC-005/Error every Schematron finding gets:
-/// RSC-017 ("should use a fragment identifier") when `@refines` is a
-/// non-empty, non-fragment, non-absolute reference; OPF-027 when
-/// `@scheme` has no `prefix:` part; OPF-026 when `@property` isn't a
-/// well-formed (possibly prefixed) NCName.
+/// RSC-017 ("should use a fragment identifier") when `@refines` names a
+/// manifest item by href; OPF-027 when `@scheme` has no `prefix:` part;
+/// OPF-026 when `@property` isn't a well-formed (possibly prefixed) NCName.
+///
+/// **The RSC-017 condition is narrow, and used not to be** (Doitsu,
+/// MobileRead #163). epubcheck's `opf.refines.by-fragment` resolves
+/// `@refines` and reports only when it matches an actual manifest item's
+/// `@href`:
+///
+/// ```text
+/// <let name="item" value="//opf:manifest/opf:item[resolve-uri(@href)=$refines-url]"/>
+/// <report test="$item">… should instead refer to … ("#<item/@id>")</report>
+/// ```
+///
+/// We fired on *any* non-fragment value, so `refines="creator-id"` - a bare
+/// id with a missing `#`, which is what the reporter's book had - drew a
+/// warning epubcheck never gives. `resolve-uri` is not in our XPath subset,
+/// which is why this is here rather than in `package.sch`; both sides are
+/// resolved against the same base, so comparing normalised relative paths is
+/// the same comparison.
 fn check_meta_property_scheme_shape(
     doc: &roxmltree::Document,
     opf_path: &str,
@@ -952,16 +968,29 @@ fn check_meta_property_scheme_shape(
         if let Some(refines_attr) = attr_no_ns_node(n, "refines") {
             let refines = refines_attr.value().trim();
             if !refines.is_empty() && !refines.starts_with('#') && !refines.contains("://") {
-                report.push_node_attr(
-                    RSC_017,
-                    Severity::Warning,
-                    "@refines should use a fragment identifier pointing to its manifest item",
-                    opf_path,
-                    n,
-                    refines_attr,
-                    "opf.meta.refines_should_use_fragment",
-                    Vec::new(),
-                );
+                let target = nfc(&resolve("", strip_url_fragment(refines).trim()));
+                let item_id = doc
+                    .descendants()
+                    .filter(|m| m.is_element() && m.tag_name().name() == "item")
+                    .find(|m| {
+                        m.attr_no_ns("href")
+                            .is_some_and(|h| nfc(&resolve("", h.trim())) == target)
+                    })
+                    .and_then(|m| m.attr_no_ns("id"));
+                if let Some(id) = item_id {
+                    report.push_node_attr(
+                        RSC_017,
+                        Severity::Warning,
+                        format!(
+                            "@refines should refer to '{refines}' by a fragment identifier pointing to its manifest item (\"#{id}\")"
+                        ),
+                        opf_path,
+                        n,
+                        refines_attr,
+                        "opf.meta.refines_should_use_fragment",
+                        vec![refines.to_string(), id.to_string()],
+                    );
+                }
             }
         }
         if let Some(scheme_attr) = attr_no_ns_node(n, "scheme") {
@@ -10533,6 +10562,71 @@ mod tests {
         // Both mappings survive when the value is clean.
         let (pairs, _) = super::parse_prefix_value("a: http://x\tb: http://y");
         assert_eq!(pairs.len(), 2);
+    }
+
+    /// Doitsu, MobileRead #163. Two halves of one report.
+    ///
+    /// `<meta refines="title" property="title-type">` — a missing `#` — drew a
+    /// WARNING from us and an ERROR from epubcheck, so the *verdict* differed:
+    /// its book was INVALID, ours VALID. epubcheck's Schematron compares
+    /// `@refines` against `concat('#', @id)`, so a bare id fails the
+    /// "must refine a title property" assertion. Seven such assertions are now
+    /// ported.
+    ///
+    /// The other half was ours being too broad: RSC-017 fired on *any*
+    /// non-fragment `@refines`, where epubcheck reports it only when the value
+    /// resolves to a real manifest item's href.
+    #[test]
+    fn refines_must_name_its_target_and_the_fragment_hint_is_narrow() {
+        let ids = |meta: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title id="title">T</dc:title>
+    <dc:creator id="cre">A</dc:creator>
+    <dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {meta}
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let d = roxmltree::Document::parse(&opf).unwrap();
+            let mut report = crate::report::Report::new();
+            super::check_meta_property_scheme_shape(&d, "OEBPS/content.opf", &mut report);
+            let sch = crate::schematron::load(crate::schematron::PACKAGE_SCH).unwrap();
+            let mut ids: Vec<String> = report
+                .messages
+                .iter()
+                .map(|m| m.id.to_string())
+                .chain(
+                    crate::schematron::run(&sch, &d)
+                        .into_iter()
+                        .map(|_| "RSC-005".to_string()),
+                )
+                .collect();
+            ids.sort();
+            ids
+        };
+        // A bare id where a fragment was meant: the specific "must refine"
+        // error, and no fragment hint (the value is not a manifest item).
+        assert_eq!(
+            ids(r#"<meta refines="title" property="title-type">main</meta>"#),
+            ["RSC-005"]
+        );
+        // Correct form: silent.
+        assert!(ids(r##"<meta refines="#title" property="title-type">main</meta>"##).is_empty());
+        // A bare id on a property with no "must refine" rule: epubcheck says
+        // nothing, and this is the false positive the report found.
+        assert!(ids(r#"<meta refines="cre" property="file-as">A, B</meta>"#).is_empty());
+        // Naming a manifest item by href is the one case RSC-017 is for.
+        assert_eq!(
+            ids(r#"<meta refines="ch1.xhtml" property="file-as">x</meta>"#),
+            ["RSC-017"]
+        );
     }
 
     /// Doitsu, MobileRead #161: which prefixes are *reserved* depends on the

@@ -79,6 +79,72 @@
     </rule>
   </pattern>
 
+  <!-- Doitsu, MobileRead #163. Seven "must refine a X property" assertions,
+       ported from epubcheck's `package-30.sch` patterns `opf.meta.title-type`,
+       `authority`, `term`, `identifier-type`, `role`, `collection-type` and
+       `source-of`.
+
+       The reported case is `refines="title"` where `refines="#title"` was
+       meant. The tests compare `@refines` against `concat('#', @id)`, so a
+       missing `#` fails them - which is how epubcheck turns a malformed
+       reference into a *specific* error about what the property must refine,
+       and why it reports an ERROR where we only had a warning. That is a
+       verdict difference, not a wording one: the book was INVALID to epubcheck
+       and VALID to us.
+
+       Two of epubcheck's tests use an XPath 2.0 parenthesised union
+       (`../(dc:identifier|dc:source)[...]`), rewritten here as a union of two
+       full paths, which is the XPath 1.0 spelling of the same thing. -->
+
+  <pattern id="opf-meta-title-type-refines">
+    <rule context="opf:meta[normalize-space(@property)='title-type']">
+      <assert test="exists(../dc:title[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)])"
+        >property "title-type" must refine a "title" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-authority-refines">
+    <rule context="opf:meta[normalize-space(@property)='authority']">
+      <assert test="exists(../dc:subject[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)])"
+        >property "authority" must refine a "subject" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-term-refines">
+    <rule context="opf:meta[normalize-space(@property)='term']">
+      <assert test="exists(../dc:subject[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)])"
+        >property "term" must refine a "subject" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-identifier-type-refines">
+    <rule context="opf:meta[normalize-space(@property)='identifier-type']">
+      <assert test="exists(../dc:identifier[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)] | ../dc:source[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)])"
+        >property "identifier-type" must refine an "identifier" or "source" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-role-refines">
+    <rule context="opf:meta[normalize-space(@property)='role']">
+      <assert test="exists(../dc:creator[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)] | ../dc:contributor[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)] | ../dc:publisher[concat('#',normalize-space(@id)) = normalize-space(current()/@refines)])"
+        >property "role" must refine a "creator", "contributor", or "publisher" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-collection-type-refines">
+    <rule context="opf:meta[normalize-space(@property)='collection-type']">
+      <assert test="exists(../opf:meta[normalize-space(@id)=substring(normalize-space(current()/@refines),2)][normalize-space(@property)='belongs-to-collection'])"
+        >property "collection-type" must refine a "belongs-to-collection" property</assert>
+    </rule>
+  </pattern>
+
+  <pattern id="opf-meta-source-of-refines">
+    <rule context="opf:meta[normalize-space(@property)='source-of']">
+      <assert test="exists(@refines) and exists(../dc:source[normalize-space(@id)=substring(normalize-space(current()/@refines),2)])"
+        >the "source-of" property must refine a "source" property</assert>
+    </rule>
+  </pattern>
+
   <pattern id="opf-refines-must-be-relative">
     <rule context="*[@refines]">
       <assert test="not(contains(@refines, '://'))"
