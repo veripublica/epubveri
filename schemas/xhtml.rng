@@ -1212,7 +1212,16 @@
   <define name="imgAttrsCommon-epub2">
     <ref name="globalAttrs-epub2"/>
     <attribute name="src"><data type="anyURI"/></attribute>
-    <optional><attribute name="alt"><data type="string"/></attribute></optional>
+    <!-- `alt` is REQUIRED in XHTML 1.1 (`img.attlist`, image.rng) and optional
+         in HTML5 (`img.attrs.alt?`, embed.rnc), so this is one of the few
+         places EPUB 2 is the stricter version. We had it optional on both,
+         inherited from the shared define this was split out of: one shelf book
+         draws 73 findings from epubcheck and drew none from us.
+
+         Found by the count comparison in `compare`, not by the ID-set diff -
+         the book reports RSC-005 either way, so the sets agreed and only the
+         totals (7 vs 79) gave it away. -->
+    <attribute name="alt"><data type="string"/></attribute>
     <optional><attribute name="usemap"><data type="string"/></attribute></optional>
     <optional><attribute name="ismap"><data type="token"/></attribute></optional>
   </define>

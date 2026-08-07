@@ -12,6 +12,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **`alt` is required on `<img>` in EPUB 2, and a missing required attribute no
+  longer stops the walk.** Two faults, found together.
+
+  XHTML 1.1's `img.attlist` makes `alt` required; HTML5's `img.attrs.alt?` does
+  not, so this is one of the few places EPUB 2 is the stricter version. We had
+  it optional on both.
+
+  And the recovery: `#60` taught the derivative to carry on after *incomplete
+  content*, but the attribute branch still returned `NotAllowed`, which made the
+  sibling walk break. So one `<img>` without `alt` silenced every finding after
+  it in that file. On the book that surfaced this — 72 such images — epubcheck
+  reports 73 and we reported **2**, one per file.
+
+  Both fixed, and that book now matches epubcheck exactly at 82 = 82. Ten shelf
+  books gain findings, every one of them still at or below epubcheck's count,
+  and six of the ten now match it exactly.
+
+  Neither was visible to the ID-set diff: the book reports RSC-005 either way.
+  It took the count comparison added to `compare` in the same release.
+
 - **A dictionary collection is now checked on its own `role`, not on
   `dc:type`.** epubcheck's `checkCollections`/`checkCollectionsContent` iterate
   the collections and test `collection.hasRole(DICTIONARY)` and nothing else;

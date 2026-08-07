@@ -1451,6 +1451,58 @@ mod tests {
         );
     }
 
+    /// A missing required attribute must not stop the siblings being checked.
+    ///
+    /// #60 fixed this for *incomplete content* by taking the continuation the
+    /// derivative already holds; the attribute branch still returned
+    /// `NotAllowed`, which made `children_deriv` break. So one `<img>` without
+    /// the `alt` XHTML 1.1 requires silenced everything after it in the file.
+    ///
+    /// Measured on a real book: 72 such images, epubcheck reports 73, we
+    /// reported **2** — one per file, because the walk stopped at the first.
+    /// The ID sets agreed, so only a count comparison could see it.
+    #[test]
+    fn a_missing_required_attribute_does_not_stop_the_walk() {
+        let two = xhtml_grammar_epub2();
+        let doc = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>\
+             <p><img src=\"a.png\"/></p>\
+             <p><img src=\"b.png\"/></p>\
+             <p><img src=\"c.png\"/></p></body></html>"
+        );
+        let d = roxmltree::Document::parse(&doc).unwrap();
+        let missing = validate_node_report(&two, d.root_element())
+            .into_iter()
+            .filter(|b| matches!(b, Blame::Element(_, ElementFault::MissingAttribute)))
+            .count();
+        assert_eq!(missing, 3, "every image, not just the first");
+
+        // ...and a later, unrelated fault is still found, which is the part
+        // the `break` used to lose.
+        let doc = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head><body>\
+             <p><img src=\"a.png\"/></p><center>x</center></body></html>"
+        );
+        let d = roxmltree::Document::parse(&doc).unwrap();
+        let names = validate_node_report(&two, d.root_element())
+            .into_iter()
+            .filter_map(|b| match b {
+                Blame::Element(n, ElementFault::NotAllowed(_)) => {
+                    Some(n.tag_name().name().to_string())
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(names.contains(&"center".to_string()), "got {names:?}");
+
+        // EPUB 3 is the guard: `alt` is optional there (`img.attrs.alt?`),
+        // so the same markup is clean.
+        let three = xhtml_grammar();
+        let xml = xhtml_doc("<p><img src=\"a.png\"/></p>");
+        let d = roxmltree::Document::parse(&xml).unwrap();
+        assert!(validate_node_report(&three, d.root_element()).is_empty());
+    }
+
     /// **No define reachable from the EPUB 2 root may pull in the EPUB 3
     /// global attribute set.** A structural invariant, checked over the schema
     /// text rather than by probing behaviour, because behaviour only shows the

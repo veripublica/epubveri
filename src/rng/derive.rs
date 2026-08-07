@@ -604,10 +604,27 @@ impl<'a> Env<'a> {
                 continue;
             }
         }
+        let before_close = cur.clone();
         cur = self.start_tag_close_deriv(&cur);
         if is_not_allowed(&cur) {
             blames.push(Blame::Element(node, ElementFault::MissingAttribute));
-            return cur;
+            // Recover the same way #60 did for incomplete content: take the
+            // continuation the derivative is already holding, so the element's
+            // *siblings* are still checked. Returning NotAllowed made
+            // `children_deriv` break, so one missing required attribute
+            // silenced the rest of the document.
+            //
+            // Measured on a real book: 72 `<img>` elements with no `alt` (which
+            // XHTML 1.1 requires), epubcheck reports 73, we reported 2 - one per
+            // file, because the walk stopped at the first. Found by the count
+            // comparison in `compare`; the ID sets agreed, so nothing else
+            // could see it.
+            //
+            // `end_tag_recover` takes `After(_, rest) -> rest` without the
+            // nullability check, which is exactly "carry on as if this element
+            // had been well-formed". The blame is already recorded, so this
+            // cannot silently accept anything.
+            return self.end_tag_recover(&before_close);
         }
         cur = self.children_deriv(&cur, node, blames, false);
         if is_not_allowed(&cur) {
