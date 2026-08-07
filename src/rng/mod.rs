@@ -371,7 +371,10 @@ mod tests {
 
     const XHTML_NS_DECLS: &str = concat!(
         "xmlns=\"http://www.w3.org/1999/xhtml\" ",
-        "xmlns:epub=\"http://www.idpf.org/2007/ops\""
+        "xmlns:epub=\"http://www.idpf.org/2007/ops\" ",
+        // `epub:trigger`'s attributes live here (#161). An unused namespace
+        // declaration is inert, so every other test is unaffected.
+        "xmlns:ev=\"http://www.w3.org/2001/xml-events\""
     );
 
     fn xhtml_doc(body: &str) -> String {
@@ -1336,6 +1339,52 @@ mod tests {
             ["center", "font", "s"],
             "the container and its bad contents"
         );
+    }
+
+    /// Doitsu, MobileRead #161, against the IDPF `cc-shared-culture` sample
+    /// (CC-licensed, so this markup can be quoted).
+    ///
+    /// Three separate defects, five findings per `<epub:trigger>` and one per
+    /// `<video>` fallback, against epubcheck's zero.
+    #[test]
+    fn epub_trigger_and_transparent_media_content() {
+        // 1. `epub:trigger` is a real EPUB 3 element
+        //    (schema/30/mod/epub-trigger.rnc), added to `common.elem.flow`.
+        //    We had it nowhere, so the element and its `action`/`ref` were
+        //    each rejected. RSC-017 still reports the deprecation elsewhere.
+        assert!(ok(
+            &xhtml_grammar(),
+            &xhtml_doc(
+                "<p id=\"video1\">v</p>\
+                 <epub:trigger ev:observer=\"pause\" ev:event=\"click\" \
+                 action=\"pause\" ref=\"video1\"/>"
+            )
+        ));
+        // The attribute grammar is exact rather than permissive: `action` is
+        // an enumeration and both `ev:` attributes are required.
+        assert!(!ok(
+            &xhtml_grammar(),
+            &xhtml_doc(
+                "<p id=\"v\">v</p>\
+                 <epub:trigger ev:observer=\"a\" ev:event=\"c\" action=\"wiggle\" ref=\"v\"/>"
+            )
+        ));
+        assert!(!ok(
+            &xhtml_grammar(),
+            &xhtml_doc("<p id=\"v\">v</p><epub:trigger action=\"pause\" ref=\"v\"/>")
+        ));
+
+        // 2. `<video>`/`<audio>` are transparent: at flow level epubcheck's
+        //    `video.inner.flow` ends in `common.inner.transparent.flow`, so a
+        //    `<div>` fallback after the `<source>`s is ordinary. We modelled
+        //    only the phrasing variant.
+        for media in ["video", "audio"] {
+            let body = format!(
+                "<{media} controls=\"\"><source src=\"a.mp4\" type=\"video/mp4\"/>\
+                 <div class=\"errmsg\"><p>no support</p></div></{media}>"
+            );
+            assert!(ok(&xhtml_grammar(), &xhtml_doc(&body)), "{media}");
+        }
     }
 
     /// #69. A misplaced element whose *name* the grammar does have is

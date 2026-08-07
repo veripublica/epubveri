@@ -372,7 +372,58 @@ fn target_id_order(
 /// correct default URI is explicitly allowed (confirmed via
 /// `prefix-mapping-reserved-valid.{opf,xhtml}`) - only an override to a
 /// *different* URI is a violation.
-const RESERVED_PREFIXES: &[(&str, &str)] = &[
+/// Which document declared the `prefix` attribute. epubcheck reserves a
+/// *different* set of prefixes in each, and reporting the union - as this did
+/// - invents OPF-007 in both directions.
+///
+/// Doitsu, MobileRead #161: the IDPF `cc-shared-culture` sample declares
+/// `epub:prefix="media: http://idpf.org/epub/vocab/media/#"` on a content
+/// document's `<html>`. That URI differs from the Media Overlays vocabulary,
+/// so a redeclaration check fires - but only if `media` is reserved *there*,
+/// and in a content document it is not. epubcheck reports nothing.
+#[derive(Clone, Copy, PartialEq)]
+enum PrefixContext {
+    /// `OPFHandler30`: the union of its five `parsePrefixDeclaration` calls.
+    Package,
+    /// `OPSHandler30.RESERVED_VOCABS` - the magazine-navigation and PRISM
+    /// foreign vocabularies, and nothing else.
+    ContentDocument,
+    /// `OverlayHandler.RESERVED_VOCABS` is the default structure vocabulary
+    /// alone, so a Media Overlay reserves no prefix at all.
+    Overlay,
+}
+
+const RESERVED_PREFIXES_PACKAGE: &[(&str, &str)] = &[
+    ("a11y", "http://www.idpf.org/epub/vocab/package/a11y/#"),
+    ("dcterms", "http://purl.org/dc/terms/"),
+    ("marc", "http://id.loc.gov/vocabulary/"),
+    ("media", "http://www.idpf.org/epub/vocab/overlays/#"),
+    (
+        "onix",
+        "http://www.editeur.org/ONIX/book/codelists/current.html#",
+    ),
+    ("rendition", "http://www.idpf.org/vocab/rendition/#"),
+    ("schema", "http://schema.org/"),
+    ("xsd", "http://www.w3.org/2001/XMLSchema#"),
+];
+
+const RESERVED_PREFIXES_CONTENT: &[(&str, &str)] = &[
+    ("msv", "http://www.idpf.org/epub/vocab/structure/magazine/#"),
+    (
+        "prism",
+        "http://www.prismstandard.org/specifications/3.0/PRISM_CV_Spec_3.0.htm#",
+    ),
+];
+
+/// Every reserved prefix, in any context.
+///
+/// Used only by the two checks that ask "is this prefix reserved *somewhere*":
+/// whether an undeclared prefix is usable, and whether a manifest-item
+/// property's prefix is known. Those are different questions from
+/// redeclaration, which is per-context above, and they are left on the union
+/// deliberately, since narrowing them was not what #161 reported and is not
+/// measured.
+const RESERVED_PREFIXES_ANY: &[(&str, &str)] = &[
     ("a11y", "http://www.idpf.org/epub/vocab/package/a11y/#"),
     ("dcterms", "http://purl.org/dc/terms/"),
     ("marc", "http://id.loc.gov/vocabulary/"),
@@ -390,6 +441,16 @@ const RESERVED_PREFIXES: &[(&str, &str)] = &[
         "http://www.prismstandard.org/specifications/3.0/PRISM_CV_Spec_3.0.htm#",
     ),
 ];
+
+impl PrefixContext {
+    fn reserved(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            PrefixContext::Package => RESERVED_PREFIXES_PACKAGE,
+            PrefixContext::ContentDocument => RESERVED_PREFIXES_CONTENT,
+            PrefixContext::Overlay => &[],
+        }
+    }
+}
 
 /// The 4 rendition:X (layout/orientation/spread/flow) spine-override
 /// families, plus page-spread-* (which also accepts an unprefixed form,
@@ -1202,6 +1263,7 @@ fn check_prefix_declaration(
     prefix_attr: roxmltree::Attribute,
     path: &str,
     node: roxmltree::Node,
+    context: PrefixContext,
     report: &mut Report,
 ) -> HashMap<String, String> {
     let (pairs, faults) = parse_prefix_value(prefix_attr.value());
@@ -1320,7 +1382,7 @@ fn check_prefix_declaration(
                 "opf.prefix.assigned_to_dc_namespace",
                 vec![name.clone()],
             );
-        } else if let Some((_, default_uri)) = RESERVED_PREFIXES.iter().find(|(n, _)| n == name)
+        } else if let Some((_, default_uri)) = context.reserved().iter().find(|(n, _)| n == name)
             && uri != default_uri
         {
             report.push_node_attr(
@@ -1353,7 +1415,7 @@ fn check_prefix_usage(
         let Some((prefix, _)) = tok.split_once(':') else {
             continue;
         };
-        if prefix.is_empty() || RESERVED_PREFIXES.iter().any(|(n, _)| *n == prefix) {
+        if prefix.is_empty() || RESERVED_PREFIXES_ANY.iter().any(|(n, _)| *n == prefix) {
             continue;
         }
         if declared.contains_key(prefix) {
@@ -2071,7 +2133,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         return;
     }
     let declared_prefixes = attr_no_ns_node(pkg, "prefix")
-        .map(|p| check_prefix_declaration(p, opf_path, pkg, report))
+        .map(|p| check_prefix_declaration(p, opf_path, pkg, PrefixContext::Package, report))
         .unwrap_or_default();
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(v) = n.attr_no_ns("property") {
@@ -3176,7 +3238,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // just as "unknown" as an unprefixed one.
                         let unknown = match token.split_once(':') {
                             Some((prefix, _)) => {
-                                RESERVED_PREFIXES.iter().any(|(n, _)| *n == prefix)
+                                RESERVED_PREFIXES_ANY.iter().any(|(n, _)| *n == prefix)
                             }
                             None => !KNOWN_ITEM_PROPERTIES.contains(&token),
                         };
@@ -4499,7 +4561,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
         let declared_prefixes =
             attr_ns_node(d.root_element(), "http://www.idpf.org/2007/ops", "prefix")
-                .map(|p| check_prefix_declaration(p, &path, d.root_element(), report))
+                .map(|p| {
+                    check_prefix_declaration(
+                        p,
+                        &path,
+                        d.root_element(),
+                        PrefixContext::ContentDocument,
+                        report,
+                    )
+                })
                 .unwrap_or_default();
         check_prefix_placement(&d, &path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
@@ -6693,7 +6763,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Ok(d) = parse_xml(&text) else { continue };
         let declared_prefixes =
             attr_ns_node(d.root_element(), "http://www.idpf.org/2007/ops", "prefix")
-                .map(|p| check_prefix_declaration(p, doc_path, d.root_element(), report))
+                .map(|p| {
+                    check_prefix_declaration(
+                        p,
+                        doc_path,
+                        d.root_element(),
+                        PrefixContext::ContentDocument,
+                        report,
+                    )
+                })
                 .unwrap_or_default();
         check_prefix_placement(&d, doc_path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
@@ -7214,7 +7292,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
             let declared_prefixes =
                 attr_ns_node(smil_root, "http://www.idpf.org/2007/ops", "prefix")
-                    .map(|p| check_prefix_declaration(p, &path, smil_root, report))
+                    .map(|p| {
+                        check_prefix_declaration(
+                            p,
+                            &path,
+                            smil_root,
+                            PrefixContext::Overlay,
+                            report,
+                        )
+                    })
                     .unwrap_or_default();
             check_prefix_placement(&smil_doc, &path, report);
             for n in smil_doc.descendants().filter(|n| n.is_element()) {
@@ -8352,9 +8438,24 @@ mod tests {
     #[test]
     fn keyed_tables_have_no_duplicate_keys() {
         let mut prefixes = std::collections::BTreeSet::new();
-        for (p, _) in super::RESERVED_PREFIXES {
+        for (p, _) in super::RESERVED_PREFIXES_ANY {
             assert!(prefixes.insert(*p), "reserved prefix '{p}' is listed twice");
         }
+        // The per-context lists must partition the union exactly, with the
+        // same URI for each prefix. Three tables that can drift apart is how
+        // the redeclaration check would quietly start reserving the wrong
+        // prefix in the wrong document again (#161).
+        let any: std::collections::BTreeSet<_> = super::RESERVED_PREFIXES_ANY.iter().collect();
+        let split: std::collections::BTreeSet<_> = super::RESERVED_PREFIXES_PACKAGE
+            .iter()
+            .chain(super::RESERVED_PREFIXES_CONTENT)
+            .collect();
+        assert_eq!(any, split, "the context lists must partition the union");
+        assert_eq!(
+            super::RESERVED_PREFIXES_PACKAGE.len() + super::RESERVED_PREFIXES_CONTENT.len(),
+            super::RESERVED_PREFIXES_ANY.len(),
+            "and must not overlap"
+        );
         let mut media_types = std::collections::BTreeSet::new();
         for (mt, _, _) in super::ALLOWED_EXTERNAL_IDENTIFIERS {
             assert!(
@@ -10434,6 +10535,51 @@ mod tests {
         assert_eq!(pairs.len(), 2);
     }
 
+    /// Doitsu, MobileRead #161: which prefixes are *reserved* depends on the
+    /// document declaring them, and we were reporting the union.
+    ///
+    /// epubcheck passes a different `predefined` map per context:
+    /// `OPFHandler30` reserves a11y/dcterms/marc/media/onix/rendition/schema/
+    /// xsd, `OPSHandler30` reserves only msv/prism, and `OverlayHandler`
+    /// reserves none. The sample declares `media:` on a content document's
+    /// `<html>`, pointing at a URI that is not the Media Overlays one - a
+    /// redeclaration in a package document, and nothing at all in a content
+    /// document.
+    #[test]
+    fn reserved_prefixes_depend_on_the_declaring_document() {
+        let redeclares = |ctx: super::PrefixContext, decl: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id" prefix="{decl}">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"/>
+</package>"#
+            );
+            let d = roxmltree::Document::parse(&opf).unwrap();
+            let pkg = d.root_element();
+            let attr = super::attr_no_ns_node(pkg, "prefix").unwrap();
+            let mut report = crate::report::Report::new();
+            super::check_prefix_declaration(attr, "OEBPS/content.opf", pkg, ctx, &mut report);
+            report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_007)
+                .count()
+        };
+        const MEDIA: &str = "media: http://idpf.org/epub/vocab/media/#";
+        const MSV: &str = "msv: http://example.org/not-magazine/#";
+        use super::PrefixContext::*;
+        assert_eq!(
+            redeclares(Package, MEDIA),
+            1,
+            "media is reserved in the OPF"
+        );
+        assert_eq!(redeclares(ContentDocument, MEDIA), 0, "but not in XHTML");
+        assert_eq!(redeclares(ContentDocument, MSV), 1, "msv is, there");
+        assert_eq!(redeclares(Package, MSV), 0, "and not in the OPF");
+        assert_eq!(redeclares(Overlay, MEDIA), 0, "an overlay reserves none");
+        assert_eq!(redeclares(Overlay, MSV), 0);
+    }
+
     /// #70: the three special prefix-mapping faults each have their own
     /// epubcheck ID, and `VocabUtil.checkPrefixes` is an if/else-if chain, so
     /// at most one fires per mapping.
@@ -10461,7 +10607,13 @@ mod tests {
             let pkg = d.root_element();
             let attr = super::attr_no_ns_node(pkg, "prefix").unwrap();
             let mut report = crate::report::Report::new();
-            super::check_prefix_declaration(attr, "OEBPS/content.opf", pkg, &mut report);
+            super::check_prefix_declaration(
+                attr,
+                "OEBPS/content.opf",
+                pkg,
+                super::PrefixContext::Package,
+                &mut report,
+            );
             report
                 .messages
                 .iter()

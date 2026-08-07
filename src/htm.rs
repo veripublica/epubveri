@@ -903,9 +903,14 @@ const SSML_NS: &str = "http://www.w3.org/2001/10/synthesis";
 /// (XHTML itself, EPUB's own `epub:` ops namespace, XML/XLink, SVG,
 /// MathML) — HTM-054 is about *custom* attributes impersonating a
 /// w3.org/idpf.org affiliation, not these standard, expected ones.
-const KNOWN_NAMESPACES: [&str; 7] = [
+const KNOWN_NAMESPACES: [&str; 8] = [
     XHTML_NS,
     "http://www.idpf.org/2007/ops",
+    // XML Events, which `epub:trigger` uses for `ev:observer`/`ev:event`
+    // (schema/30/mod/epub-trigger.rnc declares the namespace itself).
+    // Missing here, every one of those attributes drew HTM-054 "reserved
+    // namespace" - Doitsu, MobileRead #161.
+    "http://www.w3.org/2001/xml-events",
     "http://www.w3.org/XML/1998/namespace",
     "http://www.w3.org/1999/xlink",
     SSML_NS,

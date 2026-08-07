@@ -12,6 +12,30 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **`epub:trigger` is a real EPUB 3 element and we did not have it**
+  (Doitsu, MobileRead #161). Every occurrence drew five findings — the element,
+  its `action` and `ref`, and two HTM-054 "reserved namespace" errors for the
+  `ev:` attributes — where epubcheck draws one deprecation warning. It is now
+  transcribed from `schema/30/mod/epub-trigger.rnc`, with the required/optional
+  attribute split epubcheck specifies, and `http://www.w3.org/2001/xml-events`
+  is a known namespace.
+
+- **`<video>` and `<audio>` are transparent**, so a `<div>` fallback after the
+  `<source>` elements is ordinary content. epubcheck models this with two
+  variants and takes the flow one at flow level (`video.inner.flow` ends in
+  `common.inner.transparent.flow`); we had only the phrasing variant, so the
+  standard fallback shape was rejected.
+
+- **Which prefixes are *reserved* now depends on the document declaring them.**
+  epubcheck passes a different predefined map per context: the package document
+  reserves `a11y`/`dcterms`/`marc`/`media`/`onix`/`rendition`/`schema`/`xsd`, a
+  content document reserves only `msv`/`prism`, and a Media Overlay reserves
+  none. We used the union everywhere, so `epub:prefix="media: …"` on a content
+  document's `<html>` drew a spurious OPF-007.
+
+  On the reported book — the IDPF `cc-shared-culture` sample — these three take
+  us from **38 errors to 2**, which is what epubcheck reports.
+
 - **EPUB 2 no longer grants 147 global attributes XHTML 1.1 does not have**
   (#66). `globalAttrsRest` was shared with EPUB 3, so an EPUB 2 document was
   granted 207 attribute names where XHTML 1.1's `Common.attrib` grants seven.

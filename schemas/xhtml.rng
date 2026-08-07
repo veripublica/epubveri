@@ -40,6 +40,7 @@
 -->
 <grammar xmlns="http://relaxng.org/ns/structure/1.0"
          xmlns:epub="http://www.idpf.org/2007/ops"
+         xmlns:ev="http://www.w3.org/2001/xml-events"
          ns="http://www.w3.org/1999/xhtml"
          datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 
@@ -1395,10 +1396,24 @@
       <!-- #33: media.attrs completion (media.rnc). -->
       <optional><attribute name="muted"><data type="token"/></attribute></optional>
       <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
+      <!-- Doitsu, MobileRead #161: `<video>`/`<audio>` are *transparent* in
+           HTML5, and epubcheck models that with two variants -
+           `video.inner.flow` is `media.source, track.elem*,
+           common.inner.transparent.flow` (media.rnc), `video.inner.phrasing`
+           the phrasing one. We had only phrasing, so the ordinary fallback
+           shape `<video><source/><div><p>…</p></div></video>` - six of them in
+           the IDPF `cc-shared-culture` sample - was rejected where epubcheck
+           accepts it.
+
+           Taking flow for both contexts rather than threading the
+           distinction: at flow level it matches epubcheck exactly, and at
+           phrasing level it is more permissive, which is a false negative in
+           the direction this grammar already chose ("PERMISSIVE on nesting
+           order", see the header). -->
       <interleave>
         <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
-        <ref name="phrasingContent"/>
+        <ref name="flowContent"/>
       </interleave>
     </element>
   </define>
@@ -1418,10 +1433,24 @@
       <optional><attribute name="muted"><data type="token"/></attribute></optional>
       <optional><attribute name="crossorigin"><data type="token"/></attribute></optional>
       <optional><attribute name="playsinline"><data type="token"/></attribute></optional>
+      <!-- Doitsu, MobileRead #161: `<video>`/`<audio>` are *transparent* in
+           HTML5, and epubcheck models that with two variants -
+           `video.inner.flow` is `media.source, track.elem*,
+           common.inner.transparent.flow` (media.rnc), `video.inner.phrasing`
+           the phrasing one. We had only phrasing, so the ordinary fallback
+           shape `<video><source/><div><p>…</p></div></video>` - six of them in
+           the IDPF `cc-shared-culture` sample - was rejected where epubcheck
+           accepts it.
+
+           Taking flow for both contexts rather than threading the
+           distinction: at flow level it matches epubcheck exactly, and at
+           phrasing level it is more permissive, which is a false negative in
+           the direction this grammar already chose ("PERMISSIVE on nesting
+           order", see the header). -->
       <interleave>
         <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
-        <ref name="phrasingContent"/>
+        <ref name="flowContent"/>
       </interleave>
     </element>
   </define>
@@ -1775,6 +1804,55 @@
     </choice>
   </define>
 
+  <!-- ============ epub:trigger ============ -->
+
+  <!-- Doitsu, MobileRead #161. A real EPUB 3 element we did not have at all,
+       so the IDPF `cc-shared-culture` sample drew five findings per
+       occurrence from us (the element, `action`, `ref`, and two HTM-054s for
+       the `ev:` namespace) where epubcheck draws one deprecation warning.
+
+       Transcribed from `schema/30/mod/epub-trigger.rnc`, which is where the
+       required/optional split comes from: `action`, `ref`, `ev:event` and
+       `ev:observer` are required, the other three `ev:` attributes optional,
+       and the content is empty. `epub-xhtml-integration.rnc` adds it to
+       `common.elem.flow`, which is this pool.
+
+       Attributes are `common.attrs.id?` and these only - not the full global
+       set - matching epubcheck rather than being permissive, because the
+       grammar for this one is exact and in front of us. RSC-017 already
+       reports the deprecation and is unaffected. -->
+  <define name="epubTriggerEl">
+    <element name="epub:trigger">
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <attribute name="action">
+        <choice>
+          <value>show</value><value>hide</value><value>play</value>
+          <value>pause</value><value>resume</value><value>mute</value>
+          <value>unmute</value>
+        </choice>
+      </attribute>
+      <attribute name="ref"><data type="IDREF"/></attribute>
+      <attribute name="ev:event"><data type="NMTOKEN"/></attribute>
+      <attribute name="ev:observer"><data type="IDREF"/></attribute>
+      <optional>
+        <attribute name="ev:defaultAction">
+          <choice><value>cancel</value><value>perform</value></choice>
+        </attribute>
+      </optional>
+      <optional>
+        <attribute name="ev:phase">
+          <choice><value>capture</value><value>default</value></choice>
+        </attribute>
+      </optional>
+      <optional>
+        <attribute name="ev:propagate">
+          <choice><value>stop</value><value>continue</value></choice>
+        </attribute>
+      </optional>
+      <empty/>
+    </element>
+  </define>
+
   <!-- ============ epub:switch (real sequencing: case* then default?) ============ -->
 
   <!-- epub:case/epub:default hold a fallback rendition, which is often
@@ -1877,6 +1955,7 @@
       </element>
       <ref name="tableEl"/>
       <ref name="epubSwitchEl"/>
+      <ref name="epubTriggerEl"/>
     </choice>
   </define>
 
