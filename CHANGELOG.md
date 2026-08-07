@@ -8,6 +8,27 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **RSC-025 is no longer reported on EPUB 2 books.** epubcheck registers exactly
+  one non-normative validator — `SVG_30_INFORMATIVE_NVDL`, the full SVG 1.1
+  grammar whose findings become usage-level RSC-025 — and its `ValidatorMap`
+  pairs that validator with `VERSION_3` alone. An EPUB 2 document, inline SVG or
+  standalone, gets `XHTML_20_NVDL`/`SVG_20_NVDL` and no informative pass at all,
+  so epubcheck never emits RSC-025 there. We ran it on both versions.
+
+  The case that surfaced it is a real EPUB 2 book with a lowercase `viewbox` and
+  `preserveaspectratio`. Those attribute names genuinely are wrong — SVG names
+  are case-sensitive — but RSC-025 is the family for epubcheck's *opinion*
+  rather than a spec requirement, and in EPUB 2 it has none. Measured four ways
+  (inline and standalone × EPUB 2 and EPUB 3); all four now agree.
+
+  With this, **no ID is reported by epubveri and not by epubcheck across the
+  whole 104-book shelf** — the false-positive-candidate list is empty, and 101
+  of 104 books agree on the exact ID set.
+
 ## [0.9.8] - 2026-08-06
 
 ### Fixed

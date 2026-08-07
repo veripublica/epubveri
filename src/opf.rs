@@ -4651,8 +4651,24 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         && a.tag_name().namespace() == Some(crate::svg::SVG_NS)
                 })
         }) {
-            crate::svg::check_vocabulary(svg_root, &path, report);
-            crate::svg::check_attribute_vocabulary(svg_root, &path, report);
+            // RSC-025 is EPUB 3 only. epubcheck attaches the full SVG 1.1
+            // grammar as `SVG_30_INFORMATIVE_NVDL` - the one validator it
+            // registers with `isNormative=false`, which is what turns its
+            // findings into usage-level RSC-025 - and its `ValidatorMap`
+            // pairs that validator with VERSION_3 alone. An EPUB 2 document
+            // gets `XHTML_20_NVDL`/`SVG_20_NVDL` and no informative pass at
+            // all, so epubcheck never emits RSC-025 there.
+            //
+            // We ran it on both versions, which made a lowercase `viewbox`
+            // in a real EPUB 2 book our last false-positive candidate on the
+            // 104-book shelf. The attribute really is wrong - SVG names are
+            // case-sensitive - but epubcheck has no opinion on it in EPUB 2,
+            // and RSC-025 is the "informative" family precisely because it is
+            // epubcheck's opinion rather than a spec requirement.
+            if is_epub3 {
+                crate::svg::check_vocabulary(svg_root, &path, report);
+                crate::svg::check_attribute_vocabulary(svg_root, &path, report);
+            }
             crate::svg::check_epub_attributes(svg_root, &path, report);
             // `check_ids` is standalone-SVG-only: a real fixture confirms
             // `id="1"` on an SVG root is fine when the SVG is embedded
@@ -6700,8 +6716,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
             }
         }
-        crate::svg::check_vocabulary(d.root_element(), doc_path, report);
-        crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, report);
+        // EPUB 3 only, for the same reason as the inline-SVG site above:
+        // `image/svg+xml` + VERSION_2 maps to `SVG_20_NVDL` with no
+        // informative validator beside it.
+        if is_epub3 {
+            crate::svg::check_vocabulary(d.root_element(), doc_path, report);
+            crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, report);
+        }
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
         crate::svg::check_ids(d.root_element(), doc_path, report);
         crate::svg::check_link_labels(d.root_element(), doc_path, report);
@@ -10641,6 +10662,109 @@ mod tests {
     /// Build a minimal valid EPUB 3 with the caller's extra lines injected
     /// into the OPF `<metadata>` — used to exercise metadata-level checks
     /// (here, deprecated `<link rel>` keywords).
+    /// RSC-025 is EPUB 3 only, because epubcheck's `ValidatorMap` pairs the
+    /// one non-normative validator it has - `SVG_30_INFORMATIVE_NVDL`, the
+    /// full SVG 1.1 grammar whose findings become usage-level RSC-025 - with
+    /// VERSION_3 alone. An EPUB 2 document gets `XHTML_20_NVDL` /
+    /// `SVG_20_NVDL` and no informative pass at all.
+    ///
+    /// A lowercase `viewbox` in a real EPUB 2 book was the last
+    /// false-positive candidate on the 104-book shelf. The attribute really
+    /// is wrong - SVG names are case-sensitive - but RSC-025 is the family
+    /// for epubcheck's *opinion*, and in EPUB 2 it has none.
+    ///
+    /// Measured both ways against epubcheck 5.3.0, inline and standalone:
+    /// EPUB 3 gives two findings each, EPUB 2 none.
+    #[test]
+    fn svg_vocabulary_usage_is_epub3_only() {
+        const SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewbox=\"0 0 10 10\" \
+             preserveaspectratio=\"xMidYMid meet\"><rect width=\"5\" height=\"5\"/></svg>";
+        let rsc025 = |ver: &str| {
+            crate::validate_bytes(epub_with_body(ver, SVG))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_025)
+                .count()
+        };
+        assert_eq!(rsc025("3.0"), 2, "lowercase viewBox/preserveAspectRatio");
+        assert_eq!(
+            rsc025("2.0"),
+            0,
+            "epubcheck runs no informative SVG grammar on EPUB 2"
+        );
+    }
+
+    /// A minimal EPUB (version `ver`) whose single content document has
+    /// `body` as its body content.
+    fn epub_with_body(ver: &str, body: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let (modified, ncx_item, toc_attr) = if ver.starts_with('3') {
+            (
+                "<meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>",
+                "",
+                "",
+            )
+        } else {
+            (
+                "",
+                "<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>",
+                " toc=\"ncx\"",
+            )
+        };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    {modified}
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>{ncx_item}
+  </manifest>
+  <spine{toc_attr}><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        let ch1 = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+             <body>{body}</body></html>"
+        );
+        const NCX: &str = "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+             version=\"2005-1\"><head><meta name=\"dtb:uid\" \
+             content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+             <navLabel><text>T</text></navLabel><content src=\"ch1.xhtml\"/></navPoint></navMap></ncx>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ("OEBPS/toc.ncx", NCX),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
     /// A minimal EPUB (version `ver`, e.g. "2.0" or "3.0") whose metadata
     /// carries `dc_extra` verbatim, for the empty-metadata checks.
     fn epub_with_metadata(ver: &str, dc_extra: &str) -> Vec<u8> {
