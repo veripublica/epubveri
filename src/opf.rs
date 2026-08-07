@@ -4036,12 +4036,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             opf_path,
                             Position::of(sp),
                         );
-                    } else if let Some(uid_text) = &package_identifier_text
-                        && let Some(orig) = name_index.get(&nfc(ncx_path)).cloned()
+                    } else if let Some(orig) = name_index.get(&nfc(ncx_path)).cloned()
                         && let Some(b) = ocf.read(&orig)
                     {
                         let ncx_text = String::from_utf8_lossy(&b).into_owned();
-                        crate::ncx::check(&ncx_text, ncx_path, uid_text, report);
+                        // Only NCX-001/NCX-004 need the package identifier -
+                        // they compare `dtb:uid` against it. Gating the whole
+                        // block on it meant a book whose `unique-identifier`
+                        // resolves to nothing (already its own OPF-030) had
+                        // RSC-007, RSC-010 and RSC-012 on its NCX silently
+                        // switched off as well. One shelf book, three real
+                        // undefined fragments, and no output at all: the
+                        // familiar shape where a precondition for one check
+                        // takes unrelated ones down with it.
+                        if let Some(uid_text) = &package_identifier_text {
+                            crate::ncx::check(&ncx_text, ncx_path, uid_text, report);
+                        }
                         if let Ok(ncx_doc) = parse_xml(&ncx_text) {
                             check_ncx_content_fragments(
                                 &ncx_doc,
@@ -10662,6 +10672,113 @@ mod tests {
     /// Build a minimal valid EPUB 3 with the caller's extra lines injected
     /// into the OPF `<metadata>` — used to exercise metadata-level checks
     /// (here, deprecated `<link rel>` keywords).
+    /// An unresolvable `unique-identifier` must not switch off the NCX's
+    /// other checks.
+    ///
+    /// Only NCX-001/NCX-004 need the package identifier — they compare
+    /// `dtb:uid` against it. The whole NCX block used to be gated on it, so a
+    /// book whose `unique-identifier` names no `dc:identifier` (already its
+    /// own OPF-030) also lost RSC-007, RSC-010 and RSC-012 on its NCX. One
+    /// shelf book had three genuinely undefined fragments and produced
+    /// nothing; epubcheck reports all three.
+    #[test]
+    fn a_missing_unique_identifier_does_not_silence_the_ncx_checks() {
+        let ids = |uid_present: bool| {
+            let bytes = epub2_with_ncx_fragment(uid_present, "#nosuchid");
+            let r = crate::validate_bytes(bytes);
+            let mut v = r.messages.iter().map(|m| m.id).collect::<Vec<_>>();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        assert!(
+            ids(true).contains(&crate::ids::RSC_012),
+            "baseline: the fragment is undefined either way"
+        );
+        let broken = ids(false);
+        assert!(
+            broken.contains(&crate::ids::OPF_030),
+            "the unresolvable unique-identifier is still its own finding"
+        );
+        assert!(
+            broken.contains(&crate::ids::RSC_012),
+            "...and it must not take the fragment check down with it, got {broken:?}"
+        );
+        // A fragment that does resolve stays silent, so this is not just
+        // "RSC-012 always fires".
+        assert!(
+            !crate::validate_bytes(epub2_with_ncx_fragment(false, "#real"))
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::RSC_012)
+        );
+    }
+
+    /// An EPUB 2 whose NCX `<content src>` carries `frag`, and whose
+    /// `unique-identifier` either resolves to a `dc:identifier` or does not.
+    fn epub2_with_ncx_fragment(uid_present: bool, frag: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let ident = if uid_present {
+            "<dc:identifier id=\"id\">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>"
+        } else {
+            // Declared but never defined: the package points `unique-identifier`
+            // at an id no element carries.
+            "<dc:identifier id=\"other\">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>"
+        };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    {ident}<dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        let ncx = format!(
+            "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+             version=\"2005-1\"><head><meta name=\"dtb:uid\" \
+             content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+             <navLabel><text>T</text></navLabel><content src=\"ch1.xhtml{frag}\"/></navPoint>\
+             </navMap></ncx>"
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p id=\"real\">x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/toc.ncx", ncx.as_str()),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
     /// RSC-025 is EPUB 3 only, because epubcheck's `ValidatorMap` pairs the
     /// one non-normative validator it has - `SVG_30_INFORMATIVE_NVDL`, the
     /// full SVG 1.1 grammar whose findings become usage-level RSC-025 - with

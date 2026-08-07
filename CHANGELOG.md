@@ -12,6 +12,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **An unresolvable `unique-identifier` no longer switches off the NCX's other
+  checks.** Only NCX-001/NCX-004 need the package identifier — they compare
+  `dtb:uid` against it — but the whole NCX block was gated on it, so a book
+  whose `unique-identifier` names no `dc:identifier` (already reported as
+  OPF-030) also lost RSC-007, RSC-010 and RSC-012 on its NCX. One shelf book had
+  three genuinely undefined `<content src="…#frag">` targets and produced
+  nothing at all; epubcheck reports all three, and now so do we.
+
+  The familiar shape: a precondition for one check taking unrelated ones down
+  with it, and the symptom is silence rather than a wrong answer.
+
 - **RSC-025 is no longer reported on EPUB 2 books.** epubcheck registers exactly
   one non-normative validator — `SVG_30_INFORMATIVE_NVDL`, the full SVG 1.1
   grammar whose findings become usage-level RSC-025 — and its `ValidatorMap`
