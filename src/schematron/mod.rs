@@ -59,6 +59,10 @@ pub struct Rule {
 
 #[derive(Debug, Clone, Default)]
 pub struct Pattern {
+    /// The pattern's `@id`, which becomes the `rule` slug on every finding it
+    /// produces. Every pattern in both bundled schemas has one; the test
+    /// `every_pattern_has_an_id` keeps it that way.
+    pub id: Option<String>,
     pub rules: Vec<Rule>,
 }
 
@@ -125,7 +129,9 @@ pub fn load(xml: &str) -> Result<Schema, String> {
     }
     let mut patterns = Vec::new();
     for p in sch_children(root).filter(|c| lname(*c) == "pattern") {
-        patterns.push(parse_pattern(p)?);
+        let mut pat = parse_pattern(p)?;
+        pat.id = p.attr_no_ns("id").map(str::to_string);
+        patterns.push(pat);
     }
     Ok(Schema {
         namespaces,
@@ -152,7 +158,7 @@ fn parse_pattern(n: Node) -> Result<Pattern, String> {
     for r in sch_children(n).filter(|c| lname(*c) == "rule") {
         rules.push(parse_rule(r)?);
     }
-    Ok(Pattern { rules })
+    Ok(Pattern { id: None, rules })
 }
 
 fn parse_rule(n: Node) -> Result<Rule, String> {
@@ -224,7 +230,42 @@ fn parse_check(n: Node, kind: CheckKind) -> Result<Check, String> {
 /// to report these (this project reports Schematron findings as `RSC-005`,
 /// matching how epubcheck itself surfaces nearly all of them under that one
 /// catch-all code).
-pub fn run<'input>(schema: &Schema, doc: &Document<'input>) -> Vec<(String, Position)> {
+/// A stable `rule` slug for a Schematron finding, derived from its pattern's
+/// `@id`.
+///
+/// Every other finding in epubveri carries a `rule`; Schematron ones carried
+/// `None`, which put them in the bucket a downstream consumer cannot key on.
+/// epubsana reported that bucket at 172 findings across 26 books, and the
+/// `@refines` assertions added for MobileRead #163 landed in it — a repair
+/// that is otherwise completely determinate (`refines="title"` wants a `#`)
+/// had no handle.
+///
+/// `Message.rule` is `&'static str`, and a slug derived at load time is not.
+/// The set is bounded and tiny — both schemas are `include_str!` constants, so
+/// there are exactly as many slugs as there are patterns (102 today) and they
+/// are interned once for the life of the process — so leaking them is cheaper
+/// and far less error-prone than hand-maintaining a 102-row table that could
+/// drift from the schema.
+fn intern_rule(prefix: &str, pattern_id: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let slug = format!("{prefix}.{}", pattern_id.replace('-', "_"));
+    let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut pool = pool.lock().expect("rule-slug pool");
+    if let Some(existing) = pool.get(slug.as_str()) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(slug.into_boxed_str());
+    pool.insert(leaked);
+    leaked
+}
+
+pub fn run<'input>(
+    schema: &Schema,
+    doc: &Document<'input>,
+    rule_prefix: &str,
+) -> Vec<(String, Position, &'static str)> {
     let root = doc.root_element();
     let namespaces = &schema.namespaces;
 
@@ -289,6 +330,10 @@ pub fn run<'input>(schema: &Schema, doc: &Document<'input>) -> Vec<(String, Posi
                         messages.push((
                             render_message(&check.message, &env, node),
                             Position::of(node),
+                            intern_rule(
+                                rule_prefix,
+                                pattern.id.as_deref().unwrap_or("unnamed_pattern"),
+                            ),
                         ));
                     }
                 }
@@ -416,7 +461,10 @@ mod tests {
         "#;
         let schema = load(sch).unwrap();
         let doc = Document::parse(r#"<root><a id="x"/><b id="x"/><c id="y"/></root>"#).unwrap();
-        let texts: Vec<String> = run(&schema, &doc).into_iter().map(|(t, _)| t).collect();
+        let texts: Vec<String> = run(&schema, &doc, "test")
+            .into_iter()
+            .map(|(t, _, _)| t)
+            .collect();
         assert_eq!(
             texts,
             vec!["Duplicate id".to_string(), "Duplicate id".to_string()]
@@ -437,7 +485,7 @@ mod tests {
         "#;
         let schema = load(sch).unwrap();
         let doc = Document::parse(r#"<root><a id="x"/><b id="y"/></root>"#).unwrap();
-        assert!(run(&schema, &doc).is_empty());
+        assert!(run(&schema, &doc, "test").is_empty());
     }
 
     #[test]
@@ -455,7 +503,10 @@ mod tests {
         let schema = load(sch).unwrap();
         let doc =
             Document::parse(r#"<root xmlns:epub="urn:test:epub"><epub:switch/></root>"#).unwrap();
-        let texts: Vec<String> = run(&schema, &doc).into_iter().map(|(t, _)| t).collect();
+        let texts: Vec<String> = run(&schema, &doc, "test")
+            .into_iter()
+            .map(|(t, _, _)| t)
+            .collect();
         assert_eq!(
             texts,
             vec!["WARNING: epub:switch is deprecated".to_string()]
@@ -475,7 +526,10 @@ mod tests {
         "#;
         let schema = load(sch).unwrap();
         let doc = Document::parse(r#"<root><a id="x"/></root>"#).unwrap();
-        let texts: Vec<String> = run(&schema, &doc).into_iter().map(|(t, _)| t).collect();
+        let texts: Vec<String> = run(&schema, &doc, "test")
+            .into_iter()
+            .map(|(t, _, _)| t)
+            .collect();
         assert_eq!(texts, vec!["bad id \"x\"".to_string()]);
     }
 
@@ -497,13 +551,16 @@ mod tests {
             r#"<opf:package xmlns:opf="urn:test:opf" unique-identifier="id"><opf:metadata><opf:identifier id="id"/></opf:metadata></opf:package>"#,
         )
         .unwrap();
-        assert!(run(&schema, &ok_doc).is_empty());
+        assert!(run(&schema, &ok_doc, "test").is_empty());
 
         let bad_doc = Document::parse(
             r#"<opf:package xmlns:opf="urn:test:opf" unique-identifier="missing"><opf:metadata><opf:identifier id="id"/></opf:metadata></opf:package>"#,
         )
         .unwrap();
-        let texts: Vec<String> = run(&schema, &bad_doc).into_iter().map(|(t, _)| t).collect();
+        let texts: Vec<String> = run(&schema, &bad_doc, "test")
+            .into_iter()
+            .map(|(t, _, _)| t)
+            .collect();
         assert_eq!(
             texts,
             vec!["unique-identifier does not resolve".to_string()]
@@ -528,9 +585,9 @@ mod tests {
                 v = version,
             );
             let doc = Document::parse(&opf).unwrap();
-            run(&package_schema(), &doc)
+            run(&package_schema(), &doc, "test")
                 .iter()
-                .any(|(m, _)| m.contains("only one dc:date"))
+                .any(|(m, _, _)| m.contains("only one dc:date"))
         }
         assert!(!flags_second_date("2.0"), "EPUB 2 allows multiple dc:date");
         assert!(flags_second_date("3.0"), "EPUB 3 allows only one dc:date");
@@ -544,9 +601,9 @@ mod tests {
             r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
         );
         let doc = Document::parse(&xml).unwrap();
-        run(&xhtml_schema(), &doc)
+        run(&xhtml_schema(), &doc, "test")
             .into_iter()
-            .map(|(t, _)| t)
+            .map(|(t, _, _)| t)
             .collect()
     }
 
@@ -603,6 +660,49 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// Every pattern in both bundled schemas must carry an `@id`, because that
+    /// id becomes the `rule` slug on every finding the pattern produces.
+    ///
+    /// A pattern without one would silently publish `…unnamed_pattern` to
+    /// downstream consumers, which is worse than the `None` this replaced: it
+    /// looks like a real key and is shared by every unnamed pattern.
+    #[test]
+    fn every_pattern_has_an_id() {
+        for (name, schema) in [
+            ("package.sch", package_schema()),
+            ("xhtml.sch", xhtml_schema()),
+        ] {
+            let missing = schema.patterns.iter().filter(|p| p.id.is_none()).count();
+            assert_eq!(missing, 0, "{name} has {missing} pattern(s) with no @id");
+            let mut ids: Vec<_> = schema
+                .patterns
+                .iter()
+                .filter_map(|p| p.id.as_deref())
+                .collect();
+            let before = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(before, ids.len(), "{name} has a duplicate pattern @id");
+        }
+    }
+
+    /// The slug is the pattern id with hyphens as underscores, under a prefix
+    /// naming the document the schema applies to — so a consumer can tell a
+    /// Schematron finding from a hand-coded one, and two patterns can never
+    /// collide.
+    #[test]
+    fn rule_slugs_are_derived_from_the_pattern_id() {
+        assert_eq!(
+            super::intern_rule("opf.package", "opf-meta-title-type-refines"),
+            "opf.package.opf_meta_title_type_refines"
+        );
+        // Interning is by value, so the same pattern always yields the same
+        // pointer rather than leaking once per finding.
+        let a = super::intern_rule("opf.package", "opf-refines-target-exists");
+        let b = super::intern_rule("opf.package", "opf-refines-target-exists");
+        assert!(std::ptr::eq(a, b));
     }
 
     #[test]

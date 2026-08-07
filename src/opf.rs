@@ -2329,8 +2329,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // Schematron output now gets line/column too (previously it was the
     // one documented family that couldn't).
     check_duplicate_ids(&doc, opf_path, report);
-    for (message, position) in crate::schematron::run(&crate::schematron::package_schema(), &doc) {
-        report.push_at_pos(RSC_005, Severity::Error, message, opf_path, position);
+    for (message, position, rule) in
+        crate::schematron::run(&crate::schematron::package_schema(), &doc, "opf.package")
+    {
+        report.push_full(
+            RSC_005,
+            Severity::Error,
+            message,
+            opf_path,
+            position,
+            rule,
+            Vec::new(),
+        );
     }
 
     // --- required metadata ---
@@ -4739,8 +4749,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // EPUB 3 content-model nesting constraints (Schematron), reported as
             // RSC-005 at the offending element, matching epubcheck.
             if let Some(sch) = &xhtml_sch {
-                for (message, position) in crate::schematron::run(sch, &d) {
-                    report.push_at_pos(RSC_005, Severity::Error, message, path.clone(), position);
+                for (message, position, rule) in
+                    crate::schematron::run(sch, &d, "opf.content_document")
+                {
+                    report.push_full(
+                        RSC_005,
+                        Severity::Error,
+                        message,
+                        path.clone(),
+                        position,
+                        rule,
+                        Vec::new(),
+                    );
                 }
                 // IDREF/IDREFS resolution (hand-coded; needs per-token iteration
                 // the Schematron's XPath 1.0 core can't do). EPUB 3 only.
@@ -10603,7 +10623,7 @@ mod tests {
                 .iter()
                 .map(|m| m.id.to_string())
                 .chain(
-                    crate::schematron::run(&sch, &d)
+                    crate::schematron::run(&sch, &d, "opf.package")
                         .into_iter()
                         .map(|_| "RSC-005".to_string()),
                 )

@@ -8,6 +8,28 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **Schematron findings now carry a `rule` slug**, derived from the pattern's
+  `@id` — `opf.package.opf_meta_title_type_refines`, and so on. They were the
+  only findings emitted with `rule: null`, which put them in the bucket a
+  downstream consumer cannot key on; epubsana reported that bucket at 172
+  findings across 26 books. It mattered immediately, because 0.9.10's
+  `@refines` assertions landed in it and `refines="title"` → `refines="#title"`
+  is about as determinate as a repair gets.
+
+  Purely additive — these findings previously had no key at all, so nothing
+  that keys on `rule` can break. Counts, IDs, messages and positions are
+  unchanged; the corpus and the shelf are byte-identical. Unkeyed findings on
+  the 115-book shelf go 291 → 287.
+
+  Two tests hold it: every pattern in both schemas must have a unique `@id`
+  (without one a finding would publish a shared `…unnamed_pattern` key, which
+  is worse than `None` because it looks real), and the slug derivation is
+  pinned.
+
 ## [0.9.10] - 2026-08-07
 
 ### Fixed
