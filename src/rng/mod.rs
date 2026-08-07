@@ -1451,6 +1451,73 @@ mod tests {
         );
     }
 
+    /// **No define reachable from the EPUB 2 root may pull in the EPUB 3
+    /// global attribute set.** A structural invariant, checked over the schema
+    /// text rather than by probing behaviour, because behaviour only shows the
+    /// leak you happened to test.
+    ///
+    /// This has now been the cause twice. The `map` leak (#69) made every
+    /// HTML5 element *reachable* in EPUB 2; JSWolf's MobileRead #165 was five
+    /// elements - `img`, `area`, `iframe`, `param`, `script` - taking the
+    /// EPUB 3 attribute set through a define shared between the versions, so
+    /// `<img role="x">` sailed through everything #66 tightened. One of the
+    /// five, `areaEl`, became reachable *because* of #69's fix.
+    ///
+    /// Both were found by asking this question of the whole grammar. Asking it
+    /// in a test means the next one fails here instead of arriving as a report.
+    #[test]
+    fn the_epub2_grammar_never_reaches_the_epub3_global_set() {
+        let src = crate::rng::XHTML_RNG;
+        // define name -> body, by scanning for `<define name="X">` … `</define>`.
+        let mut defs: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+        let mut rest = src;
+        while let Some(i) = rest.find("<define name=\"") {
+            let after = &rest[i + 14..];
+            let Some(q) = after.find('"') else { break };
+            let name = &after[..q];
+            let body_start = i + 14 + q;
+            let end = rest[body_start..]
+                .find("</define>")
+                .map(|e| body_start + e)
+                .unwrap_or(rest.len());
+            defs.insert(name, &rest[body_start..end]);
+            rest = &rest[end.min(rest.len())..];
+            if rest.is_empty() {
+                break;
+            }
+        }
+        assert!(
+            defs.contains_key("htmlEl-epub2") && defs.contains_key("globalAttrsRest-epub2"),
+            "the scan found no defines, so this test would pass vacuously"
+        );
+
+        const EPUB3_ONLY: [&str; 2] = ["globalAttrs", "globalAttrsRest"];
+        let mut seen = std::collections::HashSet::new();
+        let mut stack = vec!["htmlEl-epub2"];
+        let mut leaks: Vec<String> = Vec::new();
+        while let Some(name) = stack.pop() {
+            if !seen.insert(name) {
+                continue;
+            }
+            let Some(body) = defs.get(name) else { continue };
+            let mut b = *body;
+            while let Some(i) = b.find("<ref name=\"") {
+                let after = &b[i + 11..];
+                let Some(q) = after.find('"') else { break };
+                let r = &after[..q];
+                if EPUB3_ONLY.contains(&r) {
+                    leaks.push(format!("{name} -> {r}"));
+                }
+                stack.push(r);
+                b = &after[q..];
+            }
+        }
+        assert!(
+            leaks.is_empty(),
+            "EPUB 2 reaches the EPUB 3 global set: {leaks:?}"
+        );
+    }
+
     /// EPUB 2's `<map>` must not be a door into the EPUB 3 vocabulary.
     ///
     /// It was one until #69: the EPUB 2 branch referenced the EPUB 3 `mapEl`,

@@ -8,6 +8,32 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Five EPUB 2 elements were taking the EPUB 3 global attribute set** (JSWolf,
+  MobileRead #165). `img`, `area`, `iframe`, `param` and `script` reached
+  `globalAttrs` through a define shared between the two versions, so
+  `<img role="x">` and its four siblings sailed through everything #66
+  tightened. epubcheck rejects `role` on all five in EPUB 2; we accepted it on
+  all five.
+
+  Found by walking the grammar from the EPUB 2 root and listing every define
+  that pulls in the EPUB 3 global set — the same reachability question that
+  exposed the `map` leak in #69, asked of the whole grammar instead of waiting
+  for the next report. One of the five, `area`, became reachable *because* of
+  #69's fix.
+
+  A test now asserts the invariant over the schema text, and it was checked in
+  both directions: reintroducing the `img` leak fails it.
+
+  `iframe`, `param` and `script` are knowingly left slightly permissive —
+  schema/20 gives them `Core.attrib`, `id.attrib` and no common attributes
+  respectively, where they now get the full XHTML 1.1 `Common.attrib`. That is
+  a false negative rather than a false positive, and the exact lists are
+  recorded at the site.
+
 ## [0.9.11] - 2026-08-07
 
 ### Added

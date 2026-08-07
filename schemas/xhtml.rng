@@ -1098,7 +1098,7 @@
       <optional><attribute name="name"><data type="string"/></attribute></optional>
       <oneOrMore>
         <choice>
-          <ref name="areaEl"/>
+          <ref name="areaEl-epub2"/>
           <ref name="epub2BlockChoice"/>
         </choice>
       </oneOrMore>
@@ -1164,7 +1164,7 @@
        rule above stays in force for EPUB 3. -->
   <define name="imgEl-epub2">
     <element name="img">
-      <ref name="imgAttrsCommon"/>
+      <ref name="imgAttrsCommon-epub2"/>
       <optional><attribute name="width"><data type="string"/></attribute></optional>
       <optional><attribute name="height"><data type="string"/></attribute></optional>
       <!-- The rest of XHTML 1.1's `img.attlist` (#58): `longdesc` from
@@ -1179,6 +1179,80 @@
   </define>
 
   <!-- Everything on `img` except width/height, shared by both versions. -->
+  <!-- ============ EPUB 2 variants of five shared defines ============ -->
+
+  <!-- JSWolf, MobileRead #165. Five elements reachable from `htmlEl-epub2`
+       pulled in the *EPUB 3* global attribute set through a define shared
+       between the versions, so `<img role="x">` and four siblings sailed
+       through every tightening #66 made. Measured against epubcheck: it
+       rejects `role` on all five in EPUB 2, we accepted it on all five.
+
+       Found by walking the grammar from `htmlEl-epub2` and listing every
+       define that references `globalAttrs`/`globalAttrsCore`/`globalAttrsRest`
+       - the same reachability question that exposed the `map` leak in #69,
+       asked once instead of waiting for the next report. `areaEl` was one of
+       them, and it became reachable *because* of #69's fix: factoring `area`
+       out of `mapEl` gave the EPUB 2 map an EPUB 3 attribute set.
+
+       schema/20's real lists, for the record, since three of these are
+       narrower than `globalAttrs-epub2` and are knowingly left permissive:
+
+         img     Common.attrib (= our globalAttrs-epub2) + src/alt/longdesc/
+                 height/width/name/ismap/usemap
+         area    Common.attrib + href/nohref/alt/tabindex/accesskey/shape/
+                 coords/target
+         iframe  Core.attrib only - id/class/title/style, NO lang/xml:lang/dir
+         param   id.attrib only
+         script  no common attributes at all; charset/type/src/defer/xml:space
+
+       Granting `globalAttrs-epub2` to the last three is a false negative, not
+       a false positive, which is the safe direction and the reason this is a
+       recorded leftover rather than three more defines. -->
+
+  <define name="imgAttrsCommon-epub2">
+    <ref name="globalAttrs-epub2"/>
+    <attribute name="src"><data type="anyURI"/></attribute>
+    <optional><attribute name="alt"><data type="string"/></attribute></optional>
+    <optional><attribute name="usemap"><data type="string"/></attribute></optional>
+    <optional><attribute name="ismap"><data type="token"/></attribute></optional>
+  </define>
+
+  <define name="areaEl-epub2">
+    <element name="area">
+      <ref name="globalAttrs-epub2"/>
+      <optional><attribute name="tabindex"><data type="integer"/></attribute></optional>
+      <!-- csismap.rng declares `accesskey` on `area` as well as on `a`. -->
+      <optional><attribute name="accesskey"><data type="string"/></attribute></optional>
+      <optional><attribute name="shape"><data type="token"/></attribute></optional>
+      <optional><attribute name="coords"><data type="string"/></attribute></optional>
+      <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="alt"><data type="string"/></attribute></optional>
+      <optional><attribute name="nohref"><value>nohref</value></attribute></optional>
+      <optional><attribute name="target"><data type="token"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="paramEl-epub2">
+    <element name="param">
+      <ref name="globalAttrs-epub2"/>
+      <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <optional><attribute name="valuetype"><data type="token"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="scriptEl-epub2">
+    <element name="script"><ref name="globalAttrs-epub2"/>
+      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <optional><attribute name="charset"><data type="string"/></attribute></optional>
+      <optional><attribute name="defer"><value>defer</value></attribute></optional>
+      <optional><attribute name="xml:space"><value>preserve</value></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
   <define name="imgAttrsCommon">
     <ref name="globalAttrs"/>
     <attribute name="src"><data type="anyURI"/></attribute>
@@ -1491,7 +1565,7 @@
        width/height, matching epubcheck's schema/20 (#43) - see imgEl-epub2. -->
   <define name="iframeEl-epub2">
     <element name="iframe">
-      <ref name="globalAttrs"/>
+      <ref name="globalAttrs-epub2"/>
       <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="width"><data type="string"/></attribute></optional>
       <optional><attribute name="height"><data type="string"/></attribute></optional>
@@ -1961,7 +2035,7 @@
           <zeroOrMore>
             <element name="p"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
           </zeroOrMore>
-          <zeroOrMore><ref name="scriptEl"/></zeroOrMore>
+          <zeroOrMore><ref name="scriptEl-epub2"/></zeroOrMore>
         </interleave>
       </element>
       <ref name="tableEl"/>
@@ -2088,7 +2162,7 @@
           <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
           <optional><attribute name="target"><data type="string"/></attribute></optional>
         </element>
-        <ref name="scriptEl"/>
+        <ref name="scriptEl-epub2"/>
       </choice>
     </zeroOrMore>
   </define>
@@ -2195,7 +2269,7 @@
       <element name="applet">
         <ref name="globalAttrs-epub2"/>
         <interleave>
-          <zeroOrMore><ref name="paramEl"/></zeroOrMore>
+          <zeroOrMore><ref name="paramEl-epub2"/></zeroOrMore>
           <ref name="epub2Flow"/>
         </interleave>
       </element>
@@ -2250,7 +2324,7 @@
        (`Script.class`, `Edit.class`, and OPS 2.0.1's `svg` hook). -->
   <define name="epub2BothChoice">
     <choice>
-      <ref name="scriptEl"/>
+      <ref name="scriptEl-epub2"/>
       <!-- `noscript` is the third and last `Block.model` element in the
            module set (`script.rng`), block-only even at inline level. -->
       <element name="noscript"><ref name="globalAttrs-epub2"/><ref name="epub2Block"/></element>
@@ -2337,7 +2411,7 @@
       <optional><attribute name="width"><data type="string"/></attribute></optional>
       <optional><attribute name="height"><data type="string"/></attribute></optional>
       <interleave>
-        <zeroOrMore><ref name="paramEl"/></zeroOrMore>
+        <zeroOrMore><ref name="paramEl-epub2"/></zeroOrMore>
         <ref name="epub2Flow"/>
       </interleave>
     </element>
