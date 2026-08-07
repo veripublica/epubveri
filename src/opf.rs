@@ -7681,6 +7681,15 @@ fn check_dictionaries(
         }
     }
 
+    let dictionary_collections: Vec<_> = pkg
+        .children()
+        .filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "collection"
+                && n.attr_no_ns("role") == Some("dictionary")
+        })
+        .collect();
+
     if !is_dictionary_pub {
         // The 'dict' CLI profile forces treatment as a dictionary
         // publication for the purpose of *this one* gating check only -
@@ -7700,7 +7709,22 @@ fn check_dictionaries(
                 Vec::new(),
             );
         }
-        return;
+        // ...but the *collection*-scoped rules are not gated on `dc:type` at
+        // all. epubcheck's `checkCollections`/`checkCollectionsContent` iterate
+        // the collections and test `collection.hasRole(DICTIONARY)` and nothing
+        // else, so `<collection role="dictionary">` alone is enough there.
+        //
+        // We required `dc:type="dictionary"` for all of it, so a book with a
+        // malformed dictionary collection and no `dc:type` drew *nothing* from
+        // us where epubcheck reports four - including OPF-083, a row
+        // `docs/COVERAGE.md` marks implemented. A check that cannot fire is
+        // worse in the matrix than one that is honestly absent.
+        //
+        // Safe for the fixture named above: it carries no `<collection>` at
+        // all, so this branch finds nothing there.
+        if dictionary_collections.is_empty() {
+            return;
+        }
     }
 
     let metadata = pkg
@@ -7795,15 +7819,6 @@ fn check_dictionaries(
             }
         }
     };
-
-    let dictionary_collections: Vec<_> = pkg
-        .children()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "collection"
-                && n.attr_no_ns("role") == Some("dictionary")
-        })
-        .collect();
 
     if dictionary_collections.is_empty() {
         if dictionary_marked_docs.is_empty() {
@@ -7951,7 +7966,7 @@ fn check_dictionaries(
             0 => report.push_at_pos(
                 OPF_083,
                 Severity::Error,
-                "a dictionary collection must contain no Search Key Map Document",
+                "a dictionary collection contains no Search Key Map Document",
                 opf_path,
                 Position::of(*collection),
             ),
@@ -11095,6 +11110,94 @@ mod tests {
                 ("OEBPS/content.opf", opf.as_str()),
                 ("OEBPS/ch1.xhtml", CH1),
                 ("OEBPS/toc.ncx", ncx.as_str()),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// A dictionary collection is judged on its own `role`, not on the
+    /// publication declaring `dc:type="dictionary"`.
+    ///
+    /// epubcheck's `checkCollections`/`checkCollectionsContent` iterate the
+    /// collections and test `collection.hasRole(DICTIONARY)` and nothing else.
+    /// We gated the whole suite on `dc:type`, so a book with a malformed
+    /// dictionary collection and no `dc:type` drew **nothing at all** where
+    /// epubcheck reports four — including OPF-083, a row `docs/COVERAGE.md`
+    /// marks as implemented. A check that cannot fire is worse in the matrix
+    /// than one that is honestly absent.
+    ///
+    /// Safe for the fixture the `dc:type` gate exists for
+    /// (`dictionary-metadata-type-missing-error.opf`): it carries no
+    /// `<collection>` at all, so this branch finds nothing there.
+    #[test]
+    fn a_dictionary_collection_is_checked_without_dc_type() {
+        for dc_type in [true, false] {
+            let ty = if dc_type {
+                "<dc:type>dictionary</dc:type>"
+            } else {
+                ""
+            };
+            let r = crate::validate_bytes(epub_with_dictionary_collection(ty));
+            assert!(
+                r.messages.iter().any(|m| m.id == crate::ids::OPF_083),
+                "a collection with no Search Key Map must draw OPF-083 (dc:type={dc_type})"
+            );
+        }
+    }
+
+    /// An EPUB 3 book whose package carries a `<collection role="dictionary">`
+    /// with a single XHTML link and no Search Key Map.
+    fn epub_with_dictionary_collection(dc_type: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{dc_type}
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+  <collection role="dictionary"><link href="ch1.xhtml"/></collection>
+</package>"#
+        );
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>N</title></head>\
+            <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">C</a></li></ol></nav>\
+            </body></html>";
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/ch1.xhtml", CH1),
             ] {
                 z.start_file(name, o).unwrap();
                 z.write_all(body.as_bytes()).unwrap();

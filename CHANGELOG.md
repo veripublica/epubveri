@@ -12,6 +12,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A dictionary collection is now checked on its own `role`, not on
+  `dc:type`.** epubcheck's `checkCollections`/`checkCollectionsContent` iterate
+  the collections and test `collection.hasRole(DICTIONARY)` and nothing else;
+  we required the publication to declare `dc:type="dictionary"` first. A book
+  with a malformed `<collection role="dictionary">` and no `dc:type` drew
+  **nothing at all** from us where epubcheck reports four — including OPF-083,
+  a row `docs/COVERAGE.md` marks as implemented. A check that cannot fire is
+  worse in the matrix than one that is honestly absent.
+
+  Now 4 = 4 on that shape. The `dc:type`-required finding for the `dict`
+  profile is unaffected: its fixture carries no `<collection>` at all.
+
+  Also corrects OPF-083's wording, which said a collection "must contain no
+  Search Key Map Document" — the exact opposite of the condition it reports.
+
 - **Five EPUB 2 elements were taking the EPUB 3 global attribute set** (JSWolf,
   MobileRead #165). `img`, `area`, `iframe`, `param` and `script` reached
   `globalAttrs` through a define shared between the two versions, so
