@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.12] - 2026-08-08
 
 ### Fixed
 
@@ -68,6 +68,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   respectively, where they now get the full XHTML 1.1 `Common.attrib`. That is
   a false negative rather than a false positive, and the exact lists are
   recorded at the site.
+
+### Changed
+
+- **The `compare` harness diffs finding counts, not just the ID set.** It
+  already collected `ID -> count` for both tools and compared only the keys, so
+  a book where we report 5 of something and epubcheck reports 500 counted as
+  "agreed". First run over 125 books found 47 such divergences, two of them
+  unexplained — one is the `<img alt>` fix above. Not shipped to users: the
+  harness is a workspace member, not part of the crate.
 
 ## [0.9.11] - 2026-08-07
 
