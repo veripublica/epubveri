@@ -130,6 +130,46 @@ fn check_unreferenced_remote_item(
     );
 }
 
+/// Does this manifest item's `fallback` chain reach a Content Document?
+///
+/// epubcheck's RSC-010 condition has three clauses and we had two:
+///
+/// ```java
+/// if (!isBlessedItemType(mt, version) && !isDeprecatedBlessedItemType(mt)
+///     && !targetResource.hasContentDocumentFallback())
+/// ```
+///
+/// Doitsu, MobileRead #168, on the IDPF `haruko-jpeg` sample: an image-based
+/// book whose nav and NCX link straight at the JPEGs, each of which declares
+/// `fallback="fallback"` to an XHTML document. That is the ordinary
+/// image-publication shape and epubcheck says nothing about it; we reported
+/// three errors.
+///
+/// Bounded at 10 hops, the same guard the OPF-043/OPF-065 chain walks use, so
+/// a `fallback` cycle cannot spin here. `foreign::fallback_reaches_core` is
+/// the neighbouring walk and deliberately not reused: it asks for a Core Media
+/// Type, which is a wider set than a Content Document.
+pub(crate) fn fallback_reaches_content_document(
+    start_id: &str,
+    items: &HashMap<String, (String, String)>,
+    fallback_map: &HashMap<String, String>,
+) -> bool {
+    let mut cur = start_id;
+    for _ in 0..10 {
+        let Some(next) = fallback_map.get(cur) else {
+            return false;
+        };
+        let Some((_, mt)) = items.get(next.as_str()) else {
+            return false;
+        };
+        if is_content_document_type(mt) {
+            return true;
+        }
+        cur = next.as_str();
+    }
+    false
+}
+
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
 fn parent_dir(path: &str) -> String {
     match path.rfind('/') {
@@ -1721,12 +1761,14 @@ fn check_guide_references(
 /// fragment must resolve to a real `id` in the target document (RSC-012).
 /// Reads each distinct target doc once, caching its id set (a real book
 /// can have many navPoints pointing to the same doc).
+#[allow(clippy::too_many_arguments)]
 fn check_ncx_content_fragments(
     ncx_doc: &roxmltree::Document,
     ncx_path: &str,
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
+    fallback_map: &HashMap<String, String>,
     is_epub3: bool,
     report: &mut Report,
 ) {
@@ -1759,8 +1801,9 @@ fn check_ncx_content_fragments(
             );
             continue;
         }
-        if let Some((_, mt)) = items.values().find(|(p, _)| nfc(p) == resolved)
+        if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == resolved)
             && !is_content_document_type(mt)
+            && !fallback_reaches_content_document(id, items, fallback_map)
         {
             report.push_node(
                 RSC_010,
@@ -4172,6 +4215,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 ocf,
                                 &name_index,
                                 &items,
+                                &fallback_map,
                                 is_epub3,
                                 report,
                             );
@@ -5820,7 +5864,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
         // --- Navigation document checks (NAV-010/011) ---
         if nav_path.as_deref() == Some(path.as_str()) {
-            crate::navdoc::check(&d, &path, &dir, &items, report);
+            crate::navdoc::check(&d, &path, &dir, &items, &fallback_map, report);
             // NAV-010: external links inside the required toc/page-list/
             // landmarks nav elements aren't allowed (links to remote
             // resources are fine in other, custom nav types).
@@ -11114,6 +11158,90 @@ mod tests {
                 z.start_file(name, o).unwrap();
                 z.write_all(body.as_bytes()).unwrap();
             }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// A nav or NCX link to a non-Content-Document is legal when the manifest
+    /// item declares a `fallback` chain reaching one.
+    ///
+    /// epubcheck's RSC-010 condition has three clauses and we had two; the
+    /// missing one is `!targetResource.hasContentDocumentFallback()`. Doitsu,
+    /// MobileRead #168, on the IDPF `haruko-jpeg` sample: an image-based book
+    /// whose nav and NCX link straight at the JPEGs, each declaring
+    /// `fallback="fallback"` to an XHTML document. epubcheck reports one usage
+    /// message for the whole book; we reported three errors.
+    #[test]
+    fn a_link_target_with_a_content_document_fallback_is_allowed() {
+        let count = |fallback: bool| {
+            let fb = if fallback { r#" fallback="fb""# } else { "" };
+            let bytes = epub_with_image_nav_target(fb);
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_010)
+                .count()
+        };
+        assert_eq!(count(true), 0, "a fallback to XHTML makes the target legal");
+        assert!(count(false) > 0, "without one it is still an error");
+    }
+
+    /// An EPUB 3 book whose `toc` nav links at an image, with the image's
+    /// manifest item optionally declaring a fallback.
+    fn epub_with_image_nav_target(fb_attr: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="img" href="01.jpg" media-type="image/jpeg"{fb_attr}/>
+    <item id="fb" href="fallback.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="img"/></spine>
+</package>"#
+        );
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>N</title></head>\
+            <body><nav epub:type=\"toc\"><ol><li><a href=\"01.jpg\">C</a></li></ol></nav>\
+            </body></html>";
+        const FB: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>f</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/fallback.xhtml", FB),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.start_file("OEBPS/01.jpg", o).unwrap();
+            z.write_all(&[0xFF, 0xD8, 0xFF, 0xE0]).unwrap();
             z.finish().unwrap();
         }
         buf

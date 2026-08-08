@@ -200,6 +200,7 @@ fn check_toc_links(
     nav: roxmltree::Node,
     dir: &str,
     items: &HashMap<String, (String, String)>,
+    fallback_map: &HashMap<String, String>,
     path: &str,
     report: &mut Report,
 ) {
@@ -215,9 +216,16 @@ fn check_toc_links(
         }
         let path_part = href.split(['#', '?']).next().unwrap_or(href);
         let resolved = crate::opf::nfc(&crate::opf::resolve(dir, path_part));
-        if let Some((_, mt)) = items.values().find(|(p, _)| crate::opf::nfc(p) == resolved)
+        // The third clause of epubcheck's RSC-010 condition: an item whose
+        // `fallback` chain reaches a Content Document is a legitimate target.
+        // Doitsu, MobileRead #168 - an image-based book links its nav straight
+        // at the JPEGs, each with `fallback` to an XHTML document.
+        if let Some((id, (_, mt))) = items
+            .iter()
+            .find(|(_, (p, _))| crate::opf::nfc(p) == resolved)
             && mt != "application/xhtml+xml"
             && mt != "image/svg+xml"
+            && !crate::opf::fallback_reaches_content_document(id, items, fallback_map)
         {
             report.push_node(
                 RSC_010,
@@ -307,6 +315,7 @@ pub(crate) fn check(
     path: &str,
     dir: &str,
     items: &HashMap<String, (String, String)>,
+    fallback_map: &HashMap<String, String>,
     report: &mut Report,
 ) {
     check_hidden_attrs(doc, path, report);
@@ -396,7 +405,7 @@ pub(crate) fn check(
             }
         }
         if ty == "toc" {
-            check_toc_links(nav, dir, items, path, report);
+            check_toc_links(nav, dir, items, fallback_map, path, report);
         }
         if ty == "landmarks" {
             check_landmarks(nav, dir, path, report);
