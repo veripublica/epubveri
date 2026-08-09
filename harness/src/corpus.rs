@@ -36,6 +36,15 @@ struct Scenario {
     /// strongest error, not a lesser one.
     usages: BTreeSet<String>,
     clean: bool,
+    /// The scenario carries a **commented-out** expectation - epubcheck has
+    /// disabled an assertion in its own file, always with a FIXME above it
+    /// saying the message *should* be reported. Such a scenario states no
+    /// settled expectation, so scoring it either way is wrong: reading the
+    /// comment as an assertion invents a miss, and ignoring it entirely
+    /// leaves the scenario looking clean and charges a false positive to a
+    /// tool that reports exactly what the FIXME asks for. Skipped instead,
+    /// and counted visibly.
+    unsettled: bool,
     as_nav: bool,
     edupub_profile: bool,
     idx_profile: bool,
@@ -154,6 +163,30 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
         // silently corrupts scoring (a fixture we're already correctly
         // silent on looks like a miss).
         if line.starts_with('#') {
+            // ...but a disabled *expectation* still tells us something: the
+            // scenario has no settled answer, so it must not be scored at
+            // all. See `Scenario::unsettled`.
+            //
+            // It has to be a commented-out **step**, not merely a comment
+            // mentioning a message id. The looser test - "contains 'is
+            // reported' and an id" - also matched `ocf.feature`'s narrative
+            // "#FIXME !!! test that RSC-007 is reported when resource
+            // referenced in encryption.xml was not found", a note sitting
+            // between two scenarios that attaches to the preceding one. That
+            // scenario has a real, active expectation, and discarding it cost
+            // a genuine exact-ID hit while the total moved too little to
+            // notice. Requiring a Gherkin step keyword separates the three
+            // real cases (all `#Then error X is reported`) from the note.
+            let body = line.trim_start_matches('#').trim_start();
+            if ["Then", "And", "But", "Given", "When"]
+                .iter()
+                .any(|kw| body.starts_with(kw))
+                && body.contains("is reported")
+                && id_re().is_match(body)
+                && let Some(i) = cur
+            {
+                scenarios[i].unsettled = true;
+            }
             continue;
         }
         if let Some(m) = located_re().captures(line) {
@@ -226,6 +259,7 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
                 warns: BTreeSet::new(),
                 usages: BTreeSet::new(),
                 clean: false,
+                unsettled: false,
                 as_nav: false,
                 edupub_profile: edupub_profile_bg,
                 idx_profile: idx_profile_bg,
@@ -614,6 +648,22 @@ const TARGET_IDS: &[&str] = &[
 // wrapping limitation, not a real epubveri defect, in that context.
 const SINGLE_DOC_WRAP_EXCLUDED: &[&str] = &[
     "RSC-001", "RSC-007", "RSC-011", "RSC-008", "OPF-014", "RSC-012", "OPF-078",
+    // RSC-006 (a remote resource where the container is required) is
+    // publication-scope, and epubcheck's single-document mode does not run it
+    // - one of the two scenarios that charged us for it says so in its own
+    // title: "remote XHTML document is not detected in single-document mode".
+    // Our wrap promotes the fixture to a publication, so the check fires.
+    //
+    // Not reasoned - asked. Both fixtures were rebuilt as publications and
+    // handed to epubcheck 5.3.0, which reports the same remote Content
+    // Document we do ("must be located in the EPUB container") and two
+    // unreferenced-resource findings besides. The finding is right; the
+    // scenario is about the mode.
+    //
+    // Costs no coverage: every scenario in the corpus that *expects* RSC-006
+    // checks a real directory fixture (`When checking EPUB '<dir>'`), so none
+    // of them is a single-document wrap and none is scored through this list.
+    "RSC-006",
 ];
 
 fn run_report(scenarios: &[Scenario], res_dir: &Path) {
@@ -644,6 +694,12 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     let mut miss_all: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
 
     for s in scenarios {
+        if s.unsettled {
+            *skipped
+                .entry("expectation commented out by epubcheck")
+                .or_insert(0) += 1;
+            continue;
+        }
         let resolved = resolve(s, res_dir);
         let (path, is_temp, single_doc_wrap) = match resolved {
             Resolved::Skip(reason) => {
