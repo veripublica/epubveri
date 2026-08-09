@@ -8,7 +8,17 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.15] - 2026-08-10
+
+Three false positives, all found here rather than reported: markup this
+tool rejected and epubcheck accepts. The custom-element one is the reason
+to upgrade — a book using `<epub-switch>` or any other hyphenated element
+name was reported INVALID.
+
+Two of the three had been sitting in the corpus harness's own output for
+months, inside a standing "4 false positives" figure that was being read as
+a constant rather than as four open questions. One was real; the other
+three were the instrument's, and are fixed too.
 
 ### Added
 
