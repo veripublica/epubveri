@@ -10,6 +10,34 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **EDUPUB heading ranks are checked** (`--profile edupub`, RSC-005). A
+  heading's rank must match its sectioning depth: a document that starts at
+  `h2` must step to `h3` one section in. The rule is *relative* — it derives
+  an expected rank for every heading from whichever heading came first — so
+  it does not demand an `h1`.
+
+  This was a named gap in `edupub.rs`, deferred on the grounds that "real
+  fixtures gave contradictory evidence for the exact depth-counting
+  algorithm". They did not disagree; the algorithm was being inferred from
+  the fixtures rather than read from epubcheck's `edu-structure.sch`, which
+  states it outright — including the two things that made the fixtures look
+  contradictory (a different formula when `<body>` acts as a section, and a
+  baseline heading that ignores `aside`/`nav` and anything more than one
+  sectioning level deep).
+
+- **An index-only document must declare the index on `<body>`**
+  (`--profile idx`, RSC-005). Reproduces one quirk of epubcheck on purpose:
+  its assert tokenizes on `'/s+'` — a typo for `'\s+'` — so a multi-token
+  `epub:type="index frontmatter"` never matches and is reported. Measured
+  against 5.3.0 rather than assumed; tokenizing properly here would be a
+  silent false negative against the tool we are matched against.
+
+Corpus exact-ID recall **98.8% → 99.5%** (604/607). The three remaining
+misses are two OEBPS 1.2 scenarios (out of scope) and one that measures
+epubcheck's single-document mode, which this tool does not have.
+
 ### Fixed
 
 - **HTML custom elements are no longer rejected (false positive).**

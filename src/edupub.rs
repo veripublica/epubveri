@@ -4,11 +4,11 @@
 //! publication-level metadata file used only for multi-rendition
 //! packages). Deliberately narrow: only the checks confirmed by real
 //! corpus fixtures (HTML5 microdata attributes, the page-list/pagination-
-//! source cross-reference, and the multi-rendition `dc:type` cardinality
-//! checks wired in `opf.rs`) — not the full EDUPUB conformance suite
-//! (sectioning rules, accessibility metadata, etc.), which the corpus
-//! itself only exercises indirectly via `-valid` fixtures with no
-//! dedicated error codes to target.
+//! source cross-reference, the sectioning and heading rules, and the
+//! multi-rendition `dc:type` cardinality checks wired in `opf.rs`) — not
+//! the full EDUPUB conformance suite (accessibility metadata, etc.), which
+//! the corpus itself only exercises indirectly via `-valid` fixtures with
+//! no dedicated error codes to target.
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
@@ -178,21 +178,24 @@ fn check_own_heading(
 }
 
 /// §4.2 Sectioning / §4.3 Titles and Headings: the EDUPUB content-
-/// document sectioning and heading rules. Deliberately excludes the
-/// heading *nesting-level number* check (e.g. "a depth-2 section must use
-/// h2, not h3") - real fixtures gave contradictory evidence for the exact
-/// depth-counting algorithm (in particular, whether/when an implicit
-/// `<body>` with multiple sectioning children itself "spends" a nesting
-/// level), and getting it wrong risked false positives on other
-/// currently-clean fixtures. The three scenarios that specifically test
-/// numbering (`edupub-titles-invalid-missing-error`,
-/// `edupub-titles-explicit-body-error`, `edupub-untitled-heading-level-
-/// error`) are a named, deliberate gap rather than a guess.
+/// document sectioning and heading rules.
+///
+/// The heading *rank* check (`check_heading_ranks`) used to be a named gap
+/// here, deferred because "real fixtures gave contradictory evidence for the
+/// exact depth-counting algorithm". They did not disagree - the algorithm was
+/// being inferred from the fixtures instead of read from
+/// `edu-structure.sch`, which states it outright, including the two things
+/// that made the fixtures look contradictory: the `body-is-section` branch
+/// selects a different formula, and the topmost heading (which sets the
+/// baseline every other heading is measured against) ignores `aside`/`nav`
+/// and anything more than one sectioning level deep.
 pub(crate) fn check_sectioning_and_headings(
     doc: &roxmltree::Document,
     path: &str,
     report: &mut Report,
 ) {
+    check_heading_ranks(doc, path, report);
+
     let Some(body) = doc
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "body")
@@ -263,6 +266,166 @@ pub(crate) fn check_sectioning_and_headings(
                 path,
                 n,
                 "edupub.sectioning.subtitle_not_wrapped",
+                Vec::new(),
+            );
+        }
+    }
+}
+
+/// A heading's *rank* for the nesting rule.
+///
+/// Deliberately not `heading_level`, which answers a different question and
+/// gives up on a `role="heading"` carrying no `aria-level`. Here epubcheck's
+/// Schematron defaults that case to **2** (`if (current()/@aria-level) then
+/// number(...) else 2`), and the default is load-bearing: without it such a
+/// heading vanishes from the rule instead of being ranked.
+fn heading_rank(n: roxmltree::Node) -> Option<u32> {
+    let name = n.tag_name().name();
+    if let Some(digits) = name.strip_prefix('h')
+        && let Ok(rank) = digits.parse::<u32>()
+        && (1..=6).contains(&rank)
+    {
+        return Some(rank);
+    }
+    if n.attr_no_ns("role") == Some("heading") {
+        return Some(
+            n.attr_no_ns("aria-level")
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2),
+        );
+    }
+    None
+}
+
+/// How deeply a node sits in sectioning content, epubcheck's count: the
+/// number of `section`/`article`/`aside`/`nav` ancestors.
+fn sectioning_depth(n: roxmltree::Node) -> u32 {
+    n.ancestors()
+        .skip(1)
+        .filter(|a| a.is_element() && is_sectioning(a.tag_name().name()))
+        .count() as u32
+}
+
+/// RSC-005: a heading's rank must match its nesting depth (`edu-structure.sch`,
+/// pattern `edupub.headings`).
+///
+/// The whole rule is relative, which is why it needs the two file-level
+/// values below rather than "an `<h1>` at depth 0". epubcheck derives an
+/// *expected* rank for every heading from whichever heading came first, so a
+/// document that starts at `h2` is consistent as long as it keeps stepping by
+/// one; a document that starts at `h2` and then uses `h2` again one section
+/// deep is not.
+///
+/// Ported from the Schematron rather than from its prose, because three
+/// parts are easy to get subtly wrong: the topmost heading ignores anything
+/// inside an `aside`/`nav` and anything more than one sectioning level deep;
+/// `body-is-section` selects a *different* formula (`rank - nest + depth`
+/// versus `rank + depth - 1`); and the rule stops caring past `h6`, where it
+/// asks only that the heading be an `h6`.
+///
+/// Checked against epubcheck 5.3.0 on its own `edupub-titles-*` fixtures, one
+/// heading at a time - the corpus scenario asserts three findings for one
+/// document, so a port that produced three findings for the wrong three
+/// headings would have scored as a pass.
+fn check_heading_ranks(doc: &roxmltree::Document, path: &str, report: &mut Report) {
+    let Some(body) = doc
+        .descendants()
+        .find(|n| n.is_element() && n.tag_name().name() == "body")
+    else {
+        return;
+    };
+    let headings: Vec<roxmltree::Node> = body
+        .descendants()
+        .filter(|n| n.is_element() && heading_rank(*n).is_some())
+        .collect();
+
+    // `exists(//html:body/(html:* except (html:article | html:section)))` -
+    // note this is *not* `is_body_explicit`, which also excludes `aside` and
+    // `nav`. A body holding only a `<nav>` is an implied section for this
+    // rule and an implicit one for that one.
+    let body_is_section = body
+        .children()
+        .filter(|c| c.is_element())
+        .any(|c| !matches!(c.tag_name().name(), "article" | "section"));
+    let body_label = body
+        .attr_no_ns("aria-label")
+        .map(|v| v.split_whitespace().collect::<Vec<_>>().join(" "))
+        .unwrap_or_default();
+
+    // The topmost heading: document order, skipping anything inside an
+    // `aside`/`nav`, and no deeper than one `section`/`article`.
+    let topmost = headings.iter().find(|h| {
+        !h.ancestors()
+            .skip(1)
+            .any(|a| a.is_element() && matches!(a.tag_name().name(), "aside" | "nav"))
+            && h.ancestors()
+                .skip(1)
+                .filter(|a| a.is_element() && matches!(a.tag_name().name(), "section" | "article"))
+                .count()
+                <= 1
+    });
+    let (topmost_rank, topmost_nest) = if !body_label.is_empty() {
+        (1, 0)
+    } else {
+        match topmost {
+            Some(h) => {
+                let nest = u32::from(h.ancestors().skip(1).any(|a| {
+                    a.is_element() && matches!(a.tag_name().name(), "section" | "article" | "nav")
+                }));
+                (heading_rank(*h).unwrap_or(1), nest)
+            }
+            None => (1, 0),
+        }
+    };
+
+    for h in &headings {
+        let rank = heading_rank(*h).unwrap_or(1);
+        if h.ancestors()
+            .skip(1)
+            .any(|a| a.is_element() && matches!(a.tag_name().name(), "figure" | "blockquote"))
+        {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "Ranked headings are not valid in figure or blockquote",
+                path,
+                *h,
+                "edupub.headings.rank_in_sectioning_root",
+                Vec::new(),
+            );
+            continue;
+        }
+        let depth = sectioning_depth(*h);
+        // Saturating, because the second formula subtracts: a document whose
+        // topmost heading is at depth 0 and is not a section gives
+        // `rank + 0 - 1`, and an `h1` there must not wrap around.
+        let expected = if body_is_section {
+            (topmost_rank + depth).saturating_sub(topmost_nest)
+        } else {
+            (topmost_rank + depth).saturating_sub(1)
+        };
+        if expected < 6 {
+            if rank != expected {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    format!(
+                        "The heading rank h{rank} does not match the current nesting level ({expected})"
+                    ),
+                    path,
+                    *h,
+                    "edupub.headings.rank_mismatch",
+                    vec![rank.to_string(), expected.to_string()],
+                );
+            }
+        } else if rank < 6 {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "The current heading rank should be h6",
+                path,
+                *h,
+                "edupub.headings.rank_should_be_h6",
                 Vec::new(),
             );
         }
@@ -613,5 +776,87 @@ pub(crate) fn check_multi_rendition_dc_type(
                 Vec::new(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ranks(body: &str) -> Vec<(u32, String)> {
+        let xml = format!(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\" \
+             xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+             <head><title>t</title></head><body>{body}</body></html>"
+        );
+        let d = crate::ocf::parse_xml(&xml).unwrap();
+        let mut report = Report::new();
+        check_heading_ranks(&d, "c.xhtml", &mut report);
+        report
+            .messages
+            .iter()
+            .map(|m| (m.position.map(|p| p.line).unwrap_or(0), m.text.clone()))
+            .collect()
+    }
+
+    /// The rule is relative, so the interesting assertion is *which* headings
+    /// are blamed and with what expected rank - not how many.
+    ///
+    /// epubcheck's own `edupub-titles-invalid-missing-error.xhtml` asserts
+    /// "RSC-005 is reported 3 times" and nothing more, so a port that blamed
+    /// three *different* headings, or got every expected rank wrong, would
+    /// score as a pass against the corpus. These are the three findings
+    /// epubcheck 5.3.0 actually produces on that file, ranks included.
+    #[test]
+    fn heading_rank_must_match_sectioning_depth() {
+        // The corpus fixture, one line per element so positions are readable.
+        let got = ranks(
+            "\n<h2>Explicit body section</h2>\
+             \n<nav epub:type=\"toc\"><h2>Table of Contents</h2></nav>\
+             \n<section aria-label=\"test\">\
+             \n<section aria-label=\"implied grouping\">\
+             \n<aside><header><h4>Prelim</h4></header><p>x</p></aside>\
+             \n<section><h3>Sub-sub-subsection</h3><p>x</p></section>\
+             \n</section></section>",
+        );
+        let texts: Vec<&str> = got.iter().map(|(_, t)| t.as_str()).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "The heading rank h2 does not match the current nesting level (3)",
+                "The heading rank h4 does not match the current nesting level (5)",
+                "The heading rank h3 does not match the current nesting level (5)",
+            ],
+            "got {got:?}"
+        );
+        // The body's own h2 is the topmost heading and sets the baseline, so
+        // it must NOT be blamed - the whole point of a relative rule.
+        assert_eq!(got.len(), 3);
+    }
+
+    /// A document that steps by one from its own starting rank is silent,
+    /// whatever that starting rank is. Without this the rule could be "h1 at
+    /// depth 0" and still pass the test above.
+    #[test]
+    fn a_consistent_hierarchy_is_silent_at_any_starting_rank() {
+        for (top, sub) in [("h1", "h2"), ("h2", "h3"), ("h3", "h4")] {
+            let got = ranks(&format!(
+                "<{top}>T</{top}><section><{sub}>S</{sub}></section>"
+            ));
+            assert!(got.is_empty(), "{top}/{sub} should be silent, got {got:?}");
+        }
+    }
+
+    /// Past h6 the rule stops counting and only asks for an h6.
+    #[test]
+    fn beyond_h6_the_rule_only_requires_h6() {
+        let deep = "<section><section><section><section><section><section>\
+                    <h3>x</h3></section></section></section></section></section></section>";
+        let got = ranks(&format!("<h1>T</h1>{deep}"));
+        assert_eq!(
+            got.iter().map(|(_, t)| t.as_str()).collect::<Vec<_>>(),
+            vec!["The current heading rank should be h6"],
+            "got {got:?}"
+        );
     }
 }
