@@ -44,6 +44,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Added
 
+- **ADV-004 now reads the content documents, not only the package.** Reported
+  by DNSB on MobileRead (#169/#170) with a Calibre AZW3→EPUB 2 conversion:
+  epubcheck and epubveri disagreed wildly on it, and changing the version
+  attribute to `3.0` made most findings vanish — our 429 became 6, epubcheck's
+  3432 became 10. That is exactly what ADV-004 exists to say in one line, and
+  it stayed silent, because the book's package carries **no** EPUB 3 signal at
+  all while its content documents carry 374 `epub:type` attributes and 75 HTML5
+  sectioning elements.
+
+  Two content signals join the package ones — `epub:type` used on any element,
+  and an HTML5 sectioning element — under the unchanged two-signal threshold,
+  and the two halves mix.
+
+  **The signal is *use*, not declaration**, which is measured rather than
+  assumed: of 72 EPUB 2 books on the shelf, 8 bind the EPUB 3 `ops` namespace in
+  their content documents and only 2 ever use `epub:type` — the other 6 carry an
+  unused `xmlns:epub` as producer boilerplate. Keying on the binding would fire
+  on all 8, which is the ADV-003 failure mode. Keying on use reports 3 books of
+  125, all three genuinely written in EPUB 3.
+
 - **ADV-005: `page-spread-*` on a reflowable document** (EPUB 3.4,
   [w3c/epubcheck#1652](https://github.com/w3c/epubcheck/issues/1652)). Placing
   a page on one side of a spread is meaningless for reflowable content, so

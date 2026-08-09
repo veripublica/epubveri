@@ -2144,11 +2144,46 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
 /// wrong character in the version attribute. So this fires only where such a
 /// pile already exists, which is what keeps it from inventing a verdict.
 ///
-/// Scoped to package-document signals, deliberately. Each is structural, and
-/// each is illegal in EPUB 2 on its own - no judgement about intent is being
-/// made, only a count. Content-side signals (`epub:type`, HTML5 sectioning
-/// elements) were left out until the real-book shelf can say whether they add
-/// anything a correctly-labelled book doesn't also trip.
+/// The content-document half of ADV-004's evidence, collected while the spine
+/// is walked so no document is read or parsed twice.
+///
+/// Both fields mean *used*, never *declared* — see the measurement in
+/// [`check_declared_version_advisory`], where keying on the `xmlns:epub`
+/// declaration would have fired on 6 shelf books carrying it as dead
+/// boilerplate.
+#[derive(Clone, Copy, Default)]
+struct ContentVersionSignals {
+    /// An `epub:type` attribute on any element. Its namespace does not exist
+    /// in OPS 2.0.1.
+    epub_type: bool,
+    /// A `section`/`header`/`footer`/`article`/`aside`/`nav` element. XHTML
+    /// 1.1 has none of them; they arrived with HTML5.
+    html5_sectioning: bool,
+}
+
+/// Each signal is structural, and each is illegal in EPUB 2 on its own - no
+/// judgement about intent is being made, only a count.
+///
+/// **Content-document signals joined the package ones in 0.9.13**, which the
+/// note here used to defer "until the real-book shelf can say whether they add
+/// anything a correctly-labelled book doesn't also trip". The shelf has now
+/// said, prompted by DNSB (MobileRead #169/#170) with a Calibre AZW3→EPUB 2
+/// conversion whose package carries **no** signal at all - no
+/// `<meta property>`, no `properties=` - while its content documents carry 374
+/// `epub:type` attributes and 75 HTML5 sectioning elements. The book this
+/// check exists for was exactly the book it stayed silent on.
+///
+/// The reporter proved the diagnosis themselves by flipping the version
+/// attribute to `3.0`: our findings go 429 → 6, epubcheck's 3432 → 10.
+///
+/// **The signal is *use*, not declaration**, and that is measured rather than
+/// assumed. Of 72 EPUB 2 books on the shelf, 8 declare the EPUB 3 `ops`
+/// namespace in their content documents and only **2** ever use `epub:type` -
+/// the other 6 carry an unused `xmlns:epub` as producer boilerplate. Keying on
+/// the declaration would fire on all 8, which is the ADV-003 failure mode (an
+/// advisory that cries wolf teaches people never to pass the flag). Keying on
+/// use, and keeping the two-signal threshold, leaves those 6 silent and
+/// reports 3.
 ///
 /// The reverse direction - a `3.0` book that is really EPUB 2 - is not
 /// implemented, and not for lack of interest: EPUB 3 *permits* an NCX and a
@@ -2159,7 +2194,12 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
 /// Advisory-only (opt-in `--advisory`, usage severity, never in the exit
 /// code): epubcheck has no verdict on this, and the standing rule is that
 /// anything beyond its verdict stays opt-in.
-fn check_declared_version_advisory(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+fn check_declared_version_advisory(
+    doc: &roxmltree::Document,
+    opf_path: &str,
+    content: ContentVersionSignals,
+    report: &mut Report,
+) {
     let elements = || doc.descendants().filter(|n| n.is_element());
     let mut signals: Vec<String> = Vec::new();
 
@@ -2182,6 +2222,16 @@ fn check_declared_version_advisory(doc: &roxmltree::Document, opf_path: &str, re
     }
     if item_props().any(|p| p.split_whitespace().any(|t| t != "nav")) {
         signals.push("other EPUB 3 manifest properties".to_string());
+    }
+    // The content-document half, gathered while the spine was walked. Both
+    // are illegal in EPUB 2 the same way the package ones are: `epub:type`
+    // belongs to a namespace OPS 2.0.1 does not have, and the sectioning
+    // elements arrived with HTML5, where EPUB 2 is XHTML 1.1.
+    if content.epub_type {
+        signals.push("epub:type in the content documents".to_string());
+    }
+    if content.html5_sectioning {
+        signals.push("HTML5 sectioning elements in the content documents".to_string());
     }
 
     // Two independent signals, not one. A single stray attribute is a
@@ -4420,9 +4470,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // OPF-011/OPF-036/PKG-015 as a dead ID.
     let _ = nav_present;
 
-    if advisory && !is_epub3 {
-        check_declared_version_advisory(&doc, opf_path, report);
-    }
+    // ADV-004 is emitted *after* the content-document walk below, because
+    // half its evidence is gathered there (`ContentVersionSignals`).
 
     // Manifest-declared resource paths (nfc-normalized) - used by
     // `css::check` to distinguish RSC-001 (declared but missing) from
@@ -4582,6 +4631,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // is what selects RSC-006/RSC-006b below.
     let mut remote_resource_refs: HashSet<String> = HashSet::new();
     let mut pending_dtd_fix: Option<(usize, String, crate::htm::DtdShift)> = None;
+    // ADV-004's content-document half; only ever read for an EPUB 2 book.
+    let mut version_signals = ContentVersionSignals::default();
     for path in content_docs {
         if let Some((from, p, sh)) = pending_dtd_fix.take() {
             crate::htm::correct_dtd_shift(&mut report.messages[from..], &p, sh);
@@ -4668,6 +4719,30 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         crate::dict::check_content_doc(&d, &path, report);
         if crate::dict::has_dictionary_marker(&d) {
             dictionary_marked_docs.insert(nfc(&path));
+        }
+
+        // ADV-004's content half. Only an EPUB 2 book can be diagnosed this
+        // way, and both flags latch, so this stops looking once each is set.
+        if !is_epub3 && !(version_signals.epub_type && version_signals.html5_sectioning) {
+            const HTML5_SECTIONING: &[&str] =
+                &["section", "header", "footer", "article", "aside", "nav"];
+            for n in d.descendants().filter(|n| n.is_element()) {
+                // `attribute("epub:type")` would not do: roxmltree matches on
+                // the *namespace*, and the prefix a document happens to bind
+                // is not the question. Asking for the OPS namespace with any
+                // local name `type` is.
+                if n.attributes().any(|a| {
+                    a.name() == "type" && a.namespace() == Some("http://www.idpf.org/2007/ops")
+                }) {
+                    version_signals.epub_type = true;
+                }
+                if HTML5_SECTIONING.contains(&n.tag_name().name()) {
+                    version_signals.html5_sectioning = true;
+                }
+                if version_signals.epub_type && version_signals.html5_sectioning {
+                    break;
+                }
+            }
         }
 
         if is_epub3 {
@@ -6743,6 +6818,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 );
             }
         }
+    }
+
+    if advisory && !is_epub3 {
+        check_declared_version_advisory(&doc, opf_path, version_signals, report);
     }
 
     // The last document has no next iteration to correct its findings.
@@ -10156,6 +10235,104 @@ mod tests {
         );
     }
 
+    /// ADV-004's content-document half (DNSB, MobileRead #169/#170).
+    ///
+    /// The reporter's book is a Calibre AZW3→EPUB 2 conversion whose package
+    /// carries no EPUB 3 signal at all, so the package-only version of this
+    /// check stayed silent on the exact book it exists for. Its content
+    /// documents carry 374 `epub:type` attributes and 75 HTML5 sectioning
+    /// elements.
+    ///
+    /// The threshold is unchanged at two signals, and the two halves mix: a
+    /// package signal plus a content one is a mislabelled book just as much
+    /// as two of either.
+    ///
+    /// **`epub:type` must be counted by namespace, not by prefix.** A
+    /// document is free to bind the OPS namespace to any prefix it likes, so
+    /// one of these uses `ops:type` to keep an attribute-name match from
+    /// passing by accident.
+    #[test]
+    fn content_documents_can_carry_the_evidence_for_adv_004() {
+        // No `<meta property>`, no `properties=`: nothing for the
+        // package-side signals to find.
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+</package>"#;
+        // `epub_with_opf` always writes an EPUB 3 nav document into the zip,
+        // and it carries both signals itself. Leaving it out of the manifest
+        // keeps it from being walked as a content document, so each case
+        // below measures only its own `ch1`. (That the fixture's nav *would*
+        // have counted is the check working: a nav document with epub:type is
+        // exactly the evidence this looks for.)
+        let body = |b: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:ops="http://www.idpf.org/2007/ops">
+<head><title>t</title></head><body>{b}</body></html>"#
+            )
+        };
+        let adv_004 = |ch1: String, advisory: bool| {
+            crate::validate_bytes_with_options(
+                epub_with_opf(Some(OPF), &ch1),
+                &crate::Options {
+                    advisory,
+                    ..Default::default()
+                },
+            )
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::ADV_004)
+            .count()
+        };
+
+        // Both content signals, and the prefix is not `epub:`.
+        let both = body(r#"<section ops:type="chapter"><p>x</p></section>"#);
+        assert_eq!(adv_004(both.clone(), true), 1, "two content signals");
+        assert_eq!(adv_004(both, false), 0, "still opt-in");
+
+        // One signal each: a stray, not a mislabelled book.
+        assert_eq!(
+            adv_004(body(r#"<section><p>x</p></section>"#), true),
+            0,
+            "sectioning alone is one signal"
+        );
+        assert_eq!(
+            adv_004(body(r#"<p ops:type="bridgehead">x</p>"#), true),
+            0,
+            "epub:type alone is one signal"
+        );
+
+        // Declaring the OPS namespace without ever using it is producer
+        // boilerplate: 6 of the 8 EPUB 2 shelf books that bind it never use
+        // it, and firing on them is the ADV-003 failure mode.
+        assert_eq!(
+            adv_004(body(r#"<p>x</p>"#), true),
+            0,
+            "an unused xmlns:ops binding is not evidence of anything"
+        );
+
+        // A correct EPUB 2 book, with neither namespace nor HTML5 element.
+        assert_eq!(
+            adv_004(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p>x</p></body></html>"#
+                    .to_string(),
+                true
+            ),
+            0
+        );
+    }
+
     /// ADV-004 (#62): a book declaring EPUB 2 whose package document is
     /// written in EPUB 3.
     ///
@@ -10174,8 +10351,7 @@ mod tests {
     <dc:title>T</dc:title><dc:language>en</dc:language>{metadata}
   </metadata>
   <manifest>
-    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml"{nav_props}/>
-    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"{nav_props}/>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
   </manifest>
   <spine toc="ncx"><itemref idref="ch1"/></spine>
@@ -10184,6 +10360,14 @@ mod tests {
         };
         const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>x</p></body></html>"#;
+        // `properties` hangs off the sole content document rather than a
+        // second `nav.xhtml` item, so these cases isolate the *package*
+        // signals. `epub_with_opf` writes an EPUB 3 nav document into every
+        // zip it builds - `<nav epub:type="toc">`, i.e. both content signals -
+        // and manifesting it made every case here a two-signal book once the
+        // content half was added. The fixture was never the "plain EPUB 2" the
+        // last assertion below calls it; the package-only check simply could
+        // not see what it was carrying.
         let adv_004 = |opf: String, advisory: bool| {
             crate::validate_bytes_with_options(
                 epub_with_opf(Some(&opf), CH1),

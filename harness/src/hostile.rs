@@ -347,14 +347,37 @@ fn main() {
     let flag = |name: &str| args.iter().position(|a| a == name).map(|i| i + 1);
 
     let scale = args.iter().any(|a| a == "--scale");
+    // Both defaults are derived from *this* binary's location rather than
+    // from the manifest directory, because the target directory need not sit
+    // inside the repo: `CARGO_TARGET_DIR` (or `build.target-dir`) moves it
+    // anywhere, and on this machine it had to move — the repo lives under an
+    // iCloud-synced tree that was evicting build artefacts and blocking every
+    // read on a network round-trip.
+    //
+    // `current_exe()` lands in `<target>/<profile>/`, and the epubveri binary
+    // this harness drives is its sibling there, so the pair travels together
+    // wherever cargo puts them. `root` is still right for repo *inputs* (the
+    // corpus fixtures); it is only the outputs that move.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_else(|| root.join("target/release"));
+    // One level above `release/`, as before: this binary is itself called
+    // `hostile` and lives in `exe_dir`, so building the fixtures beside it
+    // asks to mkdir over an existing file.
     let out = flag("--out")
         .and_then(|i| args.get(i))
         .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target/hostile"));
+        .unwrap_or_else(|| {
+            exe_dir
+                .parent()
+                .unwrap_or(exe_dir.as_path())
+                .join("hostile")
+        });
     let bin = flag("--bin")
         .and_then(|i| args.get(i))
         .map(PathBuf::from)
-        .unwrap_or_else(|| root.join("target/release/epubveri"));
+        .unwrap_or_else(|| exe_dir.join("epubveri"));
     let timeout = Duration::from_secs(
         flag("--timeout")
             .and_then(|i| args.get(i))
