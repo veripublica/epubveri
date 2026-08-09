@@ -8,6 +8,55 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.13] - 2026-08-09
+
+### Fixed
+
+- **A malformed selector inside an `@media` is reported.** It was caught at the
+  top level of a stylesheet and silently accepted one grouping at-rule deep, so
+  `. foo { }` — a class selector with a space after the dot, which real books
+  carry as a find-replace accident — passed unremarked inside a media query.
+
+  The cause was in the CSS parser, not here: CSS Syntax §5.4.2 hands an
+  at-rule's block on as a simple block, and nothing inside one was ever
+  re-entered as a rule, so the selector check was never reached. Fixed as
+  [styloria#2](https://github.com/veripublica/styloria/issues/2) and consumed
+  via its new `parse_rule_list` (styloria 0.9).
+
+  Two hand-rolled pieces went with it: this crate no longer works out where a
+  nested rule's prelude ends, and it no longer guesses that a nested block is a
+  grouping one by whether it contains a block — it asks the at-rule's name, the
+  same test the top level already used.
+
+  One book on the 125-book shelf moves, from 1 finding to 22; no other book
+  changes. epubcheck reports 12 on it, because it stops at the first error in
+  each selector list where we report each — the same granularity difference
+  already recorded for CSS-028. Every one of the 22 is a genuine malformed
+  selector.
+
+- **A nav or NCX link to a resource with a Content Document fallback is
+  allowed** (#168, reported by Doitsu on MobileRead). epubcheck's RSC-010
+  condition has three clauses and we had two; the missing one asks whether the
+  target declares a `fallback` chain reaching a Content Document. On the IDPF
+  `haruko-jpeg` sample — an image-based book whose nav and NCX link straight at
+  the JPEGs — epubcheck reports a single usage message and we reported three
+  errors. The two tools now agree exactly.
+
+### Added
+
+- **ADV-005: `page-spread-*` on a reflowable document** (EPUB 3.4,
+  [w3c/epubcheck#1652](https://github.com/w3c/epubcheck/issues/1652)). Placing
+  a page on one side of a spread is meaningless for reflowable content, so
+  EPUB 3.4 confines the property to fixed-layout documents. The itemref's own
+  `rendition:layout-*` override is folded over the package default, so this
+  fires both on a wholly reflowable book and on a single pre-paginated page
+  that overrides itself back.
+
+  Advisory-only, behind `--advisory`, and never in the verdict: epubcheck has
+  not implemented #1652, so to anyone diffing the two tools this would be
+  indistinguishable from a false positive. It becomes an ordinary error once
+  epubcheck ships it.
+
 ## [0.9.12] - 2026-08-08
 
 ### Fixed

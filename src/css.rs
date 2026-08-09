@@ -280,39 +280,13 @@ pub(crate) fn check(
     // happens in `check_declaration_shapes_spanned` below, which still emits
     // its own CSS-008 for those).
     for e in &syntax_errs {
-        let slug = match e.kind {
-            spanned::SyntaxErrorKind::BadString | spanned::SyntaxErrorKind::BadUrl => {
-                "css.stylesheet.bad_token"
-            }
-            spanned::SyntaxErrorKind::UnterminatedRule
-            | spanned::SyntaxErrorKind::UnterminatedBlock => "css.stylesheet.unterminated",
-            spanned::SyntaxErrorKind::MalformedDeclaration
-            | spanned::SyntaxErrorKind::UnexpectedToken => "css.stylesheet.malformed",
-            // styloria 0.5 reads a qualified rule's prelude as a selector
-            // list. Its own slug, so the finding says which half of the rule
-            // was wrong: epubcheck reports both as CSS-008, but "the selector
-            // is malformed" and "the declarations are malformed" send an
-            // author to different places.
-            spanned::SyntaxErrorKind::InvalidSelector => "css.stylesheet.invalid_selector",
-            // Its own slug for the same reason as the selector one: epubcheck
-            // reports every CSS parse problem as CSS-008, but "the range is
-            // malformed" points somewhere quite different from "the block is".
-            spanned::SyntaxErrorKind::InvalidUnicodeRange => "css.stylesheet.invalid_unicode_range",
-            // styloria 0.7's nesting bound. Its own slug because this one is
-            // not a defect in the CSS the way the others are - it says the
-            // parser declined to descend further, and the stylesheet below
-            // that point went unchecked. Real stylesheets nest 2 deep, so
-            // reaching 256 means generated or hostile input; reporting it
-            // under a shared "malformed" slug would hide which it was.
-            spanned::SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
-        };
         report.push_full(
             CSS_008,
             Severity::Error,
             "CSS syntax error",
             css_path,
             origin.position(css, e.span.start),
-            slug,
+            syntax_error_slug(e.kind),
             Vec::new(),
         );
     }
@@ -616,14 +590,66 @@ const GROUPING_AT_RULES: &[&str] = &[
     "-moz-document",
 ];
 
+/// The `rule` slug for one of styloria's syntax errors. Every one of them is
+/// CSS-008 to epubcheck; the slug is where a consumer can tell them apart.
+///
+/// Shared by the top-level pass and the nested one, so a rule inside an
+/// `@media` is keyed the same as the identical rule outside it - the two had
+/// no reason to differ, and only one of them existed before styloria 0.9.
+fn syntax_error_slug(kind: spanned::SyntaxErrorKind) -> &'static str {
+    match kind {
+        spanned::SyntaxErrorKind::BadString | spanned::SyntaxErrorKind::BadUrl => {
+            "css.stylesheet.bad_token"
+        }
+        spanned::SyntaxErrorKind::UnterminatedRule
+        | spanned::SyntaxErrorKind::UnterminatedBlock => "css.stylesheet.unterminated",
+        spanned::SyntaxErrorKind::MalformedDeclaration
+        | spanned::SyntaxErrorKind::UnexpectedToken => "css.stylesheet.malformed",
+        // styloria 0.5 reads a qualified rule's prelude as a selector
+        // list. Its own slug, so the finding says which half of the rule
+        // was wrong: epubcheck reports both as CSS-008, but "the selector
+        // is malformed" and "the declarations are malformed" send an
+        // author to different places.
+        spanned::SyntaxErrorKind::InvalidSelector => "css.stylesheet.invalid_selector",
+        // Its own slug for the same reason as the selector one: epubcheck
+        // reports every CSS parse problem as CSS-008, but "the range is
+        // malformed" points somewhere quite different from "the block is".
+        spanned::SyntaxErrorKind::InvalidUnicodeRange => "css.stylesheet.invalid_unicode_range",
+        // styloria 0.7's nesting bound. Its own slug because this one is
+        // not a defect in the CSS the way the others are - it says the
+        // parser declined to descend further, and the stylesheet below
+        // that point went unchecked. Real stylesheets nest 2 deep, so
+        // reaching 256 means generated or hostile input; reporting it
+        // under a shared "malformed" slug would hide which it was.
+        spanned::SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
+    }
+}
+
 /// Walk the block of a conditional-group at-rule, which holds nested rules
-/// rather than declarations. For each nested rule's block, check the
-/// declarations inside it: a further grouping at-rule (a nested `@media`)
-/// recurses as a rule list; anything else is a qualified rule whose block
-/// is an ordinary declaration list. The rule *preludes* (selectors /
-/// conditions) are deliberately not shape-checked here - they are not
-/// declarations (issue #5). A nested block is recognised as a grouping one
-/// by containing a block of its own, mirroring how the top level dispatches.
+/// rather than declarations: check each nested rule's *prelude* as a
+/// selector list and its *block* as declarations, and recurse into a further
+/// grouping at-rule.
+///
+/// styloria 0.9's `parse_rule_list` does the parsing (its issue #2). Two
+/// things this used to do by hand went with it:
+///
+/// - **The preludes were not checked at all.** The comment here justified
+///   that with "they are not declarations (issue #5)", which is true and
+///   answers a different question - #5 was about not reading a selector as a
+///   declaration, and says nothing about reading it as a selector. styloria
+///   kept an at-rule's block as raw component values, so its own
+///   `syntax_errors` never reached a nested prelude either, and the two gaps
+///   lined up: `. foo { }` was reported at the top level and silently
+///   accepted one `@media` deep.
+/// - **A nested block was taken for a grouping one by containing a block of
+///   its own.** That is a guess standing in for the at-rule's name, which is
+///   what actually decides it - and which the top level already tests
+///   against `GROUPING_AT_RULES`. Now both levels ask the same question.
+///
+/// Found by `compare`'s count diff rather than by a user: one shelf book
+/// where epubcheck reported 11 CSS-008 and we reported 0, every one a
+/// selector inside an `@media`. Declaration errors in the same blocks were
+/// reported normally, which is what kept it invisible in the totals.
 fn check_rule_list_block_spanned(
     block_values: &[Spanned<spanned::ComponentValue>],
     css: &str,
@@ -631,25 +657,51 @@ fn check_rule_list_block_spanned(
     origin: CssOrigin,
     report: &mut Report,
 ) {
-    for v in block_values {
-        // Only a `{}` block is a rule body. A `[]` block is part of a
-        // *prelude* - an attribute selector - and its contents are not
-        // declarations; reading them as such reported CSS-008 on every
-        // `img[alt]` inside an `@media`, which is ordinary CSS (Doitsu,
-        // MobileRead). `()` never reaches here: CSS Syntax makes `name(` a
-        // function token rather than a simple block, which is why a
-        // `:nth-child(2n)` in the same position was unaffected and hid the
-        // shape of the bug.
-        if let spanned::ComponentValue::Block(b) = &v.node
-            && b.kind == BlockKind::Curly
-        {
-            if b.values
-                .iter()
-                .any(|nv| matches!(&nv.node, spanned::ComponentValue::Block(_)))
-            {
-                check_rule_list_block_spanned(&b.values, css, css_path, origin, report);
-            } else {
-                check_declaration_shapes_spanned(&b.values, css, css_path, origin, report);
+    let (rules, errors) = styloria::parse_rule_list(block_values);
+    for e in &errors {
+        report.push_full(
+            CSS_008,
+            Severity::Error,
+            "CSS syntax error",
+            css_path,
+            origin.position(css, e.span.start),
+            syntax_error_slug(e.kind),
+            Vec::new(),
+        );
+    }
+    for r in &rules {
+        match &r.node {
+            spanned::Rule::Qualified(q) => {
+                check_declaration_shapes_spanned(
+                    &q.block.node.values,
+                    css,
+                    css_path,
+                    origin,
+                    report,
+                );
+            }
+            spanned::Rule::At(a) => {
+                let Some(block) = &a.block else { continue };
+                if GROUPING_AT_RULES
+                    .iter()
+                    .any(|g| a.name.eq_ignore_ascii_case(g))
+                {
+                    check_rule_list_block_spanned(
+                        &block.node.values,
+                        css,
+                        css_path,
+                        origin,
+                        report,
+                    );
+                } else {
+                    check_declaration_shapes_spanned(
+                        &block.node.values,
+                        css,
+                        css_path,
+                        origin,
+                        report,
+                    );
+                }
             }
         }
     }
@@ -1136,6 +1188,72 @@ mod adv003_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A malformed selector inside a conditional-group at-rule.
+    ///
+    /// It was reported at the top level and silently accepted one `@media`
+    /// deep: styloria kept an at-rule's block as raw component values, so
+    /// nothing inside was re-entered as a rule and the selector check was
+    /// never reached (styloria#2, fixed in its 0.9 `parse_rule_list`).
+    ///
+    /// Found by `compare`'s count diff, not a user - one shelf book where
+    /// epubcheck reported 11 of these and we reported 0. Its declaration
+    /// errors *were* reported from the same blocks, which is what hid it.
+    #[test]
+    fn a_malformed_selector_inside_a_group_at_rule_is_reported() {
+        let idx = HashMap::new();
+        let count = |css: &str| run(css, &idx).iter().filter(|i| **i == CSS_008).count();
+
+        // The same defect at both depths, and it now reports at both.
+        assert_eq!(count(". foo { color: red }"), 1);
+        assert_eq!(count("@media print { . foo { color: red } }"), 1);
+        assert_eq!(
+            count("@media print { @media (min-width: 0) { . foo { color: red } } }"),
+            1
+        );
+        // Both halves of a comma list, which is what the real book carried.
+        assert_eq!(count("@media print { . a, . b { color: red } }"), 2);
+
+        // Slugged as a selector problem, the same as at the top level -
+        // epubcheck calls every CSS parse error CSS-008, so the slug is the
+        // only thing telling a consumer which half of the rule was wrong.
+        let report = run_report("@media print { . foo { color: red } }", &idx);
+        assert_eq!(
+            report
+                .messages
+                .iter()
+                .find(|m| m.id == CSS_008)
+                .and_then(|m| m.rule),
+            Some("css.stylesheet.invalid_selector")
+        );
+    }
+
+    /// The two shapes that must stay silent, both of which are ordinary CSS
+    /// that an earlier version of this walk reported.
+    #[test]
+    fn valid_css_inside_a_group_at_rule_stays_silent() {
+        let idx = HashMap::new();
+        let count = |css: &str| run(css, &idx).iter().filter(|i| **i == CSS_008).count();
+
+        // An attribute selector: a `[]` block belongs to the *prelude*, and
+        // reading it as a rule body reported CSS-008 on every `img[alt]`
+        // inside an `@media` (Doitsu, MobileRead). `:nth-child(2n)` was
+        // unaffected then - CSS Syntax makes `name(` a function token, not a
+        // block - which is exactly what hid the shape, so it is pinned too.
+        assert_eq!(count("@media print { img[alt] { color: red } }"), 0);
+        assert_eq!(count("@media print { p:nth-child(2n) { color: red } }"), 0);
+        // A nested at-rule's prelude is a condition, not a selector list.
+        assert_eq!(
+            count("@media print { @media (min-width: 0) { p { color: red } } }"),
+            0
+        );
+        // A non-grouping at-rule nested inside a grouping one still holds
+        // declarations, so its body must not be read as a rule list.
+        assert_eq!(
+            count("@media print { @font-face { font-family: x; src: url(x.ttf) } }"),
+            0
+        );
+    }
 
     #[test]
     fn selector_class_names_basic() {
