@@ -251,7 +251,11 @@ fn main() {
             ratio(b).partial_cmp(&ratio(a)).unwrap()
         });
         println!("--- same ID, different counts (the ID-set diff cannot see these) ---");
-        for (id, book, ours_n, theirs_n) in count_gaps.iter().take(15) {
+        // The 15 highest ratios are the ones worth reading first; the tail is
+        // usually one producer's quirk repeated across their books. `--verbose`
+        // prints all of it, because deciding *that* needs the whole list.
+        let shown = if verbose { count_gaps.len() } else { 15 };
+        for (id, book, ours_n, theirs_n) in count_gaps.iter().take(shown) {
             let book: String = book.chars().take(44).collect();
             println!("  {id:<9} ours {ours_n:>5}  epubcheck {theirs_n:>5}   {book}");
         }
