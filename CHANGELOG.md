@@ -8,6 +8,51 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.14] - 2026-08-09
+
+Completes the EPUB 3.4 work list. All eight issues the spec editor filed
+against epubcheck for 3.4 (w3c/epubcheck#1616, #1642, #1649–#1654) are still
+open there; none is unaddressed here. Three of the eight needed no code —
+`its-*` attributes were already valid, resources referenced from `<script>`
+were already exempt from the fallback requirement, and #1650's "outdated
+features" dissolved on measurement — so this is not eight implementations.
+
+### Added
+
+- **`rendition:layout` accepts `roll`**, EPUB 3.4's webtoon layout
+  (w3c/epubcheck#1651). This half is *permissive*, so it ships unflagged:
+  accepting `roll` costs a false negative against epubcheck-as-it-is-today
+  (5.3.0 still reports it, measured) and removes a false positive against the
+  spec-as-it-will-be. Only the global value gains it — #1651 says spine
+  overrides may not accompany roll at all, so there is no
+  `rendition:layout-roll` spine property.
+
+- **ADV-006 / ADV-007 / ADV-008 — the restrictive half of EPUB 3.4**, all
+  opt-in behind `--advisory` and none affecting the verdict, because epubcheck
+  has implemented neither #1649 nor #1651 and a side-by-side diff cannot tell
+  these from false positives until it does.
+
+  - **ADV-006**: a `rendition:layout-*` spine override beside a `roll` package
+    layout (#1651, "no mixing layouts").
+  - **ADV-007**: a roll spine's XHTML document declaring no viewport width and
+    height, i.e. no ICB dimensions (#1651). Deliberately *not* modelled as
+    "roll implies fixed-layout", which would be the truer reading but would
+    switch on the viewport checks at **error** severity — restrictive,
+    unflagged and counting toward the verdict, which an advisory may not do.
+    It asks only whether the dimensions are declared; validating the values
+    stays with the existing check, so the two cannot disagree about the same
+    document.
+  - **ADV-008**: a feature deprecated in 3.4 (#1649) — the
+    `rendition:align-x-center` spine property, and the reserved prefixes
+    `xsd`/`msv`/`prism` on a `prefix` declaration. Reported on the
+    *declaration* rather than on use: a book relying on a reserved mapping
+    without declaring it says nothing in the package document.
+
+  **0 of the 125 shelf books draws any of the three.** That is the advisory
+  bar met, but it is silence rather than confirmation — no real book uses a
+  layout the specification introduced weeks ago — so the evidence is the
+  enumeration in the tests, not the shelf.
+
 ## [0.9.13] - 2026-08-09
 
 ### Fixed
