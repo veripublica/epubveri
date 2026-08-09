@@ -178,7 +178,14 @@ const ANN: &[Ann] = &[
          15 fatals and 1 other finding on a file whose siblings each produced \
          ~300 (the silent-skip class the 0.7.12-0.7.14 audits were about). \
          What matters is finding and reporting the defects; escalating one of \
-         them to fatal costs the rest."),
+         them to fatal costs the rest. **The fatal also manufactures findings \
+         that are not defects**, measured on the same book (2026-08-09): \
+         because the document is dropped before its ids are indexed, all 18 \
+         fragments pointing into it are reported RSC-012 \"fragment identifier \
+         is not defined\" - and every one of those ids is present in the file \
+         (`id=\"x14-42800012.5\"` and friends, checked individually). So the \
+         divergence costs epubcheck 18 false positives on this book and costs \
+         us one usage-level label."),
     ("RSC-006", None,
         "Remote stylesheet references (also SVG stylesheet forms)."),
     ("RSC-030", None,
@@ -229,7 +236,22 @@ const ANN: &[Ann] = &[
          ATRULE_PARAM restriction is `return true`). One deliberate deviation: \
          selector validation flags only what is malformed under Selectors \
          Level 4 **and** epubcheck flags, so modern-but-valid selectors its \
-         old parser rejects stay silent."),
+         old parser rejects stay silent. Known granularity difference, left as \
+         is (measured 2026-08-09): in a malformed **selector list** we report \
+         every bad selector, epubcheck the first and then abandons the rule - \
+         `. h-100, . y-100 { }` is 2 findings here, 1 there. Both selectors \
+         are genuinely malformed, so neither tool is wrong; ours names each \
+         thing to fix. Same class as the `colgroup`/`col` difference. Blast \
+         radius: 1 shelf book of 136, 22 findings against epubcheck's 12."),
+    ("CSS-028", None,
+        "A `@font-face` declaration is present (usage). Known granularity \
+         difference, left as is (measured 2026-08-09): we report once per \
+         `@font-face` **rule**, epubcheck once per **declaration inside it**, \
+         so a block of four descriptors is 1 finding here and 4 there. It is \
+         informational either way and never touches the verdict. Visible on 32 \
+         of 136 shelf books, all from one producer whose blocks each carry \
+         four descriptors - which is why the ratio looks like a suspiciously \
+         exact 4x."),
     // --- MED (reviewed) ---
     ("MED-004", None,
         "Reserved for a file too short to contain a 4-byte image header, \
