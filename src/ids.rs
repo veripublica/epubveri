@@ -182,6 +182,7 @@ pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not
 // ADV-003 is reserved for the unknown-type-selector advisory (#28), deferred.
 pub const ADV_003: &str = "ADV-003"; // a CSS type selector names an element no vocabulary defines (usage, #28)
 pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)
+pub const ADV_005: &str = "ADV-005"; // EPUB 3.4: page-spread-* on a reflowable document (usage, w3c/epubcheck#1652)
 
 // --- Resource limits (epubveri-owned; see the module note) ---
 //

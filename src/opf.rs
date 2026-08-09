@@ -492,6 +492,53 @@ impl PrefixContext {
     }
 }
 
+/// EPUB 3.4: a spine override placing a page of a **reflowable** document on
+/// one side of a spread is meaningless, so `page-spread-*` is confined to
+/// fixed-layout content (w3c/epubcheck#1652).
+///
+/// "Reflowable" is the caller's `is_fixed_layout` inverted, which already
+/// folds the itemref's own `rendition:layout-*` override over the package
+/// default - so this fires both on a book that is reflowable throughout and
+/// on one pre-paginated page that overrides itself back to reflowable.
+///
+/// The five prohibited values are the issue's own list. Note the asymmetry:
+/// `center` exists only in the prefixed form, because the unprefixed pair is
+/// the legacy EPUB 3.0 spine property and never had a centre value - the same
+/// asymmetry `KNOWN_ITEMREF_PROPERTIES` already encodes.
+///
+/// Advisory-only, and deliberately so even though the spec is a Candidate
+/// Recommendation: epubcheck has not implemented #1652, so to anyone diffing
+/// the two tools this is indistinguishable from a false positive. It becomes
+/// a normal error once epubcheck ships it. Nothing on the 125-book shelf uses
+/// `page-spread-*` at all, so the shelf can neither confirm nor refute this
+/// one - the evidence is the enumeration in the tests, not the shelf's
+/// silence (the rule #48 set).
+fn check_reflowable_page_spread(props: &str, path: &str, ir: roxmltree::Node, report: &mut Report) {
+    const PROHIBITED: &[&str] = &[
+        "page-spread-left",
+        "page-spread-right",
+        "rendition:page-spread-left",
+        "rendition:page-spread-right",
+        "rendition:page-spread-center",
+    ];
+    for token in props.split_whitespace() {
+        if PROHIBITED.contains(&token) {
+            report.push_node(
+                ADV_005,
+                Severity::Usage,
+                format!(
+                    "EPUB 3.4: the \"{token}\" spine override applies to \
+                     fixed-layout content, but this document is reflowable"
+                ),
+                path.to_string(),
+                ir,
+                "opf.itemref.page_spread_on_reflowable",
+                vec![token.to_string()],
+            );
+        }
+    }
+}
+
 /// The 4 rendition:X (layout/orientation/spread/flow) spine-override
 /// families, plus page-spread-* (which also accepts an unprefixed form,
 /// confirmed via `rendition-page-spread-itemref-unprefixed-valid.opf`):
@@ -4115,9 +4162,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
                             // --- Fixed-layout viewport/viewBox checks ---
                             let props = ir.attr_no_ns("properties").unwrap_or("");
-                            check_itemref_rendition_conflicts(
-                                props, opf_path, ir, is_epub3, report,
-                            );
                             let is_fixed_layout = if props
                                 .split_whitespace()
                                 .any(|p| p == "rendition:layout-reflowable")
@@ -4131,6 +4175,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             } else {
                                 package_fixed_layout
                             };
+                            check_itemref_rendition_conflicts(
+                                props, opf_path, ir, is_epub3, report,
+                            );
+                            if advisory && is_epub3 && !is_fixed_layout {
+                                check_reflowable_page_spread(props, opf_path, ir, report);
+                            }
                             fixed_layout_docs.insert(nfc(path), is_fixed_layout);
                             if let Some(orig) = name_index.get(&nfc(path)).cloned()
                                 && let Some(b) = ocf.read(&orig)
@@ -11161,6 +11211,106 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// EPUB 3.4 (w3c/epubcheck#1652): `page-spread-*` is confined to
+    /// fixed-layout content.
+    ///
+    /// The shelf is blind here - 0 of 125 books carry a `page-spread-*`
+    /// token at all - so its silence is not evidence and this enumeration
+    /// is. The space is closed and small, so it is walked in full: the four
+    /// ways a document ends up reflowable or fixed (package default, with
+    /// and without an itemref override in each direction) against the five
+    /// prohibited tokens, plus the tokens that must stay silent.
+    ///
+    /// epubcheck cannot arbitrate any of it - #1652 is open and
+    /// unimplemented - which is exactly why this is advisory-only.
+    #[test]
+    fn page_spread_is_confined_to_fixed_layout_content() {
+        const PROHIBITED: &[&str] = &[
+            "page-spread-left",
+            "page-spread-right",
+            "rendition:page-spread-left",
+            "rendition:page-spread-right",
+            "rendition:page-spread-center",
+        ];
+        // (package is pre-paginated, itemref override) -> is the document
+        // reflowable, i.e. must the advisory fire?
+        const LAYOUTS: &[(bool, &str, bool)] = &[
+            (false, "", true),
+            (true, "", false),
+            (true, "rendition:layout-reflowable ", true),
+            (false, "rendition:layout-pre-paginated ", false),
+        ];
+
+        for &(pre_paginated, override_token, reflowable) in LAYOUTS {
+            for token in PROHIBITED {
+                let n = adv_005(pre_paginated, &format!("{override_token}{token}"), true);
+                assert_eq!(
+                    n,
+                    usize::from(reflowable),
+                    "package pre-paginated={pre_paginated}, override={override_token:?}, \
+                     token={token}: expected reflowable={reflowable}"
+                );
+            }
+            // A layout override on its own is never the subject of this rule.
+            assert_eq!(
+                adv_005(pre_paginated, override_token.trim(), true),
+                0,
+                "no page-spread token, nothing to report"
+            );
+        }
+
+        // Opt-in only: the same book is silent without `--advisory`, which is
+        // what keeps a rule epubcheck has not shipped out of the default diff.
+        assert_eq!(adv_005(false, "page-spread-left", false), 0);
+        // A neighbouring rendition override is not a page-spread token.
+        assert_eq!(adv_005(false, "rendition:align-x-center", true), 0);
+    }
+
+    /// Count ADV-005 for one spine itemref, with the package either
+    /// pre-paginated or left at its reflowable default.
+    fn adv_005(package_pre_paginated: bool, itemref_props: &str, advisory: bool) -> usize {
+        let layout = if package_pre_paginated {
+            r#"<meta property="rendition:layout">pre-paginated</meta>"#
+        } else {
+            ""
+        };
+        let props = if itemref_props.is_empty() {
+            String::new()
+        } else {
+            format!(r#" properties="{itemref_props}""#)
+        };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {layout}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"{props}/></spine>
+</package>"#
+        );
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>
+<meta name="viewport" content="width=100, height=100"/></head><body><p>x</p></body></html>"#;
+        crate::validate_bytes_with_options(
+            epub_with_opf(Some(&opf), CH1),
+            &crate::Options {
+                advisory,
+                ..Default::default()
+            },
+        )
+        .messages
+        .iter()
+        .filter(|m| m.id == crate::ids::ADV_005)
+        .count()
     }
 
     /// A nav or NCX link to a non-Content-Document is legal when the manifest
