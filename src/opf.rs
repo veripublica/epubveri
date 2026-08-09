@@ -11397,6 +11397,60 @@ mod tests {
         buf
     }
 
+    /// EPUB 3.4 (w3c/epubcheck#1651): `rendition:layout` gains the value
+    /// `roll`, the webtoon layout.
+    ///
+    /// This half is **permissive** and therefore ships unflagged, unlike
+    /// ADV-005: accepting `roll` costs a false negative against
+    /// epubcheck-as-it-is-today (5.3.0 still rejects it, measured) and
+    /// removes a false positive against the spec-as-it-will-be. That is the
+    /// whole of the "first validator to support 3.4" position.
+    ///
+    /// The neighbouring assertion must keep working — a value the spec has
+    /// never had is still an error — which is the half a widened enum can
+    /// silently lose.
+    #[test]
+    fn rendition_layout_accepts_roll_but_not_an_invented_value() {
+        let layout_findings = |value: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="rendition:layout">{value}</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>
+<meta name="viewport" content="width=1200, height=1600"/></head><body><p>x</p></body></html>"#;
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.package.rendition_layout_value"))
+                .count()
+        };
+
+        assert_eq!(layout_findings("reflowable"), 0);
+        assert_eq!(layout_findings("pre-paginated"), 0);
+        assert_eq!(layout_findings("roll"), 0, "EPUB 3.4 webtoon layout");
+        assert_eq!(
+            layout_findings("bogusvalue"),
+            1,
+            "widening the enum must not switch the assertion off"
+        );
+        // Case matters: the spec's values are lowercase, and epubcheck's
+        // Schematron compares them literally.
+        assert_eq!(layout_findings("Roll"), 1);
+    }
+
     /// EPUB 3.4 (w3c/epubcheck#1652): `page-spread-*` is confined to
     /// fixed-layout content.
     ///

@@ -484,10 +484,22 @@
        cardinality rule. Confirmed via real corpus fixtures
        (epub3/08-layout/files/rendition-*-global-*.opf). -->
 
+  <!-- "roll" is EPUB 3.4's webtoon layout (w3c/epubcheck#1651, open and
+       unimplemented there). Accepting it is *permissive*: epubcheck 5.3.0
+       still reports it, so shipping first costs a false negative against
+       epubcheck-as-it-is-today and removes a false positive against the
+       spec-as-it-will-be. That direction needs no advisory flag; the
+       restrictive half of #1651 (a roll spine must be fixed-layout; no
+       per-spine layout overrides beside it) does, and is separate.
+
+       Only the global value gains it. #1651 asks for the value on
+       `rendition:layout`, and says spine overrides may not accompany roll at
+       all, so `KNOWN_ITEMREF_PROPERTIES` deliberately does not grow a
+       `rendition:layout-roll`. -->
   <pattern id="rendition-layout-value">
     <rule context="opf:meta[normalize-space(@property) = 'rendition:layout']">
-      <assert test="normalize-space(.) = 'reflowable' or normalize-space(.) = 'pre-paginated'"
-        >The value of the "rendition:layout" property must be "reflowable" or "pre-paginated"</assert>
+      <assert test="normalize-space(.) = 'reflowable' or normalize-space(.) = 'pre-paginated' or normalize-space(.) = 'roll'"
+        >The value of the "rendition:layout" property must be "reflowable", "pre-paginated" or "roll"</assert>
     </rule>
   </pattern>
 
