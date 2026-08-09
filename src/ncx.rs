@@ -179,6 +179,39 @@ fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &m
     }
 }
 
+/// **The four `playOrder` rules interlock, and satisfying one naively breaks
+/// another** — worth reading together before touching any of them. Raised by
+/// epubsana (2026-08-09) after building a repairer for them: its first version
+/// numbered by file position and was target-blind, which would have *created*
+/// `target_mismatch` on a book whose navigation reaches one position by two
+/// routes. No shelf book has that shape, so no test of theirs could have caught
+/// it; reading the rules together did.
+///
+/// Taken as a set, with `k` distinct targets:
+///
+/// - `duplicate` (Match2) — one number, one target;
+/// - `target_mismatch` (Match) — one target, one number;
+///
+/// together these make the target↔number correspondence a **bijection**, and
+///
+/// - `no_origin` — some element carries `"1"`;
+/// - `gap` — every `n > 1` present has `n - 1` present;
+///
+/// together these make the numbers used exactly `1..=k`.
+///
+/// **What that does *not* pin is which target gets which number.** epubsana's
+/// note says the constraints admit exactly one assignment; they admit `k!` of
+/// them, and document order is the one that is *meaningful* rather than the one
+/// the rules force. `playOrder` is the reading order by definition, but none of
+/// the four rules — nor epubcheck's `ncx.sch`, which they are ported from —
+/// compares against document position. A repairer that assigned any permutation
+/// would pass all four here and in epubcheck while producing nonsense.
+///
+/// So the argument for numbering in document order rests on what `playOrder`
+/// *means*, not on what these rules check. Worth keeping straight: it is the
+/// difference between a constraint we could tighten and a semantic expectation
+/// we deliberately do not enforce, since epubcheck does not either.
+///
 /// `playOrder` is optional, but where present it must be unique across
 /// every `navPoint`/`navTarget`/`pageTarget` in the document - it *is* the
 /// reading order, so two elements claiming the same position is a
