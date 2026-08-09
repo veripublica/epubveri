@@ -1848,15 +1848,29 @@ fn check_guide_duplicates(doc: &roxmltree::Document, opf_path: &str, report: &mu
 /// (plus RSC-007 if the file doesn't exist in the container at all -
 /// confirmed via a real fixture where the target is both undeclared and
 /// missing); OPF-032 if it *is* declared but isn't a Content Document
-/// (a real fixture links to a plain image).
+/// (a real fixture links to a plain image); and RSC-012 when the reference
+/// carries a `#fragment` that doesn't resolve to an `id` in the target.
+///
+/// The fragment half is here because epubcheck's own check is on the
+/// *reference*, not on what produced it - `ResourceReferencesChecker`
+/// resolves every registered reference the same way, so a `<guide>` href
+/// is covered there for free. Ours was per-source and had grown three
+/// sites (NCX `<content src>`, content-document hrefs, `epub:textref`)
+/// with the guide left out; found by `compare` on a real book whose
+/// `<reference type="toc">` pointed at an id that lives in a *different*
+/// file, where our output for the whole package document was empty.
+#[allow(clippy::too_many_arguments)]
 fn check_guide_references(
     doc: &roxmltree::Document,
     base_dir: &str,
+    ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
+    is_epub3: bool,
     opf_path: &str,
     report: &mut Report,
 ) {
+    let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
     for r in doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "reference")
@@ -1898,6 +1912,45 @@ fn check_guide_references(
                         format!("guide reference '{href}' does not target a Content Document"),
                         opf_path,
                         Position::of(r),
+                    );
+                    continue;
+                }
+                // epubcheck only resolves a fragment against XHTML and SVG
+                // targets (`ResourceReferencesChecker`), which leaves out the
+                // third Content Document type, DTBook - whose documents this
+                // project doesn't validate either (see `docs/COVERAGE.md`).
+                if !matches!(mt.as_str(), "application/xhtml+xml" | "image/svg+xml") {
+                    continue;
+                }
+                let Some(frag) = href.split_once('#').map(|(_, f)| f) else {
+                    continue;
+                };
+                // Same exemption as the content-document site: an empty
+                // fragment addresses the document itself, and a fragment
+                // carrying `=`, `:` or `(` is a CFI or a media-fragment
+                // rather than an id.
+                if frag.is_empty() || frag.contains(['=', ':', '(']) {
+                    continue;
+                }
+                if !id_cache.contains_key(&resolved) {
+                    let ids = target_id_order(ocf, name_index, &resolved, is_epub3);
+                    id_cache.insert(resolved.clone(), ids);
+                }
+                // `None` = the target could not be read/parsed, so whether the
+                // fragment resolves is unknown and unreported (see
+                // `target_id_order`).
+                let Some(ids) = &id_cache[&resolved] else {
+                    continue;
+                };
+                if !ids.contains_key(frag) {
+                    report.push_node(
+                        RSC_012,
+                        Severity::Error,
+                        format!("fragment identifier '{frag}' is not defined in '{resolved}'"),
+                        opf_path,
+                        r,
+                        "opf.guide.reference_fragment_not_defined",
+                        vec![frag.to_string(), resolved.clone()],
                     );
                 }
             }
@@ -3777,7 +3830,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
     }
 
-    check_guide_references(&doc, &base_dir, &name_index, &items, opf_path, report);
+    check_guide_references(
+        &doc,
+        &base_dir,
+        ocf,
+        &name_index,
+        &items,
+        is_epub3,
+        opf_path,
+        report,
+    );
     // OPF-045: a `fallback` chain must not form a cycle - same DFS-cycle-
     // detector shape as OPF-065's `@refines`-cycle check, over
     // `fallback_map` (already built above) instead of walking the DOM
@@ -11568,6 +11630,93 @@ mod tests {
                 ("OEBPS/content.opf", opf.as_str()),
                 ("OEBPS/ch1.xhtml", CH1),
                 ("OEBPS/toc.ncx", ncx.as_str()),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// A `<guide><reference href="…#frag">` whose fragment names no `id` in
+    /// the target is RSC-012, as it is from an NCX or a content document.
+    ///
+    /// Our fragment resolution grew per *source* — NCX `<content src>`, then
+    /// content-document hrefs, then `epub:textref` — and the guide was never
+    /// added, while epubcheck's runs over every registered reference at once
+    /// and so covered it from the start. Found by `compare` on a shelf book
+    /// whose `<reference type="toc">` pointed at an id living in a different
+    /// file: epubcheck reported it, and our output for the entire package
+    /// document was empty.
+    #[test]
+    fn a_guide_reference_fragment_must_resolve() {
+        let ids = |frag: &str| {
+            let r = crate::validate_bytes(epub2_with_guide_fragment(frag));
+            r.messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_012)
+                .count()
+        };
+        assert_eq!(
+            ids("#nosuchid"),
+            1,
+            "the fragment names no id in the target"
+        );
+        // Both negatives matter: a resolving fragment and no fragment at all
+        // must stay silent, or this is just "RSC-012 always fires on a guide".
+        assert_eq!(ids("#real"), 0);
+        assert_eq!(ids(""), 0);
+    }
+
+    /// An EPUB 2 whose `<guide>` reference carries `frag`.
+    fn epub2_with_guide_fragment(frag: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+  <guide><reference type="toc" title="T" href="ch1.xhtml{frag}"/></guide>
+</package>"#
+        );
+        const NCX: &str = "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+             version=\"2005-1\"><head><meta name=\"dtb:uid\" \
+             content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+             <navLabel><text>T</text></navLabel><content src=\"ch1.xhtml\"/></navPoint>\
+             </navMap></ncx>";
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p id=\"real\">x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/toc.ncx", NCX),
             ] {
                 z.start_file(name, o).unwrap();
                 z.write_all(body.as_bytes()).unwrap();

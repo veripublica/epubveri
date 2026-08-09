@@ -8,6 +8,32 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `<guide>` reference's `#fragment` is now resolved (RSC-012).** A
+  `<reference type="toc" href="chapter.xhtml#frag"/>` whose fragment names no
+  `id` in the target went unreported, while epubcheck reports it as an error.
+
+  Fragment resolution here had grown one site per *source* — the NCX
+  `<content src>`, then content-document hrefs, then `epub:textref` — and the
+  guide was never added. epubcheck has no such split: its check is on the
+  reference, so every registered reference is resolved by the same code and
+  the guide was covered from the start.
+
+  Found by the `compare` harness on a real book whose `<reference type="toc">`
+  pointed at an id that lives in a *different* file. Our output for the whole
+  package document was empty; epubcheck's was this one error. **1 book of 136
+  on the shelf**, one occurrence, and the only shelf change.
+
+  As epubcheck does, the fragment is resolved only against XHTML and SVG
+  targets, and a fragment carrying `=`, `:` or `(` (a CFI or media fragment,
+  not an id) is left alone.
+
+  **For consumers:** this adds a rule slug, `opf.guide.reference_fragment_not_defined`.
+  A downstream allowlist of rules it handles will not contain it.
+
 ## [0.9.14] - 2026-08-09
 
 Completes the EPUB 3.4 work list. All eight issues the spec editor filed
