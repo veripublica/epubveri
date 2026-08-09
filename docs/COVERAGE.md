@@ -32,7 +32,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
 | **All** | **203** | **4** | **3** | **105** | **210** | **207/210** | |
 
-**epubveri implements 207 of 210 live epubcheck checks (~99%)** — 203 fully, 4 partially — plus 6 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 207 of 210 live epubcheck checks (~99%)** — 203 fully, 4 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -428,4 +428,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-003 | a CSS type selector names an element no vocabulary defines (usage, #28) | — | Y |
 | ADV-004 | an EPUB 2 package document is written in EPUB 3 (usage, #62) | — | Y |
 | ADV-005 | EPUB 3.4: page-spread-* on a reflowable document (usage, w3c/epubcheck#1652) | — | Y |
+| ADV-006 | EPUB 3.4: a spine layout override beside a roll layout (usage, w3c/epubcheck#1651) | — | Y |
+| ADV-007 | EPUB 3.4: a roll spine document without ICB dimensions (usage, w3c/epubcheck#1651) | — | Y |
+| ADV-008 | EPUB 3.4: a feature deprecated in 3.4 (usage, w3c/epubcheck#1649) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |

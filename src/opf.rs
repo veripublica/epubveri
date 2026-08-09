@@ -482,12 +482,97 @@ const RESERVED_PREFIXES_ANY: &[(&str, &str)] = &[
     ),
 ];
 
+/// Reserved prefixes EPUB 3.4 deprecates (w3c/epubcheck#1649).
+const DEPRECATED_PREFIXES_34: &[&str] = &["xsd", "msv", "prism"];
+
 impl PrefixContext {
     fn reserved(self) -> &'static [(&'static str, &'static str)] {
         match self {
             PrefixContext::Package => RESERVED_PREFIXES_PACKAGE,
             PrefixContext::ContentDocument => RESERVED_PREFIXES_CONTENT,
             PrefixContext::Overlay => &[],
+        }
+    }
+}
+
+/// Does this XHTML document declare an initial containing block, i.e. a
+/// `<meta name="viewport">` giving both a width and a height?
+///
+/// Only *presence* is asked. `crate::layout::check_xhtml_viewport` is the
+/// real check and validates the values too; duplicating that here would give
+/// an advisory two ways to disagree with an error-level check about the same
+/// document. The advisory answers the one question #1651 raises — are the ICB
+/// dimensions set at all.
+fn has_icb_dimensions(d: &roxmltree::Document) -> bool {
+    d.descendants()
+        .filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && n.attr_no_ns("name") == Some("viewport")
+        })
+        .any(|n| {
+            let content = n.attr_no_ns("content").unwrap_or("");
+            let has = |k: &str| {
+                content
+                    .split(',')
+                    .any(|p| p.trim_start().starts_with(k) && p.contains('='))
+            };
+            has("width") && has("height")
+        })
+}
+
+/// EPUB 3.4 deprecations and roll-layout constraints that live on a spine
+/// itemref (w3c/epubcheck#1649, #1651 — both open and unimplemented there).
+///
+/// Two conditions, kept as separate IDs because a consumer filters on them
+/// differently:
+///
+/// - **ADV-006** — a `rendition:layout-*` spine override beside a `roll`
+///   package layout. #1651: "no mixing layouts". Only the two override values
+///   are reported; `roll` itself has no spine-override form, which is why
+///   `KNOWN_ITEMREF_PROPERTIES` does not carry one.
+/// - **ADV-008** — `rendition:align-x-center`, deprecated in 3.4 (#1649).
+///
+/// Advisory-only for the reason the whole restrictive half is: epubcheck
+/// reports neither, so in a side-by-side diff these are indistinguishable
+/// from false positives until it catches up. Nothing on the 125-book shelf
+/// carries `align-x-center` or a `roll` layout, so the shelf is silent on
+/// both and its silence is not evidence — no real book uses a layout the
+/// specification introduced weeks ago.
+fn check_epub34_itemref_deprecations(
+    props: &str,
+    package_layout_roll: bool,
+    path: &str,
+    ir: roxmltree::Node,
+    report: &mut Report,
+) {
+    for token in props.split_whitespace() {
+        if package_layout_roll
+            && (token == "rendition:layout-reflowable" || token == "rendition:layout-pre-paginated")
+        {
+            report.push_node(
+                ADV_006,
+                Severity::Usage,
+                format!(
+                    "EPUB 3.4: a roll layout admits no per-spine layout override, \
+                     but this itemref declares \"{token}\""
+                ),
+                path.to_string(),
+                ir,
+                "opf.itemref.layout_override_beside_roll",
+                vec![token.to_string()],
+            );
+        }
+        if token == "rendition:align-x-center" {
+            report.push_node(
+                ADV_008,
+                Severity::Usage,
+                "EPUB 3.4: the \"rendition:align-x-center\" property is deprecated",
+                path.to_string(),
+                ir,
+                "opf.itemref.deprecated_align_x_center",
+                vec![token.to_string()],
+            );
         }
     }
 }
@@ -1380,6 +1465,7 @@ fn check_prefix_declaration(
     path: &str,
     node: roxmltree::Node,
     context: PrefixContext,
+    advisory: bool,
     report: &mut Report,
 ) -> HashMap<String, String> {
     let (pairs, faults) = parse_prefix_value(prefix_attr.value());
@@ -1509,6 +1595,25 @@ fn check_prefix_declaration(
                 node,
                 prefix_attr,
                 "opf.prefix.reserved_redeclared",
+                vec![name.clone()],
+            );
+        }
+        // EPUB 3.4 (w3c/epubcheck#1649, open and unimplemented there):
+        // these three reserved prefixes are deprecated. Reported on the
+        // *declaration*, which is the unambiguous signal — a book that
+        // relies on the reserved mapping without declaring it says nothing
+        // in the package document, and guessing from property names would
+        // need the whole vocabulary. Advisory-only, like the rest of the
+        // restrictive 3.4 work.
+        if advisory && DEPRECATED_PREFIXES_34.contains(&name.as_str()) {
+            report.push_node_attr(
+                ADV_008,
+                Severity::Usage,
+                format!("EPUB 3.4: the reserved prefix \"{name}\" is deprecated"),
+                path,
+                node,
+                prefix_attr,
+                "opf.prefix.deprecated_in_epub34",
                 vec![name.clone()],
             );
         }
@@ -2302,7 +2407,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         return;
     }
     let declared_prefixes = attr_no_ns_node(pkg, "prefix")
-        .map(|p| check_prefix_declaration(p, opf_path, pkg, PrefixContext::Package, report))
+        .map(|p| {
+            check_prefix_declaration(p, opf_path, pkg, PrefixContext::Package, advisory, report)
+        })
         .unwrap_or_default();
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(v) = n.attr_no_ns("property") {
@@ -2491,6 +2598,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // override this via their own 'properties'), used for the viewport/
     // viewBox checks below.
     let mut package_fixed_layout = false;
+    // EPUB 3.4's webtoon layout. Kept beside `package_fixed_layout` rather
+    // than folded into it: roll *is* a fixed-layout mode, but saying so here
+    // would switch on the error-severity viewport checks unflagged, and the
+    // restrictive half of #1651 is advisory until epubcheck ships it.
+    let mut package_layout_roll = false;
     // media:active-class / media:playback-active-class: the CSS class a
     // reading system applies to the active/playing media-overlay element,
     // used for the CSS-029/030 cross-referencing pass below.
@@ -2826,6 +2938,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter_map(|t| t.text())
                     .collect();
                 text.trim() == "pre-paginated"
+            });
+        package_layout_roll = md
+            .children()
+            .filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attr_no_ns("property") == Some("rendition:layout")
+            })
+            .any(|n| {
+                let text: String = n
+                    .descendants()
+                    .filter(|t| t.is_text())
+                    .filter_map(|t| t.text())
+                    .collect();
+                text.trim() == "roll"
             });
         let has = |local: &str| {
             md.children()
@@ -4228,8 +4355,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             check_itemref_rendition_conflicts(
                                 props, opf_path, ir, is_epub3, report,
                             );
-                            if advisory && is_epub3 && !is_fixed_layout {
-                                check_reflowable_page_spread(props, opf_path, ir, report);
+                            if advisory && is_epub3 {
+                                if !is_fixed_layout {
+                                    check_reflowable_page_spread(props, opf_path, ir, report);
+                                }
+                                check_epub34_itemref_deprecations(
+                                    props,
+                                    package_layout_roll,
+                                    opf_path,
+                                    ir,
+                                    report,
+                                );
                             }
                             fixed_layout_docs.insert(nfc(path), is_fixed_layout);
                             if let Some(orig) = name_index.get(&nfc(path)).cloned()
@@ -4247,6 +4383,39 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                         }
                                     } else if mt == "image/svg+xml" && is_fixed_layout {
                                         crate::layout::check_svg_viewbox(&d, path, report);
+                                    }
+                                    // EPUB 3.4 (#1651): a roll spine must
+                                    // reference fixed-layout documents, which
+                                    // for an XHTML one means its ICB
+                                    // dimensions are set.
+                                    //
+                                    // Deliberately *not* done by making roll
+                                    // imply `is_fixed_layout` above. That
+                                    // would be the truer model, and it would
+                                    // switch on `check_xhtml_viewport`, whose
+                                    // findings are HTM-046 and friends at
+                                    // error severity - restrictive, unflagged,
+                                    // and counting toward the verdict, which
+                                    // is exactly what an advisory may not do.
+                                    // So the presence question is asked here
+                                    // and answered at usage level; when
+                                    // epubcheck ships #1651 this collapses
+                                    // into `is_fixed_layout` and this block
+                                    // goes away.
+                                    if advisory
+                                        && is_epub3
+                                        && package_layout_roll
+                                        && mt == "application/xhtml+xml"
+                                        && !has_icb_dimensions(&d)
+                                    {
+                                        report.push_at(
+                                            ADV_007,
+                                            Severity::Usage,
+                                            "EPUB 3.4: a roll layout requires fixed-layout \
+                                             documents, but this one declares no viewport \
+                                             width and height",
+                                            path,
+                                        );
                                     }
                                 }
                             }
@@ -4789,6 +4958,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         &path,
                         d.root_element(),
                         PrefixContext::ContentDocument,
+                        advisory,
                         report,
                     )
                 })
@@ -7009,6 +7179,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         doc_path,
                         d.root_element(),
                         PrefixContext::ContentDocument,
+                        advisory,
                         report,
                     )
                 })
@@ -7538,6 +7709,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             &path,
                             smil_root,
                             PrefixContext::Overlay,
+                            advisory,
                             report,
                         )
                     })
@@ -10987,7 +11159,14 @@ mod tests {
             let pkg = d.root_element();
             let attr = super::attr_no_ns_node(pkg, "prefix").unwrap();
             let mut report = crate::report::Report::new();
-            super::check_prefix_declaration(attr, "OEBPS/content.opf", pkg, ctx, &mut report);
+            super::check_prefix_declaration(
+                attr,
+                "OEBPS/content.opf",
+                pkg,
+                ctx,
+                false,
+                &mut report,
+            );
             report
                 .messages
                 .iter()
@@ -11041,6 +11220,7 @@ mod tests {
                 "OEBPS/content.opf",
                 pkg,
                 super::PrefixContext::Package,
+                false,
                 &mut report,
             );
             report
@@ -11395,6 +11575,125 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// EPUB 3.4's restrictive half: the roll-layout constraints (#1651) and
+    /// the deprecations (#1649).
+    ///
+    /// All four are advisory. epubcheck has implemented none of them, so in
+    /// a side-by-side diff they are indistinguishable from false positives —
+    /// and **0 of the 125 shelf books draws any of them**, so the shelf
+    /// confirms silence but cannot confirm correctness. No real book uses a
+    /// layout the specification introduced weeks ago; this enumeration is
+    /// the evidence, as it was for ADV-005.
+    #[test]
+    fn epub34_roll_constraints_and_deprecations_are_advisory() {
+        const VIEWPORT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>
+<meta name="viewport" content="width=1200, height=1600"/></head><body><p>x</p></body></html>"#;
+        const NO_VIEWPORT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>x</p></body></html>"#;
+
+        let ids =
+            |layout: &str, itemref_props: &str, pkg_prefix: &str, ch1: &str, advisory: bool| {
+                let layout_meta = if layout.is_empty() {
+                    String::new()
+                } else {
+                    format!(r#"<meta property="rendition:layout">{layout}</meta>"#)
+                };
+                let props = if itemref_props.is_empty() {
+                    String::new()
+                } else {
+                    format!(r#" properties="{itemref_props}""#)
+                };
+                let opf = format!(
+                    r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"{pkg_prefix}>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {layout_meta}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"{props}/></spine>
+</package>"#
+                );
+                let mut v: Vec<&'static str> = crate::validate_bytes_with_options(
+                    epub_with_opf(Some(&opf), ch1),
+                    &crate::Options {
+                        advisory,
+                        ..Default::default()
+                    },
+                )
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| id.starts_with("ADV-00") && *id != crate::ids::ADV_005)
+                .collect();
+                v.sort_unstable();
+                v.dedup();
+                v
+            };
+
+        // #1651: no per-spine layout override beside a roll layout.
+        assert_eq!(
+            ids("roll", "rendition:layout-reflowable", "", VIEWPORT, true),
+            vec![crate::ids::ADV_006]
+        );
+        assert_eq!(
+            ids("roll", "rendition:layout-pre-paginated", "", VIEWPORT, true),
+            vec![crate::ids::ADV_006]
+        );
+        // The same override is ordinary outside a roll layout.
+        assert!(ids("", "rendition:layout-reflowable", "", VIEWPORT, true).is_empty());
+
+        // #1651: a roll spine document must declare its ICB dimensions.
+        assert_eq!(
+            ids("roll", "", "", NO_VIEWPORT, true),
+            vec![crate::ids::ADV_007]
+        );
+        assert!(ids("roll", "", "", VIEWPORT, true).is_empty());
+        // Only under a roll layout — a plain reflowable book has no ICB.
+        assert!(ids("", "", "", NO_VIEWPORT, true).is_empty());
+
+        // #1649: two deprecations, one ID.
+        assert_eq!(
+            ids("", "rendition:align-x-center", "", VIEWPORT, true),
+            vec![crate::ids::ADV_008]
+        );
+        for prefix in ["xsd", "msv", "prism"] {
+            assert_eq!(
+                ids(
+                    "",
+                    "",
+                    &format!(r#" prefix="{prefix}: http://example.org/{prefix}#""#),
+                    VIEWPORT,
+                    true
+                ),
+                vec![crate::ids::ADV_008],
+                "{prefix} is deprecated in EPUB 3.4"
+            );
+        }
+        // A reserved prefix 3.4 does *not* deprecate stays quiet.
+        assert!(
+            ids(
+                "",
+                "",
+                r#" prefix="foo: http://example.org/foo#""#,
+                VIEWPORT,
+                true
+            )
+            .is_empty()
+        );
+
+        // Opt-in, every one of them.
+        assert!(ids("roll", "rendition:layout-reflowable", "", VIEWPORT, false).is_empty());
+        assert!(ids("roll", "", "", NO_VIEWPORT, false).is_empty());
+        assert!(ids("", "rendition:align-x-center", "", VIEWPORT, false).is_empty());
     }
 
     /// EPUB 3.4 (w3c/epubcheck#1651): `rendition:layout` gains the value
