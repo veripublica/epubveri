@@ -22,6 +22,35 @@ use super::pattern::*;
 pub struct Grammar {
     pub start: Pat,
     pub defs: Vec<Pat>,
+    /// Accept HTML **custom elements** - any element in the XHTML namespace
+    /// whose local name contains a hyphen - wherever the grammar allows a
+    /// `<span>`. Off by default; only the EPUB 3 XHTML content-document
+    /// grammar turns it on.
+    ///
+    /// It has to live here rather than in the schema because **no RELAX NG
+    /// name class can say "any name containing a hyphen"**. epubcheck cannot
+    /// express it either: its `PreprocessingDefaultHandler` *rewrites* such
+    /// elements into a private namespace before validating, so that its
+    /// grammar's `element c:*` can match them. This flag is the same
+    /// admission, made in one line instead of a rewriting pass.
+    ///
+    /// **The name rule is epubcheck's, verbatim, not HTML's.**
+    /// `HTMLUtils.isCustomElement` is `Namespaces.XHTML.equals(namespace) &&
+    /// name.contains("-")` and nothing more - it does not apply HTML's
+    /// `PotentialCustomElementName` production, so a leading digit, an
+    /// uppercase letter and the reserved hyphenated names (`annotation-xml`,
+    /// `font-face`) all pass. Coding to the specification instead would
+    /// invent errors on documents epubcheck accepts.
+    ///
+    /// **`<span>` is the position test because epubcheck adds custom elements
+    /// to `common.elem.flow` and `common.elem.phrasing`, and to nothing
+    /// else.** `span` is admitted by exactly those two, and in this grammar
+    /// `flowChoice` includes `phrasingChoice`, so the single name settles
+    /// both. Measured against 5.3.0: accepted in `<body>` and inside `<p>`,
+    /// rejected in `<head>` and as a child of `<ul>`, rejected without a
+    /// hyphen (`<mywidget>`), and rejected in EPUB 2 even with one ("not
+    /// allowed *anywhere*" there - `schema/20` has no web-components module).
+    pub custom_elements: bool,
 }
 
 impl Grammar {
@@ -30,9 +59,13 @@ impl Grammar {
         Self {
             start,
             defs: Vec::new(),
+            custom_elements: false,
         }
     }
 }
+
+/// The XHTML namespace, for the custom-element rule above.
+const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 
 fn is_ws(s: &str) -> bool {
     s.chars().all(char::is_whitespace)
@@ -80,13 +113,16 @@ struct Env<'a> {
     /// Only consulted after a rejection, so a valid document never pays for it.
     elem_pool: RefCell<Option<Vec<Pat>>>,
     elem_memo: RefCell<HashMap<(String, String), Option<Pat>>>,
+    /// See `Grammar::custom_elements`.
+    custom_elements: bool,
 }
 
 impl<'a> Env<'a> {
-    fn new(defs: &'a [Pat], start: Pat) -> Self {
+    fn new(defs: &'a [Pat], start: Pat, custom_elements: bool) -> Self {
         Self {
             defs,
             start,
+            custom_elements,
             nullable_memo: RefCell::new(HashMap::new()),
             nullable_busy: RefCell::new(HashSet::new()),
             open_memo: RefCell::new(HashMap::new()),
@@ -471,6 +507,38 @@ impl<'a> Env<'a> {
                 let ns = n.tag_name().namespace().unwrap_or("");
                 let local = n.tag_name().name();
                 if is_not_allowed(&self.start_tag_open_deriv(&cur, ns, local)) {
+                    // A custom element is allowed wherever `<span>` is, and the
+                    // question has to be asked *of the pattern at this
+                    // position* - which is why this sits here rather than at
+                    // the report level. The first attempt tested the blame's
+                    // `expected` list for "span" and was wrong in a way worth
+                    // recording: `expected_names` walks `After(content, rest)`
+                    // into `rest` whenever `content` is nullable, so inside
+                    // `<ul>` - whose model is `zeroOrMore(li)`, nullable - the
+                    // set also holds everything that may follow `</ul>`,
+                    // including `span`. It read as "phrasing is allowed here"
+                    // and silently accepted `<ul><my-item/></ul>`, which
+                    // epubcheck rejects. `start_tag_open_deriv` answers the
+                    // real question and cannot leak that way.
+                    //
+                    // Accepted without consuming, exactly like the rejection
+                    // path below: every flow/phrasing position in this grammar
+                    // is `mixed(zeroOrMore(...))`, so consuming or not is
+                    // indistinguishable, and not consuming keeps one recovery
+                    // shape instead of two.
+                    if self.custom_elements
+                        && ns == XHTML_NS
+                        && local.contains('-')
+                        && !is_not_allowed(&self.start_tag_open_deriv(&cur, XHTML_NS, "span"))
+                    {
+                        // Its children are checked against `cur`, the same
+                        // "transparent content" the rejection path uses, which
+                        // is what epubcheck's `common.inner.transparent.flow`
+                        // amounts to. Attributes go unchecked, matching its
+                        // `attr.any*`.
+                        let _ = self.children_deriv(&cur, n, blames, true);
+                        continue;
+                    }
                     // Name not allowed here: report and skip it, keeping `cur`
                     // (an element that never fit can't have consumed anything),
                     // so the remaining siblings are still validated. `cur` is
@@ -895,7 +963,11 @@ pub fn validate_node_report<'d, 'i>(
     grammar: &Grammar,
     root: roxmltree::Node<'d, 'i>,
 ) -> Vec<Blame<'d, 'i>> {
-    let env = Env::new(&grammar.defs, grammar.start.clone());
+    let env = Env::new(
+        &grammar.defs,
+        grammar.start.clone(),
+        grammar.custom_elements,
+    );
     let mut blames = Vec::new();
     let p = env.child_deriv(&grammar.start, root, &mut blames);
     // Validity is "no blames": recovery may leave `p` nullable even after

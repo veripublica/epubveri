@@ -12,6 +12,33 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **HTML custom elements are no longer rejected (false positive).**
+  `<epub-switch>`, `<my-widget>` — any element in the XHTML namespace whose
+  name contains a hyphen — drew RSC-005 "not allowed here" and made the book
+  INVALID. epubcheck accepts them and reports nothing at all.
+
+  Neither grammar can express the rule: **no RELAX NG name class says "any
+  name containing a hyphen"**. epubcheck rewrites such elements into a private
+  namespace before validating so that an `element c:*` pattern can match them;
+  we accept them in the derivative engine at the point of rejection instead.
+  The name test is epubcheck's own, verbatim — XHTML namespace, contains `-`,
+  nothing else — deliberately *not* HTML's stricter
+  `PotentialCustomElementName`, which would invent errors on documents
+  epubcheck accepts.
+
+  Accepted **only where flow or phrasing content is allowed**, matching
+  epubcheck's grammar, which adds them to `common.elem.flow` and
+  `common.elem.phrasing` and nowhere else. So they remain errors in `<head>`,
+  as a child of `<ul>`, without a hyphen, and **anywhere in EPUB 2** (XHTML
+  1.1 has no such concept). Their content is transparent: a `<div>` inside a
+  custom element inside a `<p>` is still an error.
+
+  All eight cases were run as real books through epubcheck 5.3.0 and agree.
+  That enumeration is the whole evidence: **no book on the 136-book shelf
+  contains a custom element**, so neither the shelf nor `compare` could see
+  this, and the corpus only ever showed it as one line of a false-positive
+  count (now 4 → 3; the remaining three are not ours — see the harness notes).
+
 - **A `<guide>` reference's `#fragment` is now resolved (RSC-012).** A
   `<reference type="toc" href="chapter.xhtml#frag"/>` whose fragment names no
   `id` in the target went unreported, while epubcheck reports it as an error.

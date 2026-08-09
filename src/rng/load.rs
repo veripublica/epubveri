@@ -94,6 +94,9 @@ fn load_impl(xml: &str, start_define: Option<&str>) -> Result<Grammar, String> {
         Ok(Grammar {
             start: start_pat,
             defs,
+            // Off by default; the EPUB 3 XHTML grammar opts in (see
+            // `Grammar::custom_elements`).
+            custom_elements: false,
         })
     } else {
         let l = Loader {

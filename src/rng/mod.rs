@@ -67,7 +67,13 @@ pub const XHTML_RNG: &str = include_str!("../../schemas/xhtml.rng");
 
 /// Load the built-in **EPUB 3** XHTML (HTML5) content-document grammar.
 pub fn xhtml_grammar() -> Grammar {
-    load(XHTML_RNG).expect("built-in xhtml.rng must parse")
+    let mut g = load(XHTML_RNG).expect("built-in xhtml.rng must parse");
+    // HTML custom elements (`<epub-switch>`): allowed wherever `<span>` is,
+    // and expressible in no RELAX NG name class. EPUB 3 only - XHTML 1.1 has
+    // none, so `xhtml_grammar_epub2` below leaves the flag off. See
+    // `Grammar::custom_elements`.
+    g.custom_elements = true;
+    g
 }
 
 /// Load the built-in **EPUB 2** (XHTML 1.1 + OPS 2.0.1) content-document
@@ -133,6 +139,83 @@ mod tests {
             let mark = if valid == want_valid { "OK " } else { "XX " };
             eprintln!("{mark}[{}] valid={valid} (want {want_valid})", label);
         }
+    }
+
+    /// HTML custom elements are accepted where flow or phrasing content is,
+    /// and nowhere else - epubcheck's rule, enumerated against 5.3.0.
+    ///
+    /// Nothing else here can hold this. The corpus scores
+    /// `custom-elements-valid.xhtml` as one line of a false-positive count;
+    /// **the shelf is blind** - 136 real books contain no custom element at
+    /// all - and `compare` therefore sees nothing either. The enumeration is
+    /// the evidence, as it was for #48's table permutations.
+    ///
+    /// Each case below was run as a real book through epubcheck 5.3.0 and
+    /// agrees with it. The negatives are the point: they are what separates
+    /// "allowed wherever `<span>` is" from "allowed anywhere", and the first
+    /// implementation of this got `<ul>` wrong while passing every positive.
+    #[test]
+    fn custom_elements_are_accepted_exactly_where_phrasing_content_is() {
+        let doc = |head_extra: &str, body: &str| {
+            format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title>{head_extra}</head><body>{body}</body></html>"
+            )
+        };
+        let valid = |g: &crate::rng::Grammar, xml: &str| {
+            let d = crate::ocf::parse_xml(xml).unwrap();
+            crate::rng::validate_node_report(g, d.root_element()).is_empty()
+        };
+
+        let g3 = crate::rng::xhtml_grammar();
+        let cases = [
+            // (label, head extra, body, valid in EPUB 3?)
+            ("flow position", "", "<epub-switch>x</epub-switch>", true),
+            ("phrasing position", "", "<p>a <my-el>b</my-el> c</p>", true),
+            (
+                "any attributes",
+                "",
+                "<p><my-el whatever=\"2\">b</my-el></p>",
+                true,
+            ),
+            // Transparent content: its children are judged by the position
+            // the custom element sits in, so a block inside a phrasing one
+            // is still an error.
+            (
+                "transparent, flow child ok",
+                "",
+                "<my-el><div><p>d</p></div></my-el>",
+                true,
+            ),
+            (
+                "transparent, block inside phrasing",
+                "",
+                "<p><my-el><div>d</div></my-el></p>",
+                false,
+            ),
+            // The three negatives.
+            ("in head", "<my-meta/>", "<p>x</p>", false),
+            (
+                "as a ul child",
+                "",
+                "<ul><my-item>a</my-item><li>b</li></ul>",
+                false,
+            ),
+            ("no hyphen", "", "<mywidget>x</mywidget>", false),
+        ];
+        for (label, head_extra, body, want) in cases {
+            assert_eq!(valid(&g3, &doc(head_extra, body)), want, "EPUB 3: {label}");
+        }
+
+        // EPUB 2 has no custom elements at all - `schema/20` includes no
+        // web-components module, and epubcheck says "not allowed *anywhere*"
+        // there. The flag is off for that grammar, so the same document that
+        // passes above must fail here.
+        let g2 = crate::rng::xhtml_grammar_epub2();
+        assert!(
+            !valid(&g2, &doc("", "<p>a <my-el>b</my-el> c</p>")),
+            "EPUB 2 must still reject a custom element"
+        );
     }
 
     /// XHTML 1.1 builds `html`/`head`/`title` from `I18n.attrib` alone -
