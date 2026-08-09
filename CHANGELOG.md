@@ -40,6 +40,13 @@ epubcheck's single-document mode, which this tool does not have.
 
 ### Fixed
 
+- **An EDUPUB `role="heading"` with no `aria-level` counts as a heading
+  (false positive).** `<body><span role="heading">Top</span>…</body>` drew
+  "The body element requires a heading when it is used as an implied
+  section"; epubcheck is silent on the same book, its selector being a bare
+  `html:*[@role='heading']`. Two predicates here answered "is this a
+  heading" differently; there is now one.
+
 - **HTML custom elements are no longer rejected (false positive).**
   `<epub-switch>`, `<my-widget>` — any element in the XHTML namespace whose
   name contains a hyphen — drew RSC-005 "not allowed here" and made the book

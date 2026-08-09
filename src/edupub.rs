@@ -70,36 +70,28 @@ fn is_body_explicit(body: roxmltree::Node) -> bool {
         .any(|c| !is_sectioning(c.tag_name().name()))
 }
 
-/// A heading is a real `hN` element, or any element carrying
-/// `role="heading"` with a numeric `aria-level` (confirmed via a real
-/// fixture using `<span aria-level="1" role="heading">`).
-fn heading_level(n: roxmltree::Node) -> Option<u32> {
-    let name = n.tag_name().name();
-    if let Some(digits) = name.strip_prefix('h')
-        && let Ok(level) = digits.parse::<u32>()
-        && (1..=6).contains(&level)
-    {
-        return Some(level);
-    }
-    if n.attr_no_ns("role") == Some("heading") {
-        return n.attr_no_ns("aria-level").and_then(|v| v.parse().ok());
-    }
-    None
-}
-
 /// A sectioning container's own heading: a direct-child heading element,
 /// or one wrapped in a direct-child `<header>` (confirmed via real
 /// fixtures using both forms interchangeably).
+///
+/// "Is a heading" is `heading_rank`, and it used to be a near-copy that
+/// required `role="heading"` to carry an `aria-level` too. That produced a
+/// **false positive**: `<body><span role="heading">Top</span>…</body>` drew
+/// "The body element requires a heading when it is used as an implied
+/// section" from us and nothing from epubcheck, whose selector is a bare
+/// `html:*[@role='heading']`. Two predicates answering "is this a heading"
+/// with different answers is the shape worth deleting on sight; only one
+/// remains, and its `aria-level` default of 2 is epubcheck's.
 fn find_heading<'a>(container: roxmltree::Node<'a, 'a>) -> Option<roxmltree::Node<'a, 'a>> {
     for c in container.children().filter(|c| c.is_element()) {
-        if heading_level(c).is_some() {
+        if heading_rank(c).is_some() {
             return Some(c);
         }
         if c.tag_name().name() == "header"
             && let Some(h) = c
                 .children()
                 .filter(|gc| gc.is_element())
-                .find(|gc| heading_level(*gc).is_some())
+                .find(|gc| heading_rank(*gc).is_some())
         {
             return Some(h);
         }
@@ -845,6 +837,37 @@ mod tests {
             ));
             assert!(got.is_empty(), "{top}/{sub} should be silent, got {got:?}");
         }
+    }
+
+    /// A `role="heading"` with no `aria-level` is still a heading.
+    ///
+    /// epubcheck's selector is a bare `html:*[@role='heading']`; ours had a
+    /// second, stricter predicate that also demanded `aria-level`, so a body
+    /// whose only heading was such an element was reported as having none -
+    /// a false positive against 5.3.0, which is silent on the same book.
+    #[test]
+    fn a_role_heading_without_aria_level_counts_as_a_heading() {
+        let xml = "<html xmlns=\"http://www.w3.org/1999/xhtml\">\
+             <head><title>t</title></head>\
+             <body><span role=\"heading\">Top</span>\
+             <section><h3>Sub</h3></section></body></html>";
+        let d = crate::ocf::parse_xml(xml).unwrap();
+        let body = d
+            .descendants()
+            .find(|n| n.is_element() && n.tag_name().name() == "body")
+            .unwrap();
+        assert!(find_heading(body).is_some());
+
+        let mut report = Report::new();
+        check_sectioning_and_headings(&d, "c.xhtml", &mut report);
+        assert!(
+            !report
+                .messages
+                .iter()
+                .any(|m| m.text.contains("requires a heading")),
+            "got {:?}",
+            report.messages.iter().map(|m| &m.text).collect::<Vec<_>>()
+        );
     }
 
     /// Past h6 the rule stops counting and only asks for an h6.
