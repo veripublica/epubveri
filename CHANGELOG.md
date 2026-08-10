@@ -12,6 +12,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **`<template>` is accepted, and `<script>`/`<template>` are accepted in the
+  containers HTML5 admits them in** (EPUB 3). `<template>` was in the grammar
+  nowhere at all, so it was an error everywhere — in `<head>`, in phrasing, in
+  flow. And a `<ul><script>…</script><li>` was rejected, though HTML5 admits
+  "script-supporting elements" in list, table, `picture`, `hgroup` and
+  `select` content models.
+
+  Fourteen probes, fourteen false positives against epubcheck 5.3.0; all
+  fourteen now agree. The sites are enumerated from epubcheck's own modules
+  (`common.elem.script-supporting`), not guessed: `ul`, `ol`, `dl`, `menu`,
+  `table`, `thead`, `tbody`, `tfoot`, `tr`, `colgroup`, `picture`, `hgroup`,
+  `select`, `optgroup`.
+
+  EPUB 2 is unchanged and still rejects both — XHTML 1.1 has no `<template>`,
+  and `<ul><script>` is an error there too, both measured.
+
+- **`<hgroup>` referenced the EPUB 2 `<script>` pattern from the EPUB 3
+  grammar**, a cross-version leak found while doing the above. It granted
+  XHTML 1.1's attribute set plus `charset`, so an EPUB 3
+  `<hgroup><script epub:type="…">` was rejected and a `charset` accepted.
+
 - **"expected one of …" now names what may appear *here*.** The suggestion set
   walked `After(content, rest)` into `rest` whenever `content` was nullable —
   right for a sequence, wrong here, because `rest` is the parent's

@@ -92,6 +92,8 @@
           <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
         </element>
         <ref name="scriptEl"/>
+        <!-- `common.elem.metadata |= template.elem` (web-components.rnc) -->
+        <ref name="templateEl"/>
         <!-- the deprecated EPUB3 trigger element (still epubcheck-valid,
              with a deprecation warning) -->
         <element name="epub:trigger"><ref name="globalAttrsCore"/></element>
@@ -105,6 +107,69 @@
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <text/>
     </element>
+  </define>
+
+  <!-- HTML5 `<template>` (EPUB 3 only; XHTML 1.1 has no such element and
+       epubcheck rejects it in EPUB 2, measured).
+
+       Content model. epubcheck's `template.inner` is the *union* of nearly
+       every inner model in the schema — metadata, flow, and the inner models
+       of ol/ul/dl/figure/ruby/object/video/audio/table/colgroup/thead/tbody/
+       tfoot/tr/fieldset/select/details — because a template holds a fragment
+       destined for somewhere else, so it may hold whatever that somewhere
+       accepts. Reproduced here as flow content plus the container-only
+       children that exist as defines.
+
+       Deliberately NOT a wildcard: a wildcard would accept a bogus element
+       inside a template, which epubcheck rejects, and #69's `map` lesson is
+       that a permissive shortcut is not local — anything reasoning *over*
+       the grammar (reachability, first-sets, the custom-element position
+       test) inherits it.
+
+       Known gap, left because it is exotic and a wildcard costs more: a
+       `dt`/`dd`/`caption`/`colgroup`/`figcaption`/`summary`/`rt`/`rp`/
+       `optgroup`/`param`/`track` placed *directly* under `<template>` is
+       still rejected. Those are defined inline inside their parents here
+       rather than as named patterns. Close it if a real book turns up. -->
+  <define name="templateEl">
+    <element name="template">
+      <ref name="globalAttrs"/>
+      <mixed>
+        <zeroOrMore>
+          <choice>
+            <ref name="flowChoice"/>
+            <ref name="liEl"/>
+            <ref name="trEl"/>
+            <ref name="cellEl"/>
+            <ref name="optionEl"/>
+            <ref name="sourceEl"/>
+          </choice>
+        </zeroOrMore>
+      </mixed>
+    </element>
+  </define>
+
+  <!-- HTML5's "script-supporting elements": `<script>` and `<template>` are
+       admitted by content models that otherwise take only their own
+       children, so `<ul><script>…</script><li>` is valid. Every site is
+       enumerated from epubcheck's own modules (`common.elem.script-supporting`
+       in block/tables/sectional/applications/embed/web-forms.rnc): ul, ol,
+       dl (and a `div` inside dl), menu, table, thead, tbody, tfoot, tr,
+       colgroup, picture, hgroup, select, optgroup.
+
+       We rejected all of them — eight probes, eight false positives against
+       epubcheck 5.3.0.
+
+       **Always reference this inside a `<choice>` or an `<interleave>`
+       branch, never beside a sibling `<ref>`.** RELAX NG defaults to
+       sequence: listing `menu` next to `ul` in one define once made `ulEl`
+       mean "a ul followed by a menu", took corpus false positives from 4 to
+       9 and changed 50 shelf books on the first build. -->
+  <define name="scriptSupportingEl">
+    <choice>
+      <ref name="scriptEl"/>
+      <ref name="templateEl"/>
+    </choice>
   </define>
 
   <!-- <meta>/<link> are also legal directly in flow content in real-world
@@ -799,6 +864,10 @@
 
   <define name="phrasingChoiceNoTime">
     <choice>
+      <!-- `common.elem.phrasing |= template.elem` (web-components.rnc), which
+           is what puts <template> in flow content too, since flowChoice
+           includes phrasingChoice. -->
+      <ref name="templateEl"/>
       <ref name="aEl"/>
       <element name="span"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
       <element name="em"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
@@ -964,11 +1033,17 @@
       <zeroOrMore>
         <choice>
           <ref name="optionEl"/>
+          <ref name="scriptSupportingEl"/>
           <element name="optgroup"><ref name="globalAttrs"/>
             <optional><attribute name="label"><data type="string"/></attribute></optional>
             <!-- #33: optgroup.attrs completion (web-forms.rnc). -->
             <optional><attribute name="disabled"><data type="token"/></attribute></optional>
-            <zeroOrMore><ref name="optionEl"/></zeroOrMore>
+            <zeroOrMore>
+              <choice>
+                <ref name="optionEl"/>
+                <ref name="scriptSupportingEl"/>
+              </choice>
+            </zeroOrMore>
           </element>
         </choice>
       </zeroOrMore>
@@ -1300,7 +1375,7 @@
       <optional><attribute name="start"><data type="integer"/></attribute></optional>
       <optional><attribute name="reversed"><data type="token"/></attribute></optional>
       <optional><attribute name="type"><data type="token"/></attribute></optional>
-      <zeroOrMore><ref name="liEl"/></zeroOrMore>
+      <zeroOrMore><choice><ref name="liEl"/><ref name="scriptSupportingEl"/></choice></zeroOrMore>
     </element>
   </define>
 
@@ -1317,8 +1392,8 @@
          OPS 2.0.1 does not include, and epubcheck rejects it there. Both
          halves checked against epubcheck 5.3.0. -->
     <choice>
-      <element name="ul"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl"/></zeroOrMore></element>
-      <element name="menu"><ref name="globalAttrs"/><zeroOrMore><ref name="liEl"/></zeroOrMore></element>
+      <element name="ul"><ref name="globalAttrs"/><zeroOrMore><choice><ref name="liEl"/><ref name="scriptSupportingEl"/></choice></zeroOrMore></element>
+      <element name="menu"><ref name="globalAttrs"/><zeroOrMore><choice><ref name="liEl"/><ref name="scriptSupportingEl"/></choice></zeroOrMore></element>
     </choice>
   </define>
 
@@ -1332,6 +1407,7 @@
         <zeroOrMore>
           <element name="dd"><ref name="globalAttrs"/><ref name="flowContent"/></element>
         </zeroOrMore>
+        <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
       </interleave>
     </element>
   </define>
@@ -1397,7 +1473,7 @@
   </define>
 
   <define name="trEl">
-    <element name="tr"><ref name="globalAttrs"/><zeroOrMore><ref name="cellEl"/></zeroOrMore></element>
+    <element name="tr"><ref name="globalAttrs"/><zeroOrMore><choice><ref name="cellEl"/><ref name="scriptSupportingEl"/></choice></zeroOrMore></element>
   </define>
 
   <define name="tableEl">
@@ -1424,29 +1500,38 @@
       <optional>
         <element name="caption"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       </optional>
+      <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
       <zeroOrMore>
         <element name="colgroup">
           <ref name="globalAttrs"/>
           <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
-          <zeroOrMore>
-            <element name="col">
-              <ref name="globalAttrs"/>
-              <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
-            </element>
-          </zeroOrMore>
+          <!-- `col.elem* & script-supporting*` - interleaved, so a script may
+               sit before, between or after the columns. -->
+          <interleave>
+            <zeroOrMore>
+              <element name="col">
+                <ref name="globalAttrs"/>
+                <optional><attribute name="span"><data type="positiveInteger"/></attribute></optional>
+              </element>
+            </zeroOrMore>
+            <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
+          </interleave>
         </element>
       </zeroOrMore>
+      <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
       <optional>
-        <element name="thead"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+        <element name="thead"><ref name="globalAttrs"/><zeroOrMore><choice><ref name="trEl"/><ref name="scriptSupportingEl"/></choice></zeroOrMore></element>
       </optional>
+      <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
       <choice>
         <zeroOrMore>
-          <element name="tbody"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+          <element name="tbody"><ref name="globalAttrs"/><zeroOrMore><choice><ref name="trEl"/><ref name="scriptSupportingEl"/></choice></zeroOrMore></element>
         </zeroOrMore>
         <oneOrMore><ref name="trEl"/></oneOrMore>
       </choice>
+      <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
       <optional>
-        <element name="tfoot"><ref name="globalAttrs"/><zeroOrMore><ref name="trEl"/></zeroOrMore></element>
+        <element name="tfoot"><ref name="globalAttrs"/><zeroOrMore><choice><ref name="trEl"/><ref name="scriptSupportingEl"/></choice></zeroOrMore></element>
       </optional>
     </element>
   </define>
@@ -1552,7 +1637,10 @@
   <define name="pictureEl">
     <element name="picture">
       <ref name="globalAttrs"/>
-      <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+      <interleave>
+        <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+        <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
+      </interleave>
       <optional><ref name="imgEl"/></optional>
     </element>
   </define>
@@ -2034,9 +2122,12 @@
            corpus fixture covers either direction, so the schema is the
            authority, as it was for the EPUB 2 branch.
 
-           `template` is not modelled anywhere in this grammar, so
-           script-supporting is just <script> here - the same simplification
-           the list and table content models already carry. -->
+           Script-supporting here used to be `scriptEl-epub2`, referenced
+           from the EPUB 3 grammar: a cross-version leak of exactly the shape
+           #69 was about. It granted XHTML 1.1's attribute set plus `charset`,
+           so an EPUB 3 `<hgroup><script epub:type=…>` was rejected and a
+           `charset` accepted. It is `scriptSupportingEl` now, which also
+           brings `<template>`. -->
       <element name="hgroup">
         <ref name="globalAttrs"/>
         <interleave>
@@ -2044,7 +2135,7 @@
           <zeroOrMore>
             <element name="p"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
           </zeroOrMore>
-          <zeroOrMore><ref name="scriptEl-epub2"/></zeroOrMore>
+          <zeroOrMore><ref name="scriptSupportingEl"/></zeroOrMore>
         </interleave>
       </element>
       <ref name="tableEl"/>

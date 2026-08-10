@@ -227,9 +227,10 @@ mod tests {
     /// `zeroOrMore(li)`, nullable — the set became `li` plus the whole flow
     /// vocabulary, overflowed the suggestion cap, and the tail vanished.
     ///
-    /// The expected lists below are epubcheck 5.3.0's, minus its "the element
-    /// end-tag or" prefix and the script-supporting elements it also allows
-    /// (a separate, still-open gap).
+    /// The expected lists below are epubcheck 5.3.0's, minus only its "the
+    /// element end-tag or" prefix — `script` and `template` are in them
+    /// because HTML5 admits script-supporting elements in these containers,
+    /// which is what `scriptSupportingEl` models.
     #[test]
     fn the_expected_set_does_not_leak_the_parent_continuation() {
         let g = crate::rng::xhtml_grammar();
@@ -250,15 +251,19 @@ mod tests {
                 .unwrap_or_default()
         };
 
-        assert_eq!(expected_for("<ol><zz>a</zz></ol>"), vec!["li"]);
+        let mut ol = expected_for("<ol><zz>a</zz></ol>");
+        ol.sort();
+        assert_eq!(ol, vec!["li", "script", "template"]);
         let mut dl = expected_for("<dl><zz>a</zz></dl>");
         dl.sort();
-        assert_eq!(dl, vec!["dd", "dt"]);
+        assert_eq!(dl, vec!["dd", "dt", "script", "template"]);
         let mut tbl = expected_for("<table><zz>a</zz></table>");
         tbl.sort();
         assert_eq!(
             tbl,
-            vec!["caption", "colgroup", "tbody", "tfoot", "thead", "tr"]
+            vec![
+                "caption", "colgroup", "script", "tbody", "template", "tfoot", "thead", "tr"
+            ]
         );
 
         // A genuinely large first-set is not this bug: a phrasing position
@@ -584,7 +589,9 @@ mod tests {
             .filter(|t| t.contains("\"div\""))
             .collect();
         assert!(
-            texts.iter().any(|t| t.contains("expected \"li\"")),
+            texts
+                .iter()
+                .any(|t| t.contains("expected one of \"li\", \"script\", \"template\"")),
             "got {texts:?}"
         );
     }
