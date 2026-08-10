@@ -686,6 +686,8 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     let mut extra_examples: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     let mut extra_family: BTreeMap<String, u32> = BTreeMap::new();
     let (mut n_err, mut n_detect, mut n_exact) = (0u32, 0u32, 0u32);
+    // Scenarios that expect an actual error - see the comment at its increment.
+    let mut n_detect_denom = 0u32;
     let (mut n_inscope, mut n_inscope_exact) = (0u32, 0u32);
     let mut exp_family: BTreeMap<String, u32> = BTreeMap::new();
     let mut hit_family: BTreeMap<String, u32> = BTreeMap::new();
@@ -762,6 +764,18 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
             .collect();
         if !expected.is_empty() {
             n_err += 1;
+            // Denominator for *detection* recall, which is a different
+            // question from exact-ID recall and needs a different one. `rc` is
+            // the CLI exit code, so it can only ever be 1 for a scenario that
+            // expects an actual **error**; counting warning-only and
+            // usage-only scenarios against it made the ratio meaningless and
+            // permanently understated - 511/607 = 84.2% printed next to a
+            // 99.5% exact-ID recall, which is arithmetically impossible for
+            // the same denominator, and the mismatch sat in plain sight for
+            // months because nobody reads the smaller number.
+            if !s.errs.is_empty() {
+                n_detect_denom += 1;
+            }
             for e in &expected {
                 *exp_family.entry(family(e).to_string()).or_insert(0) += 1;
             }
@@ -932,8 +946,8 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
 
     println!("\n-- should-ERROR cases: {n_err} --");
     println!(
-        "  detection recall (flagged any error): {n_detect}/{n_err} = {}",
-        pct(n_detect, n_err)
+        "  detection recall (flagged any error): {n_detect}/{n_detect_denom} = {}",
+        pct(n_detect, n_detect_denom)
     );
     println!(
         "  exact-ID recall  (same message ID)  : {n_exact}/{n_err} = {}",

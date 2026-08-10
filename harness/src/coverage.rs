@@ -330,9 +330,16 @@ const FAMILY_SCOPE: &[(&str, &str)] = &[
     ),
     (
         "CHK",
-        "Every CHK ID is an epubcheck CLI/tooling message about its custom \
+        "CHK-001..007 are epubcheck CLI/tooling messages about its custom \
          message-overrides file - not EPUB content validation. N/A for an \
-         embeddable library, not a gap.",
+         embeddable library, not a gap. **CHK-008 is not one of them**, and \
+         this note used to say it was (corrected 2026-08-10): its call site is \
+         the `catch (IllegalStateException)` around `checker.check()` in \
+         `OPFChecker`, i.e. epubcheck reporting that one of its own checkers \
+         threw and the item was skipped. Still N/A here, but for RSC-022's \
+         reason rather than this family's - it describes the validator's \
+         internal failure, not the book. We have no equivalent: the \
+         0.7.12-0.7.14 audits removed the silent per-item bail it announces.",
     ),
     (
         "INF",
