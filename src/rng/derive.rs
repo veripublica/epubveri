@@ -729,6 +729,26 @@ impl<'a> Env<'a> {
         if is_not_allowed(&cur) {
             return cur; // a descendant failed; `children_deriv` recorded it
         }
+        // Known granularity difference, left as is (measured 2026-08-11).
+        // `<epub:switch><epub:default/></epub:switch>` - model `case+,
+        // default` - draws two findings here (the default "not allowed here"
+        // *and* the switch "incomplete") where epubcheck draws one, merged:
+        // "element epub:default not allowed yet; missing required element
+        // epub:case".
+        //
+        // Suppressing the parent's incomplete-content blame whenever a child
+        // was rejected was tried and reverted: epubcheck reports **both** when
+        // the rejected child is unknown to the parent's model, which is
+        // exactly #65's EPUB 2 `<body><nav/></body>` from a real user report
+        // (MobileRead #134). The distinction is "not allowed *yet*" - the
+        // child is in this model but out of order - versus "not allowed at
+        // all", and telling them apart needs a membership query over the
+        // parent's whole model that nothing else here wants.
+        //
+        // Not worth building on speculation: the shape needs a model with a
+        // required sequence and an author supplying a later member first, and
+        // the only one in the grammar is a deprecated element. 0 of 146 shelf
+        // books are affected.
         let inside = cur.clone();
         cur = self.end_tag_deriv(&cur);
         if is_not_allowed(&cur) {

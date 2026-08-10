@@ -141,6 +141,45 @@ mod tests {
         }
     }
 
+    /// `<epub:switch>` needs at least one `<epub:case>` and a
+    /// `<epub:default>`; both were optional here.
+    ///
+    /// epubcheck's `epub-switch.rnc` is `epub.switch.case.flow+,
+    /// epub.switch.default.flow` — a plus and no question mark. Ours was
+    /// `case*, default?`, so the corpus's two switch fixtures validated
+    /// clean. They were the **only two scenarios in 981** where a book
+    /// epubcheck fails drew no error at all from us, and they stayed
+    /// invisible while the harness's detection-recall denominator was wrong
+    /// and the ratio read 84%.
+    ///
+    /// Enumerated against epubcheck 5.3.0 as four books: valid, no case, no
+    /// default, two cases. The last matters — `+` not `?` — and no fixture
+    /// covers it.
+    #[test]
+    fn epub_switch_requires_a_case_and_a_default() {
+        let g = xhtml_grammar();
+        let ok = |body: &str| {
+            let xml = format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            let d = crate::ocf::parse_xml(&xml).unwrap();
+            validate_node_report(&g, d.root_element()).is_empty()
+        };
+        const CASE: &str =
+            "<epub:case required-namespace=\"http://example.org/x\"><p>a</p></epub:case>";
+        const DEF: &str = "<epub:default><p>b</p></epub:default>";
+
+        assert!(ok(&format!("<epub:switch>{CASE}{DEF}</epub:switch>")));
+        assert!(ok(&format!("<epub:switch>{CASE}{CASE}{DEF}</epub:switch>")));
+        assert!(!ok(&format!("<epub:switch>{DEF}</epub:switch>")), "no case");
+        assert!(
+            !ok(&format!("<epub:switch>{CASE}</epub:switch>")),
+            "no default"
+        );
+    }
+
     /// HTML custom elements are accepted where flow or phrasing content is,
     /// and nowhere else - epubcheck's rule, enumerated against 5.3.0.
     ///

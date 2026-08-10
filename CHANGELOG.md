@@ -12,6 +12,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **`<epub:switch>` now requires at least one `<epub:case>` and an
+  `<epub:default>`.** Both were optional in our grammar, where epubcheck's is
+  `case+, default` — so a switch missing either validated clean. These were
+  the **only two scenarios in the corpus's 981** where a book epubcheck fails
+  drew no error at all from us, and they were invisible while the harness's
+  detection-recall denominator was wrong. Detection recall is now 513/513.
+
+  Known granularity difference, documented and left: on the no-case shape we
+  report two findings (the misplaced `<epub:default>` and the incomplete
+  `<epub:switch>`) where epubcheck merges them into one.
+
 - **A well-formedness fatal now names the line the element was *opened* on.**
   An unterminated `<hr>` at line 81 made the parse fail at line 157, and both
   we and epubcheck pointed at line 157 — the `</body>` that could not match —

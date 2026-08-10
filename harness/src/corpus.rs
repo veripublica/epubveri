@@ -694,6 +694,7 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     let mut fp_examples: Vec<(String, Vec<String>)> = Vec::new();
     let mut miss_examples: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     let mut miss_all: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut detect_misses: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
 
     for s in scenarios {
         if s.unsettled {
@@ -779,8 +780,26 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
             for e in &expected {
                 *exp_family.entry(family(e).to_string()).or_insert(0) += 1;
             }
-            if !s.errs.is_empty() && rc == 1 {
-                n_detect += 1;
+            if !s.errs.is_empty() {
+                if rc == 1 {
+                    n_detect += 1;
+                } else {
+                    // A scenario that expects an *error* and got no non-zero
+                    // exit from us: we let a book through that epubcheck
+                    // fails. Printed for the same reason the exact-ID misses
+                    // are - a bare ratio names nothing to go and look at, and
+                    // this list was invisible until the denominator was fixed
+                    // and the number stopped being 84%.
+                    detect_misses.push((
+                        s.name.clone().unwrap_or_default(),
+                        s.errs.iter().cloned().collect::<Vec<_>>(),
+                        if ids.is_empty() {
+                            vec!["(none)".to_string()]
+                        } else {
+                            ids.clone()
+                        },
+                    ));
+                }
             }
             let hit: Vec<&String> = expected
                 .iter()
@@ -1000,6 +1019,19 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
         println!("  {fam:<5} {hit:>4} / {tot}");
     }
 
+    if !detect_misses.is_empty() {
+        println!(
+            "\n-- DETECTION MISSES ({} scenarios: an error was expected, we exited 0) --",
+            detect_misses.len()
+        );
+        for (name, exp, got) in &detect_misses {
+            println!(
+                "  {name}\n      expected {}  got {}",
+                py_list(exp),
+                py_list(got)
+            );
+        }
+    }
     if !miss_all.is_empty() {
         println!("\n-- ALL exact-ID MISSES ({} scenarios) --", miss_all.len());
         for (name, exp, got) in &miss_all {

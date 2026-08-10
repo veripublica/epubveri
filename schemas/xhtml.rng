@@ -2056,20 +2056,30 @@
     <element name="epub:switch">
       <ref name="globalAttrs"/>
       <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
-      <zeroOrMore>
+      <!-- `epub.switch.case.flow+, epub.switch.default.flow` (epub-switch.rnc):
+           at least one case, and a default that is NOT optional. Ours was
+           `case*, default?`, so a switch with no case and one with no default
+           both validated - the only two scenarios in the whole corpus where a
+           book epubcheck fails came out of here with exit 0. They were
+           invisible until the detection-recall denominator was fixed and the
+           ratio stopped reading 84%.
+
+           epubcheck reports them from opposite ends: no case is "element
+           epub:default not allowed yet" (the default arrived before its
+           required sibling), no default is "element epub:switch incomplete".
+           Both are RSC-005 and both fall out of the cardinality. -->
+      <oneOrMore>
         <element name="epub:case">
           <ref name="globalAttrs"/>
           <attribute name="required-namespace"><data type="anyURI"/></attribute>
           <optional><attribute name="required-version"><data type="token"/></attribute></optional>
           <ref name="switchBranchContent"/>
         </element>
-      </zeroOrMore>
-      <optional>
-        <element name="epub:default">
-          <ref name="globalAttrs"/>
-          <ref name="switchBranchContent"/>
-        </element>
-      </optional>
+      </oneOrMore>
+      <element name="epub:default">
+        <ref name="globalAttrs"/>
+        <ref name="switchBranchContent"/>
+      </element>
     </element>
   </define>
 
