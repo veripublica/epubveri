@@ -8,7 +8,17 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.16] - 2026-08-11
+
+Three more false-positive classes, all found here rather than reported —
+markup this tool rejected and epubcheck accepts. `<template>` is the one to
+upgrade for: it appeared in the grammar nowhere at all, so it was an error in
+`<head>`, in phrasing and in flow alike.
+
+Two long-standing gaps close alongside them, both of which had been hiding
+behind a broken instrument: OEBPS 1.2 packages were being judged by EPUB 2's
+rules, and `<epub:switch>` accepted a shape epubcheck rejects. Corpus
+detection recall is now 513/513 and exact-ID recall 606/607.
 
 ### Fixed
 
