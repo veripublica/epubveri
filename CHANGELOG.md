@@ -10,15 +10,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.9.15] - 2026-08-10
 
-Three false positives, all found here rather than reported: markup this
-tool rejected and epubcheck accepts. The custom-element one is the reason
-to upgrade — a book using `<epub-switch>` or any other hyphenated element
-name was reported INVALID.
+Two false positives, both found here rather than reported: markup this tool
+rejected and epubcheck accepts. The custom-element one is the reason to
+upgrade — a book using `<epub-switch>` or any other hyphenated element name
+was reported INVALID.
 
-Two of the three had been sitting in the corpus harness's own output for
+One of the two had been sitting in the corpus harness's own output for
 months, inside a standing "4 false positives" figure that was being read as
-a constant rather than as four open questions. One was real; the other
-three were the instrument's, and are fixed too.
+a constant rather than as four open questions. Only that one was ours; the
+other three were the instrument's, and are fixed too.
 
 ### Added
 
