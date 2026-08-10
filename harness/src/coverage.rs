@@ -93,17 +93,19 @@ const ANN: &[Ann] = &[
          its 4 findings, six of ours invented; now our set is a strict subset \
          of its and the verdict agrees."),
     ("OPF-038", None,
-        "Not implemented. In an OEBPS 1.2 context a `text/css` stylesheet \
-         should be `text/x-oeb1-css` and a content document \
-         `text/x-oeb1-document`; epubcheck warns, we do not. This and OPF-039 \
-         are the half of OEBPS 1.2 support that stays out of scope - the \
-         format is pre-EPUB and no book on a 146-book shelf uses it. **Both \
-         were counted as implemented until 2026-08-10**: `ids.rs` declared \
-         the constants and no line ever emitted them, which the matrix reads \
-         as coverage. The dead-ID rule applies in this direction too - a \
-         declared constant is not a check."),
+        "A modern content media-type inside an OEBPS 1.2 package, which wants \
+         `text/x-oeb1-document`. Ported from `OPFChecker.checkItem`, which \
+         asks it in two places that are not interchangeable: `text/html` is \
+         OPF-038 unconditionally there (and OPF-035 in a normal package), \
+         while a *blessed* type - EPUB 2's XHTML or DTBook - is OPF-038 only \
+         when the item declares no `fallback`. **Counted as implemented long \
+         before it was**: until 2026-08-10 `ids.rs` declared the constant and \
+         no line emitted it, which the matrix reads as coverage. The dead-ID \
+         rule runs in this direction too - grep a constant's uses, not its \
+         declaration."),
     ("OPF-039", None,
-        "Not implemented; see OPF-038."),
+        "The stylesheet half of OPF-038: a `text/css` item with no fallback \
+         inside an OEBPS 1.2 package, which wants `text/x-oeb1-css`."),
     ("OPF-064", None,
         "Informational profile-selection message - not emitted."),
     ("NAV-001", Some("na"),

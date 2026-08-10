@@ -19,7 +19,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 22 | 1 | 0 | 2 | 23 | 23/23 | reviewed |
-| OPF | 88 | 0 | 4 | 15 | 92 | 88/92 | reviewed |
+| OPF | 90 | 0 | 2 | 15 | 92 | 90/92 | reviewed |
 | RSC | 28 | 3 | 0 | 4 | 31 | 31/31 | reviewed |
 | HTM | 22 | 0 | 0 | 29 | 22 | 22/22 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **202** | **4** | **4** | **105** | **210** | **206/210** | |
+| **All** | **204** | **4** | **2** | **105** | **210** | **208/210** | |
 
-**epubveri implements 206 of 210 live epubcheck checks (~98%)** — 202 fully, 4 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 204 fully, 4 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -114,8 +114,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-035 | Media type "text/html" is not appropriate for XHTML/OPS. | Y | Y | a manifest item declares an HTML media-type instead of XHTML (warning) |
 | OPF-036 | Video type "%1$s" might not be supported by reading systems | Y | ⊘ | Dead ID - the video-codec-support note exists only in MessageId/DefaultSeverities and the translation bundles; nothing in epubcheck's source emits it and no test expects it (verified #53). |
 | OPF-037 | Found deprecated media-type "%1$s". | Y | Y | a manifest item uses the deprecated OEB 1.x CSS media-type (warning) |
-| OPF-038 | Media type "%1$s" is not appropriate for an OEBPS 1.2 context; Use "text/x-oeb1-documen... | Y | x | Not implemented. In an OEBPS 1.2 context a `text/css` stylesheet should be `text/x-oeb1-css` and a content document `text/x-oeb1-document`; epubcheck warns, we do not. This and OPF-039 are the half of OEBPS 1.2 support that stays out of scope - the format is pre-EPUB and no book on a 146-book shelf uses it. **Both were counted as implemented until 2026-08-10**: `ids.rs` declared the constants and no line ever emitted them, which the matrix reads as coverage. The dead-ID rule applies in this direction too - a declared constant is not a check. |
-| OPF-039 | Media-type "%1$s" is not appropriate in an OEBPS 1.2 context. Use "text/x-oeb1-css" ins... | Y | x | Not implemented; see OPF-038. |
+| OPF-038 | Media type "%1$s" is not appropriate for an OEBPS 1.2 context; Use "text/x-oeb1-documen... | Y | Y | A modern content media-type inside an OEBPS 1.2 package, which wants `text/x-oeb1-document`. Ported from `OPFChecker.checkItem`, which asks it in two places that are not interchangeable: `text/html` is OPF-038 unconditionally there (and OPF-035 in a normal package), while a *blessed* type - EPUB 2's XHTML or DTBook - is OPF-038 only when the item declares no `fallback`. **Counted as implemented long before it was**: until 2026-08-10 `ids.rs` declared the constant and no line emitted it, which the matrix reads as coverage. The dead-ID rule runs in this direction too - grep a constant's uses, not its declaration. |
+| OPF-039 | Media-type "%1$s" is not appropriate in an OEBPS 1.2 context. Use "text/x-oeb1-css" ins... | Y | Y | The stylesheet half of OPF-038: a `text/css` item with no fallback inside an OEBPS 1.2 package, which wants `text/x-oeb1-css`. |
 | OPF-040 | Fallback item with id "%1$s" could not be found. | Y | Y | fallback references an unknown manifest id |
 | OPF-041 | Fallback-style item with id "%1$s" could not be found. | Y | Y | a fallback-style attribute references an unknown manifest item |
 | OPF-042 | %1$s" is not a permissible spine media-type. | Y | Y | a spine item's media-type is an image (not a Content Document) |

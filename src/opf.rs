@@ -2591,12 +2591,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // findings, we reported 7 errors - OPF-030 in common, and six of ours
     // invented by rules that do not apply to the format the book declares.
     //
-    // **Deliberately partial.** This says "OEBPS 1.2, not checked" and stops
-    // inventing errors; it does not implement the format. OPF-038/OPF-039
-    // (the oeb1 media types) and the `oebpkg12` DTD stay unimplemented, which
-    // is the standing scope decision - see `docs/COVERAGE.md`. Getting the
-    // wrong answer and getting no answer are different, and this trades the
-    // first for the second.
+    // **Deliberately partial.** This stops the EPUB 2 rules being applied to a
+    // format that does not have them; it does not implement OEBPS 1.2. The
+    // media-type checks OPF-038/OPF-039 hang off this same flag further down
+    // (they became cheap once it existed), but the `oebpkg12` DTD stays
+    // unimplemented, which is the rest of the standing scope decision - see
+    // `docs/COVERAGE.md`. Getting the wrong answer and getting no answer are
+    // different, and this trades the first for the second.
     // Narrow on purpose. epubcheck's own guard admits only three namespaces
     // before asking the question (`OPFHandler.startElement`): absent, empty,
     // or the OEBPS 1.2 URI. A `<package>` in some *other* wrong namespace —
@@ -2612,8 +2613,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         report.push_at_pos(
             OPF_047,
             Severity::Warning,
-            "package document uses legacy OEBPS 1.2 syntax; \
-             its OEBPS 1.2-specific rules are not checked",
+            "package document uses legacy OEBPS 1.2 syntax, allowing backwards \
+             compatibility",
             opf_path,
             Position::of(pkg),
         );
@@ -3538,6 +3539,60 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     opf_path,
                     Position::of(item),
                 );
+            }
+            // OPF-038/OPF-039: inside an **OEBPS 1.2** package the modern
+            // media types are the wrong ones - that format wants
+            // `text/x-oeb1-document` and `text/x-oeb1-css`. Ported from
+            // `OPFChecker.checkItem`, which asks it in two separate places
+            // and they are not interchangeable:
+            //
+            //   1. a *deprecated blessed* type (`text/x-oeb1-document` or
+            //      `text/html`) is OPF-035 in a normal package and OPF-038 in
+            //      an OEBPS 1.2 one - `text/html` only, unconditionally;
+            //   2. a *blessed* type (EPUB 2: XHTML or DTBook) or a blessed
+            //      style type (`text/css`) is OPF-038/OPF-039, but only when
+            //      the item declares no `fallback`.
+            //
+            // Cheap now and expensive an hour ago: these were "implement the
+            // format" until OPF-047 gave us `is_oeb12`. The `oebpkg12` DTD
+            // stays unimplemented, which is the rest of the scope decision.
+            if is_oeb12 {
+                if mt == "text/html" {
+                    report.push_at_pos(
+                        OPF_038,
+                        Severity::Warning,
+                        format!(
+                            "media-type '{mt}' is not appropriate in an OEBPS 1.2 context; \
+                             use 'text/x-oeb1-document'"
+                        ),
+                        opf_path,
+                        Position::of(item),
+                    );
+                } else if item.attr_no_ns("fallback").is_none() {
+                    if mt == "application/xhtml+xml" || mt == "application/x-dtbook+xml" {
+                        report.push_at_pos(
+                            OPF_038,
+                            Severity::Warning,
+                            format!(
+                                "media-type '{mt}' is not appropriate in an OEBPS 1.2 context; \
+                                 use 'text/x-oeb1-document'"
+                            ),
+                            opf_path,
+                            Position::of(item),
+                        );
+                    } else if mt == "text/css" {
+                        report.push_at_pos(
+                            OPF_039,
+                            Severity::Warning,
+                            format!(
+                                "media-type '{mt}' is not appropriate in an OEBPS 1.2 context; \
+                                 use 'text/x-oeb1-css'"
+                            ),
+                            opf_path,
+                            Position::of(item),
+                        );
+                    }
+                }
             }
             // resolve()'s query-stripping and path-segment handling are
             // meant for container-relative paths; applied to an absolute
@@ -11766,6 +11821,93 @@ mod tests {
         // fixture its RSC-005.
         let typo = ids("http://www.ipdf.org/2007/opf");
         assert!(!typo.contains(&crate::ids::OPF_047), "got {typo:?}");
+    }
+
+    /// OPF-038/OPF-039: the modern media types are the wrong ones inside an
+    /// OEBPS 1.2 package.
+    ///
+    /// Enumerated because `OPFChecker.checkItem` asks the question in two
+    /// places with different conditions, and a port that collapsed them would
+    /// still pass epubcheck's two fixtures: `text/html` is OPF-038
+    /// **unconditionally**, while XHTML/DTBook and `text/css` are
+    /// OPF-038/OPF-039 **only when the item declares no `fallback`**. The
+    /// fallback half is what no fixture covers.
+    #[test]
+    fn oebps12_media_types_are_reported_per_epubchecks_two_conditions() {
+        let ids_for = |mt: &str, fallback: bool| {
+            let r = crate::validate_bytes(epub_oeb12_with_item(mt, fallback));
+            r.messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_038 || m.id == crate::ids::OPF_039)
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
+        };
+        // Deprecated-blessed: reported whether or not a fallback exists.
+        assert_eq!(ids_for("text/html", false), vec![crate::ids::OPF_038]);
+        assert_eq!(ids_for("text/html", true), vec![crate::ids::OPF_038]);
+        // Blessed, and the style type: only without a fallback.
+        assert_eq!(
+            ids_for("application/xhtml+xml", false),
+            vec![crate::ids::OPF_038]
+        );
+        assert_eq!(ids_for("application/xhtml+xml", true), Vec::<&str>::new());
+        assert_eq!(ids_for("text/css", false), vec![crate::ids::OPF_039]);
+        assert_eq!(ids_for("text/css", true), Vec::<&str>::new());
+        // The format's own types are what it wants: silent either way.
+        assert_eq!(ids_for("text/x-oeb1-document", false), Vec::<&str>::new());
+        assert_eq!(ids_for("text/x-oeb1-css", false), Vec::<&str>::new());
+    }
+
+    /// An OEBPS 1.2 package with one extra manifest item of media-type `mt`,
+    /// optionally carrying a `fallback`.
+    fn epub_oeb12_with_item(mt: &str, fallback: bool) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let fb = if fallback { r#" fallback="c1""# } else { "" };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://openebook.org/namespaces/oeb-package/1.0/" version="2.0" unique-identifier="q">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc-metadata><dc:Title>T</dc:Title><dc:Language>en</dc:Language>
+    <dc:Identifier id="q">NOID</dc:Identifier></dc-metadata>
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="text/x-oeb1-document"/>
+    <item id="x1" href="other.bin" media-type="{mt}"{fb}/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/other.bin", "x"),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
     }
 
     /// An EPUB 2-era package whose `<package>` sits in `ns`, with the Dublin

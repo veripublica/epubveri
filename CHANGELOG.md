@@ -23,14 +23,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   grammar). Our findings are now a strict subset of epubcheck's, and the
   verdict agrees.
 
-  Still out of scope, deliberately: OPF-038/OPF-039 (the oeb1 media types) and
-  the `oebpkg12` DTD. This says "OEBPS 1.2, not checked" — it does not
-  implement the format.
+- **OPF-038 / OPF-039**: a modern media type inside an OEBPS 1.2 package —
+  which wants `text/x-oeb1-document` and `text/x-oeb1-css`. These were "out of
+  scope" an hour before they were written: they became cheap the moment
+  OPF-047 gave the code a way to know it was looking at such a package.
 
-  **`docs/COVERAGE.md` goes 207/210 → 206/210 as a result, and that is a
-  correction, not a regression.** OPF-047 is now implemented (+1), but
-  OPF-038/OPF-039 turn out never to have been (-2): `ids.rs` declared their
-  constants and nothing ever emitted them, which the matrix read as coverage.
+  epubcheck asks the question in two places with different conditions, and
+  both are reproduced: `text/html` is OPF-038 unconditionally, while XHTML,
+  DTBook and `text/css` are OPF-038/OPF-039 only when the item declares no
+  `fallback`. No corpus fixture covers the fallback half, so it was checked
+  against 5.3.0 directly — five books, five agreements.
+
+  Still out of scope, deliberately: the `oebpkg12` DTD.
+
+  **`docs/COVERAGE.md` goes 207/210 → 208/210 across the two changes, and one
+  step of that is a correction rather than progress.** OPF-047, OPF-038 and
+  OPF-039 are now implemented (+3), but OPF-038/OPF-039 had been *counted* as
+  implemented all along (-2 when that was found): `ids.rs` declared their
+  constants and nothing ever emitted them, which the matrix reads as
+  coverage.
 
 - **`<template>` is accepted, and `<script>`/`<template>` are accepted in the
   containers HTML5 admits them in** (EPUB 3). `<template>` was in the grammar
