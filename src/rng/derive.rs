@@ -220,13 +220,41 @@ impl<'a> Env<'a> {
     /// point in the pattern - the pattern's first-set, restricted to names
     /// concrete enough to name in a message.
     ///
-    /// Walked the same way as `nullable`: a `Group`/`After` contributes its
-    /// second half only when its first half is nullable (an optional prefix
-    /// lets a later element start), a `Choice` contributes both, and a `Ref`
-    /// is followed once (a `visited` guard breaks recursive grammars). This
-    /// is what turns "element X is not allowed here" into "…; expected one of
+    /// Walked the same way as `nullable`: a `Group` contributes its second
+    /// half only when its first half is nullable (an optional prefix lets a
+    /// later element start), a `Choice` contributes both, and a `Ref` is
+    /// followed once (a `visited` guard breaks recursive grammars). This is
+    /// what turns "element X is not allowed here" into "…; expected one of
     /// li" - the set is collected at the point the offending element was
     /// rejected, so it is exactly what would have been accepted instead.
+    ///
+    /// **`After` is the exception, and treating it like `Group` was a bug.**
+    /// `After(content, rest)` means "we are inside an element whose remaining
+    /// content must match `content`, and `rest` applies once its end tag is
+    /// seen" - so `rest` is the *parent's* continuation and nothing in it can
+    /// appear at this position. Descending into it whenever `content` was
+    /// nullable pulled the whole outer vocabulary in: inside `<ol>`, whose
+    /// model is the nullable `zeroOrMore(li)`, the set became `li` plus every
+    /// element that may follow `</ol>`. Past `MAX_SUGGESTED` the tail is
+    /// dropped entirely, so the visible symptom was not a wrong suggestion
+    /// but **no suggestion at all**. `<ol>` now says `expected "li"` and
+    /// `<table>` names its six children, both matching epubcheck.
+    ///
+    /// **Worth almost nothing on real books, and that was measured rather
+    /// than assumed** - two builds over the 146-book shelf differ by **2
+    /// findings out of 8190**. The leak only bites where a small-model
+    /// container holds a misplaced child; real books misplace blocks inside
+    /// `<p>`, a phrasing position whose first-set is legitimately larger than
+    /// `MAX_SUGGESTED` and is capped for that reason, not this one. A first
+    /// guess that 118 tail-less findings on one book were this bug was wrong
+    /// on both count and cause.
+    ///
+    /// It is fixed because the set was *wrong*, not because it was costly.
+    /// The same conflation had already caused one real defect: a position
+    /// test written against this set read "phrasing is allowed here" inside
+    /// `<ul>` and wrongly accepted a custom element there. That one is now
+    /// asked of the pattern directly (see `children_deriv`); this removes the
+    /// trap rather than the next instance of it.
     fn expected_names(&self, p: &Pat, out: &mut Vec<String>, visited: &mut HashSet<usize>) {
         match &**p {
             Pattern::Element(nc, _) => {
@@ -242,12 +270,15 @@ impl<'a> Env<'a> {
                 self.expected_names(a, out, visited);
                 self.expected_names(b, out, visited);
             }
-            Pattern::Group(a, b) | Pattern::After(a, b) => {
+            Pattern::Group(a, b) => {
                 self.expected_names(a, out, visited);
                 if self.nullable(a) {
                     self.expected_names(b, out, visited);
                 }
             }
+            // Never the continuation: it is only reachable past this
+            // element's end tag. See the doc comment.
+            Pattern::After(a, _) => self.expected_names(a, out, visited),
             Pattern::OneOrMore(a) => self.expected_names(a, out, visited),
             Pattern::Ref(i) if visited.insert(*i) => {
                 self.expected_names(&self.defs[*i], out, visited);

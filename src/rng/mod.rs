@@ -218,6 +218,58 @@ mod tests {
         );
     }
 
+    /// The "expected one of …" set names what may appear *here*, not what may
+    /// follow this element's end tag.
+    ///
+    /// `expected_names` used to walk `After(content, rest)` into `rest`
+    /// whenever `content` was nullable, which is right for `Group` and wrong
+    /// here: `rest` is the parent's continuation. Inside `<ol>` — model
+    /// `zeroOrMore(li)`, nullable — the set became `li` plus the whole flow
+    /// vocabulary, overflowed the suggestion cap, and the tail vanished.
+    ///
+    /// The expected lists below are epubcheck 5.3.0's, minus its "the element
+    /// end-tag or" prefix and the script-supporting elements it also allows
+    /// (a separate, still-open gap).
+    #[test]
+    fn the_expected_set_does_not_leak_the_parent_continuation() {
+        let g = crate::rng::xhtml_grammar();
+        let expected_for = |body: &str| -> Vec<String> {
+            let xml = format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            let d = crate::ocf::parse_xml(&xml).unwrap();
+            crate::rng::validate_node_report(&g, d.root_element())
+                .into_iter()
+                .find_map(|b| match b {
+                    crate::rng::Blame::Element(_, crate::rng::ElementFault::NotAllowed(names)) => {
+                        Some(names)
+                    }
+                    _ => None,
+                })
+                .unwrap_or_default()
+        };
+
+        assert_eq!(expected_for("<ol><zz>a</zz></ol>"), vec!["li"]);
+        let mut dl = expected_for("<dl><zz>a</zz></dl>");
+        dl.sort();
+        assert_eq!(dl, vec!["dd", "dt"]);
+        let mut tbl = expected_for("<table><zz>a</zz></table>");
+        tbl.sort();
+        assert_eq!(
+            tbl,
+            vec!["caption", "colgroup", "tbody", "tfoot", "thead", "tr"]
+        );
+
+        // A genuinely large first-set is not this bug: a phrasing position
+        // really does admit most of the vocabulary, and the *cap* on the
+        // message is what hides it there.
+        assert!(
+            expected_for("<p><zz>a</zz></p>").len() > 24,
+            "a phrasing position's first-set is legitimately large"
+        );
+    }
+
     /// XHTML 1.1 builds `html`/`head`/`title` from `I18n.attrib` alone -
     /// no `Common.attrib`, so no `id`, `class`, `style` or `title` on any
     /// of the three. `<html class="calibre">` is calibre's own output and
@@ -494,14 +546,23 @@ mod tests {
         assert!(params.iter().any(|p| p == "head"), "got {params:?}");
     }
 
-    /// ...and stays silent when the model is permissive. Our grammar shares
-    /// one large pool for flow content, so `<ul><div>` sits at a position that
-    /// admits 80-odd names - not a suggestion anyone can use, so the bare
-    /// message stands rather than dumping the pool.
+    /// ...and stays silent when the model really is permissive.
+    ///
+    /// This test used to use `<ul><div>` and assert the *opposite*, on the
+    /// stated grounds that "`<ul><div>` sits at a position that admits 80-odd
+    /// names". It does not: `<ul>`'s model is `zeroOrMore(li)`. Those 80 names
+    /// were the parent continuation leaking through `After` (see
+    /// `expected_names`), so the test was holding a bug in place as if it
+    /// were a decision. epubcheck 5.3.0 on the same document says `expected
+    /// the element end-tag or element "li", "script" or "template"` — a tight
+    /// list — which settles it.
+    ///
+    /// A phrasing position is the genuinely permissive case, and there the
+    /// cap is doing real work.
     #[test]
     fn not_allowed_omits_the_list_when_the_set_is_huge() {
         let g = xhtml_grammar();
-        let xml = xhtml_doc("<ul><div>x</div></ul>");
+        let xml = xhtml_doc("<p><div>x</div></p>");
         let doc = roxmltree::Document::parse(&xml).unwrap();
         for b in validate_node_report(&g, doc.root_element()) {
             let (text, _) = b.describe();
@@ -512,6 +573,20 @@ mod tests {
                 );
             }
         }
+
+        // The small-model container is the other half, and it must NOT be
+        // silent — that silence was the bug.
+        let xml = xhtml_doc("<ul><div>x</div></ul>");
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let texts: Vec<String> = validate_node_report(&g, doc.root_element())
+            .iter()
+            .map(|b| b.describe().0)
+            .filter(|t| t.contains("\"div\""))
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("expected \"li\"")),
+            "got {texts:?}"
+        );
     }
 
     /// The suggestion order is deterministic - sorted, not

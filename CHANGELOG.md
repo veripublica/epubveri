@@ -8,6 +8,25 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **"expected one of …" now names what may appear *here*.** The suggestion set
+  walked `After(content, rest)` into `rest` whenever `content` was nullable —
+  right for a sequence, wrong here, because `rest` is the parent's
+  continuation and nothing in it can appear before this element's end tag.
+  Inside `<ol>`, whose model is the nullable `zeroOrMore(li)`, the set became
+  `li` plus the whole flow vocabulary, overflowed the suggestion cap, and the
+  tail disappeared. `<ol>` now says `expected "li"` and `<table>` names its
+  six children, both matching epubcheck.
+
+  **On real books this is worth almost nothing, and that was measured**: two
+  builds over a 146-book shelf differ by 2 findings out of 8190. It is fixed
+  because the set was wrong, not because it was costly — the same conflation
+  had already caused a real defect, a position test that read "phrasing is
+  allowed here" inside `<ul>`.
+
 ## [0.9.15] - 2026-08-10
 
 Two false positives, both found here rather than reported: markup this tool
