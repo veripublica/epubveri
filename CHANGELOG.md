@@ -12,6 +12,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A well-formedness fatal now names the line the element was *opened* on.**
+  An unterminated `<hr>` at line 81 made the parse fail at line 157, and both
+  we and epubcheck pointed at line 157 — the `</body>` that could not match —
+  rather than at the tag the author has to fix. The message now reads
+  `… (<hr> at line 81 is never closed; XHTML requires <hr/>)`, with the XHTML
+  advice added only for HTML's void elements, where writing `<hr>` out of HTML
+  habit is the usual cause.
+
+  Reported by JSWolf on MobileRead (#174). Not a bug: our single FATAL was
+  correct, and the 74 extra errors epubcheck reports on the same file are one
+  defect repeated — its streaming validator keeps validating *inside* the
+  element that was never closed, so every following `<p>` is "not allowed
+  here". All 75 of its findings are in that one file and 74 carry the same
+  message.
+
 - **OEBPS 1.2 packages are flagged, not judged as EPUB 2 (OPF-047).** The
   pre-EPUB format — package in the `openebook.org` namespace, Dublin Core
   inside `<dc-metadata>`, no NCX, `text/x-oeb1-document` content — was being

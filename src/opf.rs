@@ -5057,10 +5057,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .iter()
                     .any(|m| m.rule.is_some_and(|r| r.starts_with("htm.entity.")));
                 if !(crate::ocf::is_entity_reference_error(&e) && entity_reported) {
+                    // The parser points at the close tag that could not
+                    // match; the author needs the line the element was
+                    // *opened* on. See `unterminated_start_tag_hint`.
+                    let hint = crate::ocf::unterminated_start_tag_hint(&t, &e).unwrap_or_default();
                     report.push_full(
                         RSC_016,
                         Severity::Fatal,
-                        format!("content document is not well-formed XML: {e}"),
+                        format!("content document is not well-formed XML: {e}{hint}"),
                         path.clone(),
                         Position::of_parse_error(&e),
                         "content.malformed_xml",

@@ -228,6 +228,77 @@ pub(crate) fn is_entity_reference_error(err: &XmlError) -> bool {
     )
 }
 
+/// HTML's void elements: the ones an author writes unclosed out of HTML habit
+/// and which XHTML requires be self-closed. `<hr>` instead of `<hr/>` is the
+/// single most common way a real EPUB stops being well-formed XML.
+const VOID_ELEMENTS: &[&str] = &[
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
+];
+
+/// Where the element the parser was still inside was *opened*, for the
+/// "unexpected close tag" error.
+///
+/// **The reported position is the wrong end of the problem.** roxmltree and
+/// epubcheck both point at the close tag that could not match — line 157,
+/// `</body>` — when what the author has to fix is the `<hr>` at line 81.
+/// Reported by JSWolf on MobileRead (#174) with a book whose single
+/// unterminated `<hr>` produced 74 identical errors from epubcheck and one
+/// from us; ours named the right defect and still sent the reader to the
+/// wrong line.
+///
+/// Walks the source counting starts and ends of that one element name, so a
+/// legitimately nested pair earlier in the file cannot be mistaken for the
+/// culprit; the unmatched one left on the stack is it. Returns `None` rather
+/// than guess when the scan cannot find an opener.
+pub(crate) fn unterminated_start_tag_hint(text: &str, err: &XmlError) -> Option<String> {
+    let XmlError::Parse(roxmltree::Error::UnexpectedCloseTag(expected, _, _)) = err else {
+        return None;
+    };
+    // The local name, since that is what the source text carries a prefix on.
+    let name = expected.rsplit(':').next().unwrap_or(expected);
+    if name.is_empty() {
+        return None;
+    }
+    let mut open_lines: Vec<usize> = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        let mut rest = line;
+        while let Some(at) = rest.find('<') {
+            let after = &rest[at + 1..];
+            let (is_close, tail) = match after.strip_prefix('/') {
+                Some(t) => (true, t),
+                None => (false, after),
+            };
+            if let Some(t) = tail.strip_prefix(name)
+                && t.chars()
+                    .next()
+                    .is_none_or(|c| c.is_whitespace() || c == '>' || c == '/')
+            {
+                if is_close {
+                    open_lines.pop();
+                } else {
+                    // Self-closing (`<hr/>`) opens nothing. Look ahead to this
+                    // tag's `>` and check the character before it.
+                    let self_closed = t
+                        .find('>')
+                        .is_some_and(|end| t[..end].trim_end().ends_with('/'));
+                    if !self_closed {
+                        open_lines.push(i + 1);
+                    }
+                }
+            }
+            rest = &rest[at + 1..];
+        }
+    }
+    let line = open_lines.last()?;
+    let fix = if VOID_ELEMENTS.contains(&name) {
+        format!("; XHTML requires <{name}/>")
+    } else {
+        String::new()
+    };
+    Some(format!(" (<{name}> at line {line} is never closed{fix})"))
+}
+
 /// Manually scans the ZIP's raw bytes for a genuine exact-duplicate entry
 /// name in the central directory - the `zip` crate's own reader can't
 /// expose this (see the call site's comment), so this walks the End-Of-
@@ -922,5 +993,46 @@ mod depth_guard_tests {
     fn scanning_resumes_after_a_skipped_region() {
         let doc = format!("<r><!-- c -->{}</r>", "<d>".repeat(MAX_XML_DEPTH + 5));
         assert!(depth_exceeding(&doc, MAX_XML_DEPTH).is_some());
+    }
+}
+
+#[cfg(test)]
+mod unterminated_tag_tests {
+    use super::{parse_xml, unterminated_start_tag_hint};
+
+    fn hint(body: &str) -> Option<String> {
+        let xml = format!(
+            "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+             <head><title>t</title></head>\n<body>\n{body}\n</body></html>"
+        );
+        let err = parse_xml(&xml).expect_err("must not parse");
+        unterminated_start_tag_hint(&xml, &err)
+    }
+
+    /// JSWolf, MobileRead #174: one unterminated `<hr>` at line 81 drew 74
+    /// identical errors from epubcheck and one from us — and both tools
+    /// pointed at line 157, the `</body>` where the parse finally failed,
+    /// rather than at the tag the author has to fix.
+    #[test]
+    fn the_hint_names_the_line_the_element_was_opened_on() {
+        // `<hr>` is on line 4 of the document built above.
+        let h = hint("<p>a</p>\n<hr>\n<p>b</p>").expect("a hint");
+        assert!(h.contains("line 5"), "got {h}");
+        assert!(h.contains("XHTML requires <hr/>"), "got {h}");
+    }
+
+    /// A self-closed sibling earlier in the file opens nothing, and a
+    /// correctly matched pair must not be mistaken for the culprit — the two
+    /// ways a naive "find the first `<hr`" would pick the wrong line.
+    #[test]
+    fn earlier_self_closed_and_matched_tags_are_not_the_culprit() {
+        // `<hr/>` line 4, `<p>` line 5, the unclosed `<hr>` line 6.
+        let h = hint("<hr/>\n<p>a</p>\n<hr>\n<p>b</p>").expect("a hint");
+        assert!(h.contains("line 6"), "got {h}");
+
+        let h = hint("<div><p>a</p></div>\n<div>\n<p>b</p>").expect("a hint");
+        assert!(h.contains("line 5"), "got {h}");
+        // Not a void element, so no XHTML advice - the fix is a close tag.
+        assert!(!h.contains("XHTML requires"), "got {h}");
     }
 }
