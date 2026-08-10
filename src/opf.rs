@@ -758,6 +758,9 @@ const KNOWN_ITEM_PROPERTIES: &[&str] = &[
 
 const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
+/// The OEBPS 1.2 package namespace — the pre-EPUB format's own (see OPF-047).
+const OEB12_PKG_NS: &str = "http://openebook.org/namespaces/oeb-package/1.0/";
+
 /// OPF-092: a language tag (`xml:lang`, `link/@hreflang`, or `dc:language`'s
 /// own text) must not have leading/trailing whitespace, and - once trimmed
 /// - must be empty (allowed) or a syntactically plausible BCP-47 tag. No
@@ -2575,6 +2578,46 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     };
     let is_epub3 = major == "3";
     let is_epub2 = !is_epub3;
+    // OPF-047: the package document is written in **OEBPS 1.2**, the pre-EPUB
+    // format EPUB 2 replaced, kept legal for backwards compatibility. Detected
+    // exactly as epubcheck does (`OPFHandler.startElement`): a `<package>`
+    // outside the OPF namespace.
+    //
+    // Validating such a package *as EPUB 2* is what this flag exists to stop.
+    // OEBPS 1.2 puts its Dublin Core inside `<dc-metadata>` with title-case
+    // names (`<dc:Title>`), has no NCX and so no `spine/@toc`, and uses
+    // `text/x-oeb1-document` as its content-document type. Measured on
+    // epubcheck's own fixture before this existed: epubcheck reported 4
+    // findings, we reported 7 errors - OPF-030 in common, and six of ours
+    // invented by rules that do not apply to the format the book declares.
+    //
+    // **Deliberately partial.** This says "OEBPS 1.2, not checked" and stops
+    // inventing errors; it does not implement the format. OPF-038/OPF-039
+    // (the oeb1 media types) and the `oebpkg12` DTD stay unimplemented, which
+    // is the standing scope decision - see `docs/COVERAGE.md`. Getting the
+    // wrong answer and getting no answer are different, and this trades the
+    // first for the second.
+    // Narrow on purpose. epubcheck's own guard admits only three namespaces
+    // before asking the question (`OPFHandler.startElement`): absent, empty,
+    // or the OEBPS 1.2 URI. A `<package>` in some *other* wrong namespace —
+    // its `xml-namespace-wrongdefault-error.opf` fixture has a typo'd
+    // `www.ipdf.org` — is not legacy syntax, it is a mistake, and must still
+    // reach the schema error. A first version tested `!= OPF_PKG_NS`, called
+    // that fixture OEBPS 1.2 and lost its RSC-005.
+    let is_oeb12 = matches!(
+        pkg.tag_name().namespace(),
+        None | Some("") | Some(OEB12_PKG_NS)
+    );
+    if is_oeb12 {
+        report.push_at_pos(
+            OPF_047,
+            Severity::Warning,
+            "package document uses legacy OEBPS 1.2 syntax; \
+             its OEBPS 1.2-specific rules are not checked",
+            opf_path,
+            Position::of(pkg),
+        );
+    }
     // PKG-023 (usage): validation profiles are an EPUB 3 feature, so asking
     // for one against an EPUB 2 publication does nothing - epubcheck says so
     // rather than letting the caller believe their profile ran. Keyed on the
@@ -2617,8 +2660,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         } else {
             crate::rng::package_grammar_epub2()
         };
-        for blame in crate::rng::validate_node_report(&grammar, pkg) {
-            push_blame(report, opf_path, rule, &blame);
+        // Both grammars are bound to the OPF namespace, so on an OEBPS 1.2
+        // package every element misses and the only finding produced is
+        // "element package is not allowed here; expected package" - true,
+        // useless, and hiding the one thing worth saying, which OPF-047 now
+        // says. epubcheck validates these against `oebpkg12.dtd` instead; we
+        // do not have that grammar and are not adding it.
+        if !is_oeb12 {
+            for blame in crate::rng::validate_node_report(&grammar, pkg) {
+                push_blame(report, opf_path, rule, &blame);
+            }
         }
     }
 
@@ -3011,7 +3062,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             md.children()
                 .any(|n| n.is_element() && n.tag_name().name() == local)
         };
-        if !has("title") {
+        // The three required-metadata reports are silenced for OEBPS 1.2, and
+        // silenced rather than *taught* the format on purpose. That package
+        // wraps its Dublin Core in `<dc-metadata>` with title-case names
+        // (`<dc:Title>`), so the first attempt here widened the scan to match
+        // them — which made us accept a book epubcheck rejects, because
+        // epubcheck does not recognise those names either: its own handler
+        // matches `identifier` case-sensitively, so it still reports OPF-030
+        // "unique-identifier not found" on this very fixture. Coding to the
+        // format instead of to the oracle is the mistake this project keeps
+        // having to undo. epubcheck reports none of these three here, so
+        // neither do we — and OPF-030 stays, as it does there.
+        if !has("title") && !is_oeb12 {
             report.push_node(
                 RSC_005,
                 Severity::Error,
@@ -3201,7 +3263,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
             }
         }
-        if !has("language") {
+        if !has("language") && !is_oeb12 {
             report.push_node(
                 RSC_005,
                 Severity::Error,
@@ -3216,7 +3278,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
             .collect();
-        if identifiers.is_empty() {
+        if identifiers.is_empty() && !is_oeb12 {
             report.push_node(
                 RSC_005,
                 Severity::Error,
@@ -4333,8 +4395,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             // while OPF-043 was a warning, a false *error* once
                             // it became one (issue #26; same EPUB-3-into-EPUB-2
                             // class as #24).
+                            //
+                            // OEBPS 1.2 adds a third answer: its content
+                            // document *is* `text/x-oeb1-document`, so a spine
+                            // item declaring it needs no fallback. Without
+                            // this every spine item in such a package drew
+                            // OPF-043 - the same EPUB-3-into-EPUB-2 shape one
+                            // format older.
                             let is_core = |mt: &str| {
                                 mt == "application/xhtml+xml"
+                                    || (is_oeb12
+                                        && matches!(mt, "text/x-oeb1-document" | "text/html"))
                                     || if is_epub3 {
                                         mt == "image/svg+xml"
                                     } else {
@@ -4492,7 +4563,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         const NCX: &str = "application/x-dtbncx+xml";
         match sp.attr_no_ns("toc").map(str::trim) {
             None => {
-                if is_epub2 {
+                // ...but not in OEBPS 1.2, which predates the NCX entirely.
+                if is_epub2 && !is_oeb12 {
                     report.push_node(
                         RSC_005,
                         Severity::Error,
@@ -7939,7 +8011,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     check_font_obfuscation(ocf, &items, &name_index, report);
     check_image_signatures(ocf, &items, &name_index, report);
-    check_html_declared_as_xhtml(ocf, &items, &name_index, report);
+    check_html_declared_as_xhtml(ocf, &items, &name_index, is_oeb12, report);
     check_external_identifiers(ocf, &items, &name_index, opf_path, is_epub3, report);
     check_dictionaries(
         &pkg,
@@ -8410,6 +8482,12 @@ fn check_dictionaries(
     }
 }
 
+/// Skipped entirely for an OEBPS 1.2 package: there `text/html` is the
+/// format's own (deprecated) content type, and epubcheck reports OPF-038
+/// instead of OPF-035 for it (`OPFChecker`, the `getOpf12PackageFile()`
+/// branch). We implement neither OPF-038 nor OPF-039, so silence is the
+/// honest answer rather than a message naming the wrong problem.
+///
 /// OPF-035 (warning): a manifest item declared `text/html` whose actual
 /// content *is* a real XHTML document (a well-formed XML document whose
 /// root is `<html>` in the XHTML namespace) - should be declared
@@ -8421,8 +8499,12 @@ fn check_html_declared_as_xhtml(
     ocf: &mut Ocf,
     items: &HashMap<String, (String, String)>,
     name_index: &HashMap<String, String>,
+    is_oeb12: bool,
     report: &mut Report,
 ) {
+    if is_oeb12 {
+        return;
+    }
     const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
     for (path, mt) in items.values() {
         if mt != "text/html" {
@@ -11630,6 +11712,106 @@ mod tests {
                 ("OEBPS/content.opf", opf.as_str()),
                 ("OEBPS/ch1.xhtml", CH1),
                 ("OEBPS/toc.ncx", ncx.as_str()),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// An OEBPS 1.2 package draws OPF-047 and stops being judged by EPUB 2's
+    /// rules, but keeps the checks epubcheck still makes there.
+    ///
+    /// Measured against epubcheck 5.3.0 on its own `opf-legacy-oebps12-*`
+    /// fixtures before and after. Before: epubcheck 4 findings, us 7 errors —
+    /// OPF-030 in common and six of ours invented by rules the format does
+    /// not have (required DC metadata in the OPF namespace, `spine/@toc`,
+    /// OPF-043 on `text/x-oeb1-document`, and a package grammar bound to the
+    /// OPF namespace that could only ever say "element package is not allowed
+    /// here"). After: our set is a strict subset of epubcheck's, and the
+    /// verdict agrees.
+    ///
+    /// **OPF-030 must survive**, and that is the half worth guarding. The
+    /// first attempt widened the metadata scan to recognise OEBPS 1.2's
+    /// `<dc-metadata>` and title-case `<dc:Identifier>`, which resolved the
+    /// unique-identifier and silenced OPF-030 — on a fixture epubcheck
+    /// reports it for, because its own handler matches `identifier`
+    /// case-sensitively too. Coding to the format rather than to the oracle.
+    #[test]
+    fn an_oebps12_package_is_flagged_not_judged_as_epub2() {
+        let ids = |ns: &str| {
+            let r = crate::validate_bytes(epub_with_package_ns(ns));
+            let mut v = r.messages.iter().map(|m| m.id).collect::<Vec<_>>();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let oeb = ids("http://openebook.org/namespaces/oeb-package/1.0/");
+        assert!(oeb.contains(&crate::ids::OPF_047), "got {oeb:?}");
+        assert!(
+            oeb.contains(&crate::ids::OPF_030),
+            "the checks epubcheck still makes must survive, got {oeb:?}"
+        );
+        assert!(
+            !oeb.contains(&crate::ids::RSC_005),
+            "no EPUB 2 rule may fire on an OEBPS 1.2 package, got {oeb:?}"
+        );
+
+        // A *different* wrong namespace is a typo, not legacy syntax:
+        // epubcheck's guard admits only absent/empty/OEBPS 1.2, and its
+        // `xml-namespace-wrongdefault-error.opf` fixture expects the schema
+        // error. Widening this test to "not the OPF namespace" cost that
+        // fixture its RSC-005.
+        let typo = ids("http://www.ipdf.org/2007/opf");
+        assert!(!typo.contains(&crate::ids::OPF_047), "got {typo:?}");
+    }
+
+    /// An EPUB 2-era package whose `<package>` sits in `ns`, with the Dublin
+    /// Core in OEBPS 1.2's `<dc-metadata>` wrapper under title-case names and
+    /// a `text/x-oeb1-document` spine item — the shape epubcheck's own
+    /// legacy fixtures use.
+    fn epub_with_package_ns(ns: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="{ns}" version="2.0" unique-identifier="q">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc-metadata>
+      <dc:Title>T</dc:Title><dc:Language>en</dc:Language>
+      <dc:Identifier id="q">NOID</dc:Identifier>
+    </dc-metadata>
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="text/x-oeb1-document"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
             ] {
                 z.start_file(name, o).unwrap();
                 z.write_all(body.as_bytes()).unwrap();

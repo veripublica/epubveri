@@ -12,6 +12,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **OEBPS 1.2 packages are flagged, not judged as EPUB 2 (OPF-047).** The
+  pre-EPUB format — package in the `openebook.org` namespace, Dublin Core
+  inside `<dc-metadata>`, no NCX, `text/x-oeb1-document` content — was being
+  validated against EPUB 2's rules, which it does not have. On epubcheck's own
+  legacy fixtures we reported **7 errors against its 4 findings**, six of ours
+  invented. We now report OPF-047 and skip the rules that do not apply
+  (required Dublin Core in the OPF namespace, `spine/@toc`, OPF-043 on
+  `text/x-oeb1-document`, OPF-035 on `text/html`, and the OPF-bound package
+  grammar). Our findings are now a strict subset of epubcheck's, and the
+  verdict agrees.
+
+  Still out of scope, deliberately: OPF-038/OPF-039 (the oeb1 media types) and
+  the `oebpkg12` DTD. This says "OEBPS 1.2, not checked" — it does not
+  implement the format.
+
+  **`docs/COVERAGE.md` goes 207/210 → 206/210 as a result, and that is a
+  correction, not a regression.** OPF-047 is now implemented (+1), but
+  OPF-038/OPF-039 turn out never to have been (-2): `ids.rs` declared their
+  constants and nothing ever emitted them, which the matrix read as coverage.
+
 - **`<template>` is accepted, and `<script>`/`<template>` are accepted in the
   containers HTML5 admits them in** (EPUB 3). `<template>` was in the grammar
   nowhere at all, so it was an error everywhere — in `<head>`, in phrasing, in

@@ -81,8 +81,29 @@ const ANN: &[Ann] = &[
     ("OPF-017", None,
         "Whitespace-only counts as empty, matching epubcheck's `trim()`."),
     ("OPF-047", None,
-        "Legacy OEBPS 1.2 backwards-compat syntax - deliberately out of scope \
-         (pre-EPUB format)."),
+        "Emitted for a package document in the OEBPS 1.2 namespace (or in none \
+         at all), matching epubcheck's own guard - which admits absent, empty \
+         and the OEBPS 1.2 URI, and nothing else, so a package in some other \
+         wrong namespace stays a schema error. Reporting it is also what \
+         switches off the EPUB 2 rules the pre-EPUB format does not have: \
+         required Dublin Core in the OPF namespace, `spine/@toc`, OPF-043 on \
+         `text/x-oeb1-document`, OPF-035 on `text/html`, and the \
+         OPF-namespace-bound package grammar. Measured on epubcheck's own \
+         `opf-legacy-oebps12-*` fixtures: we used to report 7 errors against \
+         its 4 findings, six of ours invented; now our set is a strict subset \
+         of its and the verdict agrees."),
+    ("OPF-038", None,
+        "Not implemented. In an OEBPS 1.2 context a `text/css` stylesheet \
+         should be `text/x-oeb1-css` and a content document \
+         `text/x-oeb1-document`; epubcheck warns, we do not. This and OPF-039 \
+         are the half of OEBPS 1.2 support that stays out of scope - the \
+         format is pre-EPUB and no book on a 146-book shelf uses it. **Both \
+         were counted as implemented until 2026-08-10**: `ids.rs` declared \
+         the constants and no line ever emitted them, which the matrix reads \
+         as coverage. The dead-ID rule applies in this direction too - a \
+         declared constant is not a check."),
+    ("OPF-039", None,
+        "Not implemented; see OPF-038."),
     ("OPF-064", None,
         "Informational profile-selection message - not emitted."),
     ("NAV-001", Some("na"),
