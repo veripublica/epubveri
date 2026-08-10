@@ -38,11 +38,25 @@ shift || true
 EXTRA=()
 if [ "$#" -gt 0 ]; then EXTRA=("$@"); fi
 
-BIN="$(dirname "$0")/../target/release/epubveri"
+# Ask cargo where the binary went rather than assuming ./target. The repo
+# lives under an iCloud-synced tree that was evicting build artefacts, so
+# CARGO_TARGET_DIR points elsewhere — and this script kept the hard-coded
+# path through that move. `hostile.rs` and `diff-shelf.sh` were fixed at the
+# time; this one was missed, so every run since has been *silently empty*:
+# the missing binary failed, `|| true` swallowed it, and the summary printed
+# "(none)" and "no book on this shelf was rejected" over a shelf that
+# actually produces thousands of findings. A false-positive hunt that always
+# reports none is worse than no hunt at all.
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+TARGET_DIR="$(cd "$ROOT" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')"
+BIN="${EPUBVERI_BIN:-${TARGET_DIR:-$ROOT/target}/release/epubveri}"
 if [ ! -x "$BIN" ]; then
   echo "==> building epubveri (release)"
-  cargo build --release --bin epubveri
+  (cd "$ROOT" && cargo build --release --bin epubveri)
 fi
+# Fail loudly rather than scan with a binary that isn't there.
+[ -x "$BIN" ] || { echo "no epubveri binary at: $BIN" >&2; exit 2; }
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
