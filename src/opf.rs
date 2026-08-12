@@ -2439,7 +2439,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             report.push_full(
                 RSC_016,
                 Severity::Fatal,
-                format!("OPF is not well-formed XML: {e}"),
+                format!(
+                    "OPF is not well-formed XML: {}",
+                    crate::ocf::parse_error_detail(&text, &e)
+                ),
                 opf_path,
                 Position::of_parse_error(&e),
                 "opf.package.malformed_xml",
@@ -5057,14 +5060,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .iter()
                     .any(|m| m.rule.is_some_and(|r| r.starts_with("htm.entity.")));
                 if !(crate::ocf::is_entity_reference_error(&e) && entity_reported) {
-                    // The parser points at the close tag that could not
-                    // match; the author needs the line the element was
-                    // *opened* on. See `unterminated_start_tag_hint`.
-                    let hint = crate::ocf::unterminated_start_tag_hint(&t, &e).unwrap_or_default();
+                    // roxmltree's wording for an unexpected close tag reads
+                    // backwards and points at the close tag rather than the
+                    // element the author left open, so we say it ourselves.
+                    // Every other parse error keeps the library's wording.
+                    // See `unterminated_element_message`.
+                    let detail = crate::ocf::unterminated_element_message(&t, &e)
+                        .unwrap_or_else(|| e.to_string());
                     report.push_full(
                         RSC_016,
                         Severity::Fatal,
-                        format!("content document is not well-formed XML: {e}{hint}"),
+                        format!("content document is not well-formed XML: {detail}"),
                         path.clone(),
                         Position::of_parse_error(&e),
                         "content.malformed_xml",

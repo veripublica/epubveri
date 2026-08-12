@@ -54,7 +54,10 @@ pub(crate) fn check(
             report.push_full(
                 RSC_016,
                 Severity::Fatal,
-                format!("media overlay is not well-formed XML: {e}"),
+                format!(
+                    "media overlay is not well-formed XML: {}",
+                    crate::ocf::parse_error_detail(smil_xml, &e)
+                ),
                 smil_path,
                 Position::of_parse_error(&e),
                 "smil.malformed_xml",

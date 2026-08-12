@@ -8,6 +8,41 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.17] - 2026-08-12
+
+A message-wording release: the one sentence a reader meets when their book
+will not parse at all was still the XML parser's, and it read backwards.
+Nothing about which books pass or fail changes.
+
+### Changed
+
+- **The well-formedness fatal for an unclosed element is now written in our
+  own words** (#71). Reported by Doitsu on MobileRead (#177). Underneath, the
+  message carried roxmltree's phrasing — `expected 'p' tag, not 'body' at
+  12:1` — which calls neither of them an *end* tag, so it reads as though a
+  `<p>` element belonged where `<body>` sits. That is backwards: `</body>`
+  arrived while `</p>` was still owed. 0.9.16's clause naming the opening line
+  was appended to that sentence, so one message ended up in two voices and two
+  quoting styles.
+
+  Before and after, on `<p>Lorem ipsum<p>`:
+
+      content document is not well-formed XML: expected 'p' tag, not 'body' at 12:1 (<p> at line 11 is never closed) [OEBPS/ch1.xhtml:12:1]
+      content document is not well-formed XML: unclosed <p> at line 11; expected </p> but found </body> [OEBPS/ch1.xhtml:12:1]
+
+  The defect leads, both tags are named as end tags, and the position is no
+  longer printed twice. For a void element the close tag is a red herring —
+  the author wrote HTML in an XHTML document — so that case keeps its single
+  unambiguous fix: `unclosed <hr> at line 8; XHTML requires <hr/>`.
+
+  Applied to **every** file we parse, not only content documents: an unclosed
+  element reads the same way in an OPF, an NCX, a media overlay or a
+  `container.xml`, and all of them shared the library wording. Every other
+  parse error keeps roxmltree's text.
+
+  Message text only — no ID, severity, position or count moves, on any input.
+  The rule key is `*.malformed_xml`, which no downstream consumer keys on.
+
 ## [0.9.16] - 2026-08-11
 
 Three more false-positive classes, all found here rather than reported —

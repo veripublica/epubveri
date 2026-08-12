@@ -236,23 +236,34 @@ const VOID_ELEMENTS: &[&str] = &[
     "track", "wbr",
 ];
 
-/// Where the element the parser was still inside was *opened*, for the
-/// "unexpected close tag" error.
+/// Our own wording for the "unexpected close tag" parse error, replacing
+/// roxmltree's `Display`. `None` for every other error, where the library's
+/// wording stands.
 ///
-/// **The reported position is the wrong end of the problem.** roxmltree and
-/// epubcheck both point at the close tag that could not match — line 157,
-/// `</body>` — when what the author has to fix is the `<hr>` at line 81.
-/// Reported by JSWolf on MobileRead (#174) with a book whose single
-/// unterminated `<hr>` produced 74 identical errors from epubcheck and one
-/// from us; ours named the right defect and still sent the reader to the
-/// wrong line.
+/// **The library's phrasing inverts the problem.** `expected 'p' tag, not
+/// 'body' at 12:1` calls neither of them an *end* tag, so it reads as though a
+/// `<p>` element belonged where `<body>` appeared — the opposite of what
+/// happened, which is that `</body>` arrived while `</p>` was still owed. It
+/// also quotes names in a style nothing else here uses, so the sentence
+/// changed hands mid-way once the opener clause below was appended to it.
+/// Doitsu reported the pair on MobileRead (#177), against epubcheck's `The
+/// element type "p" must be terminated by the matching end-tag "</p>"`.
+///
+/// **The reported position is the wrong end of the problem**, and that is the
+/// other half. roxmltree and epubcheck both point at the close tag that could
+/// not match — line 157, `</body>` — when what the author has to fix is the
+/// `<hr>` at line 81. Reported by JSWolf on MobileRead (#174) with a book
+/// whose single unterminated `<hr>` produced 74 identical errors from
+/// epubcheck and one from us; ours named the right defect and still sent the
+/// reader to the wrong line. The position stays where both tools put it (see
+/// the call site) and the opening line is named in the text instead.
 ///
 /// Walks the source counting starts and ends of that one element name, so a
 /// legitimately nested pair earlier in the file cannot be mistaken for the
-/// culprit; the unmatched one left on the stack is it. Returns `None` rather
-/// than guess when the scan cannot find an opener.
-pub(crate) fn unterminated_start_tag_hint(text: &str, err: &XmlError) -> Option<String> {
-    let XmlError::Parse(roxmltree::Error::UnexpectedCloseTag(expected, _, _)) = err else {
+/// culprit; the unmatched one left on the stack is it. The opener clause is
+/// dropped rather than guessed at when the scan cannot find one.
+pub(crate) fn unterminated_element_message(text: &str, err: &XmlError) -> Option<String> {
+    let XmlError::Parse(roxmltree::Error::UnexpectedCloseTag(expected, actual, _)) = err else {
         return None;
     };
     // The local name, since that is what the source text carries a prefix on.
@@ -290,13 +301,32 @@ pub(crate) fn unterminated_start_tag_hint(text: &str, err: &XmlError) -> Option<
             rest = &rest[at + 1..];
         }
     }
-    let line = open_lines.last()?;
-    let fix = if VOID_ELEMENTS.contains(&name) {
-        format!("; XHTML requires <{name}/>")
-    } else {
-        String::new()
+    // Names are printed as the source spells them, prefix and all, so the
+    // reader can search for the text they wrote.
+    let opener = match open_lines.last() {
+        Some(line) => format!("unclosed <{expected}> at line {line}; "),
+        None => String::new(),
     };
-    Some(format!(" (<{name}> at line {line} is never closed{fix})"))
+    // For a void element the close tag is a red herring: the author did not
+    // forget `</hr>`, they wrote HTML in an XHTML document, and there is
+    // exactly one fix. Everywhere else the mismatched pair *is* the diagnosis.
+    let problem = if VOID_ELEMENTS.contains(&name) {
+        format!("XHTML requires <{expected}/>")
+    } else {
+        format!("expected </{expected}> but found </{actual}>")
+    };
+    Some(format!("{opener}{problem}"))
+}
+
+/// What to print after `… is not well-formed XML:` — ours for the one error
+/// whose library wording misleads, the library's for the rest.
+///
+/// Every file we parse goes through here rather than through `{e}`, because
+/// an unclosed element is not a content-document defect: it happens in an OPF,
+/// an NCX or a `container.xml` just as readily, and a reader who met the clear
+/// sentence once should not meet the backwards one next time.
+pub(crate) fn parse_error_detail(text: &str, err: &XmlError) -> String {
+    unterminated_element_message(text, err).unwrap_or_else(|| err.to_string())
 }
 
 /// Manually scans the ZIP's raw bytes for a genuine exact-duplicate entry
@@ -684,7 +714,10 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
             report.push_at_pos(
                 RSC_005,
                 Severity::Error,
-                format!("META-INF/container.xml is not well-formed XML: {e}"),
+                format!(
+                    "META-INF/container.xml is not well-formed XML: {}",
+                    parse_error_detail(&text, &e)
+                ),
                 CONTAINER,
                 Position::of_parse_error(&e),
             );
@@ -789,7 +822,10 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
             report.push_at_pos(
                 RSC_005,
                 Severity::Error,
-                format!("META-INF/encryption.xml is not well-formed XML: {e}"),
+                format!(
+                    "META-INF/encryption.xml is not well-formed XML: {}",
+                    parse_error_detail(&text, &e)
+                ),
                 ENC,
                 Position::of_parse_error(&e),
             );
@@ -905,7 +941,10 @@ pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
             report.push_at_pos(
                 RSC_005,
                 Severity::Error,
-                format!("META-INF/signatures.xml is not well-formed XML: {e}"),
+                format!(
+                    "META-INF/signatures.xml is not well-formed XML: {}",
+                    parse_error_detail(&text, &e)
+                ),
                 SIG,
                 Position::of_parse_error(&e),
             );
@@ -998,7 +1037,7 @@ mod depth_guard_tests {
 
 #[cfg(test)]
 mod unterminated_tag_tests {
-    use super::{parse_xml, unterminated_start_tag_hint};
+    use super::{parse_xml, unterminated_element_message};
 
     fn hint(body: &str) -> Option<String> {
         let xml = format!(
@@ -1006,7 +1045,7 @@ mod unterminated_tag_tests {
              <head><title>t</title></head>\n<body>\n{body}\n</body></html>"
         );
         let err = parse_xml(&xml).expect_err("must not parse");
-        unterminated_start_tag_hint(&xml, &err)
+        unterminated_element_message(&xml, &err)
     }
 
     /// JSWolf, MobileRead #174: one unterminated `<hr>` at line 81 drew 74
@@ -1014,9 +1053,9 @@ mod unterminated_tag_tests {
     /// pointed at line 157, the `</body>` where the parse finally failed,
     /// rather than at the tag the author has to fix.
     #[test]
-    fn the_hint_names_the_line_the_element_was_opened_on() {
+    fn the_message_names_the_line_the_element_was_opened_on() {
         // `<hr>` is on line 4 of the document built above.
-        let h = hint("<p>a</p>\n<hr>\n<p>b</p>").expect("a hint");
+        let h = hint("<p>a</p>\n<hr>\n<p>b</p>").expect("a message");
         assert!(h.contains("line 5"), "got {h}");
         assert!(h.contains("XHTML requires <hr/>"), "got {h}");
     }
@@ -1027,12 +1066,39 @@ mod unterminated_tag_tests {
     #[test]
     fn earlier_self_closed_and_matched_tags_are_not_the_culprit() {
         // `<hr/>` line 4, `<p>` line 5, the unclosed `<hr>` line 6.
-        let h = hint("<hr/>\n<p>a</p>\n<hr>\n<p>b</p>").expect("a hint");
+        let h = hint("<hr/>\n<p>a</p>\n<hr>\n<p>b</p>").expect("a message");
         assert!(h.contains("line 6"), "got {h}");
 
-        let h = hint("<div><p>a</p></div>\n<div>\n<p>b</p>").expect("a hint");
+        let h = hint("<div><p>a</p></div>\n<div>\n<p>b</p>").expect("a message");
         assert!(h.contains("line 5"), "got {h}");
         // Not a void element, so no XHTML advice - the fix is a close tag.
         assert!(!h.contains("XHTML requires"), "got {h}");
+    }
+
+    /// Doitsu, MobileRead #177. roxmltree renders this as `expected 'p' tag,
+    /// not 'body'`, which names neither as an end tag and so reads as if a
+    /// `<p>` element were wanted where `<body>` sits — backwards. Both end
+    /// tags must appear as end tags, and the library's phrasing must not
+    /// survive anywhere in the sentence.
+    #[test]
+    fn an_unexpected_close_tag_is_described_as_a_missing_end_tag() {
+        // `<p>` opens on line 4 and is never closed; `</body>` is line 5.
+        let h = hint("<p>Lorem ipsum<p>").expect("a message");
+        assert_eq!(h, "unclosed <p> at line 4; expected </p> but found </body>");
+        assert!(!h.contains("tag, not"), "library wording leaked: {h}");
+    }
+
+    /// The opener scan is best-effort, and when it finds nothing the rest of
+    /// the sentence still has to stand on its own — that fallback is where
+    /// the library's wording used to come back.
+    #[test]
+    fn the_pair_is_named_even_when_the_opening_line_cannot_be_found() {
+        // A close tag for an element that was never opened at all: nothing
+        // for the scan to count, so there is no line to name.
+        let xml = "<html xmlns=\"http://www.w3.org/1999/xhtml\">\n\
+                   <head><title>t</title></head>\n<body></p>\n</body></html>";
+        let err = parse_xml(xml).expect_err("must not parse");
+        let h = unterminated_element_message(xml, &err).expect("a message");
+        assert_eq!(h, "expected </body> but found </p>");
     }
 }

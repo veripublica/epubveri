@@ -27,7 +27,10 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
             report.push_full(
                 RSC_016,
                 Severity::Fatal,
-                format!("NCX is not well-formed XML: {e}"),
+                format!(
+                    "NCX is not well-formed XML: {}",
+                    crate::ocf::parse_error_detail(ncx_xml, &e)
+                ),
                 ncx_path,
                 Position::of_parse_error(&e),
                 "ncx.malformed_xml",

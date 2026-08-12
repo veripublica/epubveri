@@ -10,7 +10,7 @@
 //! container.xml never parsed before this increment).
 
 use crate::ids::*;
-use crate::ocf::{Ocf, parse_xml};
+use crate::ocf::{Ocf, parse_error_detail, parse_xml};
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
@@ -63,7 +63,10 @@ fn check_metadata_file(ocf: &mut Ocf, report: &mut Report) {
             report.push_full(
                 RSC_016,
                 Severity::Fatal,
-                format!("{METADATA} is not well-formed XML: {e}"),
+                format!(
+                    "{METADATA} is not well-formed XML: {}",
+                    parse_error_detail(&text, &e)
+                ),
                 METADATA,
                 Position::of_parse_error(&e),
                 "renditions.metadata_malformed_xml",
@@ -222,7 +225,10 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
                 report.push_full(
                     RSC_016,
                     Severity::Fatal,
-                    format!("rendition mapping document is not well-formed XML: {e}"),
+                    format!(
+                        "rendition mapping document is not well-formed XML: {}",
+                        parse_error_detail(&text, &e)
+                    ),
                     href,
                     Position::of_parse_error(&e),
                     "renditions.mapping_malformed_xml",
