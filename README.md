@@ -356,6 +356,20 @@ theoretically reusable.
   `epubveri` in closed-source or proprietary products without AGPL's
   copyleft obligations. Contact baris@kayadelen.com.
 
+**Using epubveri, or building something that calls it? Read the
+[licensing FAQ](https://github.com/veripublica/epubsana/blob/main/LICENSING-FAQ.md).**
+It covers epubveri as well as its sibling `epubsana`, and answers the questions
+people actually ask: the books you check are yours unconditionally, checking
+them commercially needs no commercial license, a plugin that invokes the CLI
+picks whatever license its author wants, and GPL-3.0 tooling such as Sigil or
+calibre can use this — GPLv3 §13 and AGPLv3 §13 exist for exactly that pairing.
+`epubveri` never writes to a book at all: it reads and reports, so nothing of
+it can end up inside an EPUB.
+
+The FAQ is a single canonical text shared by both tools — deliberately linked
+rather than restated here, so the two repos cannot drift apart. `LICENSE`
+governs anywhere the two could be read differently.
+
 ## Contributing
 
 See [`CONTRIBUTING.md`](./CONTRIBUTING.md). In short: not accepting external
