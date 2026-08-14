@@ -162,7 +162,10 @@ pub(crate) fn fallback_reaches_content_document(
         let Some((_, mt)) = items.get(next.as_str()) else {
             return false;
         };
-        if is_content_document_type(mt) {
+        // `hasContentDocumentFallback` is satisfied by the deprecated types
+        // too - epubcheck's `FallbackChainResolver`:48-49 ORs both predicates,
+        // with no version condition.
+        if is_content_document_type(mt) || is_deprecated_content_document_type(mt) {
             return true;
         }
         cur = next.as_str();
@@ -278,6 +281,27 @@ pub(crate) fn is_content_document_type(mt: &str) -> bool {
         mt,
         "application/xhtml+xml" | "image/svg+xml" | "application/x-dtbook+xml"
     )
+}
+
+/// True for the two *deprecated* content-document types - epubcheck's
+/// `OPFChecker.isDeprecatedBlessedItemType`.
+///
+/// These are not Content Documents, but epubcheck deliberately treats them as
+/// if they were for every question about *placement*: a spine item declaring
+/// one needs no fallback, a guide reference may target one, and a hyperlink
+/// may point at one. What it does not do is validate them against the XHTML
+/// grammar - see the `content_docs` collection, where that split is made.
+///
+/// The one that matters in practice is `text/html`, which Calibre emits: a
+/// real book on the shelf declares it on all 91 of its spine items and drew 94
+/// findings epubcheck does not report, while every reference *inside* those 91
+/// documents went unchecked (issue #72).
+///
+/// `text/x-oeb1-document` was already carved out for OEBPS 1.2 packages
+/// specifically; epubcheck's predicate is not conditioned on the package
+/// being OEBPS 1.2, and neither is this one.
+pub(crate) fn is_deprecated_content_document_type(mt: &str) -> bool {
+    matches!(mt, "text/html" | "text/x-oeb1-document")
 }
 
 /// True for hrefs we should not resolve against the container (remote/special).
@@ -1869,6 +1893,7 @@ fn check_guide_references(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
+    fallback_map: &HashMap<String, String>,
     is_epub3: bool,
     opf_path: &str,
     report: &mut Report,
@@ -1886,7 +1911,7 @@ fn check_guide_references(
         }
         let path_part = href.split(['#', '?']).next().unwrap_or(href);
         let resolved = nfc(&resolve(base_dir, path_part));
-        match items.values().find(|(p, _)| nfc(p) == resolved) {
+        match items.iter().find(|(_, (p, _))| nfc(p) == resolved) {
             None => {
                 report.push_at_pos(
                     OPF_031,
@@ -1907,8 +1932,13 @@ fn check_guide_references(
                     );
                 }
             }
-            Some((_, mt)) => {
-                if !is_content_document_type(mt) {
+            Some((id, (_, mt))) => {
+                // epubcheck exempts the *deprecated* content-document types
+                // here as well as the real ones - `OPFChecker`:172 tests
+                // `!isBlessedItemType && !isDeprecatedBlessedItemType` - so a
+                // guide reference to a `text/html` document is not OPF-032
+                // (issue #72).
+                if !is_content_document_type(mt) && !is_deprecated_content_document_type(mt) {
                     report.push_at_pos(
                         OPF_032,
                         Severity::Error,
@@ -1916,6 +1946,33 @@ fn check_guide_references(
                         opf_path,
                         Position::of(r),
                     );
+                }
+                // Independently of that, the guide reference is subject to the
+                // foreign-resource fallback rule: epubcheck registers every
+                // guide reference as a GENERIC reference (`OPFHandler`:563)
+                // and `ResourceReferencesChecker::checkFallbacks` (:303)
+                // reports RSC-032 when the target is not a Core Media Type and
+                // no fallback chain reaches one. It is not version-gated, and
+                // it is a *separate* question from OPF-032 above - measured on
+                // three target types, one book each: `text/html` draws
+                // RSC-032 alone, `application/x-dtbook+xml` draws RSC-032
+                // alone (it is blessed in EPUB 2), and `application/pdf` draws
+                // both. We previously reported no RSC-032 for a guide
+                // reference at all, so the last two were gaps of their own.
+                if !crate::cmt::is_core_media_type(mt)
+                    && !crate::foreign::fallback_reaches_core(id, items, fallback_map)
+                {
+                    report.push_at_pos(
+                        RSC_032,
+                        Severity::Error,
+                        format!(
+                            "guide reference '{href}' targets a foreign resource with no fallback"
+                        ),
+                        opf_path,
+                        Position::of(r),
+                    );
+                }
+                if !is_content_document_type(mt) && !is_deprecated_content_document_type(mt) {
                     continue;
                 }
                 // epubcheck only resolves a fragment against XHTML and SVG
@@ -2009,8 +2066,12 @@ fn check_ncx_content_fragments(
             );
             continue;
         }
+        // The deprecated types are exempt here too. epubcheck's hyperlink
+        // branch (`ResourceReferencesChecker`:227) tests both predicates and
+        // is *not* version-gated, unlike the OPF-043 exemption.
         if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == resolved)
             && !is_content_document_type(mt)
+            && !is_deprecated_content_document_type(mt)
             && !fallback_reaches_content_document(id, items, fallback_map)
         {
             report.push_node(
@@ -2026,6 +2087,19 @@ fn check_ncx_content_fragments(
         }
         let Some(frag) = frag else { continue };
         if frag.is_empty() {
+            continue;
+        }
+        // epubcheck resolves an ID fragment only when the target is XHTML or
+        // SVG - `ResourceReferencesChecker`:177-179, whose own comment says
+        // "Check that target ID exists (if the target is XHTML or SVG)". A
+        // `text/html` document is `MIMEType.HTML`, not XHTML, so a dangling
+        // fragment into one draws nothing there. The guide's own fragment
+        // check below already had this condition; this one did not, and once
+        // issue #72 made these documents readable it started reporting a
+        // fourth RSC-012 on a real book where epubcheck reports three.
+        if !items.values().any(|(p, mt)| {
+            nfc(p) == resolved && matches!(mt.as_str(), "application/xhtml+xml" | "image/svg+xml")
+        }) {
             continue;
         }
         if !id_cache.contains_key(&resolved) {
@@ -3956,6 +4030,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         ocf,
         &name_index,
         &items,
+        &fallback_map,
         is_epub3,
         opf_path,
         report,
@@ -4454,20 +4529,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             // it became one (issue #26; same EPUB-3-into-EPUB-2
                             // class as #24).
                             //
-                            // OEBPS 1.2 adds a third answer: its content
-                            // document *is* `text/x-oeb1-document`, so a spine
-                            // item declaring it needs no fallback. Without
-                            // this every spine item in such a package drew
-                            // OPF-043 - the same EPUB-3-into-EPUB-2 shape one
-                            // format older.
+                            // The *deprecated* types (`text/html`,
+                            // `text/x-oeb1-document`) are exempt too, and the
+                            // exemption is EPUB 2's alone: epubcheck's EPUB 2
+                            // branch tests `!isBlessedItemType &&
+                            // !isDeprecatedBlessedItemType` (`OPFChecker`
+                            // :419) while its EPUB 3 branch tests only
+                            // `!isBlessedItemType` (`OPFChecker30`:251), so
+                            // OPF-043 on a `text/html` spine item is correct
+                            // in an EPUB 3 book and wrong in an EPUB 2 one.
+                            //
+                            // This used to be scoped to `is_oeb12`, which is
+                            // narrower than epubcheck's predicate and cost 91
+                            // false positives on one real Calibre-produced
+                            // EPUB 2 book (issue #72).
                             let is_core = |mt: &str| {
                                 mt == "application/xhtml+xml"
-                                    || (is_oeb12
-                                        && matches!(mt, "text/x-oeb1-document" | "text/html"))
                                     || if is_epub3 {
                                         mt == "image/svg+xml"
                                     } else {
                                         mt == "application/x-dtbook+xml"
+                                            || is_deprecated_content_document_type(mt)
                                     }
                             };
                             let mut covered = is_core(mt);
@@ -4877,10 +4959,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     let resource_status = crate::foreign::build_resource_status(&items, &fallback_map);
 
     // --- broken internal references + content-model from content documents ---
+    // An EPUB 2 `text/html` item is checked here too, but *not* against the
+    // XHTML grammar - see `schema_validated_docs` below. epubcheck runs its
+    // OPS checker over such an item (`CheckerFactory`, `case HTML:`, guarded
+    // on VERSION_2) which always installs the handler, while the validators
+    // it installs come from a map keyed on `application/xhtml+xml`, so the
+    // list comes back empty. Handler checks yes, schema no.
+    //
+    // Leaving them out entirely meant every reference inside them went
+    // unchecked: one real book's 91 `text/html` documents hid 91 missing
+    // resources, and a document that wasn't even well-formed XML reported
+    // nothing at all (issue #72). That is the silent-skip shape again - a
+    // document dropped from every check reads exactly like a clean one.
     let content_docs: Vec<String> = items
         .values()
-        .filter(|(_, mt)| mt == "application/xhtml+xml")
+        .filter(|(_, mt)| {
+            mt == "application/xhtml+xml" || (!is_epub3 && is_deprecated_content_document_type(mt))
+        })
         .map(|(path, _)| path.clone())
+        .collect();
+    // The subset the RELAX NG grammar and the Schematron run over. Measured,
+    // not assumed: the identical document draws three RSC-005 from epubcheck
+    // when the manifest declares it `application/xhtml+xml` and none at all
+    // when it declares it `text/html`.
+    let schema_validated_docs: HashSet<String> = items
+        .values()
+        .filter(|(_, mt)| mt == "application/xhtml+xml")
+        .map(|(path, _)| nfc(path))
         .collect();
     // Which content docs are XHTML (as opposed to e.g. SVG) - the
     // CSS-029/030 cross-referencing pass below only has CSS-collection
@@ -5007,6 +5112,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // as XML at all, silently skipping every check below - not just
         // HTM-058 (same fix `css::decode_bytes` already got for
         // stylesheets, reused here rather than duplicated).
+        // Whether this document is checked against the grammar as well as by
+        // the hand-coded checks - false for an EPUB 2 `text/html` item, which
+        // epubcheck gives the OPS *handler* but an empty *validator* list.
+        // Everything derived from one of its validators has to hang off this,
+        // not just the RELAX NG pass: measured against epubcheck one document
+        // at a time, `text/html` draws no schema violation, no duplicate-`id`
+        // report (its `IDUNIQUE_20_SCH` is keyed the same way) and no
+        // ID-reference resolution.
+        let schema_validated = schema_validated_docs.contains(&nfc(&path));
         let t = crate::css::decode_bytes(&b);
         // The raw scans must see the document exactly as authored, so they
         // run before the entity declarations below are added to it.
@@ -5246,7 +5360,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // at its root, pinning the offending attribute when attribute-level, and
         // naming *what* is wrong (the offending element/attribute) in the message
         // text, in the style of epubcheck's own RSC-005 wording (forum #78).
-        {
+        //
+        // Skipped for an EPUB 2 `text/html` document: epubcheck installs the
+        // handler but no validators for those, so it reports their references
+        // and their well-formedness and says nothing about their content
+        // model. Running the grammar here anyway would have turned issue #72's
+        // 94 false positives into a larger number of them - the one real book
+        // is 91 legacy HTML documents deep.
+        if schema_validated {
             let rule = "opf.content_document.schema_violation";
             for blame in crate::rng::validate_node_report(&xhtml_grammar, d.root_element()) {
                 // #35 (part of the #31 attribute-allowlist epic): data-* is
@@ -5451,7 +5572,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
 
         // Duplicate `id` attribute values within this document.
-        {
+        // epubcheck's equivalent is the `IDUNIQUE_20_SCH` validator, keyed on
+        // `application/xhtml+xml` like the grammar, so it does not run for a
+        // `text/html` item.
+        if schema_validated {
             let mut seen: HashSet<&str> = HashSet::new();
             for n in d.descendants().filter(|n| n.is_element()) {
                 if let Some(id) = n.attr_no_ns("id")
@@ -5471,8 +5595,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
 
         // ID-referencing attributes (ARIA + a couple of plain HTML ones)
-        // must refer to a real id in the same document.
-        {
+        // must refer to a real id in the same document. Grammar-derived, so
+        // it is off for a `text/html` item for the same reason as the two
+        // blocks above.
+        if schema_validated {
             let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attr_no_ns("id")).collect();
             const MULTI_TOKEN: &[&str] = &[
                 "aria-labelledby",
@@ -8076,7 +8202,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     check_font_obfuscation(ocf, &items, &name_index, report);
     check_image_signatures(ocf, &items, &name_index, report);
-    check_html_declared_as_xhtml(ocf, &items, &name_index, is_oeb12, report);
+    check_html_declared_as_xhtml(&doc, is_oeb12, is_epub3, opf_path, report);
     check_external_identifiers(ocf, &items, &name_index, opf_path, is_epub3, report);
     check_dictionaries(
         &pkg,
@@ -8553,44 +8679,56 @@ fn check_dictionaries(
 /// branch). We implement neither OPF-038 nor OPF-039, so silence is the
 /// honest answer rather than a message naming the wrong problem.
 ///
-/// OPF-035 (warning): a manifest item declared `text/html` whose actual
-/// content *is* a real XHTML document (a well-formed XML document whose
-/// root is `<html>` in the XHTML namespace) - should be declared
-/// `application/xhtml+xml` instead. Confirmed via a real fixture using
-/// exactly this shape, unreferenced by anything else in the book (so this
-/// check runs over every manifest item regardless of spine/hyperlink
-/// usage).
+/// OPF-035 (warning): a manifest item declared `text/html` should be declared
+/// `application/xhtml+xml` instead.
+///
+/// **EPUB 2 only, and independent of the item's content** - both halves were
+/// wrong here until issue #72, in opposite directions:
+///
+/// - epubcheck emits this from `OPFChecker.checkItem` purely on the declared
+///   media-type, with no content inspection at all. We required the file to
+///   parse as XML with an `<html>` root, so a `text/html` item holding plain
+///   text (or malformed markup) drew nothing - the one shape where the
+///   author most needs telling. Verified with a probe: a `text/html` item
+///   containing `just plain text, not markup at all` still draws OPF-035.
+/// - `OPFChecker30.checkItem` does not call `super.checkItem`, so this site
+///   is unreachable for an EPUB 3 package. We had no version condition and
+///   reported OPF-035 on an EPUB 3 book, which epubcheck does not - a false
+///   positive, also confirmed by probe.
+///
+/// Skipped entirely for an OEBPS 1.2 package: there `text/html` is the
+/// format's own (deprecated) content type, and epubcheck reports OPF-038
+/// instead of OPF-035 for it (`OPFChecker`, the `getOpf12PackageFile()`
+/// branch). We implement neither OPF-038 nor OPF-039, so silence is the
+/// honest answer rather than a message naming the wrong problem.
 fn check_html_declared_as_xhtml(
-    ocf: &mut Ocf,
-    items: &HashMap<String, (String, String)>,
-    name_index: &HashMap<String, String>,
+    doc: &roxmltree::Document,
     is_oeb12: bool,
+    is_epub3: bool,
+    opf_path: &str,
     report: &mut Report,
 ) {
-    if is_oeb12 {
+    if is_oeb12 || is_epub3 {
         return;
     }
-    const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
-    for (path, mt) in items.values() {
-        if mt != "text/html" {
-            continue;
-        }
-        let Some(orig) = name_index.get(&nfc(path)).cloned() else {
-            continue;
-        };
-        let Some(bytes) = ocf.read(&orig) else {
-            continue;
-        };
-        let text = crate::css::decode_bytes(&bytes);
-        let Ok(d) = parse_xml(&text) else { continue };
-        let root = d.root_element();
-        if root.tag_name().name() == "html" && root.tag_name().namespace() == Some(XHTML_NS) {
+    // Reported at the manifest item in the package document, which is where
+    // epubcheck reports it (`item.getLocation()`); it used to be anchored in
+    // the content document, which was the only place the old content-sniffing
+    // version had a position to give.
+    for item in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "item")
+    {
+        if item.attr_no_ns("media-type").map(str::trim) == Some("text/html") {
+            let href = item.attr_no_ns("href").unwrap_or_default();
             report.push_at_pos(
                 OPF_035,
                 Severity::Warning,
-                format!("manifest item '{path}' is XHTML but declared as text/html"),
-                path.as_str(),
-                Position::of(root),
+                format!(
+                    "manifest item '{href}' should be declared application/xhtml+xml, not text/html"
+                ),
+                opf_path,
+                Position::of(item),
             );
         }
     }
@@ -13398,6 +13536,229 @@ mod tests {
             !report.messages.iter().any(|m| m.id == crate::ids::RSC_030),
             "a clean SVG must not draw RSC-030: {:?}",
             report.messages
+        );
+    }
+
+    // ---- issue #72: `text/html` is a *deprecated* content-document type ----
+
+    /// Builds a book declaring `media_type` on its one content item.
+    ///
+    /// `version` is "2.0" or "3.0"; an EPUB 3 book also gets the nav document
+    /// it is required to have. `guide` is appended to the package document.
+    fn epub_declaring(version: &str, media_type: &str, ch1: &str, guide: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let is3 = version == "3.0";
+        let (nav_item, nav_ref, modified) = if is3 {
+            (
+                r#"<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>"#,
+                r#"<itemref idref="nav"/>"#,
+                r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#,
+            )
+        } else {
+            ("", "", "")
+        };
+        let spine_toc = if is3 { "" } else { r#" toc="ncx""# };
+        let ncx_item = if is3 {
+            String::new()
+        } else {
+            r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#.to_string()
+        };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{modified}
+  </metadata>
+  <manifest>{nav_item}{ncx_item}
+    <item id="ch1" href="ch1.html" media-type="{media_type}"/>
+  </manifest>
+  <spine{spine_toc}>{nav_ref}<itemref idref="ch1"/></spine>{guide}
+</package>"#
+        );
+        const NCX: &str = "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+             version=\"2005-1\"><head><meta name=\"dtb:uid\" \
+             content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+             <navLabel><text>T</text></navLabel><content src=\"ch1.html\"/></navPoint>\
+             </navMap></ncx>";
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+            <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.html\">c</a></li></ol></nav>\
+            </body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            let mut files: Vec<(&str, &str)> = vec![
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.html", ch1),
+            ];
+            if is3 {
+                files.push(("OEBPS/nav.xhtml", NAV));
+            } else {
+                files.push(("OEBPS/toc.ncx", NCX));
+            }
+            for (name, body) in files {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    const PLAIN_DOC: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+        <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+        <body><p>x</p></body></html>";
+
+    fn ids_of(bytes: Vec<u8>) -> Vec<&'static str> {
+        let mut v: Vec<&'static str> = crate::validate_bytes(bytes)
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    }
+
+    /// A `text/html` spine item needs no fallback in EPUB 2 and does need one
+    /// in EPUB 3 - epubcheck's two branches differ, and only the EPUB 2 one
+    /// consults `isDeprecatedBlessedItemType` (`OPFChecker`:419 vs
+    /// `OPFChecker30`:251). One real book declared it on all 91 of its spine
+    /// items and drew 91 OPF-043 plus 3 RSC-010 that epubcheck does not.
+    ///
+    /// Neither instrument that runs on every release can see this: the corpus
+    /// was byte-identical across the whole fix, and the shelf moved one book.
+    #[test]
+    fn epub2_text_html_spine_item_needs_no_fallback_but_epub3_does() {
+        let e2 = ids_of(epub_declaring("2.0", "text/html", PLAIN_DOC, ""));
+        assert!(
+            !e2.contains(&crate::ids::OPF_043),
+            "EPUB 2 `text/html` spine item must not draw OPF-043: {e2:?}"
+        );
+        assert!(
+            !e2.contains(&crate::ids::RSC_010),
+            "the NCX link to it must not draw RSC-010 either: {e2:?}"
+        );
+        assert!(
+            e2.contains(&crate::ids::OPF_035),
+            "it is still worth a warning: {e2:?}"
+        );
+
+        let e3 = ids_of(epub_declaring("3.0", "text/html", PLAIN_DOC, ""));
+        assert!(
+            e3.contains(&crate::ids::OPF_043),
+            "EPUB 3 keeps OPF-043 - epubcheck's EPUB 3 branch has no such exemption: {e3:?}"
+        );
+        assert!(
+            !e3.contains(&crate::ids::OPF_035),
+            "and OPF-035 is unreachable in EPUB 3, since `OPFChecker30.checkItem` \
+             does not call `super`: {e3:?}"
+        );
+    }
+
+    /// The guide asks two independent questions, and the answers differ.
+    /// Measured against epubcheck one target type per book: `text/html` draws
+    /// RSC-032 alone, `application/x-dtbook+xml` draws RSC-032 alone, and
+    /// `application/pdf` draws both it and OPF-032. Replacing our OPF-032
+    /// with silence would have turned a wrong ID into a false negative.
+    #[test]
+    fn a_guide_reference_to_text_html_is_rsc_032_not_opf_032() {
+        const GUIDE: &str = r#"<guide><reference type="cover" title="" href="ch1.html"/></guide>"#;
+        let ids = ids_of(epub_declaring("2.0", "text/html", PLAIN_DOC, GUIDE));
+        assert!(
+            ids.contains(&crate::ids::RSC_032),
+            "a foreign guide target still has to be reported: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&crate::ids::OPF_032),
+            "but not as OPF-032 - epubcheck exempts the deprecated types there \
+             (`OPFChecker`:172): {ids:?}"
+        );
+    }
+
+    /// The other half of #72, and the one no instrument could see: the
+    /// document was left out of `content_docs` entirely, so every reference
+    /// inside it went unchecked. One real book hid 91 missing resources that
+    /// way, and a document that was not even well-formed XML reported
+    /// nothing at all - a book with real errors reading exactly like a clean
+    /// one.
+    #[test]
+    fn references_inside_a_text_html_document_are_checked() {
+        const WITH_BROKEN_REF: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title>\
+            <link rel=\"stylesheet\" type=\"text/css\" href=\"missing.css\"/></head>\
+            <body><p><img src=\"missing.png\" alt=\"x\"/></p></body></html>";
+        let ids = ids_of(epub_declaring("2.0", "text/html", WITH_BROKEN_REF, ""));
+        assert!(
+            ids.contains(&crate::ids::RSC_007),
+            "a dangling reference inside a `text/html` document must be found: {ids:?}"
+        );
+    }
+
+    /// ...but the *grammar* must stay off it. epubcheck runs its OPS checker
+    /// over such an item (`CheckerFactory`, `case HTML:`) and that always
+    /// installs the handler, while the validators come from a map keyed on
+    /// `application/xhtml+xml` - so the list comes back empty. Measured: the
+    /// identical document draws three RSC-005 declared `application/xhtml+xml`
+    /// and none declared `text/html`.
+    ///
+    /// The duplicate-`id` and ID-reference checks are part of that same
+    /// validator set (`IDUNIQUE_20_SCH` is keyed the same way), which is why
+    /// they hang off the same condition rather than off the RELAX NG pass
+    /// alone - each one leaked a finding on the real book until it did.
+    #[test]
+    fn a_text_html_document_is_not_validated_against_the_grammar() {
+        const BAD: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head></head>\
+            <body><p id=\"dup\">one</p><p id=\"dup\">two</p>\
+            <p aria-labelledby=\"nosuchid\">a</p><nosuchelement/></body></html>";
+        let as_html = ids_of(epub_declaring("2.0", "text/html", BAD, ""));
+        assert!(
+            !as_html.contains(&crate::ids::RSC_005),
+            "no schema violation, no duplicate-id and no idref resolution \
+             for a `text/html` item: {as_html:?}"
+        );
+        let as_xhtml = ids_of(epub_declaring("2.0", "application/xhtml+xml", BAD, ""));
+        assert!(
+            as_xhtml.contains(&crate::ids::RSC_005),
+            "the control: the identical document *is* checked when it is \
+             declared XHTML, so the assertion above is not vacuous: {as_xhtml:?}"
+        );
+    }
+
+    /// OPF-035 comes off the declared media-type alone. epubcheck emits it
+    /// from `OPFChecker.checkItem` without opening the file, so a `text/html`
+    /// item holding something that is not markup at all still draws it - the
+    /// one shape where the author most needs telling. We used to require the
+    /// content to parse as XHTML and said nothing here.
+    #[test]
+    fn opf_035_does_not_depend_on_the_document_content() {
+        let ids = ids_of(epub_declaring(
+            "2.0",
+            "text/html",
+            "just plain text, not markup at all\n",
+            "",
+        ));
+        assert!(
+            ids.contains(&crate::ids::OPF_035),
+            "OPF-035 is a statement about the manifest, not the file: {ids:?}"
         );
     }
 }

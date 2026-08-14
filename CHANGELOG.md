@@ -8,6 +8,68 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+`text/html` is a media type Calibre emits and epubcheck has always treated as
+a *deprecated content type*: it warns once and then goes on validating the
+document. We treated it as a foreign resource instead, and that single
+difference cost in both directions at once — we invented errors about the
+item, and skipped every check that belonged inside it.
+
+### Fixed
+
+- **`text/html` items in an EPUB 2 book are content documents again** (#72).
+  Found by running `--bin compare` over ten books newly added to the shelf:
+  eight agreed with epubcheck exactly and one did not. It declares
+  `media-type="text/html"` on all 91 of its spine items, and drew **94
+  findings epubcheck does not report** — 91 OPF-043, 3 RSC-010, and an
+  OPF-032 — while every reference *inside* those 91 documents went unchecked.
+  On a minimal book the verdicts differed outright: epubcheck accepted it, we
+  rejected it.
+
+  Four things changed, each measured against epubcheck one book at a time:
+
+  - A `text/html` spine item needs no fallback, so no OPF-043 — and **only in
+    EPUB 2**. epubcheck's two branches genuinely differ (`OPFChecker`:419
+    consults `isDeprecatedBlessedItemType`, `OPFChecker30`:251 does not), so
+    the same book is an error at 3.0 and clean at 2.0. Likewise no RSC-010
+    for an NCX or nav link pointing at one.
+  - A `<guide>` reference to one is no longer OPF-032, but it **is** RSC-032.
+    Replacing one with silence would have turned a wrong ID into a false
+    negative: epubcheck registers guide references as GENERIC and asks the
+    foreign-resource fallback question about them separately. That question
+    had never been asked here, so a guide reference to a DTBook or a PDF was
+    also missing its RSC-032 — both now reported.
+  - The documents are parsed and their references, fragments and DOM-level
+    checks run. The one real book hid **91 missing resources** this way, and
+    a `text/html` document that is not even well-formed XML used to report
+    nothing at all.
+  - The XHTML **grammar** stays off them, along with the duplicate-`id` and
+    ID-reference checks, which belong to the same validator set in epubcheck
+    (`IDUNIQUE_20_SCH` is keyed on `application/xhtml+xml` exactly as the
+    grammar is). Measured: the identical document draws three RSC-005
+    declared `application/xhtml+xml` and none declared `text/html`. Running
+    the grammar over them anyway would have replaced 94 false positives with
+    a larger number of them.
+
+- **OPF-035 no longer depends on the file's contents, and is EPUB 2 only.**
+  Both halves were wrong, in opposite directions. epubcheck emits it from the
+  declared media-type alone without opening the file, so a `text/html` item
+  holding something that is not markup drew nothing from us — the one shape
+  where the author most needs telling. And `OPFChecker30.checkItem` never
+  calls `super`, so the message is unreachable for EPUB 3, where we were
+  reporting it. It is now anchored at the manifest item in the package
+  document, which is where epubcheck reports it, rather than in the content
+  document.
+
+### Notes for consumers
+
+- `opf.content_document.duplicate_id` no longer fires for a `text/html`
+  document. No message, id or position moves for any other document; this is
+  a strict reduction, in the direction of what epubcheck reports.
+- The OPF-035 message wording and position both changed (see above). It
+  carries no `rule` slug, so nothing can be keyed on it today.
+
 ## [0.9.17] - 2026-08-12
 
 A message-wording release: the one sentence a reader meets when their book

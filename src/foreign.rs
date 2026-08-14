@@ -42,7 +42,7 @@ pub(crate) struct ResourceStatus {
 /// Bounded (10-hop, same guard as the existing OPF-043/OPF-065 chain
 /// walks) walk of a manifest item's own `fallback` chain, looking for a
 /// Core Media Type.
-fn fallback_reaches_core(
+pub(crate) fn fallback_reaches_core(
     start_id: &str,
     items: &HashMap<String, (String, String)>,
     fallback_map: &HashMap<String, String>,

@@ -225,6 +225,11 @@ fn check_toc_links(
             .find(|(_, (p, _))| crate::opf::nfc(p) == resolved)
             && mt != "application/xhtml+xml"
             && mt != "image/svg+xml"
+            // epubcheck's hyperlink branch (`ResourceReferencesChecker`:227)
+            // exempts the deprecated content-document types and is not
+            // version-gated, so this applies to the EPUB 3 nav document too
+            // (verified against epubcheck with a `text/html` nav target).
+            && !crate::opf::is_deprecated_content_document_type(mt)
             && !crate::opf::fallback_reaches_content_document(id, items, fallback_map)
         {
             report.push_node(
