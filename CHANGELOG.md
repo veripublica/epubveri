@@ -78,8 +78,25 @@ item, and skipped every check that belonged inside it.
   little- and big-endian TIFF under a `.png` name, TIFF under a `.tif` name,
   BMP, and the real book's image.
 
+- **ID-reference resolution is EPUB 3 only** (#74). We resolved
+  `aria-labelledby`, `for` and their relatives against the document's own
+  `id` values in every version and reported RSC-005 when the target was
+  missing; epubcheck does this for EPUB 3 alone. Its sibling check already
+  carried the version condition — this block was simply missed.
+
+  Nothing real is lost: every attribute the block names is absent from XHTML
+  1.1 (ARIA entirely, and `for` only via the Forms module, which OPS 2.0.1
+  does not include), so in an EPUB 2 book the grammar has already rejected
+  the attribute and this only added a second message about the same defect.
+  The opposite direction was checked as well — `headers` *is* in XHTML 1.1
+  and takes IDREFS, and a dangling `headers` reference draws nothing from
+  epubcheck either, so there is no gap to fill.
+
 ### Notes for consumers
 
+- `opf.content_document.dangling_id_reference` no longer fires for an EPUB 2
+  book. Not in any known downstream consumer's rule list, and the direction is
+  a strict reduction.
 - `opf.content_document.duplicate_id` no longer fires for a `text/html`
   document. No message, id or position moves for any other document; this is
   a strict reduction, in the direction of what epubcheck reports.

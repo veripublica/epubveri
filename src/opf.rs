@@ -5598,7 +5598,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // must refer to a real id in the same document. Grammar-derived, so
         // it is off for a `text/html` item for the same reason as the two
         // blocks above.
-        if schema_validated {
+        //
+        // **EPUB 3 only** (#74). Its sibling `htm::check_idref_resolution`
+        // already carried that condition and this one did not, so an EPUB 2
+        // book drew RSC-005 findings epubcheck does not report. Nothing real
+        // is lost: every attribute named below is absent from XHTML 1.1 -
+        // ARIA entirely, and `for` only via the Forms module, which OPS 2.0.1
+        // does not include - so in an EPUB 2 book the grammar has already
+        // rejected the attribute and this only piled a second message onto
+        // the same defect.
+        //
+        // The opposite direction was checked too, and there is no gap:
+        // `headers` *is* in XHTML 1.1 and takes IDREFS, and a dangling
+        // `headers` reference draws nothing from epubcheck either. It does no
+        // ID-reference resolution in EPUB 2 at all.
+        if schema_validated && is_epub3 {
             let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attr_no_ns("id")).collect();
             const MULTI_TOKEN: &[&str] = &[
                 "aria-labelledby",
@@ -13759,6 +13773,47 @@ mod tests {
         assert!(
             ids.contains(&crate::ids::OPF_035),
             "OPF-035 is a statement about the manifest, not the file: {ids:?}"
+        );
+    }
+
+    /// #74: ID-reference resolution is EPUB 3 only. Its sibling
+    /// `htm::check_idref_resolution` already carried that condition and this
+    /// block did not, so an EPUB 2 book drew RSC-005 findings epubcheck does
+    /// not report.
+    ///
+    /// Nothing real is lost. Every attribute the block names is absent from
+    /// XHTML 1.1 — ARIA entirely, `for` only via the Forms module that OPS
+    /// 2.0.1 does not include — so the grammar has already rejected the
+    /// attribute and this only added a second message about the same defect.
+    /// The other direction was checked too: `headers` *is* in XHTML 1.1 and
+    /// takes IDREFS, and a dangling `headers` reference draws nothing from
+    /// epubcheck either.
+    ///
+    /// Neither the corpus nor the shelf can see this — 0 of 167 books draw
+    /// the message in either version.
+    #[test]
+    fn id_reference_resolution_is_epub3_only() {
+        const DANGLING: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p id=\"real\">x</p><p aria-labelledby=\"nosuchid\">a</p></body></html>";
+        let dangling_reported = |version: &str| {
+            crate::validate_bytes(epub_declaring(
+                version,
+                "application/xhtml+xml",
+                DANGLING,
+                "",
+            ))
+            .messages
+            .iter()
+            .any(|m| m.rule == Some("opf.content_document.dangling_id_reference"))
+        };
+        assert!(
+            !dangling_reported("2.0"),
+            "EPUB 2 must not resolve ID references - epubcheck does not"
+        );
+        assert!(
+            dangling_reported("3.0"),
+            "the control: EPUB 3 still does, so the assertion above is not vacuous"
         );
     }
 }
