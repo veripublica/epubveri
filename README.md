@@ -138,14 +138,26 @@ between releases.)
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
 official test cases, each one a small EPUB file specifically constructed
-to be valid or to trip exactly one specific rule. As of this writing:
+to be valid or to trip exactly one specific rule. Measured on 0.9.18
+(2026-08-14):
 
-- **98.8%** of the test suite's "this should be flagged" cases are
+- **99.8%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
-  would report.
-- **98.9%** of the test suite's "this is perfectly valid" cases are
-  correctly left alone (no false alarms) — the remaining handful are
-  understood and narrow.
+  would report (606 of 607).
+- **100%** of the test suite's "this is perfectly valid" cases are
+  correctly left alone — no false alarms on any of the 355.
+
+These are the numbers epubveri's own release pre-flight prints, and they
+cover epubcheck's corpus only. That corpus is built from synthetic
+fixtures, each tripping one rule; it says nothing about how the two tools
+compare on a real book, which is measured separately.
+
+For a check-by-check answer rather than a headline, see
+**[`docs/COVERAGE.md`](./docs/COVERAGE.md)** — a per-message-ID matrix
+covering every message epubcheck can emit, saying for each one whether
+epubveri implements it, implements it partially, or doesn't. It's
+generated from both tools' sources, so it can't drift from the code, and
+the gaps are listed as plainly as the coverage.
 
 ## Trying it out
 
