@@ -5594,95 +5594,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
         }
 
-        // ID-referencing attributes (ARIA + a couple of plain HTML ones)
-        // must refer to a real id in the same document. Grammar-derived, so
-        // it is off for a `text/html` item for the same reason as the two
-        // blocks above.
-        //
-        // **EPUB 3 only** (#74). Its sibling `htm::check_idref_resolution`
-        // already carried that condition and this one did not, so an EPUB 2
-        // book drew RSC-005 findings epubcheck does not report. Nothing real
-        // is lost: every attribute named below is absent from XHTML 1.1 -
-        // ARIA entirely, and `for` only via the Forms module, which OPS 2.0.1
-        // does not include - so in an EPUB 2 book the grammar has already
-        // rejected the attribute and this only piled a second message onto
-        // the same defect.
-        //
-        // The opposite direction was checked too, and there is no gap:
-        // `headers` *is* in XHTML 1.1 and takes IDREFS, and a dangling
-        // `headers` reference draws nothing from epubcheck either. It does no
-        // ID-reference resolution in EPUB 2 at all.
-        if schema_validated && is_epub3 {
-            let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attr_no_ns("id")).collect();
-            const MULTI_TOKEN: &[&str] = &[
-                "aria-labelledby",
-                "aria-describedby",
-                "aria-owns",
-                "aria-activedescendant",
-                "aria-controls",
-                "aria-flowto",
-                "aria-details",
-            ];
-            const SINGLE_TOKEN: &[&str] = &["for", "list"];
-            for n in d.descendants().filter(|n| n.is_element()) {
-                for attr in MULTI_TOKEN {
-                    if let Some(v) = n.attribute(*attr) {
-                        for token in v.split_whitespace() {
-                            if !ids.contains(token) {
-                                report.push_node(
-                                    RSC_005,
-                                    Severity::Error,
-                                    format!("attribute \"{attr}\" must refer to elements in the same document (target ID missing)"),
-                                    path.clone(),
-                                    n,
-                                    "opf.content_document.dangling_id_reference",
-                                    vec![attr.to_string(), token.to_string()],
-                                );
-                            }
-                        }
-                    }
-                }
-                // <output for="..."> is a space-separated *list* of
-                // control ids (like the ARIA attributes above), unlike
-                // <label for>/<input list>, which each name a single id -
-                // confirmed via a real fixture using `<output for="o2 o3">`.
-                if n.tag_name().name() == "output" {
-                    if let Some(v) = n.attr_no_ns("for") {
-                        for token in v.split_whitespace() {
-                            if !ids.contains(token) {
-                                report.push_node(
-                                    RSC_005,
-                                    Severity::Error,
-                                    "attribute \"for\" must refer to elements in the same document (target ID missing)",
-                                    path.clone(),
-                                    n,
-                                    "opf.content_document.dangling_id_reference",
-                                    vec!["for".to_string(), token.to_string()],
-                                );
-                            }
-                        }
-                    }
-                    continue;
-                }
-                for attr in SINGLE_TOKEN {
-                    if let Some(v) = n.attribute(*attr) {
-                        let v = v.trim();
-                        if !v.is_empty() && !ids.contains(v) {
-                            report.push_node(
-                                RSC_005,
-                                Severity::Error,
-                                format!("attribute \"{attr}\" must refer to elements in the same document (target ID missing)"),
-                                path.clone(),
-                                n,
-                                "opf.content_document.dangling_id_reference",
-                                vec![attr.to_string(), v.to_string()],
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
         // <img src> must not be empty/whitespace-only.
         for n in d
             .descendants()
@@ -13796,7 +13707,7 @@ mod tests {
         const DANGLING: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
             <body><p id=\"real\">x</p><p aria-labelledby=\"nosuchid\">a</p></body></html>";
-        let dangling_reported = |version: &str| {
+        let dangling_count = |version: &str| {
             crate::validate_bytes(epub_declaring(
                 version,
                 "application/xhtml+xml",
@@ -13805,15 +13716,48 @@ mod tests {
             ))
             .messages
             .iter()
-            .any(|m| m.rule == Some("opf.content_document.dangling_id_reference"))
+            .filter(|m| m.rule == Some("opf.content_document.idref_unresolved"))
+            .count()
         };
-        assert!(
-            !dangling_reported("2.0"),
+        assert_eq!(
+            dangling_count("2.0"),
+            0,
             "EPUB 2 must not resolve ID references - epubcheck does not"
         );
-        assert!(
-            dangling_reported("3.0"),
-            "the control: EPUB 3 still does, so the assertion above is not vacuous"
+        // #76: exactly one, not two. A second implementation in `opf`'s own
+        // loop used to double every EPUB 3 finding here; epubcheck reports
+        // one. The count is the assertion - `> 0` would have passed
+        // throughout the bug.
+        assert_eq!(
+            dangling_count("3.0"),
+            1,
+            "the control: EPUB 3 still resolves them, and reports each defect once"
+        );
+    }
+
+    /// #76's other half: the deleted block also checked `aria-details`, and
+    /// epubcheck does not. Probed one book at a time, counting RSC-005 — a
+    /// dangling `aria-details` draws nothing there, while `aria-labelledby`
+    /// in the same position draws one.
+    #[test]
+    fn aria_details_is_not_an_id_reference_we_resolve() {
+        let count = |attr: &str| {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body><p id=\"real\">x</p><p {attr}=\"nosuchid\">a</p></body></html>"
+            );
+            crate::validate_bytes(epub_declaring("3.0", "application/xhtml+xml", &ch1, ""))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.idref_unresolved"))
+                .count()
+        };
+        assert_eq!(count("aria-details"), 0, "epubcheck reports nothing here");
+        assert_eq!(
+            count("aria-labelledby"),
+            1,
+            "the control: a real one still resolves"
         );
     }
 }

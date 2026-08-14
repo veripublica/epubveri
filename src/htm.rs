@@ -1409,6 +1409,21 @@ fn push_idref(
 /// the right kind of element. epubcheck enforces these in its XHTML Schematron
 /// and reports RSC-005; done here in Rust because checking each
 /// whitespace-separated token needs iteration the XPath 1.0 core lacks.
+///
+/// **This is the only implementation of the rule** (#76). A second one lived
+/// in `opf`'s content-document loop and covered the same ground more thinly -
+/// existence only, with none of the type constraints - so in EPUB 3 a single
+/// dangling reference produced two RSC-005 where epubcheck produces one. It
+/// was deleted rather than merged: every attribute it named is handled here,
+/// except `aria-details`, which is a false positive. Probed one book each,
+/// counting RSC-005: a dangling `aria-details` draws **nothing** from
+/// epubcheck, while `@form`, `@list`, `label/@for` and `@headers` each draw
+/// exactly one, all of them from this function.
+///
+/// Known under-report, deliberately left: an element carrying
+/// `@aria-activedescendant` must also declare `@role`, which epubcheck
+/// enforces in its grammar. That is a schema rule, not an ID-reference one,
+/// and is not implemented here or in the RNG.
 pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, report: &mut Report) {
     // id -> owning element (first wins; a duplicate id is a separate error).
     let mut id_owner: std::collections::HashMap<&str, roxmltree::Node> =

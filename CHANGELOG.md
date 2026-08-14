@@ -92,11 +92,29 @@ item, and skipped every check that belonged inside it.
   and takes IDREFS, and a dangling `headers` reference draws nothing from
   epubcheck either, so there is no gap to fill.
 
+- **An EPUB 3 dangling ID reference is reported once, not twice** (#76), and
+  `aria-details` is no longer reported at all. Two implementations of the same
+  rule had always overlapped in EPUB 3; gating one of them for #74 is what
+  made the overlap visible. The thinner one — existence only, none of the type
+  constraints — was deleted rather than merged, because everything it covered
+  is handled by the survivor except `aria-details`, which epubcheck does not
+  check.
+
+  Probed one book each, counting RSC-005: a dangling `aria-details` draws
+  nothing from epubcheck, while `@form`, `@list`, `label/@for` and `@headers`
+  each draw exactly one. Six of the seven shapes now agree exactly; the
+  seventh is a known under-report of ours (an element carrying
+  `@aria-activedescendant` must also declare `@role`, which is a grammar rule
+  we do not implement).
+
 ### Notes for consumers
 
-- `opf.content_document.dangling_id_reference` no longer fires for an EPUB 2
-  book. Not in any known downstream consumer's rule list, and the direction is
-  a strict reduction.
+- **`opf.content_document.dangling_id_reference` no longer exists.** The rule
+  it keyed was a duplicate of `opf.content_document.idref_unresolved`, which
+  survives and covers every case it did (bar `aria-details`, a false
+  positive). Nothing keyed on the removed slug can match any more — an
+  allowlist naming it needs the surviving slug instead. Not in any known
+  downstream consumer's rule list, and the direction is a strict reduction.
 - `opf.content_document.duplicate_id` no longer fires for a `text/html`
   document. No message, id or position moves for any other document; this is
   a strict reduction, in the direction of what epubcheck reports.
