@@ -8,7 +8,11 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.18] - 2026-08-14
+
+A false-positive release: four fixes, none of which the corpus or the shelf
+could see on its own, and each of the last three found while verifying the
+one before it.
 
 `text/html` is a media type Calibre emits and epubcheck has always treated as
 a *deprecated content type*: it warns once and then goes on validating the
