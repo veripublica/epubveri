@@ -62,6 +62,22 @@ item, and skipped every check that belonged inside it.
   document, which is where epubcheck reports it, rather than in the content
   document.
 
+- **A valid image in a format we did not recognise is no longer called
+  corrupt** (#75). `sniff_image_type` knew four formats, and anything else
+  took the "unrecognised" path, which reports PKG-021 *corrupt* as an ERROR.
+  One real book carries a valid little-endian TIFF named `.png` and declared
+  `image/png`; we called it corrupt where epubcheck reports PKG-022 *wrong
+  file extension* as a WARNING. It is mislabelled twice over and not corrupt
+  at all. TIFF (both byte orders) and BMP are now sniffed, with the matching
+  file extensions so a correctly-named file stays silent.
+
+  The *unrecognised* path itself was already right and is unchanged: a file
+  whose content matches nothing still draws PKG-021 from both tools, measured
+  with a garbage file named `.png`. Only the set of formats we can name was
+  too small. All six shapes now agree with epubcheck exactly — garbage,
+  little- and big-endian TIFF under a `.png` name, TIFF under a `.tif` name,
+  BMP, and the real book's image.
+
 ### Notes for consumers
 
 - `opf.content_document.duplicate_id` no longer fires for a `text/html`
