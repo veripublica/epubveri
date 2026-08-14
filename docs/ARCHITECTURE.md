@@ -279,8 +279,22 @@ One check is intentionally unreachable from WASM: `PKG-016` (the `.epub`
 file *extension* should be lowercase) is filename-based and lives in
 `lib.rs::validate_path`, not `validate_bytes` — the WASM entry point only
 ever sees bytes, never a filename. Everything else is identical to the
-native library, verified by cross-checking `validate()` against the CLI over
-the whole corpus (24/24 books produce identical message IDs and verdicts).
+native library, verified by cross-checking `validate()` against the CLI:
+**167 of 167 real books produce identical message IDs and verdicts**
+(2026-08-14, PKG-016 excluded on both sides).
+
+The check is worth re-running after anything that touches the WASM boundary
+— the serialization types, the `Report`/`Item` shapes, or the entry point's
+argument list. Build the same crate for Node (`wasm-pack build epubveri-wasm
+--target nodejs`), then for each book call `validate(bytes, null, null,
+null)` and compare the finding codes and `status` against `epubveri -i <book>
+--format json`. Note that the CLI wraps its report in `inputs[0]`, while the
+WASM call returns that object directly.
+
+**Check the comparison is not vacuous before believing it.** Most of the
+books on a clean shelf produce no findings at all, and two empty lists
+compare equal — the same failure this project has hit before. The run above
+compared **27,361 findings across the 98 books that produced at least one**.
 
 ## The `schemas/` directory
 
