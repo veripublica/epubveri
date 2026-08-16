@@ -8,6 +8,50 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+Two EPUB 2 fixes, one in each direction, both found by running the `compare`
+harness over 156 books newly added to the real-book shelf. Neither was
+reachable before: no book here had carried the markup.
+
+**CSS-001 is EPUB 3 only.** `direction` and `unicode-bidi` drew an error at
+any version, and epubcheck guards the rule with `version == VERSION_3`
+(`CSSHandler.java`), keeping its fixtures under `epub3/`. A real EPUB 2 book
+with `<h1 style="direction: inherit">` was therefore told it had an error it
+did not have. The neighbouring CSS-006 (`position: fixed`) is *not* guarded
+there and is unchanged here — checked in the same pass, so this is the whole
+class rather than a sample of it.
+
+**`ol@start`, `ol@type` and `li@value` are now rejected in EPUB 2.** XHTML
+1.1 gives `ol.attlist`, `ul.attlist` and `li.attlist` exactly `Common.attrib`;
+all three attributes come from `legacy.rng`, which OPS 2.0.1's `content.rng`
+never includes — the same reason `align` and `clear` are already errors.
+epubcheck reports one RSC-005 each and we reported none, on 4 shelf books.
+EPUB 3 is untouched: HTML5 has all three, so the tightening applies only to
+the EPUB 2 grammar, and a test asserts both columns plus a clean control.
+
+**`data-*` attributes are now rejected in EPUB 2.** The grammar cannot express
+a prefix wildcard, so a `data-` name is suppressed at the report level; that
+suppression applied at every version. `data-*` is an HTML5 family and XHTML
+1.1 has no such concept, so epubcheck gives a plain RSC-005 in a
+`version="2.0"` book. A malformed name (`data-`) still produces exactly one
+finding, not one per owning check — HTM-061 also covers that case and
+epubcheck reports it once.
+
+**An empty `<tr>` or row group is now an error in EPUB 2.** XHTML 1.1 makes
+`tr` `oneOrMore (th|td)` and `thead`/`tfoot`/`tbody` `oneOrMore tr`; HTML5
+permits all of them empty, so this joins `ol`/`ul`/`dl` as an EPUB 2-only
+content-model rule and EPUB 3 is untouched.
+
+Consumers keying on message IDs: no ID changed meaning, and no ID was split.
+The EPUB 2 changes add RSC-005 findings on books that previously reported
+none of them; measured across the 336-book shelf they move 9 books, all in
+the same direction, and two of those books go from a clean verdict to two
+findings each — both of which epubcheck was already reporting.
+
+All four fixes leave the corpus exactly where it was: 606/607 exact-ID recall,
+0 false positives on 355 should-be-clean cases.
+
 ## [0.9.18] - 2026-08-14
 
 A false-positive release: four fixes, none of which the corpus or the shelf

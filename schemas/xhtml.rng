@@ -2533,11 +2533,21 @@
        above stay permissive - this is an EPUB 2-only rule, and making it
        version-wide would be a false positive on EPUB 3 (reported by Doitsu,
        MobileRead #126). -->
+  <!-- `ol@start`, `ol@type` and `li@value` are NOT in XHTML 1.1: list.rng
+       gives all three of `ol.attlist`, `ul.attlist` and `li.attlist` exactly
+       `Common.attrib`. The three attributes come from `legacy.rng`, which
+       `schema/20/rng/content.rng` never includes (grep says 0) - the same
+       reason `align` and `clear` stay errors. Measured against epubcheck one
+       attribute per book, on a shelf book that is otherwise clean: each draws
+       one RSC-005 there and drew none here, and a plain `<ol><li>` control
+       draws none from either. Found by the `compare` harness on `li@value`,
+       in 4 real books; `ol@start`/`ol@type` are the same class and were found
+       by reading the module rather than by waiting for a book. (No double
+       hyphen in this comment: an XML comment may not contain one, and the
+       grammar is parsed at start-up, so it fails every test at once.) -->
   <define name="olEl-epub2">
     <element name="ol">
       <ref name="globalAttrs-epub2"/>
-      <optional><attribute name="start"><data type="integer"/></attribute></optional>
-      <optional><attribute name="type"><data type="token"/></attribute></optional>
       <oneOrMore><ref name="liEl-epub2"/></oneOrMore>
     </element>
   </define>
@@ -2548,7 +2558,6 @@
 
   <define name="liEl-epub2">
     <element name="li"><ref name="globalAttrs-epub2"/>
-      <optional><attribute name="value"><data type="string"/></attribute></optional>
       <ref name="epub2Flow"/>
     </element>
   </define>
@@ -2617,14 +2626,19 @@
       </zeroOrMore>
       <choice>
         <group>
+          <!-- `oneOrMore tr`, not zero: XHTML 1.1 gives `thead`, `tfoot` and
+               `tbody` all `<oneOrMore><ref name="tr"/></oneOrMore>`
+               (table.rng), so an empty row group is an error. HTML5 relaxed
+               it, which is why the EPUB 3 shapes above stay permissive - the
+               same split `ol`/`ul`/`dl` already have here. -->
           <optional>
-            <element name="thead"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+            <element name="thead"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="trEl-epub2"/></oneOrMore></element>
           </optional>
           <optional>
-            <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+            <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="trEl-epub2"/></oneOrMore></element>
           </optional>
           <oneOrMore>
-            <element name="tbody"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="trEl-epub2"/></zeroOrMore></element>
+            <element name="tbody"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="trEl-epub2"/></oneOrMore></element>
           </oneOrMore>
         </group>
         <oneOrMore><ref name="trEl-epub2"/></oneOrMore>
@@ -2662,8 +2676,13 @@
     </optional>
   </define>
 
+  <!-- `basic-table.rng` (which `table.rng` includes, and `content.rng`
+       includes that) defines `tr` as `oneOrMore (th|td)`, so an empty row is
+       an error in EPUB 2 and not in EPUB 3. Note where the definition lives:
+       `table.rng` only ever *references* `tr`, so grepping it alone says the
+       element is undefined. -->
   <define name="trEl-epub2">
-    <element name="tr"><ref name="rowGroupAttrs-epub2"/><zeroOrMore><ref name="cellEl-epub2"/></zeroOrMore></element>
+    <element name="tr"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="cellEl-epub2"/></oneOrMore></element>
   </define>
 
   <define name="cellEl-epub2">

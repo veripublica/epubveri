@@ -168,6 +168,7 @@ pub(crate) fn check(
     manifest_paths: &HashSet<String>,
     origin: CssOrigin,
     advisory: bool,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     // Span-carrying parse: every finding below points at the exact
@@ -217,6 +218,7 @@ pub(crate) fn check(
                     css,
                     css_path,
                     origin,
+                    is_epub3,
                     report,
                 );
             }
@@ -251,6 +253,7 @@ pub(crate) fn check(
                             css,
                             css_path,
                             origin,
+                            is_epub3,
                             report,
                         );
                     } else {
@@ -259,6 +262,7 @@ pub(crate) fn check(
                             css,
                             css_path,
                             origin,
+                            is_epub3,
                             report,
                         );
                     }
@@ -534,11 +538,17 @@ fn advisory_fields(d: &styloria::Diagnostic) -> (&'static str, &'static str, Str
 /// styloria's existing tokenizer/parser produces the same
 /// `&[ComponentValue]` shape, rather than adding a new styloria entry
 /// point for a one-off caller.
-pub(crate) fn check_style_attribute(value: &str, path: &str, advisory: bool, report: &mut Report) {
+pub(crate) fn check_style_attribute(
+    value: &str,
+    path: &str,
+    advisory: bool,
+    is_epub3: bool,
+    report: &mut Report,
+) {
     let wrapped = format!("x{{{value}}}");
     let sheet = Parser::parse_stylesheet(&wrapped);
     if let Some(Rule::Qualified(q)) = sheet.rules.first() {
-        check_declaration_shapes(&q.block.values, path, report);
+        check_declaration_shapes(&q.block.values, path, is_epub3, report);
     }
 
     // Opt-in advisory pass. A style attribute is a bare declaration list;
@@ -655,6 +665,7 @@ fn check_rule_list_block_spanned(
     css: &str,
     css_path: &str,
     origin: CssOrigin,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     let (rules, errors) = styloria::parse_rule_list(block_values);
@@ -677,6 +688,7 @@ fn check_rule_list_block_spanned(
                     css,
                     css_path,
                     origin,
+                    is_epub3,
                     report,
                 );
             }
@@ -691,6 +703,7 @@ fn check_rule_list_block_spanned(
                         css,
                         css_path,
                         origin,
+                        is_epub3,
                         report,
                     );
                 } else {
@@ -699,6 +712,7 @@ fn check_rule_list_block_spanned(
                         css,
                         css_path,
                         origin,
+                        is_epub3,
                         report,
                     );
                 }
@@ -717,6 +731,7 @@ fn check_declaration_shapes_spanned(
     css: &str,
     css_path: &str,
     origin: CssOrigin,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     for chunk in
@@ -749,9 +764,18 @@ fn check_declaration_shapes_spanned(
         } else if let Some(f) = first
             && let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node
         {
-            if FLAGGED_PROPERTIES
-                .iter()
-                .any(|p| name.eq_ignore_ascii_case(p))
+            // CSS-001 is EPUB 3 only. epubcheck guards it with
+            // `if (version == EPUBVersion.VERSION_3)` (CSSHandler.java:288)
+            // and keeps its fixtures under `src/test/resources/epub3/`; its
+            // two neighbours in the same method - CSS-006 below and the
+            // @font-face work - are not guarded, so this is the whole class,
+            // not a sample of it. We had no gate at all, which invented an
+            // error on an EPUB 2 book carrying `<h1 style="direction:
+            // inherit">` (found by `--bin compare`, 2026-08-16).
+            if is_epub3
+                && FLAGGED_PROPERTIES
+                    .iter()
+                    .any(|p| name.eq_ignore_ascii_case(p))
             {
                 report.push_at_pos(
                     CSS_001,
@@ -785,13 +809,20 @@ fn check_declaration_shapes_spanned(
             if let spanned::ComponentValue::Block(b) = &v.node
                 && b.kind == BlockKind::Curly
             {
-                check_declaration_shapes_spanned(&b.values, css, css_path, origin, report);
+                check_declaration_shapes_spanned(
+                    &b.values, css, css_path, origin, is_epub3, report,
+                );
             }
         }
     }
 }
 
-fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, report: &mut Report) {
+fn check_declaration_shapes(
+    block_values: &[ComponentValue],
+    css_path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
     for chunk in block_values.split(|v| matches!(v, ComponentValue::Token(Token::Semicolon))) {
         let mut iter = chunk
             .iter()
@@ -814,9 +845,10 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
                 Vec::new(),
             );
         } else if let Some(ComponentValue::Token(Token::Ident(name))) = first {
-            if FLAGGED_PROPERTIES
-                .iter()
-                .any(|p| name.eq_ignore_ascii_case(p))
+            if is_epub3
+                && FLAGGED_PROPERTIES
+                    .iter()
+                    .any(|p| name.eq_ignore_ascii_case(p))
             {
                 report.push_at(
                     CSS_001,
@@ -845,7 +877,7 @@ fn check_declaration_shapes(block_values: &[ComponentValue], css_path: &str, rep
             if let ComponentValue::Block(b) = v
                 && b.kind == BlockKind::Curly
             {
-                check_declaration_shapes(&b.values, css_path, report);
+                check_declaration_shapes(&b.values, css_path, is_epub3, report);
             }
         }
     }
@@ -1295,6 +1327,7 @@ mod tests {
             &HashSet::new(),
             CssOrigin::File { bytes: None },
             false,
+            true,
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
@@ -1312,6 +1345,9 @@ mod tests {
             &HashSet::new(),
             CssOrigin::File { bytes: None },
             false,
+            // EPUB 3: the CSS-001 tests below assert the flagged-property
+            // findings, which only exist at that version.
+            true,
             &mut report,
         );
         report
@@ -1337,6 +1373,7 @@ mod tests {
             &HashSet::new(),
             CssOrigin::File { bytes: Some(bytes) },
             false,
+            true,
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
@@ -1356,6 +1393,7 @@ mod tests {
             &empty_index(),
             &HashSet::new(),
             CssOrigin::File { bytes: None },
+            true,
             true,
             &mut report,
         );
@@ -1408,11 +1446,11 @@ mod tests {
     #[test]
     fn advisory_checks_style_attributes() {
         let mut report = Report::new();
-        check_style_attribute("font-eight: bold", "doc.xhtml", true, &mut report);
+        check_style_attribute("font-eight: bold", "doc.xhtml", true, true, &mut report);
         assert!(report.messages.iter().any(|m| m.id == ADV_001));
         // ...and off by default:
         let mut off = Report::new();
-        check_style_attribute("font-eight: bold", "doc.xhtml", false, &mut off);
+        check_style_attribute("font-eight: bold", "doc.xhtml", false, true, &mut off);
         assert!(!off.messages.iter().any(|m| m.id.starts_with("ADV-")));
     }
 
@@ -1458,6 +1496,63 @@ mod tests {
     fn unicode_bidi_property_flagged() {
         let findings = run("body { unicode-bidi: bidi-override; }", &empty_index());
         assert!(findings.contains(&CSS_001));
+    }
+
+    /// CSS-001 is EPUB 3 only: epubcheck guards it with
+    /// `if (version == EPUBVersion.VERSION_3)`. We had no gate, which
+    /// invented an error on a real EPUB 2 book carrying
+    /// `<h1 style="direction: inherit">`. Neither the corpus nor the shelf
+    /// protects this - the shelf found it once, and only because the
+    /// `compare` harness had epubcheck's answer to diff against - so the
+    /// EPUB 2 half is asserted here.
+    #[test]
+    fn css001_is_epub3_only() {
+        let epub2 = |css: &str| {
+            let mut report = Report::new();
+            check(
+                css,
+                "style.css",
+                "OEBPS",
+                &empty_index(),
+                &HashSet::new(),
+                CssOrigin::File { bytes: None },
+                false,
+                false,
+                &mut report,
+            );
+            report.messages.iter().filter(|m| m.id == CSS_001).count()
+        };
+        assert_eq!(epub2("body { direction: rtl; }"), 0);
+        assert_eq!(epub2("body { unicode-bidi: bidi-override; }"), 0);
+        // The EPUB 3 side still fires, and CSS-006 - the unguarded rule
+        // sitting in the same `else if` chain - is unaffected at EPUB 2.
+        assert!(run("body { direction: rtl; }", &empty_index()).contains(&CSS_001));
+        let mut report = Report::new();
+        check(
+            "p { position: fixed; }",
+            "style.css",
+            "OEBPS",
+            &empty_index(),
+            &HashSet::new(),
+            CssOrigin::File { bytes: None },
+            false,
+            false,
+            &mut report,
+        );
+        assert!(report.messages.iter().any(|m| m.id == CSS_006));
+    }
+
+    /// The same gate has to hold for a `style` attribute, which reaches the
+    /// non-spanned shape check by a different path.
+    #[test]
+    fn css001_is_epub3_only_in_a_style_attribute() {
+        let count = |is_epub3: bool| {
+            let mut report = Report::new();
+            check_style_attribute("direction: rtl", "doc.xhtml", false, is_epub3, &mut report);
+            report.messages.iter().filter(|m| m.id == CSS_001).count()
+        };
+        assert_eq!(count(false), 0);
+        assert_eq!(count(true), 1);
     }
 
     #[test]
@@ -1666,6 +1761,7 @@ mod tests {
             &manifest_paths,
             CssOrigin::File { bytes: None },
             false,
+            true,
             &mut report,
         );
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
@@ -1688,6 +1784,7 @@ mod tests {
             &HashSet::new(),
             CssOrigin::File { bytes: None },
             false,
+            true,
             &mut report,
         );
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
@@ -1753,6 +1850,7 @@ mod tests {
                 &HashSet::new(),
                 CssOrigin::File { bytes: None },
                 false,
+                true,
                 &mut report,
             );
             report.messages.iter().filter(|m| m.id == RSC_026).count()

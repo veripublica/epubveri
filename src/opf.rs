@@ -5383,8 +5383,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // wildcard already accepts data-* names, so the grammar
                 // never blames them not-allowed to begin with) - built now
                 // so the mechanism exists and is tested ahead of #36.
-                if let crate::rng::Blame::Attribute(_, a, crate::rng::AttributeFault::NotAllowed) =
-                    &blame
+                //
+                // EPUB 3 only. `data-*` is an HTML5 concept and XHTML 1.1 has
+                // no such family, so epubcheck reports a plain RSC-005 for
+                // `<p data-foo="x">` in a `version="2.0"` book - probed one
+                // book per case against 5.3.0, with a clean control on both
+                // sides. Suppressing it at every version was a false
+                // negative, found while verifying the 2026-08-16 shelf
+                // additions.
+                if is_epub3
+                    && let crate::rng::Blame::Attribute(
+                        _,
+                        a,
+                        crate::rng::AttributeFault::NotAllowed,
+                    ) = &blame
                     && a.namespace().is_none()
                     && crate::htm::is_data_attribute_name(a.name())
                 {
@@ -6878,6 +6890,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     &manifest_paths,
                     origin,
                     advisory,
+                    is_epub3,
                     report,
                 );
                 crate::opf::check_exempt_font_usage(
@@ -7041,7 +7054,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // CSS-008: a `style="..."` attribute is a plain declaration
             // list, same malformed-shape check as a stylesheet's own block.
             if let Some(style) = node.attr_no_ns("style") {
-                crate::css::check_style_attribute(style, &path, advisory, report);
+                crate::css::check_style_attribute(style, &path, advisory, is_epub3, report);
             }
         }
         book_has_scripts |= has_script;
@@ -7750,6 +7763,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             &manifest_paths,
             crate::css::CssOrigin::File { bytes: Some(&b) },
             advisory,
+            is_epub3,
             report,
         );
         // RSC-008: a standalone (manifest-declared) stylesheet can
@@ -10950,6 +10964,129 @@ mod tests {
             "and the body itself is incomplete: {found:?}"
         );
         assert_eq!(texts("<p>x</p>"), Vec::<String>::new());
+    }
+
+    /// `ol@start`, `ol@type` and `li@value` are HTML5/legacy attributes, not
+    /// XHTML 1.1 ones: `schema/20/rng/xhtml/list.rng` gives `ol.attlist`,
+    /// `ul.attlist` and `li.attlist` exactly `Common.attrib`, and the module
+    /// that adds these three, `legacy.rng`, is never included by
+    /// `content.rng`. epubcheck therefore reports one RSC-005 for each, which
+    /// it was doing on 4 shelf books while we said nothing.
+    ///
+    /// The EPUB 3 half is the half that can regress silently: HTML5 does have
+    /// all three, so tightening the shared grammar instead of the EPUB 2 one
+    /// would invent errors on every ordered list in a modern book.
+    #[test]
+    fn epub2_lists_do_not_take_the_html5_numbering_attributes() {
+        let body = |markup: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{markup}</body></html>"
+            )
+        };
+        let epub2 = |markup: &str| {
+            crate::validate_bytes(epub2_with_ch1(&body(markup)))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        let epub3 = |markup: &str| {
+            crate::validate_bytes(epub_with_ch1(&format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>t</title></head><body>{markup}</body></html>"
+            )))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_005)
+            .count()
+        };
+
+        // The control has to be clean, or the counts below mean nothing.
+        assert_eq!(epub2("<ol><li>x</li></ol>"), 0, "plain list, EPUB 2");
+        assert_eq!(epub3("<ol><li>x</li></ol>"), 0, "plain list, EPUB 3");
+
+        for markup in [
+            "<ol start=\"2\"><li>x</li></ol>",
+            "<ol type=\"a\"><li>x</li></ol>",
+            "<ol><li value=\"2\">x</li></ol>",
+        ] {
+            assert_eq!(epub2(markup), 1, "EPUB 2 must reject: {markup}");
+            assert_eq!(epub3(markup), 0, "EPUB 3 must accept: {markup}");
+        }
+    }
+
+    /// Two more EPUB 2 false negatives, same shape as the list attributes
+    /// above and found the same way - by asking epubcheck rather than by
+    /// waiting for a book to arrive.
+    ///
+    /// `data-*` is an HTML5 attribute family; XHTML 1.1 has no such concept,
+    /// so epubcheck gives a plain RSC-005. We suppressed the grammar's blame
+    /// for any `data-` name at *every* version, which was right for EPUB 3
+    /// and silent for EPUB 2. The malformed-name case is included because
+    /// HTM-061 also owns it, and epubcheck still reports exactly one finding
+    /// there - so this must not become a double report.
+    ///
+    /// An empty row or row group is an error in XHTML 1.1: `basic-table.rng`
+    /// makes `tr` `oneOrMore (th|td)` and `table.rng` makes `thead`/`tfoot`/
+    /// `tbody` `oneOrMore tr`. HTML5 permits all of them empty.
+    #[test]
+    fn epub2_rejects_data_attributes_and_empty_table_rows() {
+        let body = |markup: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{markup}</body></html>"
+            )
+        };
+        let epub2 = |markup: &str| {
+            crate::validate_bytes(epub2_with_ch1(&body(markup)))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        let epub3 = |markup: &str| {
+            crate::validate_bytes(epub_with_ch1(&format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>t</title></head><body>{markup}</body></html>"
+            )))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_005)
+            .count()
+        };
+
+        assert_eq!(epub2("<p>x</p>"), 0, "control, EPUB 2");
+        assert_eq!(
+            epub2("<table><tr><td>x</td></tr></table>"),
+            0,
+            "a table with a cell is fine in EPUB 2"
+        );
+
+        for markup in [
+            "<p data-foo=\"x\">y</p>",
+            // Malformed suffix: exactly one finding, not one per owning check.
+            "<p data-=\"x\">y</p>",
+            "<table><tr></tr></table>",
+            "<table><tbody></tbody></table>",
+        ] {
+            assert_eq!(
+                epub2(markup),
+                1,
+                "EPUB 2 must reject exactly once: {markup}"
+            );
+            assert_eq!(epub3(markup), 0, "EPUB 3 must accept: {markup}");
+        }
     }
 
     /// #63: an EPUB 2 package document is checked against opf20's closed
