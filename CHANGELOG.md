@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.20] - 2026-08-17
 
 Nine changes, eight of them gaps found by cross-checking the 346-book shelf against
 epubcheck rather than by any test — and two of them run in the
