@@ -10,7 +10,7 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
-Eight gap fixes, all found by cross-checking the 346-book shelf against
+Nine changes, eight of them gaps found by cross-checking the 346-book shelf against
 epubcheck rather than by any test — and two of them run in the
 false-positive direction, which the shelf could not have shown either.
 
@@ -55,6 +55,23 @@ are, but only when what they decode to is: `http://ex%C3%BCample.com` decodes
 to a real IDN label and stays clean. The decode happens *after* the userinfo
 is stripped, never before, or the decoded `@` would let the userinfo strip eat
 the host and hide the error.
+
+**The CSS declaration walk moved into styloria** (`0.10`, its
+[#4](https://github.com/veripublica/styloria/issues/4)). "Is this a
+well-formed declaration" is a CSS question and was being answered here,
+because `parse_rule_list` took component values and its declaration twin did
+not exist — a caller holding a `{ … }` block has values, not source text. The
+new `parse_declaration_list_from_values` closes that asymmetry, and the walk
+here is gone.
+
+What did *not* move: `direction`/`unicode-bidi` (CSS-001) and
+`position: fixed` (CSS-006) are EPUB rules, not CSS ones — CSS has nothing
+against either property — so they stay, now reading styloria's parsed
+declarations instead of re-splitting the block. The `rule` slug is unchanged
+at `css.declaration.malformed_shape`: the slug is epubveri's key for
+consumers, and a crate boundary moving is not their business. Verified
+behaviour-preserving — corpus, shelf and tests all identical before and
+after.
 
 **RSC-020 now covers an interior space and an empty host, in content
 documents as well as the manifest.** It was scoped to the host of an absolute

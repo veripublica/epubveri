@@ -734,85 +734,75 @@ fn check_declaration_shapes_spanned(
     is_epub3: bool,
     report: &mut Report,
 ) {
-    for chunk in
-        block_values.split(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Semicolon)))
-    {
-        let mut iter = chunk
-            .iter()
-            .filter(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)));
-        let first = iter.next();
-        let malformed = match first.map(|f| &f.node) {
-            None => false,
-            Some(spanned::ComponentValue::Token(Token::Ident(_))) => !matches!(
-                iter.next().map(|v| &v.node),
-                Some(spanned::ComponentValue::Token(Token::Colon))
-            ),
-            Some(_) => true,
+    // The declaration walk lives in styloria now (its issue #4). This used to
+    // split on semicolons and decide "is this `ident :`" here, which is a CSS
+    // syntax question sitting outside the CSS crate - and the reason it sat
+    // here was an API asymmetry rather than a decision: `parse_rule_list`
+    // took component values, its declaration twin did not exist, and a caller
+    // holding a block has values and not source text.
+    //
+    // The `rule` slug stays `css.declaration.malformed_shape` rather than
+    // becoming styloria's kind name. The slug is epubveri's key for
+    // consumers; the crate boundary moving is not their business.
+    let (items, errors) = styloria::parse_declaration_list_from_values(block_values);
+    for e in &errors {
+        report.push_full(
+            CSS_008,
+            Severity::Error,
+            "CSS syntax error",
+            css_path,
+            origin.position(css, e.span.start),
+            "css.declaration.malformed_shape",
+            Vec::new(),
+        );
+    }
+    for item in &items {
+        let styloria::spanned::DeclarationListItem::Declaration(d) = item else {
+            continue;
         };
-        if malformed {
-            if let Some(f) = first {
-                report.push_full(
-                    CSS_008,
-                    Severity::Error,
-                    "CSS syntax error",
-                    css_path,
-                    origin.position(css, f.span.start),
-                    "css.declaration.malformed_shape",
-                    Vec::new(),
-                );
-            }
-        } else if let Some(f) = first
-            && let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node
+        let name = &d.node.name;
+        // CSS-001 is EPUB 3 only. epubcheck guards it with
+        // `if (version == EPUBVersion.VERSION_3)` (CSSHandler.java:288) and
+        // keeps its fixtures under `src/test/resources/epub3/`; its two
+        // neighbours in the same method - CSS-006 below and the @font-face
+        // work - are not guarded, so this is the whole class, not a sample.
+        // We had no gate at all, which invented an error on an EPUB 2 book
+        // carrying `<h1 style="direction: inherit">`.
+        //
+        // Both of these stay here rather than moving with the walk: "is
+        // `direction` discouraged" is an EPUB rule, not a CSS one. CSS has
+        // nothing against either property.
+        if is_epub3
+            && FLAGGED_PROPERTIES
+                .iter()
+                .any(|p| name.eq_ignore_ascii_case(p))
         {
-            // CSS-001 is EPUB 3 only. epubcheck guards it with
-            // `if (version == EPUBVersion.VERSION_3)` (CSSHandler.java:288)
-            // and keeps its fixtures under `src/test/resources/epub3/`; its
-            // two neighbours in the same method - CSS-006 below and the
-            // @font-face work - are not guarded, so this is the whole class,
-            // not a sample of it. We had no gate at all, which invented an
-            // error on an EPUB 2 book carrying `<h1 style="direction:
-            // inherit">` (found by `--bin compare`, 2026-08-16).
-            if is_epub3
-                && FLAGGED_PROPERTIES
-                    .iter()
-                    .any(|p| name.eq_ignore_ascii_case(p))
-            {
-                report.push_at_pos(
-                    CSS_001,
-                    Severity::Error,
-                    format!("use of the '{name}' property is not recommended"),
-                    css_path,
-                    origin.position(css, f.span.start),
-                );
-            } else if name.eq_ignore_ascii_case("position")
-                && matches!(
-                    iter.next().map(|v| &v.node),
-                    Some(spanned::ComponentValue::Token(Token::Ident(v)))
-                        if v.eq_ignore_ascii_case("fixed")
-                )
-            {
-                // CSS-006: `position: fixed` (matches epubcheck, which compares
-                // the first value component to "fixed", case-insensitively).
-                report.push_at_pos(
-                    CSS_006,
-                    Severity::Usage,
-                    "use of 'position: fixed' is not recommended".to_string(),
-                    css_path,
-                    origin.position(css, f.span.start),
-                );
-            }
-        }
-        // A malformed chunk can still contain a nested block (e.g. an
-        // unclosed rule swallowing a whole well-formed sibling rule) —
-        // recurse so declarations inside it still get checked too.
-        for v in chunk {
-            if let spanned::ComponentValue::Block(b) = &v.node
-                && b.kind == BlockKind::Curly
-            {
-                check_declaration_shapes_spanned(
-                    &b.values, css, css_path, origin, is_epub3, report,
-                );
-            }
+            report.push_at_pos(
+                CSS_001,
+                Severity::Error,
+                format!("use of the '{name}' property is not recommended"),
+                css_path,
+                origin.position(css, d.node.name_span.start),
+            );
+        } else if name.eq_ignore_ascii_case("position")
+            && d.node
+                .value
+                .iter()
+                .find(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)))
+                .is_some_and(|v| {
+                    matches!(&v.node, spanned::ComponentValue::Token(Token::Ident(x))
+                        if x.eq_ignore_ascii_case("fixed"))
+                })
+        {
+            // CSS-006: `position: fixed` (matches epubcheck, which compares
+            // the first value component to "fixed", case-insensitively).
+            report.push_at_pos(
+                CSS_006,
+                Severity::Usage,
+                "use of 'position: fixed' is not recommended".to_string(),
+                css_path,
+                origin.position(css, d.node.name_span.start),
+            );
         }
     }
 }
