@@ -260,12 +260,19 @@ const ANN: &[Ann] = &[
          selector validation flags only what is malformed under Selectors \
          Level 4 **and** epubcheck flags, so modern-but-valid selectors its \
          old parser rejects stay silent. Known granularity difference, left as \
-         is (measured 2026-08-09): in a malformed **selector list** we report \
-         every bad selector, epubcheck the first and then abandons the rule - \
-         `. h-100, . y-100 { }` is 2 findings here, 1 there. Both selectors \
-         are genuinely malformed, so neither tool is wrong; ours names each \
-         thing to fix. Same class as the `colgroup`/`col` difference. Blast \
-         radius: 1 shelf book of 136, 22 findings against epubcheck's 12."),
+         is (re-measured 2026-08-17): in a malformed **selector list** we \
+         report every bad selector, epubcheck the first and then abandons the \
+         rule - `. h-100, . y-100 { }` is 2 findings here, 1 there. Both \
+         selectors are genuinely malformed, so neither tool is wrong; ours \
+         names each thing to fix. Same class as the `colgroup`/`col` \
+         difference. Blast radius: 1 shelf book of 336, 22 findings against \
+         epubcheck's 12. A *second* book used to sit in this row for a \
+         different reason and no longer does - a stray declaration outside \
+         any rule was reported once per bad token (4 against epubcheck's 1), \
+         which was a real defect rather than a granularity choice and is \
+         fixed in styloria 0.9.1. When this row shows a new count gap, ask \
+         which of the two it is: several *selectors* is deliberate, several \
+         findings inside *one* selector is not."),
     ("CSS-028", None,
         "A `@font-face` declaration is present (usage). Known granularity \
          difference, left as is (measured 2026-08-09): we report once per \

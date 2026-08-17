@@ -49,8 +49,22 @@ none of them; measured across the 336-book shelf they move 9 books, all in
 the same direction, and two of those books go from a clean verdict to two
 findings each — both of which epubcheck was already reporting.
 
-All four fixes leave the corpus exactly where it was: 606/607 exact-ID recall,
-0 false positives on 355 should-be-clean cases.
+**A stylesheet's stray declaration no longer draws four CSS-008 findings**
+(styloria [#3](https://github.com/veripublica/styloria/issues/3), picked up
+here as `styloria 0.9.1`). A file beginning with `text-indent:1.5em;` outside
+any rule became one qualified rule's prelude, and the selector walk reported
+every token it could not accept — the `:`, the `1.5em`, the `;`, and the
+`@page` of the *next* rule, which is well-formed CSS. epubcheck reports one.
+The reporting unit upstream is now the comma-separated selector, so the pile
+collapses to a single finding while the *deliberate* difference is untouched:
+`. h-100, . y-100 { }` is two genuinely broken selectors and still reports
+two. `docs/COVERAGE.md` now separates the two cases, because they look
+identical in a count diff and only one of them is a defect.
+
+All five fixes leave the corpus exactly where it was: 606/607 exact-ID recall,
+0 false positives on 355 should-be-clean cases. Across the 336-book shelf,
+**329 books agree with epubcheck on the ID set exactly and not one ID is
+reported by epubveri alone.**
 
 ## [0.9.18] - 2026-08-14
 
