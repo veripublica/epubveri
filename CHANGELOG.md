@@ -10,9 +10,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.9.19] - 2026-08-17
 
-Two EPUB 2 fixes, one in each direction, both found by running the `compare`
-harness over 156 books newly added to the real-book shelf. Neither was
-reachable before: no book here had carried the markup.
+Seven fixes, and what they have in common is how they were found rather than
+what they touch: none was reachable by the instruments that run on every
+release. Five came from cross-checking against epubcheck over 156 books newly
+added to the real-book shelf, one from a stylesheet shape that shelf turned
+up, and one from a reader on the MobileRead thread who sent epubcheck's output
+beside ours. The corpus was byte-identical through all seven.
+
+Most of them are EPUB 2 rules where XHTML 1.1 is stricter than HTML5, so the
+EPUB 3 column is asserted alongside the EPUB 2 one in every test: tightening
+the shared grammar instead of the EPUB 2 one would invent errors on every
+modern book.
 
 **CSS-001 is EPUB 3 only.** `direction` and `unicode-bidi` drew an error at
 any version, and epubcheck guards the rule with `version == VERSION_3`
