@@ -840,6 +840,14 @@ fn qualified_attribute_name(a: &roxmltree::Attribute) -> String {
         Some("http://www.idpf.org/2007/ops") => "epub:",
         Some("http://www.w3.org/XML/1998/namespace") => "xml:",
         Some("http://www.w3.org/1999/xlink") => "xlink:",
+        // The OPF namespace joined this list when EPUB 3 package metadata
+        // started being checked: a converted OPF 2 book carries
+        // `opf:file-as`/`opf:role`/`opf:scheme` on its `dc:` elements, and
+        // "attribute \"file-as\" is not allowed here" names something that
+        // does not appear anywhere in the reader's file. Its absence also
+        // made us inconsistent with ourselves, since `epub:type` on the same
+        // book was already reported in full.
+        Some("http://www.idpf.org/2007/opf") => "opf:",
         _ => "",
     };
     format!("{prefix}{}", a.name())

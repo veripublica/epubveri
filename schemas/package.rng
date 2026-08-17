@@ -14,6 +14,7 @@
   the hand-coded checks today and will move to Schematron later.
 -->
 <grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         xmlns:dc="http://purl.org/dc/elements/1.1/"
          ns="http://www.idpf.org/2007/opf"
          datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 
@@ -22,7 +23,7 @@
       <ref name="anyAttributes"/>
       <attribute name="version"><data type="string"/></attribute>
       <interleave>
-        <element name="metadata"><ref name="looseContent"/></element>
+        <element name="metadata"><ref name="metadataContent-epub3"/></element>
         <element name="manifest">
           <ref name="anyAttributes"/>
           <oneOrMore>
@@ -64,6 +65,113 @@
   <define name="looseContent">
     <ref name="anyAttributes"/>
     <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
+  </define>
+
+  <!-- EPUB 3 `<metadata>`. Everything here except the Dublin Core elements
+       stays as permissive as `looseContent` - `<meta>`, `<link>` and foreign
+       elements are unconstrained, and so is any dc-namespace element outside
+       the fifteen below, because *which* dc elements may appear is a separate
+       question from what attributes they take and tightening it here would
+       bundle two changes.
+
+       The fifteen are constrained because a legacy OPF 2 package converted to
+       EPUB 3 keeps `opf:role`, `opf:file-as`, `opf:scheme` and `opf:event` on
+       them, and EPUB 3 replaced all of that with `<meta refines>`.
+       `package-30.rnc` gives them one of exactly two attribute lists, and
+       nothing else:
+
+         opf.dc.attlist = opf.id.attr? & opf.i18n.attrs   (id, dir, xml:lang)
+         …and identifier/language/date/type/format take `opf.id.attr?` alone.
+
+       That second group is the easy one to get wrong: `xml:lang` on
+       `dc:language` is an error, on `dc:title` it is not. Both halves were
+       probed against epubcheck 5.3.0, one attribute per book, on a minimal
+       book that is otherwise clean in both tools.
+
+       Reported by a MobileRead user (thread page 13) with epubcheck's output
+       and ours side by side: 13 findings against our 7, and all six missing
+       were this. No book on the 336-book shelf carries an `opf:*` attribute
+       on a dc element, so nothing here is shelf-visible in either direction -
+       the probe and the tests are the whole evidence. -->
+  <define name="metadataContent-epub3">
+    <ref name="anyAttributes"/>
+    <mixed>
+      <zeroOrMore>
+        <choice>
+          <ref name="dcFull-epub3"/>
+          <ref name="dcIdOnly-epub3"/>
+          <ref name="nonDcElement"/>
+        </choice>
+      </zeroOrMore>
+    </mixed>
+  </define>
+
+  <!-- `id`, `dir` and `xml:lang`. `dir`'s value set is epubcheck's
+       (`opf.dir.attr`), not a free string. -->
+  <define name="dcFull-epub3">
+    <element>
+      <choice>
+        <name>dc:title</name>
+        <name>dc:source</name>
+        <name>dc:creator</name>
+        <name>dc:subject</name>
+        <name>dc:description</name>
+        <name>dc:publisher</name>
+        <name>dc:contributor</name>
+        <name>dc:relation</name>
+        <name>dc:coverage</name>
+        <name>dc:rights</name>
+      </choice>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional>
+        <attribute name="dir">
+          <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
+        </attribute>
+      </optional>
+      <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- `id` and nothing else. -->
+  <define name="dcIdOnly-epub3">
+    <element>
+      <choice>
+        <name>dc:identifier</name>
+        <name>dc:language</name>
+        <name>dc:date</name>
+        <name>dc:type</name>
+        <name>dc:format</name>
+      </choice>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- Any element that is not one of the fifteen: still fully permissive. -->
+  <define name="nonDcElement">
+    <element>
+      <anyName>
+        <except>
+          <name>dc:title</name>
+          <name>dc:source</name>
+          <name>dc:creator</name>
+          <name>dc:subject</name>
+          <name>dc:description</name>
+          <name>dc:publisher</name>
+          <name>dc:contributor</name>
+          <name>dc:relation</name>
+          <name>dc:coverage</name>
+          <name>dc:rights</name>
+          <name>dc:identifier</name>
+          <name>dc:language</name>
+          <name>dc:date</name>
+          <name>dc:type</name>
+          <name>dc:format</name>
+        </except>
+      </anyName>
+      <ref name="looseContent"/>
+    </element>
   </define>
 
   <define name="anyElement">

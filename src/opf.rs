@@ -11089,6 +11089,123 @@ mod tests {
         }
     }
 
+    /// An EPUB 3 package document's Dublin Core elements take `id`, `dir` and
+    /// `xml:lang` - and identifier/language/date/type/format take `id` alone.
+    /// The OPF 2 attributes a converted book keeps (`opf:role`,
+    /// `opf:file-as`, `opf:scheme`, `opf:event`) were replaced by
+    /// `<meta refines>` in EPUB 3 and are errors there.
+    ///
+    /// Reported from the MobileRead thread with epubcheck's output beside
+    /// ours: 13 findings against our 7, and every one of the six we missed
+    /// was this. Our `<metadata>` model was `looseContent`, so no attribute
+    /// on any metadata element was checked at all.
+    ///
+    /// **Nothing but this test protects the rule.** No book on the 336-book
+    /// shelf carries an `opf:*` attribute on a dc element and the corpus has
+    /// no such fixture, so both instruments were byte-identical before and
+    /// after the change. Each case below was probed against epubcheck 5.3.0,
+    /// one attribute per book, on a minimal book clean in both tools.
+    #[test]
+    fn epub3_dc_metadata_takes_only_id_dir_and_xml_lang() {
+        let opf = |metadata: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:opf="http://www.idpf.org/2007/opf"
+         version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    {metadata}
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>T</title></head><body><p>x</p></body></html>"#;
+        const ID: &str = r#"<dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>"#;
+        let base = format!("{ID}<dc:title>T</dc:title><dc:language>en</dc:language>");
+        let count = |metadata: String| {
+            crate::validate_bytes(epub_with_opf(Some(&opf(&metadata)), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+
+        // The control has to be silent, or every count below means nothing.
+        assert_eq!(count(base.clone()), 0, "plain EPUB 3 metadata");
+
+        for (label, metadata) in [
+            (
+                "creator opf:role",
+                format!(r#"{base}<dc:creator opf:role="aut">A</dc:creator>"#),
+            ),
+            (
+                "creator opf:file-as",
+                format!(r#"{base}<dc:creator opf:file-as="A, B">A</dc:creator>"#),
+            ),
+            (
+                "title opf:file-as",
+                format!(
+                    r#"{ID}<dc:title opf:file-as="T">T</dc:title><dc:language>en</dc:language>"#
+                ),
+            ),
+            (
+                "identifier opf:scheme",
+                r#"<dc:identifier id="id" opf:scheme="uuid">urn:uuid:1</dc:identifier>
+                   <dc:title>T</dc:title><dc:language>en</dc:language>"#
+                    .to_string(),
+            ),
+            (
+                "date opf:event",
+                format!(r#"{base}<dc:date opf:event="publication">2020</dc:date>"#),
+            ),
+            // `xml:lang` is valid on `dc:title` and an error on `dc:language`:
+            // the second attribute list is the one that is easy to get wrong.
+            (
+                "language xml:lang",
+                format!(r#"{ID}<dc:title>T</dc:title><dc:language xml:lang="en">en</dc:language>"#),
+            ),
+            (
+                "title dir=bogus",
+                format!(r#"{ID}<dc:title dir="bogus">T</dc:title><dc:language>en</dc:language>"#),
+            ),
+        ] {
+            assert_eq!(count(metadata), 1, "EPUB 3 must reject once: {label}");
+        }
+
+        // The other direction, and the reason the two lists are kept apart:
+        // these are all valid and must stay silent.
+        for (label, metadata) in [
+            (
+                "title id+dir+xml:lang",
+                format!(
+                    r#"{ID}<dc:title id="t" dir="ltr" xml:lang="en">T</dc:title>
+                       <dc:language>en</dc:language>"#
+                ),
+            ),
+            (
+                "creator dir+xml:lang",
+                format!(r#"{base}<dc:creator dir="rtl" xml:lang="ar">A</dc:creator>"#),
+            ),
+            (
+                "date id",
+                format!(r#"{base}<dc:date id="d">2020</dc:date>"#),
+            ),
+            // `<meta>`, `<link>` and foreign metadata stay unconstrained.
+            (
+                "foreign metadata element",
+                format!(r#"{base}<foo xmlns="http://example.com/" bar="baz">x</foo>"#),
+            ),
+        ] {
+            assert_eq!(count(metadata), 0, "EPUB 3 must accept: {label}");
+        }
+    }
+
     /// #63: an EPUB 2 package document is checked against opf20's closed
     /// shapes, not the permissive EPUB 3 grammar. `<meta property=…>` and a
     /// manifest/spine `properties` attribute are EPUB 3 constructs that

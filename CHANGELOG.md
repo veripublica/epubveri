@@ -61,7 +61,34 @@ collapses to a single finding while the *deliberate* difference is untouched:
 two. `docs/COVERAGE.md` now separates the two cases, because they look
 identical in a count diff and only one of them is a defect.
 
-All five fixes leave the corpus exactly where it was: 606/607 exact-ID recall,
+**EPUB 3 package metadata is checked at all now** (MobileRead, thread page
+13). A reader sent epubcheck's output beside ours for the same book: 13
+findings against our 7, and all six we missed were OPF 2 attributes left on
+Dublin Core elements by a converted book — `opf:role`, `opf:file-as`,
+`opf:scheme`, `opf:event`. EPUB 3 replaced every one of them with
+`<meta refines>`, and our `<metadata>` content model was fully permissive, so
+no attribute on any metadata element was being checked.
+
+The two attribute lists are now what `package-30.rnc` specifies and are
+deliberately *not* the same: `dc:title`, `dc:creator`, `dc:contributor`,
+`dc:subject`, `dc:description`, `dc:publisher`, `dc:relation`, `dc:coverage`,
+`dc:rights` and `dc:source` take `id`, `dir` and `xml:lang`, while
+`dc:identifier`, `dc:language`, `dc:date`, `dc:type` and `dc:format` take
+`id` alone — so `xml:lang` is valid on `dc:title` and an error on
+`dc:language`. `<meta>`, `<link>` and foreign metadata elements stay
+unconstrained, and EPUB 2 packages are untouched, where these attributes are
+legitimate.
+
+**An OPF-namespaced attribute is now named in full in the message.** We
+reported `attribute "file-as" is not allowed here` for `opf:file-as`, naming
+something that appears nowhere in the reader's file — and we were already
+inconsistent with ourselves, since `epub:type` on the same book was reported
+with its prefix. Consumers reading the `params` of an
+`opf.package.schema_violation` finding will now see `opf:file-as` rather than
+`file-as`; the message shape is unchanged. No book on the 336-book shelf
+produces such a message today.
+
+All seven fixes leave the corpus exactly where it was: 606/607 exact-ID recall,
 0 false positives on 355 should-be-clean cases. Across the 336-book shelf,
 **329 books agree with epubcheck on the ID set exactly and not one ID is
 reported by epubveri alone.**
