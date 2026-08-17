@@ -10,7 +10,7 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
-Six gap fixes, all found by cross-checking the 346-book shelf against
+Eight gap fixes, all found by cross-checking the 346-book shelf against
 epubcheck rather than by any test — and two of them run in the
 false-positive direction, which the shelf could not have shown either.
 
@@ -55,6 +55,26 @@ are, but only when what they decode to is: `http://ex%C3%BCample.com` decodes
 to a real IDN label and stays clean. The decode happens *after* the userinfo
 is stripped, never before, or the decoded `@` would let the userinfo strip eat
 the host and hide the error.
+
+**RSC-020 now covers an interior space and an empty host, in content
+documents as well as the manifest.** It was scoped to the host of an absolute
+URL, on the reasoning that the WHATWG parser normalizes a space in the path —
+it does, but epubcheck parses every URL a second time through galimatias with
+a strict handler that turns those recoverable warnings into errors. The
+deferral recorded for this said to revisit it given "real books that actually
+contain such URLs"; four do, carrying 32 between them, and all four now agree
+exactly. A *trailing* space stays valid, which is a real user report
+(patrik's) and still passes — two of the three assertions in the test that
+protected it were our own stance rather than epubcheck's, and were corrected
+against the oracle.
+
+**A narrow `xsd:anyURI` check.** epubcheck types `href` and its relatives as
+`xsd:anyURI` and Jing rejects `http://`, `%zz` and `:` with "value of
+attribute … is invalid; must be a URI" — RSC-005, not RSC-020, which matters
+because catching it under the wrong id would have read as a new false
+positive. Only those three measured shapes are implemented; a space is
+explicitly *not* one of them, which is what keeps a check spanning 39 schema
+sites from inventing errors.
 
 **OPF-072 counts an element's own text, not its descendants'.** Calibre
 writes unescaped `<p>` markup into `dc:description`, and epubcheck calls such

@@ -6644,6 +6644,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         remote_resource_refs.insert(strip_url_fragment(v).trim().to_string());
                     }
                 } else {
+                    // Same interior-space rule as the attribute walk below.
+                    // SVG reaches this site instead of that one, so a
+                    // `<image xlink:href="../Images/bes sevgi dili.jpg">` -
+                    // a real book - drew the manifest-side RSC-020 and not
+                    // the reference-side one epubcheck also reports.
+                    if v.trim().contains(' ') {
+                        report.push_node(
+                            RSC_020,
+                            Severity::Error,
+                            format!("URL '{v}' is not conforming"),
+                            path.clone(),
+                            node,
+                            "opf.content_document.malformed_relative_url",
+                            vec![v.to_string()],
+                        );
+                    }
                     let key = nfc(&resolve(&dir, strip_url_fragment(v).trim()));
                     resource_refs.insert(key.clone());
                     // The same declared/present matrix the no-namespace
@@ -6811,6 +6827,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // earns).
                     if remote_base {
                         continue;
+                    }
+                    // RSC-020: an unencoded space in a *relative* reference.
+                    // The absolute-URL path is `url::has_syntax_error`, which
+                    // this walk never reaches - it bails on `is_external`
+                    // before here - so `<img src="../Images/Screen Shot
+                    // 2018-01-07 at 23.14.51.png">` produced nothing from us
+                    // and RSC-020 from epubcheck. Two real books carry five
+                    // between them; measured against 5.3.0 per book.
+                    // Interior space only - leading/trailing is stripped by
+                    // the URL parser and valid (`content-model-a-with-
+                    // leading-trailing-spaces-valid` in the corpus).
+                    if v.trim().contains(' ') {
+                        report.push_node(
+                            RSC_020,
+                            Severity::Error,
+                            format!("URL '{v}' is not conforming"),
+                            path.clone(),
+                            node,
+                            "opf.content_document.malformed_relative_url",
+                            vec![v.to_string()],
+                        );
                     }
                     let resolved = nfc(&resolve(&dir, v));
                     let declared = manifest_paths.contains(&resolved);

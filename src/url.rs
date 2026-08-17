@@ -78,10 +78,31 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     // normalized by the WHATWG parser EPUB references (percent-encoded, or
     // stripped when leading/trailing), so it isn't an error there - see
     // the module note.
-    host.chars().any(|c| {
+    // An empty host for a special scheme: `http://` and `http:///x` both
+    // parse to no authority at all, which epubcheck reports as
+    // "Invalid host: empty host". A real book carries two.
+    if host.is_empty() {
+        return true;
+    }
+    if host.chars().any(|c| {
         c.is_ascii()
             && !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']' | '%' | '_'))
-    })
+    }) {
+        return true;
+    }
+    // A space anywhere in an absolute URL, not only in the host. The comment
+    // above used to scope this to the host on the reasoning that the WHATWG
+    // parser normalizes a space in the path; it does, but epubcheck parses
+    // every URL a second time through galimatias with a strict handler that
+    // turns those recoverable warnings into errors - so a space in the path
+    // is an error there, and one real book carries twenty of them
+    // ("http://www.ted.com/talks/richard_branson_s_life_at_30_000 _feet.html").
+    // Measured against 5.3.0 one URL per book.
+    // *Interior* space only: leading and trailing whitespace is stripped by
+    // the URL parser and is valid, which the corpus says outright - the
+    // fixture is called `content-model-a-with-leading-trailing-spaces-valid`
+    // and it caught this the moment the rule was written without the trim.
+    href.trim().contains(' ')
 }
 
 /// Percent-decode a host for validation. Invalid escapes (`%zz`, a trailing
@@ -158,19 +179,37 @@ mod tests {
         assert!(has_syntax_error("http://  www.example.com"));
     }
 
+    /// A *trailing* space is stripped by the URL parser and is valid; an
+    /// *interior* one is not.
+    ///
+    /// Two of this test's three assertions were our own stance rather than
+    /// epubcheck's, and were re-measured against 5.3.0 one URL per book:
+    /// only the first - patrik's actual MobileRead report, a trailing space
+    /// in a query - is accepted by epubcheck. The other two it reports, and
+    /// so do we now. A real book carries twenty path spaces of the same
+    /// shape.
+    ///
+    /// The middle case is the reason the rule trims rather than tests the
+    /// last character: an invisible formatting character after the space
+    /// makes that space interior, and epubcheck flags it.
     #[test]
-    fn space_in_path_or_query_is_not_an_error() {
-        // patrik (MobileRead): a trailing space in the query was wrongly
-        // flagged. The WHATWG parser EPUB references normalizes a
-        // path/query space (percent-encoded, or stripped when trailing), so
-        // the URL is valid and epubcheck accepts it - we must not error.
+    fn a_trailing_space_is_valid_and_an_interior_one_is_not() {
+        // patrik (MobileRead): must stay accepted.
         assert!(!has_syntax_error(
             "https://www.youtube.com/watch?v=1ju_N8JlXFc. "
         ));
-        assert!(!has_syntax_error(
+        // The space is interior once something follows it.
+        assert!(has_syntax_error(
             "https://www.youtube.com/watch?v=1ju_N8JlXFc. \u{202c}"
         ));
-        assert!(!has_syntax_error("https://example.com/a b/c"));
+        assert!(has_syntax_error("https://example.com/a b/c"));
+        assert!(!has_syntax_error("https://example.com/a/c"));
+        // An empty host: `http://` and `http:///x` both parse to no
+        // authority, which epubcheck reports as "Invalid host: empty host".
+        // A real book carries two, alongside twenty path spaces.
+        assert!(has_syntax_error("http://"));
+        assert!(has_syntax_error("http:///x"));
+        assert!(!has_syntax_error("http://x"));
     }
 
     #[test]

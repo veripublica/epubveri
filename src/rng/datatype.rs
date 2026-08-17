@@ -95,8 +95,8 @@ impl Datatype {
             Datatype::String
             | Datatype::NormalizedString
             | Datatype::Token
-            | Datatype::AnyUri
             | Datatype::Unknown(_) => true,
+            Datatype::AnyUri => Self::is_any_uri(&s),
             Datatype::NmToken => is_nmtoken(&s),
             Datatype::NmTokens => !s.is_empty() && s.split(' ').all(is_nmtoken),
             Datatype::Name => is_name(&s),
@@ -113,6 +113,57 @@ impl Datatype {
             Datatype::Date => strip_tz(&s).map(is_date_core).unwrap_or(false),
             Datatype::Time => strip_tz(&s).map(is_time_core).unwrap_or(false),
         }
+    }
+
+    /// `xsd:anyURI`, kept deliberately narrow.
+    ///
+    /// epubcheck types `href` and its relatives as `xsd:anyURI` and Jing rejects
+    /// a small set of shapes with "value of attribute … is invalid; must be a
+    /// URI". The boundary was measured against 5.3.0 one value per book, because
+    /// Jing is not vendored here and coding to RFC 3986 rather than to what
+    /// epubcheck actually does is the mistake this project keeps having to undo:
+    ///
+    ///   `http://`   rejected - a special scheme with nothing after it
+    ///   `%zz`       rejected - a percent sign that is not an escape
+    ///   `:`         rejected - an empty scheme
+    ///   `http://x`  accepted
+    ///   `a b`       accepted - a space is NOT an error here, which is what
+    ///               keeps this from being a false-positive machine; the space
+    ///               case belongs to RSC-020, separately and partially
+    ///   `http://a b` accepted
+    ///
+    /// Only those three rejections are implemented. Anything not on the measured
+    /// list is accepted, on the same reasoning RSC-020 is left partial: a guess
+    /// about an unreadable implementation, applied to 39 schema sites, would
+    /// invent errors on real books.
+    fn is_any_uri(s: &str) -> bool {
+        // A percent sign must introduce two hex digits.
+        let b = s.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'%' {
+                let ok = b
+                    .get(i + 1..i + 3)
+                    .is_some_and(|h| h.iter().all(u8::is_ascii_hexdigit));
+                if !ok {
+                    return false;
+                }
+                i += 3;
+                continue;
+            }
+            i += 1;
+        }
+        // An empty scheme: a leading colon.
+        if s.starts_with(':') {
+            return false;
+        }
+        // A scheme with nothing at all after `://`.
+        if let Some(rest) = s.split_once("://").map(|(_, r)| r)
+            && rest.is_empty()
+        {
+            return false;
+        }
+        true
     }
 
     /// Value-space equality, used by `<value>`.
