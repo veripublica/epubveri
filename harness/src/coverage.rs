@@ -266,7 +266,16 @@ const ANN: &[Ann] = &[
          selectors are genuinely malformed, so neither tool is wrong; ours \
          names each thing to fix. Same class as the `colgroup`/`col` \
          difference. Blast radius: 1 shelf book of 336, 22 findings against \
-         epubcheck's 12. A *second* book used to sit in this row for a \
+         epubcheck's 12. **Second deliberate deviation, decided 2026-08-17: \
+         an empty declaration stays silent.** CSS Syntax 5.4.4 discards a \
+         stray semicolon in a declaration list, so `a:link {;color:#000}` is \
+         valid CSS; epubcheck's older parser reports it and we do not. This \
+         is the selector policy above applied to declarations - flag only \
+         what is malformed under the current spec *and* epubcheck flags - \
+         and extending it from one to the other was the decision, since the \
+         policy had only ever been written for selectors. Measured: 1 shelf \
+         book of 346 contains an empty declaration at all. A *second* book \
+         used to sit in this row for a \
          different reason and no longer does - a stray declaration outside \
          any rule was reported once per bad token (4 against epubcheck's 1), \
          which was a real defect rather than a granularity choice and is \
