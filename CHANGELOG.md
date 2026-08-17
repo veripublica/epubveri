@@ -8,6 +8,63 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+Six gap fixes, all found by cross-checking the 346-book shelf against
+epubcheck rather than by any test — and two of them run in the
+false-positive direction, which the shelf could not have shown either.
+
+**A content-document reference is now RSC-001, RSC-007, RSC-008 or silent,
+by whether the target is declared and whether it is present.** `css.rs` has
+applied that matrix to every `url()` for a long time, and its comment said
+the split was "already established for XHTML content-doc references" — only
+one of the three cells was. A *declared* target with a missing file drew a
+second RSC-007 on top of the manifest pass's RSC-001, and an *undeclared*
+target that is present drew nothing at all. SVG needed separate wiring: the
+reference walk reads no-namespace attributes and SVG references through
+`xlink:href`, so a broken image reference inside an `<svg>` produced no
+finding whatsoever. The package document, `mimetype` and `META-INF/*` are
+exempt, being structural resources that can never be manifest items.
+
+**A remote resource reached through a linked stylesheet is reported once,
+against the stylesheet.** One `@font-face` in one shared sheet produced 10
+RSC-008 and 9 RSC-031 on a ten-document book, against epubcheck's single
+finding, because every linking document adopted the sheet's URLs as its own.
+Removing that also removed the RSC-031 the sheet legitimately earns, so the
+https warning now lives on the manifest pass too — EPUB 3 only, since at 2.0
+nothing may be remote and the scheme is beside the point.
+
+**In EPUB 2 every remote reference is restricted (RSC-006), not undeclared
+(RSC-008).** OPS 2.0.1 has no remote-resource concept at all: there is no
+`remote-resources` property to declare and nothing may live outside the
+container, so the manifest question never arises.
+
+**`is_remote_url` is now epubcheck's predicate**: any scheme except `data:`
+(and `file:`, which RSC-030 owns). It was `http`/`https` only, so
+`res:///system/fonts/X.ttf` in a real book's `@font-face` fell between two
+checks — external enough to skip local resolution, not remote enough to be
+reported — and produced nothing from either. Hyperlink targets are
+unaffected: `<a href>` and `@cite` are collected separately and never become
+embedded dependencies.
+
+**A percent escape in a host is judged by what it decodes to.** `%40` decodes
+to `@`, which is forbidden in a domain — `http://ykykultur%40ykykultur.com.tr`
+is an error epubcheck reports and we did not. Our host check allowed `%`
+outright, on the reasoning that percent-encoded octets are legitimate; they
+are, but only when what they decode to is: `http://ex%C3%BCample.com` decodes
+to a real IDN label and stays clean. The decode happens *after* the userinfo
+is stripped, never before, or the decoded `@` would let the userinfo strip eat
+the host and hide the error.
+
+**OPF-072 counts an element's own text, not its descendants'.** Calibre
+writes unescaped `<p>` markup into `dc:description`, and epubcheck calls such
+an element empty; we read the text inside the children and stayed silent.
+
+Corpus unchanged throughout: 606/607 exact-ID recall, 0 false positives on
+355 should-be-clean cases, 0 over-reported on 255 fixtures — and it earned
+its keep here, catching two regressions the moment the reference matrix
+landed.
+
 ## [0.9.19] - 2026-08-17
 
 Seven fixes, and what they have in common is how they were found rather than

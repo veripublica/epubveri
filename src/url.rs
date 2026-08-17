@@ -56,6 +56,19 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
         .next()
         .unwrap_or(after_slashes);
     let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    // Percent-decode *after* stripping userinfo, never before: `%40` decodes
+    // to `@`, and decoding first would let the userinfo strip eat the host
+    // and hide the very error being looked for.
+    //
+    // epubcheck (galimatias, following WHATWG) decodes the host and then
+    // applies the forbidden-domain code points, so `http://a%40b.com` is an
+    // error and `http://ex%C3%BCample.com` - which decodes to a real IDN
+    // label - is not. Ours allowed `%` outright, on the reasoning that
+    // percent-encoded octets are legitimate; they are, but only when what
+    // they decode to is. Measured one URL per shape against 5.3.0: `%40` and
+    // `%20` are RSC-020, `%C3%BC` and a real `user@` are clean.
+    let host = percent_decode_lossy(host);
+    let host = host.as_str();
     // Internationalized domain names (real Unicode host labels),
     // percent-encoded octets, and an underscore (non-standard but
     // accepted by most browsers, confirmed via `url-valid.xhtml`) are all
@@ -71,6 +84,34 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     })
 }
 
+/// Percent-decode a host for validation. Invalid escapes (`%zz`, a trailing
+/// `%`) are left exactly as they are rather than dropped: the point is to see
+/// what the URL parser would see, and a byte sequence that is not valid UTF-8
+/// after decoding is replaced rather than discarded, so nothing silently
+/// disappears from the string being checked.
+fn percent_decode_lossy(host: &str) -> String {
+    if !host.contains('%') {
+        return host.to_string();
+    }
+    let b = host.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%'
+            && let Some(h) = b.get(i + 1..i + 3)
+            && let Ok(hs) = std::str::from_utf8(h)
+            && let Ok(v) = u8::from_str_radix(hs, 16)
+        {
+            out.push(v);
+            i += 3;
+            continue;
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 /// HTM-025: the URL's scheme isn't a real, registered one.
 pub(crate) fn has_unregistered_scheme(href: &str) -> bool {
     let Some((scheme, _)) = href.split_once(':') else {
@@ -84,6 +125,30 @@ pub(crate) fn has_unregistered_scheme(href: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The host is percent-decoded before it is judged, and only after the
+    /// userinfo has been stripped. `%40` decodes to `@`; decoding first would
+    /// let the userinfo strip eat the host and hide the error.
+    ///
+    /// Found on a real book (`http://ykykultur%40ykykultur.com.tr`) that
+    /// epubcheck reports and we did not. The boundary was measured one URL
+    /// per shape against 5.3.0.
+    #[test]
+    fn a_percent_escape_in_the_host_is_judged_by_what_it_decodes_to() {
+        // Decodes to a forbidden domain character.
+        assert!(has_syntax_error("http://ykykultur%40ykykultur.com.tr"));
+        assert!(has_syntax_error("http://exa%20mple.com/x"));
+        // Decodes to a real IDN label - percent-encoding is not the problem,
+        // what it decodes to is.
+        assert!(!has_syntax_error("http://ex%C3%BCample.com/x"));
+        // A genuine userinfo is not a host character at all.
+        assert!(!has_syntax_error("http://user@example.com/x"));
+        // Scoped to the host: the same escape in the path is ordinary.
+        assert!(!has_syntax_error("http://example.com/a%40b"));
+        assert!(!has_syntax_error("http://example.com/x"));
+        // A malformed escape is left alone rather than guessed at.
+        assert!(!has_syntax_error("http://exa%zzmple.com/x"));
+    }
 
     #[test]
     fn detects_space_in_host() {

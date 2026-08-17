@@ -325,7 +325,39 @@ pub(crate) fn is_external(href: &str) -> bool {
 /// remote resource" just because it isn't locally resolvable.
 pub(crate) fn is_remote_url(href: &str) -> bool {
     let href = href.trim();
-    href.starts_with("http://") || href.starts_with("https://")
+    // epubcheck's rule, from `OCFContainer.isRemote`: a `data:` URL is never
+    // remote, anything inside the container is not remote, and everything
+    // else with a scheme is. It is deliberately *not* a list of known
+    // schemes - `res:///system/fonts/HelveticaNeue.ttf` in a real book's
+    // `@font-face` drew RSC-006 and OPF-014 from epubcheck and nothing at
+    // all from us, because `res:` was remote enough to skip local
+    // resolution (`is_external` matches on `://`) and not remote enough to
+    // be reported. A gap between two checks reports nothing, which is the
+    // one failure a user cannot notice.
+    //
+    // Hyperlink targets are unaffected: `<a href>` and `@cite` are collected
+    // into `remote_link_refs`, a separate set, so a `mailto:` link does not
+    // become an embedded remote dependency. That split is what makes the
+    // general predicate safe here, and it is also how epubcheck arranges it
+    // - the URL is remote either way, and the checks that care are only
+    // asked about resources that must live in the container.
+    // `data:` is never remote (epubcheck's own first branch), and `file:`
+    // is RSC-030's alone: epubcheck reports that and stops, so treating it
+    // as a remote resource here added a second finding on top - caught by
+    // the `file-url-in-css-error` fixture, which expects RSC-030 and
+    // nothing else.
+    if href.starts_with("data:") || is_file_url(href) {
+        return false;
+    }
+    let Some(colon) = href.find(':') else {
+        return false;
+    };
+    let scheme = &href[..colon];
+    !scheme.is_empty()
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 /// A `file:` URL, which EPUB never allows (RSC-030). epubcheck's rule is
@@ -3259,8 +3291,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         "identifier" | "date" | "title" | "language"
                     )
             }) {
+                // The element's *own* text, not its descendants'. Calibre
+                // writes unescaped `<p>` markup into `dc:description`, and
+                // epubcheck counts such an element as empty: its handler keeps
+                // the character data delivered to that element, and text
+                // sitting inside a child is not it. Probed one book per shape
+                // against 5.3.0 - empty and plain text agree either way,
+                // `<p>text</p>` alone is the case that differs, and a mixed
+                // `text<p>...</p>` is non-empty to both, which is why this
+                // reads direct children rather than "has no element children".
                 let text: String = n
-                    .descendants()
+                    .children()
                     .filter(|t| t.is_text())
                     .filter_map(|t| t.text())
                     .collect();
@@ -6603,7 +6644,45 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         remote_resource_refs.insert(strip_url_fragment(v).trim().to_string());
                     }
                 } else {
-                    resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+                    let key = nfc(&resolve(&dir, strip_url_fragment(v).trim()));
+                    resource_refs.insert(key.clone());
+                    // The same declared/present matrix the no-namespace
+                    // attribute walk below applies. It could not reach here:
+                    // that walk reads `attr_no_ns`, and SVG's reference is
+                    // `xlink:href`, so a broken image reference inside an
+                    // `<svg>` produced nothing at all from us - not the
+                    // RSC-007 for a missing file, and not the RSC-008 for an
+                    // undeclared one. Measured against epubcheck 5.3.0 on a
+                    // real book (an `<image xlink:href>` pointing at a
+                    // container file nobody declared) and on one probe per
+                    // cell.
+                    let structural =
+                        key == nfc(opf_path) || key == "mimetype" || key.starts_with("META-INF/");
+                    if !structural && !manifest_paths.contains(&key) {
+                        if name_index.contains_key(&key) {
+                            report.push_node(
+                                RSC_008,
+                                Severity::Error,
+                                format!("resource '{v}' is not declared in the manifest"),
+                                path.clone(),
+                                node,
+                                "opf.content_document.undeclared_resource",
+                                vec![v.to_string()],
+                            );
+                        } else {
+                            report.push_node(
+                                RSC_007,
+                                Severity::Error,
+                                format!(
+                                    "reference to a resource missing from the publication: '{v}'"
+                                ),
+                                path.clone(),
+                                node,
+                                "opf.content_document.reference_missing_resource",
+                                vec![v.to_string()],
+                            );
+                        }
+                    }
                 }
             }
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
@@ -6733,23 +6812,65 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if remote_base {
                         continue;
                     }
-                    let resolved = resolve(&dir, v);
-                    if !name_index.contains_key(&nfc(&resolved)) {
-                        // Real corpus finding, grep-verified across the
-                        // whole corpus: RSC-001 is used exclusively for a
-                        // manifest item/@href missing from the container
-                        // (and a CSS @import target, handled separately in
-                        // css.rs) - every other "this content-doc
-                        // reference doesn't resolve" case is RSC-007.
-                        report.push_node(
-                            RSC_007,
-                            Severity::Error,
-                            format!("reference to a resource missing from the publication: '{v}'"),
-                            path.clone(),
-                            node,
-                            "opf.content_document.reference_missing_resource",
-                            vec![v.to_string()],
-                        );
+                    let resolved = nfc(&resolve(&dir, v));
+                    let declared = manifest_paths.contains(&resolved);
+                    let present = name_index.contains_key(&resolved);
+                    // The declared/present matrix `css.rs` applies to every
+                    // `url()` - whose comment claimed it was "already
+                    // established for XHTML content-doc references" when only
+                    // one of its three cells was. Both missing cells were
+                    // measured against epubcheck 5.3.0, one book per cell, on
+                    // books otherwise clean in both tools, at 2.0 and 3.0:
+                    //
+                    //   declared + file missing -> RSC-001 *only*. The
+                    //     manifest pass already reports it and we were adding
+                    //     a second RSC-007 on top.
+                    //   undeclared + file present -> RSC-008. We said nothing,
+                    //     so a real book referencing a container file nobody
+                    //     declared drew only the usage-level OPF-003 from the
+                    //     container side and no error from the reference side.
+                    //   undeclared + file missing -> RSC-007, unchanged.
+                    //
+                    // RSC-001 is used exclusively for a manifest item/@href
+                    // missing from the container (and a CSS @import target,
+                    // handled in css.rs), which is why the first cell is
+                    // silent here rather than reported under another id.
+                    // The OPF itself, `mimetype` and `META-INF/*` are
+                    // structural resources, never manifest items - the same
+                    // exemption OPF-003 makes on the container side. Without
+                    // it the `nav-cfi-valid` fixture, whose nav points at
+                    // `package.opf#epubcfi(...)`, became a false positive:
+                    // the file is present, is not declared, and never could
+                    // be.
+                    let structural = resolved == nfc(opf_path)
+                        || resolved == "mimetype"
+                        || resolved.starts_with("META-INF/");
+                    match (declared || structural, present) {
+                        (false, true) => {
+                            report.push_node(
+                                RSC_008,
+                                Severity::Error,
+                                format!("resource '{v}' is not declared in the manifest"),
+                                path.clone(),
+                                node,
+                                "opf.content_document.undeclared_resource",
+                                vec![v.to_string()],
+                            );
+                        }
+                        (false, false) => {
+                            report.push_node(
+                                RSC_007,
+                                Severity::Error,
+                                format!(
+                                    "reference to a resource missing from the publication: '{v}'"
+                                ),
+                                path.clone(),
+                                node,
+                                "opf.content_document.reference_missing_resource",
+                                vec![v.to_string()],
+                            );
+                        }
+                        (true, _) => {}
                     }
                 }
             }
@@ -6987,10 +7108,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             resource_refs
                                 .insert(nfc(&resolve(&css_dir, strip_url_fragment(&u).trim())));
                         }
-                        if is_remote_url(&u) {
-                            has_remote = true;
-                            remote_refs.insert(strip_url_fragment(&u));
-                        }
+                        // A *linked* stylesheet's remote URLs are not this
+                        // document's remote references. The manifest pass
+                        // over the stylesheet itself already reports them,
+                        // once, against the stylesheet - which is where
+                        // epubcheck puts them too. Adding them here as well
+                        // reported the same remote font once per document
+                        // that links the sheet: one `@font-face` in one
+                        // shared stylesheet produced 10 RSC-008 and 9
+                        // RSC-031 on a ten-document book, against
+                        // epubcheck's one finding.
+                        //
+                        // Invisible to every instrument. No book on the
+                        // 346-book shelf has a remote URL in CSS at all, and
+                        // the corpus fixtures that do have a single content
+                        // document each - the duplication scales with the
+                        // number of linking documents, so at one document it
+                        // cannot appear. Inline `<style>` above is a
+                        // different case and still counts: those URLs really
+                        // are the document's own.
                     }
                 }
             }
@@ -7170,6 +7306,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     Position::of(d.root_element()),
                 );
             }
+        }
+
+        // In EPUB 2 *every* remote reference is a restricted one. OPS 2.0.1
+        // has no remote-resource concept at all: there is no
+        // `remote-resources` property to declare and nothing may live
+        // outside the container, so "is it in the manifest" is not the
+        // question and RSC-008 is the wrong answer. epubcheck reports
+        // RSC-006 for a remote font in CSS at 2.0 and RSC-008 at 3.0 -
+        // probed one book per version, in a linked stylesheet and in an
+        // inline `<style>`, on books otherwise clean in both tools.
+        //
+        // Routing it through the existing restricted set rather than adding
+        // a second branch gets the RSC-031 rule right for free: the https
+        // warning below already skips restricted references, and epubcheck
+        // likewise gives no RSC-031 at 2.0, for the reason documented there
+        // - the scheme is beside the point when the resource may not be
+        // remote at all.
+        if !is_epub3 {
+            restricted_remote_refs.extend(remote_refs.iter().cloned());
         }
 
         // RSC-008: a remote resource referenced from this content
@@ -7801,13 +7956,48 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // use of a remote font is `@font-face` were reported as
                 // unreferenced.
                 remote_resource_refs.insert(u.clone());
-                if !remote_manifest.contains_key(&u) {
+                // EPUB 2: nothing may be remote, so this is RSC-006 and the
+                // manifest question never arises - the same rule the
+                // content-document path applies through
+                // `restricted_remote_refs`. See the comment there.
+                if !is_epub3 {
+                    report.push_at_rule(
+                        RSC_006,
+                        Severity::Error,
+                        format!("remote resource '{u}' is not allowed in this context"),
+                        path.clone(),
+                        "opf.content_document.remote_resource_restricted_context",
+                        vec![u.clone()],
+                    );
+                } else if !remote_manifest.contains_key(&u) {
                     report.push_at_rule(
                         RSC_008,
                         Severity::Error,
                         format!("remote resource '{u}' is not declared in the manifest"),
                         path.clone(),
                         "opf.content_document.remote_resource_not_in_manifest",
+                        vec![u.clone()],
+                    );
+                }
+                // RSC-031 belongs here too, not only on the per-document
+                // path. It used to reach a linked stylesheet's URLs only
+                // because the linking document adopted them, so removing
+                // that duplication took the https warning with it - caught
+                // by re-probing EPUB 3 after the change rather than by any
+                // test, since no shelf book has a remote URL in CSS.
+                //
+                // EPUB 3 only: in EPUB 2 nothing may be remote at all, and
+                // epubcheck reports that and stops, on the same reasoning
+                // the per-document site above already documents - telling
+                // someone to switch to https points at the wrong half of
+                // their problem. Probed both versions against 5.3.0.
+                if is_epub3 && u.starts_with("http://") {
+                    report.push_at_rule(
+                        RSC_031,
+                        Severity::Warning,
+                        format!("remote resource '{u}' should use https"),
+                        path.clone(),
+                        "opf.content_document.remote_resource_insecure_scheme",
                         vec![u],
                     );
                 }
@@ -12983,6 +13173,343 @@ mod tests {
         buf
     }
 
+    /// A content-document reference is RSC-001, RSC-007, RSC-008 or silent,
+    /// by the same declared/present matrix `css.rs` applies to every `url()`.
+    /// That comment claimed the split was "already established for XHTML
+    /// content-doc references" when only one of the three cells existed.
+    ///
+    /// Two of them were wrong, in opposite directions: a *declared* target
+    /// with a missing file drew RSC-007 on top of the manifest pass's
+    /// RSC-001, and an *undeclared* target that is present drew nothing at
+    /// all, so a real book referencing a container file nobody declared got
+    /// only the usage-level OPF-003 from the container side.
+    ///
+    /// The SVG case is separate wiring, not the same walk: that one reads
+    /// `attr_no_ns`, and SVG references through `xlink:href`, so a broken
+    /// image reference inside an `<svg>` produced nothing whatsoever. It is
+    /// how the real book reported it.
+    ///
+    /// The structural exemption is what the corpus caught: `nav-cfi-valid`
+    /// points its nav at `package.opf#epubcfi(...)`, and the OPF is present,
+    /// undeclared, and never could be declared. Same exemption OPF-003 makes
+    /// on the container side.
+    #[test]
+    fn a_content_document_reference_is_rsc_001_007_or_008_by_declared_and_present() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        // `extra_item` goes in the manifest, `extra_file` into the container.
+        let build = |body: &str, extra_item: &str, extra_file: bool| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    {extra_item}
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                <head><title>nav</title></head><body><nav epub:type=\"toc\"><ol>\
+                <li><a href=\"ch1.xhtml\">1</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    (
+                        "META-INF/container.xml",
+                        r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#.to_string(),
+                    ),
+                    ("OEBPS/content.opf", opf),
+                    ("OEBPS/nav.xhtml", NAV.to_string()),
+                    ("OEBPS/ch1.xhtml", ch1),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                if extra_file {
+                    z.start_file("OEBPS/x.gif", o).unwrap();
+                    z.write_all(b"GIF89a").unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+        };
+        let ids =
+            |r: &crate::report::Report, id: &str| r.messages.iter().filter(|m| m.id == id).count();
+        const ITEM: &str = "<item id=\"img\" href=\"x.gif\" media-type=\"image/gif\"/>";
+        const IMG: &str = "<p><img src=\"x.gif\" alt=\"a\"/></p>";
+
+        // present + undeclared -> RSC-008 (and OPF-003 from the container side)
+        let r = build(IMG, "", true);
+        assert_eq!(ids(&r, crate::ids::RSC_008), 1, "undeclared but present");
+        assert_eq!(ids(&r, crate::ids::RSC_007), 0);
+
+        // missing + undeclared -> RSC-007
+        let r = build(IMG, "", false);
+        assert_eq!(ids(&r, crate::ids::RSC_007), 1, "undeclared and missing");
+        assert_eq!(ids(&r, crate::ids::RSC_008), 0);
+
+        // missing + declared -> RSC-001 only; the reference site stays silent
+        let r = build(IMG, ITEM, false);
+        assert_eq!(ids(&r, crate::ids::RSC_001), 1, "declared but missing");
+        assert_eq!(
+            ids(&r, crate::ids::RSC_007),
+            0,
+            "no second finding on top of RSC-001"
+        );
+
+        // present + declared -> silent
+        let r = build(IMG, ITEM, true);
+        assert_eq!(ids(&r, crate::ids::RSC_007), 0);
+        assert_eq!(ids(&r, crate::ids::RSC_008), 0);
+
+        // SVG reaches the same matrix through `xlink:href`.
+        let svg = "<p><svg xmlns=\"http://www.w3.org/2000/svg\" \
+                   xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"0 0 1 1\">\
+                   <image xlink:href=\"x.gif\"/></svg></p>";
+        let r = build(svg, "", true);
+        assert_eq!(
+            ids(&r, crate::ids::RSC_008),
+            1,
+            "svg image, undeclared but present"
+        );
+        let r = build(svg, "", false);
+        assert_eq!(ids(&r, crate::ids::RSC_007), 1, "svg image, missing");
+
+        // The OPF itself is structural: present, undeclared, and never
+        // declarable. It must draw neither.
+        let r = build("<p><a href=\"content.opf\">o</a></p>", "", false);
+        assert_eq!(
+            ids(&r, crate::ids::RSC_008),
+            0,
+            "the package document is not a manifest item"
+        );
+        assert_eq!(ids(&r, crate::ids::RSC_007), 0);
+    }
+
+    /// `is_remote_url` is epubcheck's predicate, not a list of known
+    /// schemes: anything with a scheme is remote except `data:`.
+    ///
+    /// It used to be `http`/`https` only, and `res:///system/fonts/X.ttf` in
+    /// a real book's `@font-face` fell in the gap between two checks -
+    /// `is_external` matches on `://` so local resolution was skipped, and
+    /// this said "not remote" so the remote-resource rules never ran. Neither
+    /// check reported anything, which is the failure a user cannot notice.
+    /// epubcheck gives OPF-014 and four RSC-006 on that book; so do we now.
+    ///
+    /// `mailto:` and `tel:` are remote *by this predicate* and that is
+    /// correct: what keeps them harmless is that `<a href>` and `@cite` go
+    /// into a separate `remote_link_refs` set and never become embedded
+    /// dependencies. Asserting it here rather than special-casing the scheme
+    /// keeps the predicate the same shape as the oracle's.
+    #[test]
+    fn is_remote_url_is_any_scheme_except_data() {
+        for yes in [
+            "http://example.com/x",
+            "https://example.com/x",
+            "res:///system/fonts/X.ttf",
+            "ftp://example.com/x",
+            "foo://example.com/x",
+            "mailto:x@y.com",
+            "tel:+900000",
+            "  https://example.com/x  ",
+        ] {
+            assert!(super::is_remote_url(yes), "must be remote: {yes}");
+        }
+        for no in [
+            "data:image/gif;base64,R0lGODlh",
+            "images/x.png",
+            "../x.png",
+            "#frag",
+            "",
+            "x.png",
+            // A colon inside a path segment is not a scheme.
+            "chapter/a:b.xhtml",
+            // A scheme cannot start with a digit.
+            "9foo:bar",
+        ] {
+            assert!(!super::is_remote_url(no), "must not be remote: {no}");
+        }
+    }
+
+    /// A remote resource reached through a *linked* stylesheet is reported
+    /// once, against the stylesheet - not once per document that links it.
+    ///
+    /// One `@font-face` in one shared sheet used to produce **10 RSC-008 and
+    /// 9 RSC-031** on a ten-document book, against epubcheck's single
+    /// finding, because every linking document adopted the sheet's remote
+    /// URLs as its own. The manifest pass over the stylesheet already
+    /// reported them, which is also where epubcheck puts them.
+    ///
+    /// **Two documents is the whole point of this fixture.** The duplication
+    /// scales with the number of linking documents, so it cannot appear at
+    /// one - which is exactly why the corpus never saw it, every fixture
+    /// there having a single content document. Nor could the shelf: no book
+    /// among the 346 has a remote URL in CSS at all.
+    ///
+    /// RSC-031 is asserted because removing the duplication silently removed
+    /// it too - it only ever reached a linked sheet's URLs through the
+    /// per-document path. Found by re-probing epubcheck after the fix, not by
+    /// any test, which is the reason this one exists.
+    #[test]
+    fn a_linked_stylesheets_remote_font_is_reported_once_not_once_per_document() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = |ver: &str| {
+            let (modified, nav) = if ver.starts_with('3') {
+                (
+                    "<meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>",
+                    "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>",
+                )
+            } else {
+                ("", "")
+            };
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    {modified}
+  </metadata>
+  <manifest>
+    {nav}
+    <item id="css" href="s.css" media-type="text/css"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/><itemref idref="ch2"/></spine>
+</package>"#
+            )
+        };
+        const CSS: &str = "@font-face { font-family: \"X\"; src: url(http://example.com/f.ttf); }";
+        let doc = |t: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{t}</title>\
+                 <link rel=\"stylesheet\" href=\"s.css\"/></head><body><p>x</p></body></html>"
+            )
+        };
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+            <head><title>nav</title></head><body><nav epub:type=\"toc\"><ol>\
+            <li><a href=\"ch1.xhtml\">1</a></li></ol></nav></body></html>";
+
+        let build = |ver: &str| {
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    (
+                        "META-INF/container.xml",
+                        r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#.to_string(),
+                    ),
+                    ("OEBPS/content.opf", opf(ver)),
+                    ("OEBPS/s.css", CSS.to_string()),
+                    ("OEBPS/nav.xhtml", NAV.to_string()),
+                    ("OEBPS/ch1.xhtml", doc("one")),
+                    ("OEBPS/ch2.xhtml", doc("two")),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        };
+
+        let report = crate::validate_bytes(build("3.0"));
+        let count = |id: &str| report.messages.iter().filter(|m| m.id == id).count();
+        // epubcheck 5.3.0 on this exact shape: one of each.
+        assert_eq!(
+            count(crate::ids::RSC_008),
+            1,
+            "one per stylesheet, not per linking document"
+        );
+        assert_eq!(
+            count(crate::ids::RSC_031),
+            1,
+            "the https warning must survive the de-duplication"
+        );
+        assert_eq!(count(crate::ids::OPF_014), 1);
+        // And it is attributed to the stylesheet, which is where a reader has
+        // to go to fix it.
+        assert!(
+            report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_008)
+                .all(|m| m.location.as_deref().is_some_and(|l| l.contains("s.css"))),
+            "RSC-008 must point at the stylesheet: {:?}",
+            report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_008)
+                .map(|m| m.location.clone())
+                .collect::<Vec<_>>()
+        );
+
+        // EPUB 2 has no remote-resource concept at all: nothing may live
+        // outside the container, so the same stylesheet is RSC-006 there and
+        // the manifest question never arises. epubcheck gives exactly
+        // OPF-014 + RSC-006 on this shape at 2.0 - no RSC-008, and no
+        // RSC-031, because telling someone to switch to https points at the
+        // wrong half when the resource may not be remote at all.
+        let e2 = crate::validate_bytes(build("2.0"));
+        let c2 = |id: &str| e2.messages.iter().filter(|m| m.id == id).count();
+        assert_eq!(
+            c2(crate::ids::RSC_006),
+            1,
+            "EPUB 2: restricted, not undeclared"
+        );
+        assert_eq!(
+            c2(crate::ids::RSC_008),
+            0,
+            "EPUB 2 has no manifest question to ask"
+        );
+        assert_eq!(
+            c2(crate::ids::RSC_031),
+            0,
+            "no https advice on a forbidden reference"
+        );
+        assert_eq!(c2(crate::ids::OPF_014), 1);
+    }
+
     /// OPF-072 (usage): an empty `dc:*` metadata element, EPUB 2 only. In
     /// EPUB 3 an empty element is a schema error, so it must not fire there.
     /// Requested by Doitsu on the MobileRead forum - the one thing epubcheck
@@ -13017,6 +13544,38 @@ mod tests {
         assert_eq!(
             rules(epub_with_metadata("2.0", "<dc:source>x</dc:source>")).len(),
             0
+        );
+
+        // Only the element's OWN text counts. Calibre writes unescaped `<p>`
+        // markup into `dc:description`, and epubcheck calls such an element
+        // empty — its handler keeps the character data delivered to that
+        // element, and text inside a child is not it. We read descendants and
+        // therefore stayed silent on a real book epubcheck reports.
+        //
+        // The mixed case is the one that stops this being "has no element
+        // children": direct text plus a child is non-empty to both tools.
+        // Probed one book per shape against epubcheck 5.3.0.
+        //
+        // Neither instrument protects this. The corpus has no such fixture,
+        // and `diff-shelf.sh` collects ids from ERROR/FATAL lines only, so a
+        // usage-level finding is invisible to the shelf diff by construction.
+        assert_eq!(
+            rules(epub_with_metadata(
+                "2.0",
+                "<dc:description><p>x</p></dc:description>"
+            ))
+            .len(),
+            1,
+            "text inside a child element does not make the element non-empty"
+        );
+        assert_eq!(
+            rules(epub_with_metadata(
+                "2.0",
+                "<dc:description>on<p>in</p></dc:description>"
+            ))
+            .len(),
+            0,
+            "direct text alongside a child element is non-empty"
         );
         // EPUB 3: not OPF-072 (empty is a schema error there instead).
         assert_eq!(
