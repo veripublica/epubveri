@@ -106,6 +106,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
     check_id_attributes(&d, ncx_path, report);
     check_page_target_types(&d, ncx_path, report);
     check_play_order(&d, ncx_path, report);
+    check_nav_point_model(&d, ncx_path, report);
     check_play_order_sequence(&d, ncx_path, report);
     check_page_target_uniqueness(&d, ncx_path, report);
     check_multi_lang_siblings(&d, ncx_path, report);
@@ -231,6 +232,78 @@ fn check_page_target_types(doc: &roxmltree::Document, ncx_path: &str, report: &m
 ///
 /// (Reported missing by Doitsu on the MobileRead forum: epubcheck flagged
 /// four elements on a real EPUB 2 book where epubveri flagged none.)
+/// The `navPoint` content model: one or more `navLabel`, then exactly one
+/// `content`, then any number of nested `navPoint`s (`schema/20/rng/ncx.rng`,
+/// which is the grammar epubcheck loads - `XMLValidators.NCX_RNG`, not the
+/// `ncx-old.rng` sitting beside it, whose `playOrder` is required and would
+/// have produced a finding epubcheck does not).
+///
+/// Nothing here validated the NCX's *structure* before: `ncx.rs` checked
+/// playOrder, id uniqueness, duplicate `navLabel`/`navInfo` and empty text,
+/// so a `<navPoint id="x"><content src="…"/></navPoint>` - no label at all -
+/// was accepted. Reported on MobileRead with a 2.4 KB book (#79).
+///
+/// The three messages reproduce what the RELAX NG validator says, measured
+/// one book per shape against 5.3.0:
+///
+/// - `content` before any `navLabel` - one error, at the `content`;
+/// - a `navLabel` after the `content` - a second error, at the `navLabel`
+///   (so `<content/><navLabel/>` is two findings, not one);
+/// - no `content` at all - one error, at the `navPoint`.
+fn check_nav_point_model(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    for np in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "navPoint")
+    {
+        let mut seen_label = false;
+        let mut seen_content = false;
+        for c in np.children().filter(|c| c.is_element()) {
+            match c.tag_name().name() {
+                "navLabel" => {
+                    if seen_content {
+                        report.push_node(
+                            RSC_005,
+                            Severity::Error,
+                            "element \"navLabel\" is not allowed here; it must precede \"content\"",
+                            ncx_path,
+                            c,
+                            "ncx.nav_point.label_after_content",
+                            Vec::new(),
+                        );
+                    }
+                    seen_label = true;
+                }
+                "content" => {
+                    if !seen_label {
+                        report.push_node(
+                            RSC_005,
+                            Severity::Error,
+                            "element \"content\" is not allowed yet; \"navPoint\" requires a \"navLabel\" first",
+                            ncx_path,
+                            c,
+                            "ncx.nav_point.content_before_label",
+                            Vec::new(),
+                        );
+                    }
+                    seen_content = true;
+                }
+                _ => {}
+            }
+        }
+        if !seen_content {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "element \"navPoint\" is incomplete; it requires a \"content\" element",
+                ncx_path,
+                np,
+                "ncx.nav_point.missing_content",
+                Vec::new(),
+            );
+        }
+    }
+}
+
 fn check_play_order(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
     use std::collections::HashMap;
 
@@ -572,6 +645,46 @@ mod tests {
                 "{label}: an unparsable NCX must say so; got {rules:?}"
             );
         }
+    }
+
+    /// #79: the `navPoint` content model — `navLabel`+, then `content`.
+    ///
+    /// Nothing checked the NCX's structure before, so a `navPoint` carrying
+    /// only a `<content>` was accepted. Reported on MobileRead with a test
+    /// book; each shape below was measured against epubcheck 5.3.0 one book
+    /// per run, and the **counts** are the assertion — `<content/>` followed
+    /// by `<navLabel/>` is two findings there, not one, because the order
+    /// violation and the missing-label violation are separate.
+    #[test]
+    fn nav_point_requires_a_label_before_its_content() {
+        let np = |inner: &str| format!("<navMap><navPoint id=\"n1\">{inner}</navPoint></navMap>");
+        let count = |body: &str| rules_for(body).len();
+
+        assert_eq!(
+            count(&np(
+                "<navLabel><text>x</text></navLabel><content src=\"1.xhtml\"/>"
+            )),
+            0
+        );
+        assert_eq!(count(&np("<content src=\"1.xhtml\"/>")), 1);
+        assert_eq!(
+            count(&np(
+                "<content src=\"1.xhtml\"/><navLabel><text>x</text></navLabel>"
+            )),
+            2
+        );
+        assert_eq!(count(&np("<navLabel><text>x</text></navLabel>")), 1);
+
+        // The slugs, so a future reshuffle cannot quietly swap which
+        // violation is reported for which shape.
+        assert!(
+            rules_for(&np("<content src=\"1.xhtml\"/>"))
+                .contains(&"ncx.nav_point.content_before_label")
+        );
+        assert!(
+            rules_for(&np("<navLabel><text>x</text></navLabel>"))
+                .contains(&"ncx.nav_point.missing_content")
+        );
     }
 
     /// #59: `ncx_playOrderOrigin` and `ncx_playOrderNoGaps`.

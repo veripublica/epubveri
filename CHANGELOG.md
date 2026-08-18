@@ -8,6 +8,36 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**A `navPoint` must carry a `navLabel` before its `content`, and a `content`
+at all** ([#79](https://github.com/veripublica/epubveri/issues/79)). Nothing
+here validated the NCX's *structure*: `ncx.rs` checked playOrder, id
+uniqueness, duplicate `navLabel`/`navInfo` and empty text, so
+`<navPoint id="x"><content src="…"/></navPoint>` — no label at all — was
+accepted and the book came back VALID while epubcheck reported an error.
+
+Reported on MobileRead with epubcheck's output and a 2.4 KB test book, which
+is the artefact that makes a report like this cheap to act on.
+
+Three shapes, and the counts are the parity: a `content` before any
+`navLabel` is one finding; `<content/>` then `<navLabel/>` is **two** (the
+order violation and the missing-label violation are separate there); a
+`navPoint` with no `content` is one. Measured one book per shape against
+epubcheck 5.3.0, and the grammar read is `schema/20/rng/ncx.rng` — the file
+`XMLValidators` actually loads, not the `ncx-old.rng` beside it, whose
+`playOrder` is required and would have invented a finding.
+
+Restrictive, so the direction was checked first: corpus 0 false positives and
+0 over-reported, and the 356-book shelf — 266 of them EPUB 2 with an NCX — is
+byte-identical, so no real book on it has a malformed `navPoint`.
+
+**Still open from the same report**: the navigation document's own content
+model (a `<nav>` with no `<ol>`, and the RSC-017 landmarks rule). That is a
+missing *grammar layer* rather than a missing rule — epubcheck validates the
+nav document against a second, stricter grammar layered on XHTML, while our
+`navEl` is `flowContent` — so it is scoped separately in #79.
+
 ## [0.9.23] - 2026-08-18
 
 **An SVG `<a xlink:href>` to a missing file now draws RSC-007**
