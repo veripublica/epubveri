@@ -55,6 +55,30 @@ which is what caught it.
 The reported book now gives 3 RSC-005 and 1 RSC-017 — the same set epubcheck
 reports, on the same elements.
 
+**A broken selector list is one CSS-008, not one per selector**
+([#81](https://github.com/veripublica/epubveri/issues/81)). `. a, . b, . c { … }`
+was three findings here and is one in epubcheck, whose unit is the whole
+prelude. Two separately broken rules are still two, in both tools.
+
+Found by `compare` over the 356-book shelf — specifically its **count-gap**
+section, which the ID-set diff cannot see: one book reported 22 CSS-008
+against epubcheck's 12, from `. h-100, . y-100 { … }` repeated down a
+stylesheet. It now reports 12.
+
+**The library keeps its answer and the consumer adapts.** styloria reports one
+error per comma-separated selector, settled deliberately in its
+[#3](https://github.com/veripublica/styloria/issues/3), and that is the right
+granularity for a CSS library; epubcheck parity is this project's concern, not
+its. So the collapsing happens here, on both emission paths — the top level
+and inside a grouping at-rule, since a half-applied fix is the shape that
+keeps recurring.
+
+An existing test asserted the old count with the comment "both halves of a
+comma list, which is what the real book carried". True, and never checked
+against epubcheck. It now asserts one, with the measurement written next to
+it: **an assertion is not a constraint on a change until the oracle has seen
+it.**
+
 **A corrupted-but-nonempty container is now named**
 ([#80](https://github.com/veripublica/epubveri/issues/80)). epubcheck's
 `OCFZipChecker` reads a **58-byte** header: a file too short to fill it is

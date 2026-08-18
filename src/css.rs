@@ -263,7 +263,7 @@ pub(crate) fn check(
     // rule block is parsed as raw component values; the declaration split
     // happens in `check_declaration_shapes_spanned` below, which still emits
     // its own CSS-008 for those).
-    for e in &syntax_errs {
+    for e in collapse_selector_errors(&syntax_errs, &sheet.rules) {
         report.push_full(
             CSS_008,
             Severity::Error,
@@ -557,6 +557,55 @@ fn is_effectively_empty_spanned(values: &[Spanned<spanned::ComponentValue>]) -> 
         .all(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)))
 }
 
+/// Collapse a rule's `InvalidSelector` errors to one, keeping every other
+/// kind untouched.
+///
+/// styloria reports one per comma-separated selector, which is the right
+/// granularity for a CSS library and was settled deliberately in its #3.
+/// epubcheck's unit is the whole selector *list*: `. a, . b, . c { … }` is
+/// three findings there and one here (#81). A real book made the gap visible:
+/// `. h-100, . y-100 { … }` repeated down a stylesheet gave 22 CSS-008
+/// against epubcheck's 12. The CSS really is broken either way, but inventing
+/// ten extra errors on one file reads exactly like a false positive to anyone
+/// diffing the two tools.
+///
+/// The library keeps its answer; the consumer adapts. That is this project's
+/// standing rule about where epubcheck parity belongs.
+///
+/// Grouping is by the rule whose span encloses the error. Errors arrive
+/// sorted by position and rule spans do not overlap at one level, so
+/// remembering the last claimed rule is enough - no map needed.
+fn collapse_selector_errors<'a>(
+    errors: &'a [spanned::SyntaxError],
+    rules: &[Spanned<spanned::Rule>],
+) -> Vec<&'a spanned::SyntaxError> {
+    let mut out = Vec::new();
+    let mut claimed: Option<(usize, usize)> = None;
+    for e in errors {
+        if e.kind != spanned::SyntaxErrorKind::InvalidSelector {
+            out.push(e);
+            continue;
+        }
+        let owner = rules
+            .iter()
+            .find(|r| r.span.start <= e.span.start && e.span.start < r.span.end)
+            .map(|r| (r.span.start, r.span.end));
+        match owner {
+            // A second bad selector in a rule already reported.
+            Some(o) if claimed == Some(o) => {}
+            Some(o) => {
+                claimed = Some(o);
+                out.push(e);
+            }
+            // No enclosing rule: not a selector-list error in practice, and
+            // dropping it would be the silent-skip trade this project keeps
+            // having to undo.
+            None => out.push(e),
+        }
+    }
+    out
+}
+
 /// The `rule` slug for one of styloria's syntax errors. Every one of them is
 /// CSS-008 to epubcheck; the slug is where a consumer can tell them apart.
 ///
@@ -647,7 +696,7 @@ fn check_at_rule_block_spanned(
             );
         }
         styloria::BlockContents::Rules(rules) => {
-            for e in &errors {
+            for e in collapse_selector_errors(&errors, &rules) {
                 report.push_full(
                     CSS_008,
                     Severity::Error,
@@ -1271,8 +1320,13 @@ mod tests {
             count("@media print { @media (min-width: 0) { . foo { color: red } } }"),
             1
         );
-        // Both halves of a comma list, which is what the real book carried.
-        assert_eq!(count("@media print { . a, . b { color: red } }"), 2);
+        // A comma list is **one** finding, not one per half. This asserted 2
+        // until #81, on the reasoning that the real book carried both halves
+        // - true, and never checked against epubcheck, which reports the
+        // selector *list* once. Measured at 5.3.0: one book per shape, and a
+        // shelf book went 22 -> 12 to match. An assertion is not a constraint
+        // on a change until the oracle has seen it.
+        assert_eq!(count("@media print { . a, . b { color: red } }"), 1);
 
         // Slugged as a selector problem, the same as at the top level -
         // epubcheck calls every CSS parse error CSS-008, so the slug is the
@@ -1737,6 +1791,33 @@ mod tests {
     ///
     /// Not a shelf finding, and it could not have been one: no book of the
     /// 346 contains `@keyframes` at all.
+    /// #81: a broken selector *list* is one CSS-008, not one per selector.
+    ///
+    /// styloria reports per comma-separated selector (its #3, deliberate and
+    /// right for a CSS library); epubcheck's unit is the whole prelude. The
+    /// adaptation belongs here rather than there — parity with epubcheck is
+    /// the consumer's concern. Counts measured one book per shape against
+    /// 5.3.0; a real shelf book went from 22 findings to epubcheck's 12.
+    #[test]
+    fn a_broken_selector_list_is_one_finding() {
+        let n = |css: &str| run(css, &empty_index()).len();
+        assert_eq!(n(". a { color: red }"), 1);
+        assert_eq!(n(". a, . b { color: red }"), 1);
+        assert_eq!(n(". a, . b, . c { color: red }"), 1);
+        // Separate rules stay separate — the collapse is per rule, and this
+        // is the assertion that keeps it from swallowing a whole stylesheet.
+        assert_eq!(n(". a { color: red }\n. b { color: blue }"), 2);
+        // The same inside a grouping at-rule, which reaches the other
+        // emission site: a half-applied fix is this project's recurring
+        // shape.
+        assert_eq!(n("@media print { . a, . b { color: red } }"), 1);
+        assert_eq!(
+            n("@media print { . a, . b { color: red } . c, . d { color: blue } }"),
+            2
+        );
+        assert!(run("p, div { color: red }", &empty_index()).is_empty());
+    }
+
     #[test]
     fn a_keyframes_block_is_not_a_syntax_error() {
         for css in [
