@@ -49,9 +49,22 @@ now with the matrix written out.
 Twenty shapes measured, one book per run, against epubcheck 5.3.0. **No
 instrument here can see this family**: 0 of 356 shelf books define an SVG
 symbol, gradient, pattern or clipPath, and the corpus has no fixture either,
-so the enumeration and the new unit tests are the whole evidence. The
-overlay cell has a probe but no unit test — the crate has no media-overlay
-test builder.
+so the enumeration and the new unit tests are the whole evidence. The overlay cell got the
+crate's first media-overlay test builder, so it is pinned by a test rather
+than by a probe alone.
+
+**An SVG `<a>` is now read through `xlink:href`, and only that.** The walk
+matched on element name and always read the plain `href`, so every check in
+it was *inverted* against epubcheck for SVG anchors — not only RSC-014.
+Measured one book per spelling: a `xlink:href` to a missing file draws
+RSC-007 from epubcheck and drew nothing here; the same target as a plain
+`href` drew RSC-007 here and nothing there; RSC-020 and the fragment checks
+held the same pair. Fixed in both directions except one, which is a false
+*negative* and deliberately left for its own change: an SVG
+`<a xlink:href="missing.xhtml">` still draws no RSC-007 here, because
+reaching it means adding a hyperlink target to the resource-reference set
+that also answers OPF-097's "is this resource referenced" question — and a
+hyperlink is explicitly not one of those.
 
 Internally, the per-document `id` map now carries each id's kind alongside
 the document-order index it already held. A first attempt dropped that index

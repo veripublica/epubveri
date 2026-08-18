@@ -213,8 +213,8 @@ const ANN: &[Ann] = &[
          **0 of 356 shelf books define an SVG symbol, gradient, pattern or \
          clipPath**, so no instrument here exercises this family - the \
          enumeration against epubcheck and the unit tests are the whole \
-         evidence, and the overlay cell has a probe but no unit test (there \
-         is no media-overlay test builder in the crate)."),
+         evidence, including the overlay cell, which now has a \
+         media-overlay test builder of its own."),
     ("RSC-016", Some("partial"),
         "Implemented, with one measured and deliberate divergence: a named \
          HTML entity (`&nbsp;` and friends) under an **XHTML 1.0** doctype. \

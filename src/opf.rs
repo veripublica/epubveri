@@ -432,6 +432,9 @@ impl IdKind {
     }
 }
 
+/// The SVG namespace, which several checks here have to name.
+const SVG_NS: &str = "http://www.w3.org/2000/svg";
+
 /// A reference that carries an expectation about its target's [`IdKind`],
 /// and what it will accept (RSC-014).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -444,12 +447,6 @@ enum RefKind {
     /// **EPUB 3 only**: epubcheck collects it in `OPSHandler30`, and an
     /// EPUB 2 book carrying the same markup is clean, measured both ways.
     Cite,
-    /// An SVG `<a xlink:href="#…">` — a generic id only, like an XHTML
-    /// hyperlink. **`xlink:href` only**, matching epubcheck's SVG `a`
-    /// handler, which reads that spelling alone: a plain `href` on an SVG
-    /// anchor registers no reference there and draws nothing at all,
-    /// measured both spellings and both outcomes.
-    SvgHyperlink,
     /// A media overlay's `<text src="doc.xhtml#…">` — a generic id only,
     /// same acceptance as [`Self::Cite`]. Kept as its own variant because
     /// it is a different reference in a different file type, and a future
@@ -463,7 +460,7 @@ impl RefKind {
         match self {
             Self::Symbol => matches!(target, IdKind::SvgSymbol | IdKind::Generic),
             Self::Paint => target == IdKind::SvgPaint,
-            Self::Cite | Self::OverlayText | Self::SvgHyperlink => target == IdKind::Generic,
+            Self::Cite | Self::OverlayText => target == IdKind::Generic,
         }
     }
 }
@@ -6311,7 +6308,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .descendants()
                 .filter(|n| n.is_element() && n.tag_name().name() == "a")
             {
-                let Some(href) = a.attr_no_ns("href") else {
+                // Which attribute addresses the target depends on the
+                // namespace, and epubcheck reads exactly one per anchor: the
+                // XHTML handler takes `href`, the SVG one calls
+                // `checkHRef(xlink, "href")`. Ours matched on element name
+                // and always read `href`, so the two were *inverted* for
+                // every check in this walk, not only RSC-014 - measured on
+                // one book per shape: a `xlink:href` to a missing file drew
+                // RSC-007 from epubcheck and nothing here, a plain `href` to
+                // the same file drew RSC-007 here and nothing there, and the
+                // same pair held for RSC-020 and for the fragment checks.
+                let svg_anchor = a.tag_name().namespace() == Some("http://www.w3.org/2000/svg");
+                let attr = if svg_anchor {
+                    a.attribute(("http://www.w3.org/1999/xlink", "href"))
+                } else {
+                    a.attr_no_ns("href")
+                };
+                let Some(href) = attr else {
                     continue;
                 };
                 if crate::url::is_absolute(href) {
@@ -6444,16 +6457,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // document order only, and the two non-hyperlink reference
                 // kinds (`<use xlink:href>`, `fill`/`stroke="url(#…)"`) are
                 // not collected here at all.
-                // An SVG `<a>` is handled by the typed-reference walk below,
-                // through `xlink:href`. epubcheck's SVG anchor handler reads
-                // that spelling alone, so a plain `href` there registers no
-                // reference and draws nothing - reporting it would be a
-                // divergence in the direction that reads as a false
-                // positive. Measured: `<a href="#sym">` inside an `<svg>` is
-                // clean from epubcheck and was RSC-014 here.
                 if let Some(&(_, kind)) = target_ids.get(frag)
                     && kind != IdKind::Generic
-                    && a.tag_name().namespace() != Some("http://www.w3.org/2000/svg")
                 {
                     report.push_at_pos(
                         RSC_014,
@@ -6495,11 +6500,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     && let Some(v) = n.attribute(("http://www.w3.org/1999/xlink", "href"))
                 {
                     typed_refs.push((n, v.to_string(), RefKind::Symbol));
-                }
-                if n.tag_name().name() == "a"
-                    && let Some(v) = n.attribute(("http://www.w3.org/1999/xlink", "href"))
-                {
-                    typed_refs.push((n, v.to_string(), RefKind::SvgHyperlink));
                 }
                 for attr in ["fill", "stroke"] {
                     if let Some(v) = n.attr_no_ns(attr)
@@ -6941,7 +6941,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     }
                 }
             }
+            // An SVG `<a>` addresses its target with `xlink:href`, which
+            // this bare-name walk cannot see - and its plain `href` is not a
+            // reference at all to epubcheck, whose SVG handler reads the
+            // namespaced spelling alone. Reading it here reported RSC-007 on
+            // an `<a href="missing.xhtml">` inside an `<svg>` that epubcheck
+            // passes, which is the false-positive-shaped direction. Measured
+            // one book per spelling.
+            //
+            // The other half is a *false negative* and is deliberately left:
+            // an SVG `<a xlink:href="missing.xhtml">` draws RSC-007 from
+            // epubcheck and nothing here, because reaching it means adding
+            // the target to `resource_refs`, which also feeds OPF-097's
+            // "referenced resource" question - and a hyperlink is explicitly
+            // not one of those. Its own change, with its own measurement.
+            let svg_anchor =
+                node.tag_name().name() == "a" && node.tag_name().namespace() == Some(SVG_NS);
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
+                if svg_anchor && attr == "href" {
+                    continue;
+                }
                 if let Some(v) = node.attr_no_ns(attr) {
                     if !is_external(v) && is_resource_reference(node, attr) {
                         resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
@@ -13540,6 +13559,98 @@ mod tests {
 
     /// A minimal EPUB (version `ver`) whose single content document has
     /// `body` as its body content.
+    /// A minimal EPUB 3 whose one content document has `body` as its body
+    /// and carries a media overlay whose `<text src>` values are `frags`
+    /// (each resolved against that same document).
+    ///
+    /// Built because nothing else in the crate produces a SMIL-bearing book,
+    /// which is why the overlay half of RSC-014 was measured with a
+    /// hand-built probe and had no test.
+    fn epub_with_overlay(body: &str, frags: &[&str]) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let pars: String = frags
+            .iter()
+            .enumerate()
+            .map(|(i, f)| format!("<par id=\"p{i}\"><text src=\"ch1.xhtml#{f}\"/></par>"))
+            .collect();
+        let smil = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <smil xmlns=\"http://www.w3.org/ns/SMIL\" version=\"3.0\"><body>{pars}</body></smil>"
+        );
+        let opf = r##"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="media:duration">0:00:20</meta>
+    <meta property="media:duration" refines="#mo">0:00:20</meta>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="mo" properties="svg"/>
+    <item id="mo" href="ch1.smil" media-type="application/smil+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"##;
+        let ch1 = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+             <body>{body}</body></html>"
+        );
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, content) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf),
+                ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ("OEBPS/ch1.smil", smil.as_str()),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(content.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// The overlay cell of RSC-014: a media overlay's `<text src>` may name a
+    /// generic id only. Measured against epubcheck with a hand-built book
+    /// before this test existed - it reports RSC-014 for an overlay pointing
+    /// at an SVG `<symbol>`.
+    #[test]
+    fn an_overlay_text_link_to_an_svg_symbol_is_rsc_014() {
+        let ids = |frags: &[&str]| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_overlay(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"><defs><symbol id=\"sym\"/></defs></svg>\
+                 <p id=\"ok\">t</p><p id=\"ok2\">t</p>",
+                frags,
+            ))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_014 || m.id == crate::ids::RSC_012)
+            .map(|m| m.id)
+            .collect()
+        };
+        assert_eq!(ids(&["sym", "ok"]), vec![crate::ids::RSC_014]);
+        // The control that can fail: two generic targets stay clean, so the
+        // assertion above is about the symbol and not about overlays.
+        assert!(ids(&["ok", "ok2"]).is_empty());
+    }
+
     fn epub_with_body(ver: &str, body: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
