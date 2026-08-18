@@ -432,6 +432,61 @@ impl IdKind {
     }
 }
 
+/// What the declared/present matrix says about one resolved reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceRef {
+    /// Declared in the manifest, or structural. Nothing to report here.
+    Fine,
+    /// Present in the container but nobody declared it — RSC-008.
+    Undeclared,
+    /// Neither declared nor present — RSC-007.
+    Missing,
+}
+
+/// The declared/present matrix `css.rs` applies to every `url()` — whose
+/// comment claimed it was "already established for XHTML content-doc
+/// references" when only one of its three cells was. All three were measured
+/// against epubcheck 5.3.0, one book per cell, on books otherwise clean in
+/// both tools, at 2.0 and 3.0:
+///
+/// - **declared + file missing** → RSC-001 *only*. The manifest pass already
+///   reports it and we were adding a second RSC-007 on top.
+/// - **undeclared + file present** → RSC-008. We said nothing, so a real book
+///   referencing a container file nobody declared drew only the usage-level
+///   OPF-003 from the container side and no error from the reference side.
+/// - **undeclared + file missing** → RSC-007.
+///
+/// RSC-001 is used exclusively for a manifest item's `@href` missing from the
+/// container (and a CSS `@import` target, handled in `css.rs`), which is why
+/// the first cell is silent here rather than reported under another id.
+///
+/// The OPF itself, `mimetype` and `META-INF/*` are structural resources,
+/// never manifest items — the same exemption OPF-003 makes on the container
+/// side. Without it the `nav-cfi-valid` fixture, whose nav points at
+/// `package.opf#epubcfi(...)`, became a false positive: the file is present,
+/// is not declared, and never could be.
+///
+/// Only the *decision* lives here, not the reporting: the callers anchor
+/// their findings differently (a DOM node, or a raw position on the parse-
+/// error path, which has no node — #73).
+fn classify_resource_ref(
+    resolved: &str,
+    manifest_paths: &HashSet<String>,
+    name_index: &HashMap<String, String>,
+    opf_path: &str,
+) -> ResourceRef {
+    let structural =
+        resolved == nfc(opf_path) || resolved == "mimetype" || resolved.starts_with("META-INF/");
+    if manifest_paths.contains(resolved) || structural {
+        return ResourceRef::Fine;
+    }
+    if name_index.contains_key(resolved) {
+        ResourceRef::Undeclared
+    } else {
+        ResourceRef::Missing
+    }
+}
+
 /// The SVG namespace, which several checks here have to name.
 /// The declared media type of a resolved container path, if it is a manifest
 /// item.
@@ -7152,40 +7207,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         );
                     }
                     let resolved = nfc(&resolve(&dir, v));
-                    let declared = manifest_paths.contains(&resolved);
-                    let present = name_index.contains_key(&resolved);
-                    // The declared/present matrix `css.rs` applies to every
-                    // `url()` - whose comment claimed it was "already
-                    // established for XHTML content-doc references" when only
-                    // one of its three cells was. Both missing cells were
-                    // measured against epubcheck 5.3.0, one book per cell, on
-                    // books otherwise clean in both tools, at 2.0 and 3.0:
-                    //
-                    //   declared + file missing -> RSC-001 *only*. The
-                    //     manifest pass already reports it and we were adding
-                    //     a second RSC-007 on top.
-                    //   undeclared + file present -> RSC-008. We said nothing,
-                    //     so a real book referencing a container file nobody
-                    //     declared drew only the usage-level OPF-003 from the
-                    //     container side and no error from the reference side.
-                    //   undeclared + file missing -> RSC-007, unchanged.
-                    //
-                    // RSC-001 is used exclusively for a manifest item/@href
-                    // missing from the container (and a CSS @import target,
-                    // handled in css.rs), which is why the first cell is
-                    // silent here rather than reported under another id.
-                    // The OPF itself, `mimetype` and `META-INF/*` are
-                    // structural resources, never manifest items - the same
-                    // exemption OPF-003 makes on the container side. Without
-                    // it the `nav-cfi-valid` fixture, whose nav points at
-                    // `package.opf#epubcfi(...)`, became a false positive:
-                    // the file is present, is not declared, and never could
-                    // be.
-                    let structural = resolved == nfc(opf_path)
-                        || resolved == "mimetype"
-                        || resolved.starts_with("META-INF/");
-                    match (declared || structural, present) {
-                        (false, true) => {
+                    // The matrix and its reasoning live in
+                    // `classify_resource_ref`; only the anchoring is here.
+                    match classify_resource_ref(&resolved, &manifest_paths, &name_index, opf_path) {
+                        ResourceRef::Undeclared => {
                             report.push_node(
                                 RSC_008,
                                 Severity::Error,
@@ -7196,7 +7221,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 vec![v.to_string()],
                             );
                         }
-                        (false, false) => {
+                        ResourceRef::Missing => {
                             report.push_node(
                                 RSC_007,
                                 Severity::Error,
@@ -7209,7 +7234,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 vec![v.to_string()],
                             );
                         }
-                        (true, _) => {}
+                        ResourceRef::Fine => {}
                     }
                 }
             }
