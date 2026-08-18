@@ -5428,6 +5428,78 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         Vec::new(),
                     );
                 }
+                // #73: recover the references this document had already
+                // shown before it stopped parsing. epubcheck's parser is
+                // streaming, so it has registered whatever it passed and
+                // still reports it; ours builds a DOM, gets nothing, and
+                // every reference in the document went unchecked - a book
+                // with a missing stylesheet *and* a stray `&` reported only
+                // the entity.
+                //
+                // Only what *precedes* the failure, which is what epubcheck
+                // keeps: everything after the error is lost there too, and
+                // claiming more would be a divergence in the direction that
+                // reads as invention.
+                //
+                // This is the one path where a text scan is the right tool.
+                // It runs nowhere else - a document that parses is walked as
+                // a DOM - so the comment/CDATA misreadings a scanner can make
+                // are confined to books that are already FATAL and INVALID,
+                // rather than paid on every book. That is the argument the
+                // issue got backwards, and `scan_references` skips those
+                // constructs by construction anyway.
+                let err_offset = {
+                    let p = e.pos();
+                    let mut off = t.len();
+                    let mut row = 1u32;
+                    for (i, ch) in t.char_indices() {
+                        if row == p.row {
+                            off = i + (p.col as usize).saturating_sub(1);
+                            break;
+                        }
+                        if ch == '\n' {
+                            row += 1;
+                        }
+                    }
+                    off.min(t.len())
+                };
+                for (value, off) in crate::htm::scan_references(&t) {
+                    if off >= err_offset {
+                        break;
+                    }
+                    let v = value.trim();
+                    if v.is_empty() || is_external(v) || v.starts_with('#') {
+                        continue;
+                    }
+                    let resolved = nfc(&resolve(&parent_dir(&path), strip_url_fragment(v).trim()));
+                    let (id, msg, rule) = match classify_resource_ref(
+                        &resolved,
+                        &manifest_paths,
+                        &name_index,
+                        opf_path,
+                    ) {
+                        ResourceRef::Fine => continue,
+                        ResourceRef::Undeclared => (
+                            RSC_008,
+                            format!("resource '{v}' is not declared in the manifest"),
+                            "opf.content_document.undeclared_resource",
+                        ),
+                        ResourceRef::Missing => (
+                            RSC_007,
+                            format!("reference to a resource missing from the publication: '{v}'"),
+                            "opf.content_document.reference_missing_resource",
+                        ),
+                    };
+                    report.push_full(
+                        id,
+                        Severity::Error,
+                        msg,
+                        path.clone(),
+                        Position::of_offset(&t, off),
+                        rule,
+                        vec![v.to_string()],
+                    );
+                }
                 continue;
             }
         };
@@ -9891,6 +9963,81 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// #73: references that precede a parse failure are recovered.
+    ///
+    /// A document that is not well-formed used to lose every check below it,
+    /// so a book with a missing stylesheet *and* a stray `&` reported only
+    /// the entity. epubcheck's parser is streaming and keeps whatever it
+    /// passed before the failure; this recovers the same set from the text.
+    ///
+    /// Eight malformation kinds were measured against epubcheck 5.3.0, one
+    /// book each — undeclared entity, malformed numeric reference, unclosed
+    /// element, mismatched tag, unquoted attribute, stray `<`, duplicate
+    /// attribute, unknown namespace prefix. All eight behave identically in
+    /// both tools, which is why this is one rule rather than a family.
+    #[test]
+    fn references_before_a_parse_failure_are_recovered() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            let ch1 = format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>c</title>\
+                 <link rel=\"stylesheet\" type=\"text/css\" href=\"missing.css\"/></head>\
+                 <body><p><img src=\"missing.png\" alt=\"x\"/></p>{body}</body></html>"
+            );
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_body("2.0", &ch1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_007 || m.id == crate::ids::RSC_016)
+                .map(|m| m.id)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        // The document parses: the DOM walk reports both references and
+        // there is no fatal. This is the control that keeps the recovery
+        // from being credited for what the normal path already does.
+        assert_eq!(
+            ids("<p>fine</p>"),
+            vec![crate::ids::RSC_007, crate::ids::RSC_007]
+        );
+        // It does not parse: same two references, plus the fatal.
+        for bad in [
+            "<p>&badentity;</p>",
+            "<p>&#zz;</p>",
+            "<p>text",
+            "<p>text</div>",
+            "<p class=x>t</p>",
+            "<p>a < b</p>",
+            "<p id=\"a\" id=\"b\">t</p>",
+            "<foo:bar>t</foo:bar>",
+        ] {
+            assert_eq!(
+                ids(bad),
+                vec![
+                    crate::ids::RSC_007,
+                    crate::ids::RSC_007,
+                    crate::ids::RSC_016
+                ],
+                "{bad}"
+            );
+        }
+    }
+
+    /// The other half of the rule: a reference *after* the failure stays
+    /// lost, because epubcheck loses it too. Claiming more would be a
+    /// divergence in the direction that reads as invention.
+    #[test]
+    fn a_reference_after_a_parse_failure_is_not_recovered() {
+        let ch1 = "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>c</title></head>\
+                   <body><p>&badentity;</p><p><img src=\"missing.png\" alt=\"x\"/></p></body></html>";
+        let ids: Vec<&'static str> = crate::validate_bytes(epub_with_body("2.0", ch1))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_007 || m.id == crate::ids::RSC_016)
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(ids, vec![crate::ids::RSC_016]);
     }
 
     /// #82: which id a *missing* fragment gets depends on the target's media

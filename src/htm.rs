@@ -2392,3 +2392,195 @@ mod tests {
         assert_eq!(obsolete_attrs(doc, false), vec!["name"]);
     }
 }
+
+/// Reference-bearing attribute values found by scanning raw text, each with
+/// the byte offset of the value itself.
+///
+/// For the parse-error path (#73): when a content document is not
+/// well-formed there is no DOM to walk, and every reference in it goes
+/// unchecked — a book with a missing stylesheet *and* a stray `&` reported
+/// only the entity. epubcheck's parser is streaming, so it has already
+/// registered whatever it passed before the failure and still reports it.
+/// This recovers the same set from the text.
+///
+/// **A scanner, not a regex.** Comments, CDATA sections, processing
+/// instructions and the DOCTYPE (including an internal subset, whose `>`
+/// characters would otherwise end the declaration early) are skipped by
+/// construction, and a `>` inside a quoted attribute value does not end a
+/// tag. Those are exactly the false positives a naive search would invent,
+/// and the reason this is ~60 lines rather than one line.
+///
+/// Values are returned in document order with their offsets, so a caller can
+/// keep only what precedes the parse error — matching epubcheck, which loses
+/// everything *after* it.
+///
+/// Only quoted values are taken. An unquoted one is malformed XML, and on
+/// this path the document is malformed already; guessing where such a value
+/// ends is how a scanner starts inventing references.
+pub(crate) fn scan_references(text: &str) -> Vec<(String, usize)> {
+    /// Matched on the local name, so `xlink:href` counts as `href` — the
+    /// same names the DOM attribute walk reads.
+    const NAMES: [&str; 6] = ["src", "href", "data", "poster", "altimg", "cite"];
+
+    let b = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+
+    while i < b.len() {
+        let Some(rel) = text[i..].find('<') else {
+            break;
+        };
+        let mut j = i + rel;
+
+        if text[j..].starts_with("<!--") {
+            i = text[j..].find("-->").map_or(b.len(), |r| j + r + 3);
+            continue;
+        }
+        if text[j..].starts_with("<![CDATA[") {
+            i = text[j..].find("]]>").map_or(b.len(), |r| j + r + 3);
+            continue;
+        }
+        if text[j..].starts_with("<?") {
+            i = text[j..].find("?>").map_or(b.len(), |r| j + r + 2);
+            continue;
+        }
+        if text[j..].starts_with("<!") {
+            // A DOCTYPE may carry an internal subset in brackets, whose own
+            // `>` characters must not be taken for the end of it.
+            let subset = text[j..].find('[');
+            let gt = text[j..].find('>');
+            i = match (subset, gt) {
+                (Some(s), Some(g)) if s < g => text[j + s..]
+                    .find(']')
+                    .and_then(|e| text[j + s + e..].find('>').map(|g2| j + s + e + g2 + 1))
+                    .unwrap_or(b.len()),
+                (_, Some(g)) => j + g + 1,
+                _ => b.len(),
+            };
+            continue;
+        }
+
+        // A start tag. Walk its attributes until an unquoted `>`.
+        j += 1;
+        while j < b.len() && b[j] != b'>' {
+            if b[j] != b'=' {
+                j += 1;
+                continue;
+            }
+            // Back up over the attribute name that this `=` belongs to.
+            let mut ns = j;
+            while ns > 0 && (b[ns - 1] as char).is_whitespace() {
+                ns -= 1;
+            }
+            let name_end = ns;
+            while ns > 0 && !(b[ns - 1] as char).is_whitespace() && b[ns - 1] != b'<' {
+                ns -= 1;
+            }
+            let name = &text[ns..name_end];
+            let local = name.rsplit(':').next().unwrap_or(name);
+
+            // Then forward to the quoted value.
+            let mut v = j + 1;
+            while v < b.len() && (b[v] as char).is_whitespace() {
+                v += 1;
+            }
+            if v >= b.len() || (b[v] != b'"' && b[v] != b'\'') {
+                j += 1;
+                continue;
+            }
+            let quote = b[v] as char;
+            let Some(end_rel) = text[v + 1..].find(quote) else {
+                return out;
+            };
+            let end = v + 1 + end_rel;
+            if NAMES.iter().any(|n| local.eq_ignore_ascii_case(n)) {
+                out.push((text[v + 1..end].to_string(), v + 1));
+            }
+            j = end + 1;
+        }
+        i = j + 1;
+    }
+    out
+}
+
+#[cfg(test)]
+mod scan_reference_tests {
+    use super::scan_references;
+
+    fn vals(t: &str) -> Vec<String> {
+        scan_references(t).into_iter().map(|(v, _)| v).collect()
+    }
+
+    #[test]
+    fn takes_reference_attributes_in_document_order() {
+        assert_eq!(
+            vals(
+                r#"<html><head><link href="a.css"/></head><body><img src="b.png"/></body></html>"#
+            ),
+            ["a.css", "b.png"]
+        );
+        // Local-name matching, so SVG's namespaced spelling counts.
+        assert_eq!(vals(r#"<image xlink:href="c.png"/>"#), ["c.png"]);
+        // Not a reference attribute.
+        assert!(vals(r#"<p class="src" id="href">x</p>"#).is_empty());
+    }
+
+    #[test]
+    fn skips_what_a_naive_search_would_invent() {
+        // These are the false positives the issue worried about, and the
+        // reason this is a scanner: every one of them contains text that
+        // looks exactly like a reference.
+        assert!(vals(r#"<!-- <img src="ghost.png"/> -->"#).is_empty());
+        // A `>` *inside* the comment, before the fake reference. Without this
+        // the case above passes even with the comment branch deleted — the
+        // `<!` branch skips to the first `>`, which happens to be past the
+        // fake `<img>`. Verified by deleting that branch and watching only
+        // this line fail.
+        assert!(vals(r#"<!-- a > b <img src="ghost.png"/> -->"#).is_empty());
+        assert!(vals(r#"<![CDATA[ <img src="ghost.png"/> ]]>"#).is_empty());
+        assert!(vals(r#"<?xml-stylesheet href="ghost.css"?>"#).is_empty());
+        assert!(vals(r#"<!DOCTYPE html [ <!ENTITY x "<img src='ghost.png'/>"> ]><p/>"#).is_empty());
+        // A real reference after each of them is still found, so the skip
+        // does not run away with the rest of the document.
+        assert_eq!(
+            vals(r#"<!-- <img src="ghost.png"/> --><img src="real.png"/>"#),
+            ["real.png"]
+        );
+        assert_eq!(
+            vals(r#"<!DOCTYPE html [ <!ENTITY x "y"> ]><img src="real.png"/>"#),
+            ["real.png"]
+        );
+    }
+
+    #[test]
+    fn a_greater_than_inside_a_value_does_not_end_the_tag() {
+        assert_eq!(
+            vals(r#"<a title="a > b" href="real.html">x</a>"#),
+            ["real.html"]
+        );
+    }
+
+    #[test]
+    fn an_unquoted_value_is_left_alone() {
+        // Malformed, and guessing where it ends is how a scanner starts
+        // inventing references. The quoted one beside it is still taken.
+        assert_eq!(vals(r#"<img src=bare.png href="real.png"/>"#), ["real.png"]);
+    }
+
+    #[test]
+    fn offsets_point_at_the_value() {
+        let t = r#"<img src="a.png"/>"#;
+        let (v, off) = scan_references(t).into_iter().next().expect("one");
+        assert_eq!(&t[off..off + v.len()], "a.png");
+    }
+
+    /// The shape #73 is about: the reference precedes the malformation, so a
+    /// caller keeping only what comes before the parse error still gets it.
+    #[test]
+    fn a_reference_before_a_malformation_is_still_found() {
+        let t = r#"<html><head><link href="missing.css"/></head><body><p>&bad;</p></body></html>"#;
+        let refs = scan_references(t);
+        assert_eq!(refs.len(), 1);
+        assert!(refs[0].1 < t.find("&bad;").expect("the malformation"));
+    }
+}

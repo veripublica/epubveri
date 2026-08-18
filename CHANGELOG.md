@@ -8,6 +8,42 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**References that precede a parse failure are recovered**
+([#73](https://github.com/veripublica/epubveri/issues/73)). A content document
+that is not well-formed lost every check below it, so a book with a missing
+stylesheet *and* a stray `&` reported only the entity — the user fixed that,
+re-ran, and only then met the other two problems. epubcheck's parser is
+streaming: it keeps whatever it passed before the failure. This recovers the
+same set.
+
+Eight malformation kinds were measured against epubcheck 5.3.0, one book each
+(undeclared entity, malformed numeric reference, unclosed element, mismatched
+tag, unquoted attribute, stray `<`, duplicate attribute, unknown namespace
+prefix). **All eight behave identically in both tools**, before and after — so
+this is one rule, not a family, and the classification is what made the design
+decidable.
+
+A reference *after* the failure stays lost, because epubcheck loses it too
+(measured, not assumed). Claiming more would be a divergence in the direction
+that reads as invention.
+
+**The issue's own argument against this fix was backwards**, which is the part
+worth carrying: it rejected a text scan because comment and CDATA contents
+would be mistaken for references, "paid on every book". The scan runs only in
+the `Err` arm — a document that parses is walked as a DOM — so the surface is
+confined to books that are already FATAL and INVALID. And `scan_references`
+skips comments, CDATA, processing instructions and a DOCTYPE internal subset
+by construction, with a `>` inside a quoted value not ending a tag. Those are
+sixty lines that exist entirely to not invent references.
+
+One test earned its keep immediately: the comment case passed even with the
+comment branch deleted, because `<!--` fell through to the DOCTYPE branch and
+skipped to the first `>`, which happened to sit past the decoy. A comment
+containing its own `>` discriminates, and only that version fails when the
+branch is removed.
+
 ## [0.9.24] - 2026-08-19
 
 **A `navPoint` must carry a `navLabel` before its `content`, and a `content`
