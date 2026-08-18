@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.23] - 2026-08-18
 
 **An SVG `<a xlink:href>` to a missing file now draws RSC-007**
 ([#77](https://github.com/veripublica/epubveri/issues/77)), closing the last
