@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.22] - 2026-08-18
 
 **RSC-014 is a type-matching check, and it is now implemented for every
 reference kind epubcheck compares.** epubcheck types every `id` from the
