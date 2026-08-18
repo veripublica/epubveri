@@ -9831,6 +9831,50 @@ mod tests {
         buf
     }
 
+    /// #79 step 3: two Schematron patterns that were implemented at one end
+    /// only.
+    ///
+    /// `nav-ocurrence` asserts `count(toc) = 1`, and we had the zero end
+    /// alone — two `toc` navs were accepted. `heading-content`'s context is
+    /// every `h1`-`h6` in the navigation document, and ours ran on the
+    /// heading a nav opens with, so an empty heading outside any nav was
+    /// silent. Both measured against epubcheck 5.3.0, one book per shape.
+    #[test]
+    fn nav_document_toc_count_and_headings_anywhere() {
+        let ids = |nav_body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_nav_body(nav_body))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .map(|m| m.id)
+                .collect()
+        };
+        let ol = "<ol><li><a href=\"ch1.xhtml\">One</a></li></ol>";
+        let toc = format!("<nav epub:type=\"toc\"><h1>T</h1>{ol}</nav>");
+
+        assert!(ids(&toc).is_empty(), "one toc, one non-empty heading");
+        assert_eq!(
+            ids(&format!("{toc}{toc}")),
+            vec![crate::ids::RSC_005],
+            "two tocs"
+        );
+        assert_eq!(
+            ids(&format!("{toc}<h2>  </h2>")),
+            vec![crate::ids::RSC_005],
+            "an empty heading outside any nav"
+        );
+        // An image-only heading is not empty — `has_text_or_image` is what
+        // keeps the widened check off legitimate markup, and the shelf is too
+        // thin here to have caught it (8 headings across 66 nav documents).
+        assert!(
+            ids(&format!(
+                "{toc}<h2><img src=\"i.jpg\" alt=\"Part One\"/></h2>"
+            ))
+            .is_empty(),
+            "a heading whose text comes from an image alt"
+        );
+    }
+
     /// #79: a `nav` requires an `ol`, and a flat nav must have exactly one.
     ///
     /// The missing-`ol` half was a silent return — `check_nav_content_model`

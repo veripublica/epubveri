@@ -147,24 +147,12 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
         idx = 1;
     }
     match heading {
-        Some(h) => {
-            let text: String = h
-                .descendants()
-                .filter(|d| d.is_text())
-                .filter_map(|d| d.text())
-                .collect();
-            if text.trim().is_empty() {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    "Heading elements must contain text",
-                    path,
-                    h,
-                    "navdoc.heading.empty_text",
-                    Vec::new(),
-                );
-            }
-        }
+        // The empty-heading check is not here: `heading-content`'s context is
+        // every `h1`-`h6` in the navigation document, not only the one a nav
+        // opens with, so it runs once over the whole document in `check`.
+        // Doing it here missed `<h2>  </h2>` sitting outside any nav, which
+        // epubcheck reports (#79).
+        Some(_) => {}
         None if !matches!(ty, "toc" | "page-list" | "landmarks") => {
             report.push_node(
                 RSC_005,
@@ -376,6 +364,36 @@ pub(crate) fn check(
         .filter(|n| n.is_element() && n.tag_name().name() == "nav")
         .collect();
 
+    // `nav-ocurrence` asserts `count(toc) = 1`, which fails at both ends. We
+    // had the zero end only, so a nav document with two `toc` navs was
+    // accepted here and RSC-005 from epubcheck (#79). The `page-list` and
+    // `landmarks` asserts below are `< 2` and so have no zero end to miss.
+    for h in doc.descendants().filter(|n| {
+        n.is_element() && matches!(n.tag_name().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+    }) {
+        if !has_text_or_image(h) {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "heading elements must contain text",
+                path,
+                h,
+                "navdoc.heading.empty_text",
+                Vec::new(),
+            );
+        }
+    }
+    if navs.iter().filter(|n| nav_type(**n) == Some("toc")).count() > 1 {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "the nav document has more than one \"toc\" nav",
+            path,
+            doc.root_element(),
+            "navdoc.document.multiple_toc",
+            Vec::new(),
+        );
+    }
     if !navs.iter().any(|n| nav_type(*n) == Some("toc")) {
         report.push_node(
             RSC_005,

@@ -55,6 +55,25 @@ which is what caught it.
 The reported book now gives 3 RSC-005 and 1 RSC-017 — the same set epubcheck
 reports, on the same elements.
 
+**Two more nav rules were implemented at one end only** — found by diffing
+`epub-nav-30.sch`'s eight patterns against `navdoc.rs` rather than assuming
+the list was the gap, since six of the eight turned out to be covered.
+
+- `nav-ocurrence` asserts `count(toc) = 1`, which fails at both ends. We had
+  the zero end (`the nav document has no "toc" nav`) and not the other, so a
+  document with **two** `toc` navs was accepted.
+- `heading-content`'s context is every `h1`–`h6` in the navigation document.
+  Ours ran inside the nav content model, on the heading a nav opens with, so
+  `<h2>  </h2>` sitting outside any nav was silent. It now runs once over the
+  document, which also removes the risk of the old site double-reporting.
+
+**The shelf is thin evidence for the second one, and says so**: 66 nav
+documents on it carry **8 headings between them**, so the widened check ran on
+eight real headings. That is why the test pins an image-only heading
+(`<h2><img alt="Part One"/></h2>`) as valid — `has_text_or_image` is what
+keeps the rule off legitimate markup, and the shelf could not have caught it
+if it were wrong.
+
 **Scope, measured before implementing:** the nav grammar applies to the
 navigation document only. A `<nav><h1>Sidebar</h1></nav>` in an ordinary
 content document is clean in epubcheck 5.3.0, so a document-wide rule would
