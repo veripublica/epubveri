@@ -8,6 +8,28 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**An SVG `<a xlink:href>` to a missing file now draws RSC-007**
+([#77](https://github.com/veripublica/epubveri/issues/77)), closing the last
+half of the SVG-anchor inversion 0.9.22 fixed the rest of. All eight anchor
+shapes now agree with epubcheck 5.3.0.
+
+The fix was smaller than the issue predicted. The existence check lives in the
+bare-name attribute walk, which cannot see a namespaced attribute; the issue
+assumed reaching it meant adding the target to the resource set that answers
+OPF-097's "is this resource referenced", where a hyperlink does not belong.
+It does not — `is_resource_reference` already draws that line and puts an
+`a`/`href` pair on the not-consuming side, so feeding the namespaced value
+through the same loop gives the check without the side effect. Verified
+directly: a manifest item reachable only through an SVG anchor still draws
+OPF-097 from both tools.
+
+Noted while measuring, and *not* introduced by this: neither an SVG nor an
+XHTML anchor draws **RSC-010** for a hyperlink to a non-content-document
+resource (a `text/css` target), which epubcheck reports for both. A separate
+pre-existing gap, affecting the two spellings equally.
+
 ## [0.9.22] - 2026-08-18
 
 **RSC-014 is a type-matching check, and it is now implemented for every

@@ -6949,19 +6949,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // passes, which is the false-positive-shaped direction. Measured
             // one book per spelling.
             //
-            // The other half is a *false negative* and is deliberately left:
-            // an SVG `<a xlink:href="missing.xhtml">` draws RSC-007 from
-            // epubcheck and nothing here, because reaching it means adding
-            // the target to `resource_refs`, which also feeds OPF-097's
-            // "referenced resource" question - and a hyperlink is explicitly
-            // not one of those. Its own change, with its own measurement.
+            // For an SVG anchor the same questions are asked of `xlink:href`
+            // instead, which is the spelling epubcheck's SVG handler reads
+            // (#77). Feeding it through this loop rather than the anchor walk
+            // is what gives it the existence check: `is_resource_reference`
+            // already draws the "consumes the target" line, and an `a`/`href`
+            // pair is on the *not*-consuming side of it - so the reference is
+            // checked for RSC-007/RSC-008 without entering `resource_refs`,
+            // where it would wrongly answer OPF-097's "is this resource
+            // referenced". That distinction is why this looked like its own
+            // change and turned out to be a substitution.
             let svg_anchor =
                 node.tag_name().name() == "a" && node.tag_name().namespace() == Some(SVG_NS);
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
-                if svg_anchor && attr == "href" {
-                    continue;
-                }
-                if let Some(v) = node.attr_no_ns(attr) {
+                let value = if svg_anchor && attr == "href" {
+                    node.attribute(("http://www.w3.org/1999/xlink", "href"))
+                } else {
+                    node.attr_no_ns(attr)
+                };
+                if let Some(v) = value {
                     if !is_external(v) && is_resource_reference(node, attr) {
                         resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
                     }
@@ -13499,6 +13505,45 @@ mod tests {
         assert!(
             ids(&svg("<rect clip-path=\"url(#grad)\"/>")).is_empty(),
             "clip-path is unchecked by epubcheck"
+        );
+    }
+
+    /// #77: an SVG anchor's target is checked for existence, through
+    /// `xlink:href` and only that.
+    ///
+    /// The existence check lives in the bare-name attribute walk, which
+    /// cannot see a namespaced attribute - so 0.9.22 fixed the fragment and
+    /// URL halves of the SVG-anchor inversion and left this one. Routing the
+    /// namespaced value through the same loop was the whole fix, because
+    /// `is_resource_reference` already puts an `a`/`href` pair on the
+    /// *not*-consuming side: the target is checked but never enters the
+    /// resource set that answers OPF-097.
+    #[test]
+    fn an_svg_anchor_target_is_checked_for_existence() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_body("3.0", body))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_007)
+                .map(|m| m.id)
+                .collect()
+        };
+        let svga = |attr: &str| {
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+                 xmlns:xlink=\"http://www.w3.org/1999/xlink\">\
+                 <a {attr}=\"missing.xhtml\"><rect/></a></svg>"
+            )
+        };
+        assert_eq!(ids(&svga("xlink:href")), vec![crate::ids::RSC_007]);
+        // The plain spelling registers no reference in epubcheck, so it must
+        // register none here either - reporting it was the false-positive
+        // half, removed in 0.9.22.
+        assert!(ids(&svga("href")).is_empty(), "plain href on an SVG anchor");
+        // The XHTML control, same target, still reported.
+        assert_eq!(
+            ids("<p><a href=\"missing.xhtml\">x</a></p>"),
+            vec![crate::ids::RSC_007]
         );
     }
 
