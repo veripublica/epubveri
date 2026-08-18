@@ -195,7 +195,12 @@ const ANN: &[Ann] = &[
          one with no deprecated-type exemption and no fallback test. \
          **Implemented**: the NCX `<content src>`, the nav toc link, and \
          (2026-08-18, #78) an ordinary hyperlink, XHTML and SVG alike. \
-         **Not implemented**: the overlay text link. \
+         **Not a gap but a different id**: for an overlay text link \
+         to a non-blessed target we report **MED-013**, epubcheck reports \
+         RSC-010, and each reports exactly one message - measured with \
+         `text/css` and `text/html` targets. Adding RSC-010 without settling \
+         why epubcheck stays silent on MED-013 there would over-report, so \
+         the cell waits on a probe rather than an edit (#78). \
          Reported *instead of* RSC-011, never alongside it - epubcheck aborts \
          the reference's remaining checks right after, and our spine-\
          reachability loop skips the same targets for the same reason. \
