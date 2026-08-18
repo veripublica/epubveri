@@ -433,6 +433,37 @@ impl IdKind {
 }
 
 /// The SVG namespace, which several checks here have to name.
+/// The declared media type of a resolved container path, if it is a manifest
+/// item.
+fn declared_media_type<'a>(
+    items: &'a HashMap<String, (String, String)>,
+    resolved: &str,
+) -> Option<&'a str> {
+    items
+        .values()
+        .find(|(p, _)| nfc(p) == resolved)
+        .map(|(_, mt)| mt.as_str())
+}
+
+/// Which id a *missing* fragment gets, by the target document's media type.
+///
+/// epubcheck guards RSC-012 on the target being XHTML or SVG
+/// (`ResourceReferencesChecker`); a `text/html` document is
+/// `MIMEType.HTML`, neither of those, so the missing id falls through to the
+/// reference-type switch, where a null id type is neither the reference's
+/// type nor GENERIC and comes out as **RSC-014** (#82).
+///
+/// A comment at the NCX site used to say a dangling fragment into such a
+/// document "draws nothing there". That was measured for RSC-012 and true;
+/// the conclusion was not, because nobody had looked for the other id.
+fn missing_fragment_id(items: &HashMap<String, (String, String)>, resolved: &str) -> &'static str {
+    match declared_media_type(items, resolved) {
+        Some(mt) if is_content_document_type(mt) => RSC_012,
+        Some(mt) if is_deprecated_content_document_type(mt) => RSC_014,
+        _ => RSC_012,
+    }
+}
+
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
 /// A reference that carries an expectation about its target's [`IdKind`],
@@ -2115,7 +2146,9 @@ fn check_guide_references(
                 // targets (`ResourceReferencesChecker`), which leaves out the
                 // third Content Document type, DTBook - whose documents this
                 // project doesn't validate either (see `docs/COVERAGE.md`).
-                if !matches!(mt.as_str(), "application/xhtml+xml" | "image/svg+xml") {
+                // A deprecated-blessed target (`text/html`) is not skipped:
+                // its missing fragment is RSC-014 rather than RSC-012 (#82).
+                if !is_content_document_type(mt) && !is_deprecated_content_document_type(mt) {
                     continue;
                 }
                 let Some(frag) = href.split_once('#').map(|(_, f)| f) else {
@@ -2140,7 +2173,7 @@ fn check_guide_references(
                 };
                 if !ids.contains_key(frag) {
                     report.push_node(
-                        RSC_012,
+                        missing_fragment_id(items, &resolved),
                         Severity::Error,
                         format!("fragment identifier '{frag}' is not defined in '{resolved}'"),
                         opf_path,
@@ -2233,8 +2266,12 @@ fn check_ncx_content_fragments(
         // check below already had this condition; this one did not, and once
         // issue #72 made these documents readable it started reporting a
         // fourth RSC-012 on a real book where epubcheck reports three.
-        if !items.values().any(|(p, mt)| {
-            nfc(p) == resolved && matches!(mt.as_str(), "application/xhtml+xml" | "image/svg+xml")
+        // A deprecated-blessed target (`text/html`) stays in: epubcheck's
+        // RSC-012 is guarded on XHTML/SVG, so a missing fragment there comes
+        // out as RSC-014 instead of nothing (#82). The comment this replaces
+        // said such a fragment "draws nothing there" - true of RSC-012 only.
+        if !declared_media_type(items, &resolved).is_some_and(|mt| {
+            is_content_document_type(mt) || is_deprecated_content_document_type(mt)
         }) {
             continue;
         }
@@ -2250,7 +2287,7 @@ fn check_ncx_content_fragments(
         };
         if !ids.contains_key(frag) {
             report.push_node(
-                RSC_012,
+                missing_fragment_id(items, &resolved),
                 Severity::Error,
                 format!("fragment identifier '{frag}' is not defined in '{target}'"),
                 ncx_path,
@@ -6429,7 +6466,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 };
                 if !target_ids.contains_key(frag) {
                     report.push_node(
-                        RSC_012,
+                        missing_fragment_id(&items, &target_nfc),
                         Severity::Error,
                         format!("fragment identifier '{frag}' is not defined in '{target_nfc}'"),
                         path.clone(),
@@ -9829,6 +9866,59 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// #82: which id a *missing* fragment gets depends on the target's media
+    /// type.
+    ///
+    /// epubcheck guards RSC-012 on the target being XHTML or SVG. A
+    /// `text/html` document is neither, so the missing id falls through to
+    /// the reference-type switch and comes out as **RSC-014**. Found by
+    /// `compare` on a real book whose NCX pointed into a `text/html`
+    /// chapter; measured at both EPUB versions, one book per shape, and the
+    /// rule is not version-dependent.
+    ///
+    /// The target has to be a *separate* document. A `text/html` file linking
+    /// to itself draws neither id from either tool — measured, after a first
+    /// version of this test asserted RSC-014 there and failed. Its references
+    /// are simply never collected, and epubcheck agrees, so the shape is a
+    /// distraction rather than a rule.
+    #[test]
+    fn a_missing_fragment_in_a_text_html_target_is_rsc_014() {
+        // `meta.xml` is written by the builder and declared here as
+        // `text/html`, which gives a second document to point at without a
+        // second builder. It holds `<r/>` and so has no ids at all.
+        let opf = |mt: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tgt" href="meta.xml" media-type="{mt}"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        let ids = |mt: &str| -> Vec<&'static str> {
+            let ch1 = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                       <head><title>t</title></head>\
+                       <body><p><a href=\"meta.xml#nope\">x</a></p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(&opf(mt)), ch1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_012 || m.id == crate::ids::RSC_014)
+                .map(|m| m.id)
+                .collect()
+        };
+        assert_eq!(ids("application/xhtml+xml"), vec![crate::ids::RSC_012]);
+        assert_eq!(ids("text/html"), vec![crate::ids::RSC_014]);
     }
 
     /// #80: PKG-003 and PKG-004 name *which* way a container is unreadable.

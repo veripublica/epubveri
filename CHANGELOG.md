@@ -55,6 +55,27 @@ which is what caught it.
 The reported book now gives 3 RSC-005 and 1 RSC-017 — the same set epubcheck
 reports, on the same elements.
 
+**A missing fragment in a `text/html` target is RSC-014, not RSC-012**
+([#82](https://github.com/veripublica/epubveri/issues/82)). epubcheck guards
+RSC-012 on the target being XHTML or SVG; a `text/html` document is neither,
+so the missing id falls through to its reference-type switch and comes out
+under the other id. Two sites were wrong in different ways: the NCX and
+`<guide>` walks **skipped** such targets entirely, and the content-document
+walk resolved them and reported RSC-012.
+
+Found by `compare` on the 356-book shelf — one book whose NCX pointed into a
+`text/html` chapter, where epubcheck reported an RSC-014 we did not. That book
+now matches exactly (3 RSC-012 + 1 RSC-014) and is the only one that moves.
+
+The NCX site carried a comment saying a dangling fragment into such a document
+"draws nothing there". That was measured for RSC-012 and true; the conclusion
+was wrong, because nobody had looked for the other id. Same family as 0.9.18's
+`text/html` work, and the third site in it.
+
+Not version-dependent, checked at both 2.0 and 3.0. A `text/html` file linking
+to *itself* draws neither id from either tool — measured after a first version
+of the test asserted otherwise and failed.
+
 **A broken selector list is one CSS-008, not one per selector**
 ([#81](https://github.com/veripublica/epubveri/issues/81)). `. a, . b, . c { … }`
 was three findings here and is one in epubcheck, whose unit is the whole
