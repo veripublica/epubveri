@@ -8,6 +8,48 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**`@keyframes` is no longer a CSS syntax error.** A block holds either rules
+or declarations, and which one a given at-rule holds was decided here, by a
+list of the conditional-group at-rule names. That list had never heard of
+`@keyframes`, so its block was read as declarations and `0% { opacity: 0 }`
+came back as one malformed declaration — CSS-008, on valid CSS, on a
+construct that appears in every animated fixed-layout book. epubcheck reports
+nothing for it. `@-webkit-keyframes`, `@-moz-keyframes`, `@starting-style`
+and any at-rule newer than the list (`@future { p { color: red } }`) failed
+the same way: four shapes, one cause.
+
+Adding the missing names would not have fixed it. `@keyframes` holds rules
+whose preludes are `from`, `to` and `0%` — correct under CSS Animations 1 §3
+and malformed under Selectors 4 — so routing it through the selector-checking
+rule list trades one invented error for two. It needs a third reading, and
+which reading an at-rule wants is a fact about CSS rather than about an EPUB
+validator, so **the table moved to styloria** (`0.11`, its
+[#4](https://github.com/veripublica/styloria/issues/4)) and
+`parse_at_rule_block` answers it. An at-rule with no entry there is read as
+declarations with a nested rule skipped in silence — the direction the
+unknown case has to fail in, since CSS keeps gaining at-rules and no table
+stays current.
+
+What did not change: a broken declaration *inside* a keyframe is still
+reported (epubcheck reports it too, and a test pins it, so "read it as rules"
+cannot be satisfied by not looking inside), nested selectors inside `@media`
+keep the check styloria 0.9 brought, and the `rule` slug on a malformed
+declaration is still `css.declaration.malformed_shape`.
+
+Measured: the four shapes and 21 neighbouring ones were built as books and
+run through epubcheck — we now agree with it on all 25 except the two
+divergences already recorded (a `@page` margin at-rule, which its older
+parser rejects and current CSS allows; and CSS nesting, where we report one
+finding to its three). Corpus unchanged at 606/607 with 0 false positives,
+the 346-book shelf byte-identical, `hostile` clean.
+
+**The shelf could not have found this, and did not**: no book of the 346
+contains `@keyframes` at all. Neither could the corpus — it has no fixture
+for one. The enumeration against epubcheck is the whole evidence, the same
+way #48's table permutations were.
+
 ## [0.9.20] - 2026-08-17
 
 Nine changes, eight of them gaps found by cross-checking the 346-book shelf against

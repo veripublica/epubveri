@@ -237,35 +237,15 @@ pub(crate) fn check(
                     } else {
                         collect_urls_spanned(&block.node.values, &mut urls);
                     }
-                    // A conditional-group at-rule (`@media`, `@supports`, …)
-                    // contains nested *rules*, not declarations - its block
-                    // must be walked as a rule list, or every nested rule's
-                    // selector gets mis-flagged as a malformed declaration
-                    // (issue #5: Vellum media-query stylesheets fired CSS-008
-                    // once per `@media` block). Every other at-rule
-                    // (`@font-face`, `@page`, …) has a declaration block.
-                    if GROUPING_AT_RULES
-                        .iter()
-                        .any(|g| a.name.eq_ignore_ascii_case(g))
-                    {
-                        check_rule_list_block_spanned(
-                            &block.node.values,
-                            css,
-                            css_path,
-                            origin,
-                            is_epub3,
-                            report,
-                        );
-                    } else {
-                        check_declaration_shapes_spanned(
-                            &block.node.values,
-                            css,
-                            css_path,
-                            origin,
-                            is_epub3,
-                            report,
-                        );
-                    }
+                    check_at_rule_block_spanned(
+                        &a.name,
+                        &block.node.values,
+                        css,
+                        css_path,
+                        origin,
+                        is_epub3,
+                        report,
+                    );
                 }
                 if a.name.eq_ignore_ascii_case("import")
                     && let Some(target) = import_target_spanned(&a.prelude)
@@ -577,29 +557,6 @@ fn is_effectively_empty_spanned(values: &[Spanned<spanned::ComponentValue>]) -> 
         .all(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)))
 }
 
-/// Beyond outright `BadString`/`BadUrl` tokens, real-world "CSS syntax
-/// error" cases are more often a malformed *declaration* — one that isn't
-/// shaped `ident: ...;` (e.g. `span.bold: bold;`, where the stray `.`
-/// breaks the name into two tokens with no colon following the first) — or
-/// an unclosed rule that swallows a subsequent rule whole (a `{`-block
-/// that's missing its `}` makes everything up to the next real `}`,
-/// including what was meant to be an unrelated sibling rule, part of the
-/// unclosed block's own contents, which then obviously doesn't parse as a
-/// clean declaration list either). Both show up here as "this
-/// semicolon-delimited chunk doesn't start with `ident :`."
-/// Conditional-group at-rules: their block holds nested *rules*, not
-/// declarations (CSS Conditional Rules / Nesting). Names are matched
-/// without the leading `@`, case-insensitively.
-const GROUPING_AT_RULES: &[&str] = &[
-    "media",
-    "supports",
-    "container",
-    "layer",
-    "scope",
-    "document",
-    "-moz-document",
-];
-
 /// The `rule` slug for one of styloria's syntax errors. Every one of them is
 /// CSS-008 to epubcheck; the slug is where a consumer can tell them apart.
 ///
@@ -635,32 +592,35 @@ fn syntax_error_slug(kind: spanned::SyntaxErrorKind) -> &'static str {
     }
 }
 
-/// Walk the block of a conditional-group at-rule, which holds nested rules
-/// rather than declarations: check each nested rule's *prelude* as a
-/// selector list and its *block* as declarations, and recurse into a further
-/// grouping at-rule.
+/// Walk an at-rule's block, whatever it holds — nested rules for a
+/// conditional-group rule or `@keyframes`, declarations for everything else.
 ///
-/// styloria 0.9's `parse_rule_list` does the parsing (its issue #2). Two
-/// things this used to do by hand went with it:
+/// **Which of those a given at-rule holds is styloria's question now** (its
+/// issue #4). This function used to consult a `GROUPING_AT_RULES` list kept
+/// here, and the trouble with a CSS table living in an EPUB validator is not
+/// theoretical: the list knew the conditional-group rules and had never
+/// heard of `@keyframes`, so a keyframe block was read as declarations and
+/// `0% { opacity: 0 }` became a malformed declaration. That is CSS-008 on
+/// valid CSS, on a construct in every animated fixed-layout book, and
+/// epubcheck reports nothing there. `@-webkit-keyframes`, `@starting-style`
+/// and any at-rule newer than the list failed the same way.
 ///
-/// - **The preludes were not checked at all.** The comment here justified
-///   that with "they are not declarations (issue #5)", which is true and
-///   answers a different question - #5 was about not reading a selector as a
-///   declaration, and says nothing about reading it as a selector. styloria
-///   kept an at-rule's block as raw component values, so its own
-///   `syntax_errors` never reached a nested prelude either, and the two gaps
-///   lined up: `. foo { }` was reported at the top level and silently
-///   accepted one `@media` deep.
-/// - **A nested block was taken for a grouping one by containing a block of
-///   its own.** That is a guess standing in for the at-rule's name, which is
-///   what actually decides it - and which the top level already tests
-///   against `GROUPING_AT_RULES`. Now both levels ask the same question.
+/// Adding the names would not have fixed it, which is the part worth
+/// keeping: `@keyframes` holds rules whose preludes are `from`/`to`/`0%`,
+/// correct under CSS Animations 1 §3 and malformed under Selectors 4, so
+/// routing it through a selector-validating rule list trades one invented
+/// error for two. It needed a third reading, and a third reading is a fact
+/// about CSS rather than about this validator.
 ///
-/// Found by `compare`'s count diff rather than by a user: one shelf book
-/// where epubcheck reported 11 CSS-008 and we reported 0, every one a
-/// selector inside an `@media`. Declaration errors in the same blocks were
-/// reported normally, which is what kept it invisible in the totals.
-fn check_rule_list_block_spanned(
+/// Nested rules still get the prelude check styloria 0.9's `parse_rule_list`
+/// brought (its issue #2): `. foo { }` was once reported at the top level
+/// and silently accepted one `@media` deep. That gap was found by
+/// `compare`'s count diff rather than by a user — one shelf book where
+/// epubcheck reported 11 CSS-008 and we reported 0, every one a selector
+/// inside an `@media`, invisible in the totals because declaration errors in
+/// the same blocks were reported normally.
+fn check_at_rule_block_spanned(
+    name: &str,
     block_values: &[Spanned<spanned::ComponentValue>],
     css: &str,
     css_path: &str,
@@ -668,53 +628,51 @@ fn check_rule_list_block_spanned(
     is_epub3: bool,
     report: &mut Report,
 ) {
-    let (rules, errors) = styloria::parse_rule_list(block_values);
-    for e in &errors {
-        report.push_full(
-            CSS_008,
-            Severity::Error,
-            "CSS syntax error",
-            css_path,
-            origin.position(css, e.span.start),
-            syntax_error_slug(e.kind),
-            Vec::new(),
-        );
-    }
-    for r in &rules {
-        match &r.node {
-            spanned::Rule::Qualified(q) => {
-                check_declaration_shapes_spanned(
-                    &q.block.node.values,
-                    css,
+    let (contents, errors) = styloria::parse_at_rule_block(name, block_values);
+    match contents {
+        // A declaration block is reported exactly as a style rule's is,
+        // including the `rule` slug: a malformed declaration is the same
+        // finding inside `@font-face` as outside it, and a consumer keying on
+        // the slug has no reason to care which held it.
+        styloria::BlockContents::Declarations(items) => {
+            report_declarations(&items, &errors, css, css_path, origin, is_epub3, report);
+        }
+        styloria::BlockContents::Rules(rules) => {
+            for e in &errors {
+                report.push_full(
+                    CSS_008,
+                    Severity::Error,
+                    "CSS syntax error",
                     css_path,
-                    origin,
-                    is_epub3,
-                    report,
+                    origin.position(css, e.span.start),
+                    syntax_error_slug(e.kind),
+                    Vec::new(),
                 );
             }
-            spanned::Rule::At(a) => {
-                let Some(block) = &a.block else { continue };
-                if GROUPING_AT_RULES
-                    .iter()
-                    .any(|g| a.name.eq_ignore_ascii_case(g))
-                {
-                    check_rule_list_block_spanned(
-                        &block.node.values,
-                        css,
-                        css_path,
-                        origin,
-                        is_epub3,
-                        report,
-                    );
-                } else {
-                    check_declaration_shapes_spanned(
-                        &block.node.values,
-                        css,
-                        css_path,
-                        origin,
-                        is_epub3,
-                        report,
-                    );
+            for r in &rules {
+                match &r.node {
+                    spanned::Rule::Qualified(q) => {
+                        check_declaration_shapes_spanned(
+                            &q.block.node.values,
+                            css,
+                            css_path,
+                            origin,
+                            is_epub3,
+                            report,
+                        );
+                    }
+                    spanned::Rule::At(a) => {
+                        let Some(block) = &a.block else { continue };
+                        check_at_rule_block_spanned(
+                            &a.name,
+                            &block.node.values,
+                            css,
+                            css_path,
+                            origin,
+                            is_epub3,
+                            report,
+                        );
+                    }
                 }
             }
         }
@@ -745,7 +703,33 @@ fn check_declaration_shapes_spanned(
     // becoming styloria's kind name. The slug is epubveri's key for
     // consumers; the crate boundary moving is not their business.
     let (items, errors) = styloria::parse_declaration_list_from_values(block_values);
-    for e in &errors {
+    report_declarations(&items, &errors, css, css_path, origin, is_epub3, report);
+}
+
+/// Report a parsed declaration list: CSS-008 for what would not parse, then
+/// the two EPUB rules about the declarations that did.
+///
+/// Beyond outright `BadString`/`BadUrl` tokens, real-world "CSS syntax
+/// error" cases are more often a malformed *declaration* — one that isn't
+/// shaped `ident: ...;` (e.g. `span.bold: bold;`, where the stray `.`
+/// breaks the name into two tokens with no colon following the first) — or
+/// an unclosed rule that swallows a subsequent rule whole (a `{`-block
+/// that's missing its `}` makes everything up to the next real `}`,
+/// including what was meant to be an unrelated sibling rule, part of the
+/// unclosed block's own contents, which then obviously doesn't parse as a
+/// clean declaration list either). Both reach styloria as "this
+/// semicolon-delimited chunk doesn't start with `ident :`."
+#[allow(clippy::too_many_arguments)]
+fn report_declarations(
+    items: &[styloria::spanned::DeclarationListItem],
+    errors: &[spanned::SyntaxError],
+    css: &str,
+    css_path: &str,
+    origin: CssOrigin,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    for e in errors {
         report.push_full(
             CSS_008,
             Severity::Error,
@@ -756,7 +740,7 @@ fn check_declaration_shapes_spanned(
             Vec::new(),
         );
     }
-    for item in &items {
+    for item in items {
         let styloria::spanned::DeclarationListItem::Declaration(d) = item else {
             continue;
         };
@@ -1688,6 +1672,62 @@ mod tests {
                    \x20 blockquote.verse { padding-left: 1.5em; }\n\
                    }";
         assert!(run(css, &empty_index()).is_empty());
+    }
+
+    /// A keyframe block holds rules, and its preludes are keyframe
+    /// selectors rather than selectors. We read it as a declaration list
+    /// until styloria 0.11, so `0% { opacity: 0 }` came back as one
+    /// malformed declaration: CSS-008 on valid CSS, on a construct in every
+    /// animated fixed-layout book. epubcheck reports nothing for any of
+    /// these — each was built as a book and run through it.
+    ///
+    /// Not a shelf finding, and it could not have been one: no book of the
+    /// 346 contains `@keyframes` at all.
+    #[test]
+    fn a_keyframes_block_is_not_a_syntax_error() {
+        for css in [
+            "@keyframes spin { 0% { opacity: 0 } 100% { opacity: 1 } }",
+            "@keyframes spin { from { opacity: 0 } to { opacity: 1 } }",
+            "@-webkit-keyframes spin { 50% { opacity: .5 } }",
+            "@-moz-keyframes spin { 50% { opacity: .5 } }",
+            "@keyframes spin { bogus-sel { opacity: 0 } }",
+            "@media print { @keyframes spin { 0% { opacity: 0 } } }",
+            "@starting-style { .a { opacity: 0 } }",
+        ] {
+            assert!(run(css, &empty_index()).is_empty(), "{css}");
+        }
+    }
+
+    /// The half that must not go with it: a broken declaration *inside* a
+    /// keyframe is still reported, and epubcheck reports it too. Without
+    /// this, "read the block as rules" could be satisfied by not looking
+    /// inside at all — and the fix would have traded a false positive for a
+    /// false negative with nothing to notice.
+    #[test]
+    fn a_bad_declaration_inside_a_keyframe_is_still_reported() {
+        assert_eq!(
+            run("@keyframes spin { 0% { color red } }", &empty_index()),
+            vec![CSS_008]
+        );
+        assert_eq!(
+            run("@starting-style { .a { color red } }", &empty_index()),
+            vec![CSS_008]
+        );
+    }
+
+    /// An at-rule styloria has no table entry for is read as declarations,
+    /// and a nested rule inside it is not blamed. This is the direction the
+    /// unknown case has to fail in: CSS keeps gaining at-rules, so any
+    /// table is permanently behind the language, and a validator must not
+    /// turn that into an error on a valid stylesheet. A malformed
+    /// declaration is still caught — epubcheck agrees on both halves.
+    #[test]
+    fn an_unknown_at_rule_holding_rules_is_not_a_syntax_error() {
+        assert!(run("@future { p { color: red } }", &empty_index()).is_empty());
+        assert_eq!(
+            run("@future { color red }", &empty_index()),
+            vec![CSS_008]
+        );
     }
 
     #[test]
