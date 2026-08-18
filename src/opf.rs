@@ -541,6 +541,22 @@ const RESERVED_PREFIXES_ANY: &[(&str, &str)] = &[
 /// Reserved prefixes EPUB 3.4 deprecates (w3c/epubcheck#1649).
 const DEPRECATED_PREFIXES_34: &[&str] = &["xsd", "msv", "prism"];
 
+/// SVG elements whose `id` epubcheck types as something other than GENERIC,
+/// and which a hyperlink therefore may not target (RSC-014).
+///
+/// Taken from `OPSHandler`'s own list rather than from the SVG spec's notion
+/// of a definition element: `<marker>`, `<mask>` and `<filter>` are equally
+/// "definitions" and are **not** on it, so a hyperlink to one is not an
+/// error in epubcheck and must not be one here. Matched case-insensitively
+/// because epubcheck lowercases the element name before comparing.
+const SVG_TYPED_IDS: &[&str] = &[
+    "symbol",
+    "linearGradient",
+    "radialGradient",
+    "pattern",
+    "clipPath",
+];
+
 impl PrefixContext {
     fn reserved(self) -> &'static [(&'static str, &'static str)] {
         match self {
@@ -6319,19 +6335,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     );
                     continue;
                 }
-                // RSC-014: a same-document hyperlink to an SVG <symbol> -
-                // navigable links can't target an SVG element definition.
+                // RSC-014: a same-document hyperlink to an SVG definition
+                // element - a navigable link can't target one.
+                //
+                // epubcheck decides this by *typing* every id: an SVG
+                // `symbol` is SVG_SYMBOL, a `linearGradient`/`radialGradient`
+                // /`pattern` is SVG_PAINT, a `clipPath` is SVG_CLIP_PATH, and
+                // everything else is GENERIC. A hyperlink may target GENERIC
+                // and nothing else, so all five names below are errors. We
+                // had only `symbol`, measured against the oracle one book per
+                // shape.
+                //
+                // Still narrower than epubcheck, deliberately, and
+                // `docs/COVERAGE.md` says so: a *cross-document* hyperlink
+                // needs the id's type carried in `frag_id_cache`, which holds
+                // document order only, and the two non-hyperlink reference
+                // kinds (`<use xlink:href>`, `fill`/`stroke="url(#…)"`) are
+                // not collected here at all.
                 if path_part.is_empty()
                     && let Some(target_node) =
                         d.descendants().find(|n| n.attr_no_ns("id") == Some(frag))
-                    && target_node.tag_name().name() == "symbol"
                     && target_node.tag_name().namespace() == Some("http://www.w3.org/2000/svg")
+                    && let name = target_node.tag_name().name()
+                    && SVG_TYPED_IDS.iter().any(|d| name.eq_ignore_ascii_case(d))
                 {
                     report.push_at_pos(
                         RSC_014,
                         Severity::Error,
                         format!(
-                            "hyperlink '{href}' targets an SVG symbol (incompatible resource type)"
+                            "hyperlink '{href}' targets an SVG {name} (incompatible resource type)"
                         ),
                         path.clone(),
                         Position::of(a),
@@ -13078,6 +13110,61 @@ mod tests {
             rsc025("2.0"),
             0,
             "epubcheck runs no informative SVG grammar on EPUB 2"
+        );
+    }
+
+    /// RSC-014: a hyperlink may target a GENERIC id and nothing else.
+    ///
+    /// epubcheck types every id from the element that carries it — an SVG
+    /// `symbol` is SVG_SYMBOL, `linearGradient`/`radialGradient`/`pattern`
+    /// are SVG_PAINT, `clipPath` is SVG_CLIP_PATH — and a hyperlink to any
+    /// of them is an incompatible resource type. We had `symbol` alone, so
+    /// four of the five names were a silent gap. Each case below was built
+    /// as a book and run through epubcheck 5.3.0 one shape per run.
+    ///
+    /// The shelf cannot see any of this: **0 of 346 books define an SVG
+    /// symbol, gradient, pattern or clipPath at all**. The enumeration is
+    /// the evidence.
+    #[test]
+    fn a_hyperlink_to_a_typed_svg_id_is_rsc_014() {
+        let rsc014 = |body: &str| {
+            crate::validate_bytes(epub_with_body("3.0", body))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_014)
+                .count()
+        };
+        let defs = |el: &str, id: &str| {
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"><defs><{el} id=\"{id}\"/></defs></svg>\
+                 <p><a href=\"#{id}\">link</a></p>"
+            )
+        };
+        for el in [
+            "symbol",
+            "linearGradient",
+            "radialGradient",
+            "pattern",
+            "clipPath",
+        ] {
+            assert_eq!(rsc014(&defs(el, "t")), 1, "hyperlink to an SVG {el}");
+        }
+
+        // A GENERIC id is the whole point of the rule, so assert the
+        // negative too - a check that only ever fires would pass the loop
+        // above just as well.
+        assert_eq!(rsc014("<p id=\"t\">x</p><p><a href=\"#t\">link</a></p>"), 0);
+        // Not on epubcheck's list, and equally a "definition" element: the
+        // list is theirs, not the SVG spec's notion of a definition.
+        assert_eq!(
+            rsc014(&defs("marker", "t")),
+            0,
+            "marker is GENERIC to epubcheck"
+        );
+        assert_eq!(
+            rsc014(&defs("mask", "t")),
+            0,
+            "mask is GENERIC to epubcheck"
         );
     }
 

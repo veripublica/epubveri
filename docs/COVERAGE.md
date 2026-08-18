@@ -20,7 +20,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 22 | 1 | 0 | 2 | 23 | 23/23 | reviewed |
 | OPF | 90 | 0 | 2 | 15 | 92 | 90/92 | reviewed |
-| RSC | 28 | 3 | 0 | 4 | 31 | 31/31 | reviewed |
+| RSC | 27 | 4 | 0 | 4 | 31 | 31/31 | reviewed |
 | HTM | 22 | 0 | 0 | 29 | 22 | 22/22 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **204** | **4** | **2** | **105** | **210** | **208/210** | |
+| **All** | **203** | **5** | **2** | **105** | **210** | **208/210** | |
 
-**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 204 fully, 4 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 203 fully, 5 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -197,7 +197,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-011 | Found a reference to a resource that is not a spine item. | Y | Y | a hyperlinked document isn't listed in the spine |
 | RSC-012 | Fragment identifier is not defined. | Y | Y | a content src/href fragment identifier doesn't resolve |
 | RSC-013 | Fragment identifier is used in a reference to a stylesheet resource. | Y | Y | a stylesheet reference has a URL fragment identifier |
-| RSC-014 | Fragment identifier defines an incompatible resource type. | Y | Y | a hyperlink targets an incompatible resource type (e.g. an SVG symbol) |
+| RSC-014 | Fragment identifier defines an incompatible resource type. | Y | ~ | One cell of epubcheck's matrix, and the matrix is worth knowing before reading this row as a small gap. epubcheck *types* every `id` from the element carrying it - an SVG `symbol` is SVG_SYMBOL, `linearGradient`/`radialGradient`/`pattern` are SVG_PAINT, `clipPath` is SVG_CLIP_PATH, everything else GENERIC - and then requires each reference's type to match. **Implemented**: a same-document hyperlink to any of those five (widened 2026-08-18 from `symbol` alone). **Not implemented**: a *cross-document* hyperlink, which needs the id's type carried through the fragment cache; and the two non-hyperlink reference kinds, `<use xlink:href>` and `fill`/`stroke="url(#...)"`, which are not collected as references at all. All measured against epubcheck 5.3.0, one book per shape. **Two of epubcheck's own cells are broken**, so the full matrix is smaller than its source suggests: no reference is ever registered with type SVG_CLIP_PATH, making `clip-path="url(#...)"` unchecked and that `case` dead code; and `checkSymbol()` reads only `xlink:href`, so SVG 2's plain `<use href>` - the modern spelling - is missed. Both confirmed by probe, not only by reading. Worth recording that the *implemented* cell is the doubtful one: the single RSC-014 scenario in epubcheck's whole test suite carries their own comment `# FIXME not sure this error is legit`. The unimplemented paint cell has the firmer ground (SVG 1.1 §13.2 puts a document in error when a paint reference is not a paint server). Deferred rather than dropped because the population is real but absent here: **0 of 346 shelf books define an SVG symbol, gradient, pattern or clipPath at all**, so this lives in rich-SVG fixed-layout titles that no instrument here holds. |
 | RSC-015 | A fragment identifier is required for svg use tag references. | Y | Y | an SVG "use" element's href has no fragment identifier |
 | RSC-016 | Fatal Error while parsing file: %1$s | Y | ~ | Implemented, with one measured and deliberate divergence: a named HTML entity (`&nbsp;` and friends) under an **XHTML 1.0** doctype. epubcheck bundles `xhtml1-strict.dtd` but does not resolve it, so it emits HTM-004 for the doctype *and* a FATAL RSC-016 per entity; we bundle the entity list, resolve them, and emit HTM-004 only. Verified against epubcheck 5.3.0 with a minimal book (2026-08-04) - an earlier note here asserted the opposite about epubcheck and was wrong. **The verdict never differs**: the irregular doctype is already an error on our side, so such a book is INVALID either way. Not matched on purpose, because a FATAL makes the document unparseable and drops every other finding in it - one real book had 15 fatals and 1 other finding on a file whose siblings each produced ~300 (the silent-skip class the 0.7.12-0.7.14 audits were about). What matters is finding and reporting the defects; escalating one of them to fatal costs the rest. **The fatal also manufactures findings that are not defects**, measured on the same book (2026-08-09): because the document is dropped before its ids are indexed, all 18 fragments pointing into it are reported RSC-012 "fragment identifier is not defined" - and every one of those ids is present in the file (`id="x14-42800012.5"` and friends, checked individually). So the divergence costs epubcheck 18 false positives on this book and costs us one usage-level label. |
 | RSC-017 | Warning while parsing file: %1$s | Y | Y | a deprecated construct is used (e.g. epub:switch) |

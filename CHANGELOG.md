@@ -8,6 +8,33 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**A hyperlink to an SVG gradient, pattern or clip path is now RSC-014, as
+it already was to an SVG `symbol`.** epubcheck types every `id` from the
+element carrying it — `symbol` is SVG_SYMBOL, `linearGradient`,
+`radialGradient` and `pattern` are SVG_PAINT, `clipPath` is SVG_CLIP_PATH,
+everything else is GENERIC — and a hyperlink may target GENERIC and nothing
+else. We had `symbol` alone, so four of the five names were silent. `marker`,
+`mask` and `filter` are *not* on epubcheck's list and stay clean, which was
+checked rather than reasoned from the SVG spec's idea of a definition
+element.
+
+`docs/COVERAGE.md` now marks RSC-014 **partial** rather than complete, which
+it should have said all along. What remains unimplemented, deliberately: a
+*cross-document* hyperlink, and the two non-hyperlink reference kinds
+(`<use xlink:href>`, `fill`/`stroke="url(#…)"`). The row carries the whole
+matrix, including the part worth knowing before reading it as a small gap —
+**two of epubcheck's own cells are broken**: no reference is ever registered
+as SVG_CLIP_PATH, so `clip-path="url(#…)"` is unchecked there and that branch
+is dead code, and `checkSymbol()` reads only `xlink:href`, so SVG 2's plain
+`<use href>` is missed. Both confirmed by probe.
+
+Measured one book per shape against epubcheck 5.3.0. **The shelf is blind to
+all of it** — 0 of 346 books define an SVG symbol, gradient, pattern or
+clipPath at all — so the enumeration is the evidence, and this behaviour had
+no unit test before today.
+
 ## [0.9.21] - 2026-08-18
 
 **`@keyframes` is no longer a CSS syntax error.** A block holds either rules

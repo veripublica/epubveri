@@ -186,6 +186,35 @@ const ANN: &[Ann] = &[
          already catch. Building strictness against an unreadable reference, \
          on one test case, for something 60 of 61 books never do is more \
          likely to invent false positives than to catch defects."),
+    ("RSC-014", Some("partial"),
+        "One cell of epubcheck's matrix, and the matrix is worth knowing \
+         before reading this row as a small gap. epubcheck *types* every \
+         `id` from the element carrying it - an SVG `symbol` is SVG_SYMBOL, \
+         `linearGradient`/`radialGradient`/`pattern` are SVG_PAINT, \
+         `clipPath` is SVG_CLIP_PATH, everything else GENERIC - and then \
+         requires each reference's type to match. **Implemented**: a \
+         same-document hyperlink to any of those five (widened 2026-08-18 \
+         from `symbol` alone). **Not implemented**: a *cross-document* \
+         hyperlink, which needs the id's type carried through the fragment \
+         cache; and the two non-hyperlink reference kinds, `<use \
+         xlink:href>` and `fill`/`stroke=\"url(#...)\"`, which are not \
+         collected as references at all. All measured against epubcheck \
+         5.3.0, one book per shape. \
+         **Two of epubcheck's own cells are broken**, so the full matrix is \
+         smaller than its source suggests: no reference is ever registered \
+         with type SVG_CLIP_PATH, making `clip-path=\"url(#...)\"` unchecked \
+         and that `case` dead code; and `checkSymbol()` reads only \
+         `xlink:href`, so SVG 2's plain `<use href>` - the modern spelling - \
+         is missed. Both confirmed by probe, not only by reading. \
+         Worth recording that the *implemented* cell is the doubtful one: \
+         the single RSC-014 scenario in epubcheck's whole test suite carries \
+         their own comment `# FIXME not sure this error is legit`. The \
+         unimplemented paint cell has the firmer ground (SVG 1.1 §13.2 puts a \
+         document in error when a paint reference is not a paint server). \
+         Deferred rather than dropped because the population is real but \
+         absent here: **0 of 346 shelf books define an SVG symbol, gradient, \
+         pattern or clipPath at all**, so this lives in rich-SVG fixed-layout \
+         titles that no instrument here holds."),
     ("RSC-016", Some("partial"),
         "Implemented, with one measured and deliberate divergence: a named \
          HTML entity (`&nbsp;` and friends) under an **XHTML 1.0** doctype. \
