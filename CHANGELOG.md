@@ -48,6 +48,22 @@ The 356-book shelf is byte-identical across this change, so no book on it
 hyperlinks a non-Content-Document resource; the evidence is fixtures against
 epubcheck 5.3.0.
 
+**The fourth cell is a documented divergence rather than a gap, and we keep
+our answer.** For a media overlay's `<text src>` pointing at a non-blessed
+target we report **MED-013**; epubcheck reports **RSC-010**. Each reports
+exactly one message and both call the book INVALID, so no decision differs.
+
+What settled it was the control: with a *valid* content document as the
+overlay's target, both tools report MED-013 **and** MED-010 and agree exactly.
+So epubcheck's MED-013 works normally, and its silence in the non-blessed case
+comes from the `CheckAbortException` its RSC-010 throws — which drops a
+second, unrelated package-level defect (the content document declares
+`media-overlay` and the overlay never references it). Matching would mean
+reproducing a suppression rather than implementing a check, so we do not.
+Filed upstream as [w3c/epubcheck#1679](https://github.com/w3c/epubcheck/issues/1679),
+where the same class was accepted and fixed once before (their #221). Same
+reasoning as the `&nbsp;` divergence recorded on RSC-016.
+
 ## [0.9.22] - 2026-08-18
 
 **RSC-014 is a type-matching check, and it is now implemented for every

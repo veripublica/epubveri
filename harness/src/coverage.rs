@@ -195,12 +195,21 @@ const ANN: &[Ann] = &[
          one with no deprecated-type exemption and no fallback test. \
          **Implemented**: the NCX `<content src>`, the nav toc link, and \
          (2026-08-18, #78) an ordinary hyperlink, XHTML and SVG alike. \
-         **Not a gap but a different id**: for an overlay text link \
-         to a non-blessed target we report **MED-013**, epubcheck reports \
-         RSC-010, and each reports exactly one message - measured with \
-         `text/css` and `text/html` targets. Adding RSC-010 without settling \
-         why epubcheck stays silent on MED-013 there would over-report, so \
-         the cell waits on a probe rather than an edit (#78). \
+         **One deliberate divergence, measured and settled 2026-08-18**: \
+         for an overlay text link to a non-blessed target we report \
+         **MED-013**, epubcheck reports **RSC-010**, and each reports exactly \
+         one message. The probe that settled it used a *valid* content \
+         document as the overlay's target: there both tools report MED-013 \
+         plus MED-010 and agree exactly, so epubcheck's MED-013 works \
+         normally and its silence in the non-blessed case comes from the \
+         `CheckAbortException` its RSC-010 throws. That abort drops a \
+         second, unrelated package-level defect - the content document \
+         declares `media-overlay` and the overlay never references it - \
+         which is a real finding a user needs. **We keep MED-013 on purpose**: \
+         the verdict is INVALID from both tools either way, so nothing about \
+         the decision differs, and matching would mean reproducing a \
+         suppression rather than a check. Same reasoning as the `&nbsp;` \
+         divergence on RSC-016. Reported upstream. \
          Reported *instead of* RSC-011, never alongside it - epubcheck aborts \
          the reference's remaining checks right after, and our spine-\
          reachability loop skips the same targets for the same reason. \
