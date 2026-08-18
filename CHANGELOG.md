@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.24] - 2026-08-19
 
 **A `navPoint` must carry a `navLabel` before its `content`, and a `content`
 at all** ([#79](https://github.com/veripublica/epubveri/issues/79)). Nothing
