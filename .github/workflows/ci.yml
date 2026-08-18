@@ -64,6 +64,22 @@ jobs:
       # annotates the diff); `cargo install cargo-audit` per run is a slow
       # source build for the same answer.
       #
+      # Node 20 note (checked 2026-08-18): this is the only action left in
+      # this repo on the deprecated Node 20 runtime, and it is left there on
+      # purpose. Upstream's latest release is v2.0.0 (2024-09-23, `node20`);
+      # Node 24 landed on their `main` on 2026-03-20 (PR #48) and has gone
+      # unreleased since, with their issue #53 "make new release" open and
+      # unanswered. So there is nothing to bump to - `@v2` still serves
+      # node20.
+      #
+      # The decision is to wait, and to pin to `rustsec/audit-check@858dc40f`
+      # only if no release comes and GitHub's removal of Node 20 breaks this
+      # job. That fallback is cheap because their Node 24 commit did not
+      # rebuild `dist/index.js`: the blob is byte-identical to v2.0.0
+      # (cb58b3398fd5aaa21674e8e3ddb5643af12a5275, 1433161 bytes), so pinning
+      # would change the declared runtime and not a line of running code.
+      # Re-verify that hash before pinning - their `main` may have moved.
+      #
       # Scope note: today's tree is clean of *vulnerabilities* but carries one
       # unmaintained-crate warning, and warnings do not fail this job - only
       # an actual advisory does. That is the intent: an unmaintained
