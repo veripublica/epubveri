@@ -9831,6 +9831,62 @@ mod tests {
         buf
     }
 
+    /// #80: PKG-003 and PKG-004 name *which* way a container is unreadable.
+    ///
+    /// epubcheck's `OCFZipChecker` reads a **58-byte** header: too short to
+    /// fill it is PKG-003, long enough but not starting with `PK` is
+    /// PKG-004. We had PKG-003 for an empty file only and PKG-004 behind an
+    /// image sniff, so 36 bytes of text and 200 random bytes both drew the
+    /// generic PKG-008 alone.
+    ///
+    /// 58 and not 30: the check reaches past the local file header to the
+    /// `mimetype` name at offset 30. A comment in `ocf.rs` said 30, and that
+    /// misreading is what made the two tools look inconsistent when they
+    /// agreed — the boundary is the whole rule here, so it is pinned from
+    /// both sides.
+    #[test]
+    fn a_short_or_unsigned_container_is_named() {
+        let ids = |bytes: Vec<u8>| -> Vec<&'static str> {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::PKG_003 || m.id == crate::ids::PKG_004)
+                .map(|m| m.id)
+                .collect()
+        };
+        assert_eq!(ids(Vec::new()), vec![crate::ids::PKG_003], "empty");
+        assert_eq!(
+            ids(b"NOTAZIPFILE garbage header bytes".to_vec()),
+            vec![crate::ids::PKG_003]
+        );
+        // 57 vs 58 — the boundary itself.
+        assert_eq!(ids(vec![b'x'; 57]), vec![crate::ids::PKG_003], "57 bytes");
+        assert_eq!(ids(vec![b'x'; 58]), vec![crate::ids::PKG_004], "58 bytes");
+        // epubcheck's test is an `and`, so one matching byte falls through.
+        // Measured: it then reports **PKG-006** there (the header's filename
+        // -size field is not 8), which we do not - our PKG-005/PKG-006 read
+        // the parsed zip while epubcheck reads the raw header, so they never
+        // run on a container that fails to open. Same family as this fix and
+        // left as its own change; what is pinned here is only that neither
+        // PKG-003 nor PKG-004 is the answer.
+        assert!(
+            ids(b"PX"
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(b'x', 60))
+                .collect())
+            .is_empty()
+        );
+        assert!(
+            ids(b"xK"
+                .iter()
+                .copied()
+                .chain(std::iter::repeat_n(b'x', 60))
+                .collect())
+            .is_empty()
+        );
+    }
+
     /// #79 step 3: two Schematron patterns that were implemented at one end
     /// only.
     ///

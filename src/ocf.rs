@@ -451,8 +451,26 @@ pub(crate) fn check_resource_limits(ocf: &Ocf, report: &mut Report) {
 /// fatal condition, so nothing else is checked (confirmed via real
 /// fixtures pairing PKG-008 alone with "no other errors or warnings").
 pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
+    // PKG-003: epubcheck's `OCFZipChecker` reads a **58-byte** header and
+    // reports this when the file cannot fill it - so it covers any container
+    // shorter than that, not only an empty one, which is all we had (#80).
+    // 58 rather than 30 because the check reaches past the local file header
+    // to the `mimetype` name at offset 30; an earlier comment in this file
+    // said 30 and that misreading is what made the two tools look
+    // inconsistent when they were not.
+    if bytes.len() < 58 {
+        let n = bytes.len();
+        report.push(
+            PKG_003,
+            Severity::Error,
+            if n == 0 {
+                "the EPUB file is empty".to_string()
+            } else {
+                format!("the EPUB file is too short to hold a ZIP header ({n} bytes)")
+            },
+        );
+    }
     if bytes.is_empty() {
-        report.push(PKG_003, Severity::Error, "the EPUB file is empty");
         report.push_rule(
             PKG_008,
             Severity::Fatal,
@@ -482,18 +500,34 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // The two carry independent extra fields, and tools routinely put an
     // NTFS timestamp in the central directory only: one shelf book has 0
     // bytes local and 36 central, so `extra_data()` (central) made us report
-    // an error epubcheck does not - it reads the first 30 bytes of the file
-    // (OCFZipChecker), and so do we now. mimetype must be the first entry,
+    // an error epubcheck does not - it reads the file's own leading bytes
+    // (`OCFZipChecker`, a 58-byte header), and so do we now. mimetype must be the first entry,
     // which is checked separately, so offset 0 is its local header.
     let first_local_extra_len = if bytes.len() >= 30 && bytes.starts_with(b"PK\x03\x04") {
         u16::from_le_bytes([bytes[28], bytes[29]])
     } else {
         0
     };
+    // Read before `bytes` is moved into the reader below.
+    let bytes_len = bytes.len();
+    let bytes_first_two = (
+        bytes.first().copied().unwrap_or(0),
+        bytes.get(1).copied().unwrap_or(0),
+    );
     let mut archive = match ZipArchive::new(Cursor::new(bytes)) {
         Ok(a) => a,
         Err(e) => {
-            if looks_like_other_format {
+            // PKG-004 is epubcheck's "the header is long enough but does not
+            // start with `PK`" - `header[0] != 'P' && header[1] != 'K'` in
+            // `OCFZipChecker`, an **and**, so one matching byte is enough to
+            // fall through. We guarded it on an image sniff instead, so 200
+            // random bytes drew PKG-008 alone where epubcheck names the
+            // defect (#80). The sniff stays as a second route: a file that
+            // *is* a recognisable other format still gets it even if its
+            // first two bytes happen to be `PK`.
+            let bad_signature =
+                bytes_len >= 58 && bytes_first_two.0 != b'P' && bytes_first_two.1 != b'K';
+            if bad_signature || looks_like_other_format {
                 report.push(
                     PKG_004,
                     Severity::Fatal,

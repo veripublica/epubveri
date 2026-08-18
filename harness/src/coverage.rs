@@ -43,9 +43,31 @@ type Ann = (&'static str, Option<&'static str>, &'static str);
 #[rustfmt::skip]
 const ANN: &[Ann] = &[
     // --- PKG (reviewed) ---
-    ("PKG-003", Some("partial"),
-        "Emitted only for a literally empty (0-byte) file; a corrupted-but-\
-         nonempty header goes to PKG-004/PKG-008 instead."),
+    ("PKG-003", None,
+        "epubcheck's `OCFZipChecker` reads a **58-byte** header and reports \
+         this when the file cannot fill it, so it covers any container \
+         shorter than that - not only an empty one, which is all this had \
+         until 2026-08-18 (#80). 58 rather than 30 because the check reaches \
+         past the local file header to the `mimetype` name at offset 30; a \
+         comment here said 30, and that misreading is what made the two tools \
+         look inconsistent when they agreed. Boundary measured from both \
+         sides: 57 bytes is PKG-003, 58 is PKG-004."),
+    ("PKG-004", None,
+        "The other half of the same header check: long enough to fill 58 \
+         bytes but not starting with `PK`. epubcheck's test is \
+         `header[0] != 'P' && header[1] != 'K'` - an **and**, so `PX…` or \
+         `xK…` falls through to PKG-006 instead, measured. This was guarded \
+         on an image sniff until 2026-08-18, so 200 random bytes drew the \
+         generic PKG-008 alone; the sniff is kept as a second route for a \
+         file that is a recognisable other format yet happens to start `PK`."),
+    ("PKG-006", Some("partial"),
+        "Reported from the parsed zip, so it never runs on a container that \
+         fails to open - where epubcheck still reports it, reading the raw \
+         58-byte header (`OCFZipChecker`: filename-size != 8). Measured with \
+         `PX…`/`xK…` headers, which epubcheck calls PKG-006 and we call \
+         PKG-008 alone. Same family as #80 and left as its own change; \
+         PKG-005 reads the same raw header there and is likely the same \
+         shape, unmeasured."),
     ("PKG-020", Some("na"),
         "Unreachable for the input this tool accepts (verified 2026-08-04). \
          `OPFChecker.checkPackage` asks whether the container holds the \

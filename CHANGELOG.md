@@ -55,6 +55,27 @@ which is what caught it.
 The reported book now gives 3 RSC-005 and 1 RSC-017 — the same set epubcheck
 reports, on the same elements.
 
+**A corrupted-but-nonempty container is now named**
+([#80](https://github.com/veripublica/epubveri/issues/80)). epubcheck's
+`OCFZipChecker` reads a **58-byte** header: a file too short to fill it is
+PKG-003, one long enough but not starting with `PK` is PKG-004. We had
+PKG-003 for a literally empty file and PKG-004 behind an image sniff, so 36
+bytes of text and 200 random bytes both drew the generic PKG-008 alone.
+
+58 and not 30 — the check reaches past the local file header to the
+`mimetype` name at offset 30. A comment in `ocf.rs` said 30, and that
+misreading is what made the two tools look inconsistent when they agreed; the
+boundary is now pinned from both sides (57 bytes is PKG-003, 58 is PKG-004).
+Both messages are FATAL either way, so no verdict moves — this is the tool
+saying *which* way the file is broken.
+
+`docs/COVERAGE.md` moves PKG-003 and PKG-004 to complete and **PKG-006 to
+partial**, which is the same audit finding one more thing than it went looking
+for: epubcheck computes PKG-005/PKG-006 from that raw header too, so they
+still fire on a container that fails to open, while ours read the parsed zip
+and cannot. Measured (`PX…`/`xK…` headers are PKG-006 there, PKG-008 alone
+here) and left as its own change.
+
 **Two more nav rules were implemented at one end only** — found by diffing
 `epub-nav-30.sch`'s eight patterns against `navdoc.rs` rather than assuming
 the list was the gap, since six of the eight turned out to be covered.
