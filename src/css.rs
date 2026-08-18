@@ -635,7 +635,16 @@ fn check_at_rule_block_spanned(
         // finding inside `@font-face` as outside it, and a consumer keying on
         // the slug has no reason to care which held it.
         styloria::BlockContents::Declarations(items) => {
-            report_declarations(&items, &errors, css, css_path, origin, is_epub3, report);
+            report_declarations(
+                &items,
+                &errors,
+                DeclarationsIn::AtRule,
+                css,
+                css_path,
+                origin,
+                is_epub3,
+                report,
+            );
         }
         styloria::BlockContents::Rules(rules) => {
             for e in &errors {
@@ -703,7 +712,31 @@ fn check_declaration_shapes_spanned(
     // becoming styloria's kind name. The slug is epubveri's key for
     // consumers; the crate boundary moving is not their business.
     let (items, errors) = styloria::parse_declaration_list_from_values(block_values);
-    report_declarations(&items, &errors, css, css_path, origin, is_epub3, report);
+    report_declarations(
+        &items,
+        &errors,
+        DeclarationsIn::StyleRule,
+        css,
+        css_path,
+        origin,
+        is_epub3,
+        report,
+    );
+}
+
+/// What holds a declaration list, which decides whether an at-rule inside it
+/// is misplaced.
+///
+/// `@page { @top-center { … } }` and `@font-feature-values { @styleset { … } }`
+/// are ordinary CSS: an at-rule's block may contain at-rules. A *style
+/// rule's* block may not — the only at-rule that can appear there is a
+/// nested one, which is CSS Nesting, and nesting sits in §2.4 of the CSS
+/// Snapshot ("modules with rough interoperability"), not in the official
+/// definition of CSS that EPUB 3.3 defers to. epubcheck reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeclarationsIn {
+    StyleRule,
+    AtRule,
 }
 
 /// Report a parsed declaration list: CSS-008 for what would not parse, then
@@ -723,6 +756,7 @@ fn check_declaration_shapes_spanned(
 fn report_declarations(
     items: &[styloria::spanned::DeclarationListItem],
     errors: &[spanned::SyntaxError],
+    held_by: DeclarationsIn,
     css: &str,
     css_path: &str,
     origin: CssOrigin,
@@ -741,8 +775,28 @@ fn report_declarations(
         );
     }
     for item in items {
-        let styloria::spanned::DeclarationListItem::Declaration(d) = item else {
-            continue;
+        let d = match item {
+            styloria::spanned::DeclarationListItem::Declaration(d) => d,
+            // A nested at-rule. Its own slug rather than the malformed-shape
+            // one: this is not a parse error — CSS Syntax §5.4.2 consumes an
+            // at-rule in a declaration list quite happily — but a construct
+            // outside the CSS that EPUB 3.3 accepts. Different reason,
+            // different key.
+            styloria::spanned::DeclarationListItem::AtRule(a)
+                if held_by == DeclarationsIn::StyleRule =>
+            {
+                report.push_full(
+                    CSS_008,
+                    Severity::Error,
+                    "CSS syntax error",
+                    css_path,
+                    origin.position(css, a.node.name_span.start),
+                    "css.declaration.nested_at_rule",
+                    Vec::new(),
+                );
+                continue;
+            }
+            styloria::spanned::DeclarationListItem::AtRule(_) => continue,
         };
         let name = &d.node.name;
         // CSS-001 is EPUB 3 only. epubcheck guards it with
@@ -1715,6 +1769,46 @@ mod tests {
         );
     }
 
+    /// CSS Nesting inside a style rule. We reported the nested *style rule*
+    /// form and stayed silent on the nested *at-rule* form, which was not a
+    /// decision — the declaration walk skipped at-rule chunks, because an
+    /// at-rule's block may legitimately hold at-rules. A style rule's may
+    /// not.
+    ///
+    /// Reporting is the right side here, against the intuition that nesting
+    /// is modern-but-valid CSS and so should be tolerated the way modern
+    /// selectors are. EPUB 3.3 supports "CSS as defined by the CSS Working
+    /// Group Snapshot"; in the 2026 Snapshot nesting sits in §2.4, *modules
+    /// with rough interoperability*, explicitly outside the official
+    /// definition of CSS. epubcheck reports all of these (three findings to
+    /// our one, our usual lower multiplicity).
+    #[test]
+    fn a_nested_rule_in_a_style_rule_is_reported() {
+        for css in [
+            "a { color: red; & b { color: blue } }",
+            ".a { color: red; .b { color: blue } }",
+            "a { color: red; &:hover { color: blue } }",
+            ".a { color: red; @media print { color: blue } }",
+            ".a { color: red; @nest & b { color: blue } }",
+        ] {
+            assert_eq!(run(css, &empty_index()), vec![CSS_008], "{css}");
+        }
+    }
+
+    /// The other half, and the reason the at-rule case had been skipped in
+    /// the first place: an at-rule *inside an at-rule's block* is ordinary
+    /// CSS and must stay silent. `@page`'s margin at-rules are the shape
+    /// epubcheck's older parser rejects and we deliberately do not.
+    #[test]
+    fn an_at_rule_inside_an_at_rule_block_stays_silent() {
+        for css in [
+            "@page { margin: 1em; @top-center { content: \"x\" } }",
+            "@font-feature-values Fnt { @styleset { nice: 1; } }",
+        ] {
+            assert!(run(css, &empty_index()).is_empty(), "{css}");
+        }
+    }
+
     /// An at-rule styloria has no table entry for is read as declarations,
     /// and a nested rule inside it is not blamed. This is the direction the
     /// unknown case has to fail in: CSS keeps gaining at-rules, so any
@@ -1724,10 +1818,7 @@ mod tests {
     #[test]
     fn an_unknown_at_rule_holding_rules_is_not_a_syntax_error() {
         assert!(run("@future { p { color: red } }", &empty_index()).is_empty());
-        assert_eq!(
-            run("@future { color red }", &empty_index()),
-            vec![CSS_008]
-        );
+        assert_eq!(run("@future { color red }", &empty_index()), vec![CSS_008]);
     }
 
     #[test]

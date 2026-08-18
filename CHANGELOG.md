@@ -39,14 +39,39 @@ keep the check styloria 0.9 brought, and the `rule` slug on a malformed
 declaration is still `css.declaration.malformed_shape`.
 
 Measured: the four shapes and 21 neighbouring ones were built as books and
-run through epubcheck — we now agree with it on all 25 except the two
-divergences already recorded (a `@page` margin at-rule, which its older
-parser rejects and current CSS allows; and CSS nesting, where we report one
-finding to its three). Corpus unchanged at 606/607 with 0 false positives,
+run through epubcheck — we now agree with it on all 25 except the one
+divergence already recorded (a `@page` margin at-rule, which its older
+parser rejects and current CSS allows) and the nesting shapes, where we
+report one finding to its three. Corpus unchanged at 606/607 with 0 false positives,
 the 346-book shelf byte-identical, `hostile` clean.
 
-**The shelf could not have found this, and did not**: no book of the 346
-contains `@keyframes` at all. Neither could the corpus — it has no fixture
+**A nested at-rule inside a style rule is now reported too** — the same
+family, found while checking the first, and running the other way. We
+reported `a { & b { color: blue } }` and stayed silent on
+`.a { @media print { color: blue } }` and `@nest`, which was not a decision:
+the declaration walk skipped at-rule chunks, because an at-rule's block may
+legitimately hold at-rules (`@page`'s margin rules, `@font-feature-values`).
+A style rule's block may not.
+
+Reporting is the right side of that, against the first intuition — that
+nesting is modern-but-valid CSS and belongs with the modern *selectors* we
+deliberately decline to flag. It does not. EPUB 3.3 supports "CSS as defined
+by the CSS Working Group Snapshot", and in the 2026 Snapshot (22 June 2026)
+nesting sits in §2.4, *modules with rough interoperability*, explicitly
+outside the official definition of CSS; CSS Nesting Level 1 is still a
+Working Draft. The selector and empty-declaration precedents point the other
+way precisely because *those* are in the official definition. epubcheck
+reports all five nesting shapes, three findings to our one.
+
+It carries its own `rule` slug, `css.declaration.nested_at_rule`, rather than
+the malformed-shape one: this is not a parse error — CSS Syntax §5.4.2
+consumes an at-rule in a declaration list quite happily — but a construct
+outside the CSS this format accepts. Different reason, different key. An
+at-rule inside an *at-rule's* block stays silent, with a test to keep it
+that way.
+
+**The shelf could not have found any of this, and did not**: no book of the
+346 contains `@keyframes`, and none contains a nesting marker either. Neither could the corpus — it has no fixture
 for one. The enumeration against epubcheck is the whole evidence, the same
 way #48's table permutations were.
 
