@@ -7776,6 +7776,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let is_content_doc = items.values().any(|(p, mt)| {
             nfc(p) == *target && (mt == "application/xhtml+xml" || mt == "image/svg+xml")
         });
+        // RSC-010: the target is a manifest item that is not a Content
+        // Document and has no fallback that reaches one (#78). epubcheck
+        // runs this for *every* hyperlink (`ResourceReferencesChecker`:220,
+        // `case HYPERLINK`), and reports it *instead of* RSC-011 - it
+        // aborts the reference's checks right after, which is why the
+        // `continue` below is part of the parity and not a shortcut. We had
+        // it on the two toc paths only (the NCX `<content src>` and the nav
+        // toc link), so an ordinary `<a href="styles.css">` drew nothing.
+        //
+        // The deprecated types are exempt here as they are there, and this
+        // is not version-gated: epubcheck's hyperlink branch tests both
+        // predicates without asking the version.
+        if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == *target)
+            && !is_content_document_type(mt)
+            && !is_deprecated_content_document_type(mt)
+            && !fallback_reaches_content_document(id, &items, &fallback_map)
+        {
+            report.push_full_path(
+                RSC_010,
+                Severity::Error,
+                format!("'{target}' is hyperlinked but is not a Content Document"),
+                source.file.clone(),
+                source.position,
+                source.element_path.clone(),
+                "opf.content_document.hyperlink_not_content_document",
+                vec![target.clone()],
+            );
+            continue;
+        }
         if is_content_doc && !spine_order.contains_key(target) && name_index.contains_key(target) {
             // Anchor at the source `<a>` (its file + line:column + element
             // path), not the OPF package root, matching where epubcheck points
@@ -13506,6 +13535,27 @@ mod tests {
             ids(&svg("<rect clip-path=\"url(#grad)\"/>")).is_empty(),
             "clip-path is unchecked by epubcheck"
         );
+    }
+
+    /// #78: RSC-010 on an ordinary hyperlink, not just on a toc link.
+    ///
+    /// epubcheck runs this for every hyperlink and reports it *instead of*
+    /// RSC-011 — it aborts the reference's checks straight after — so the
+    /// negative half of this test is the parity, not decoration.
+    #[test]
+    fn a_hyperlink_to_a_non_content_document_is_rsc_010() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_body("3.0", body))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_010 || m.id == crate::ids::RSC_011)
+                .map(|m| m.id)
+                .collect()
+        };
+        // `ch1.xhtml` is the only manifest item in this fixture and is in the
+        // spine, so a self-link is the control: a Content Document, reachable,
+        // draws neither message.
+        assert!(ids("<p><a href=\"ch1.xhtml\">x</a></p>").is_empty());
     }
 
     /// #77: an SVG anchor's target is checked for existence, through

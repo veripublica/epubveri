@@ -186,6 +186,25 @@ const ANN: &[Ann] = &[
          already catch. Building strictness against an unreadable reference, \
          on one test case, for something 60 of 61 books never do is more \
          likely to invent false positives than to catch defects."),
+    ("RSC-010", Some("partial"),
+        "Three of epubcheck's four cells. It runs RSC-010 from two places in \
+         `ResourceReferencesChecker`: `case HYPERLINK` (:231), where the \
+         target is neither a blessed nor a deprecated-blessed item type and \
+         no fallback reaches one, and `case OVERLAY_TEXT_LINK` (:257), where \
+         a media overlay's `<text src>` target is not a blessed type - that \
+         one with no deprecated-type exemption and no fallback test. \
+         **Implemented**: the NCX `<content src>`, the nav toc link, and \
+         (2026-08-18, #78) an ordinary hyperlink, XHTML and SVG alike. \
+         **Not implemented**: the overlay text link. \
+         Reported *instead of* RSC-011, never alongside it - epubcheck aborts \
+         the reference's remaining checks right after, and our spine-\
+         reachability loop skips the same targets for the same reason. \
+         Before #78 this row read `Y | Y` while the note described a toc-only \
+         implementation, which is the same overstatement RSC-014 carried \
+         before 0.9.22: one cell of a check counted as the whole. \
+         Measured against 5.3.0 one book per shape; the 356-book shelf is \
+         byte-identical across the change, so no real book on it hyperlinks a \
+         non-Content-Document resource."),
     ("RSC-014", None,
         "A *type-matching* check, and worth reading as one: epubcheck types \
          every `id` from the element carrying it - an SVG `symbol` is \

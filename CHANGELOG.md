@@ -25,10 +25,28 @@ through the same loop gives the check without the side effect. Verified
 directly: a manifest item reachable only through an SVG anchor still draws
 OPF-097 from both tools.
 
-Noted while measuring, and *not* introduced by this: neither an SVG nor an
-XHTML anchor draws **RSC-010** for a hyperlink to a non-content-document
-resource (a `text/css` target), which epubcheck reports for both. A separate
-pre-existing gap, affecting the two spellings equally.
+**An ordinary hyperlink to a non-Content-Document resource is now RSC-010**
+([#78](https://github.com/veripublica/epubveri/issues/78)) — `<a
+href="styles.css">` and its SVG `xlink:href` equivalent alike. We had the
+check on the two toc paths only (the NCX `<content src>` and the nav toc
+link), so every other hyperlink was silent; epubcheck runs it for every
+hyperlink reference.
+
+It is reported **instead of** RSC-011, never alongside — epubcheck aborts the
+reference's remaining checks right after, and our spine-reachability loop was
+already skipping those targets with a comment saying so, which is how the
+hole had a shape waiting for it.
+
+`docs/COVERAGE.md` moves this row from `Y | Y` to **partial**, which is the
+honest direction even though the check grew: the row claimed complete while
+its own note described a toc-only implementation, and one cell is still
+missing — a media overlay's `<text src>` pointing at a non-blessed type
+(`ResourceReferencesChecker`:257). Same overstatement RSC-014 carried before
+0.9.22.
+
+The 356-book shelf is byte-identical across this change, so no book on it
+hyperlinks a non-Content-Document resource; the evidence is fixtures against
+epubcheck 5.3.0.
 
 ## [0.9.22] - 2026-08-18
 

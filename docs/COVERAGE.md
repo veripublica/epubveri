@@ -20,7 +20,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 22 | 1 | 0 | 2 | 23 | 23/23 | reviewed |
 | OPF | 90 | 0 | 2 | 15 | 92 | 90/92 | reviewed |
-| RSC | 28 | 3 | 0 | 4 | 31 | 31/31 | reviewed |
+| RSC | 27 | 4 | 0 | 4 | 31 | 31/31 | reviewed |
 | HTM | 22 | 0 | 0 | 29 | 22 | 22/22 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
@@ -30,9 +30,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **204** | **4** | **2** | **105** | **210** | **208/210** | |
+| **All** | **203** | **5** | **2** | **105** | **210** | **208/210** | |
 
-**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 204 fully, 4 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 203 fully, 5 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -193,7 +193,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-007w | Referenced resource "%1$s" could not be found in the EPUB. | Y | Y |  |
 | RSC-008 | Referenced resource "%1$s" is not declared in the OPF manifest. | Y | Y | a remote resource is used but not declared in the manifest |
 | RSC-009 | A non-SVG image resource should not be defined with a fragment identifier. | Y | Y | a non-SVG image is referenced with a URL fragment identifier |
-| RSC-010 | Reference to non-standard resource type found. | Y | Y | a toc nav link targets a resource that isn't a Content Document |
+| RSC-010 | Reference to non-standard resource type found. | Y | ~ | Three of epubcheck's four cells. It runs RSC-010 from two places in `ResourceReferencesChecker`: `case HYPERLINK` (:231), where the target is neither a blessed nor a deprecated-blessed item type and no fallback reaches one, and `case OVERLAY_TEXT_LINK` (:257), where a media overlay's `<text src>` target is not a blessed type - that one with no deprecated-type exemption and no fallback test. **Implemented**: the NCX `<content src>`, the nav toc link, and (2026-08-18, #78) an ordinary hyperlink, XHTML and SVG alike. **Not implemented**: the overlay text link. Reported *instead of* RSC-011, never alongside it - epubcheck aborts the reference's remaining checks right after, and our spine-reachability loop skips the same targets for the same reason. Before #78 this row read `Y \| Y` while the note described a toc-only implementation, which is the same overstatement RSC-014 carried before 0.9.22: one cell of a check counted as the whole. Measured against 5.3.0 one book per shape; the 356-book shelf is byte-identical across the change, so no real book on it hyperlinks a non-Content-Document resource. |
 | RSC-011 | Found a reference to a resource that is not a spine item. | Y | Y | a hyperlinked document isn't listed in the spine |
 | RSC-012 | Fragment identifier is not defined. | Y | Y | a content src/href fragment identifier doesn't resolve |
 | RSC-013 | Fragment identifier is used in a reference to a stylesheet resource. | Y | Y | a stylesheet reference has a URL fragment identifier |
