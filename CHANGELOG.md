@@ -10,30 +10,53 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
-**A hyperlink to an SVG gradient, pattern or clip path is now RSC-014, as
-it already was to an SVG `symbol`.** epubcheck types every `id` from the
-element carrying it — `symbol` is SVG_SYMBOL, `linearGradient`,
+**RSC-014 is a type-matching check, and it is now implemented for every
+reference kind epubcheck compares.** epubcheck types every `id` from the
+element carrying it — an SVG `symbol` is SVG_SYMBOL, `linearGradient`,
 `radialGradient` and `pattern` are SVG_PAINT, `clipPath` is SVG_CLIP_PATH,
-everything else is GENERIC — and a hyperlink may target GENERIC and nothing
-else. We had `symbol` alone, so four of the five names were silent. `marker`,
-`mask` and `filter` are *not* on epubcheck's list and stay clean, which was
-checked rather than reasoned from the SVG spec's idea of a definition
-element.
+everything else is GENERIC — and then requires each reference's type to
+match. We had exactly one cell of that: a *same-document* hyperlink to a
+`symbol`. Now:
 
-`docs/COVERAGE.md` now marks RSC-014 **partial** rather than complete, which
-it should have said all along. What remains unimplemented, deliberately: a
-*cross-document* hyperlink, and the two non-hyperlink reference kinds
-(`<use xlink:href>`, `fill`/`stroke="url(#…)"`). The row carries the whole
-matrix, including the part worth knowing before reading it as a small gap —
-**two of epubcheck's own cells are broken**: no reference is ever registered
-as SVG_CLIP_PATH, so `clip-path="url(#…)"` is unchecked there and that branch
-is dead code, and `checkSymbol()` reads only `xlink:href`, so SVG 2's plain
-`<use href>` is missed. Both confirmed by probe.
+- a hyperlink to any of the five typed elements, **cross-document as well as
+  same-document**;
+- an SVG `<a xlink:href="#…">`, which was not read at all;
+- `<use xlink:href="#…">`, which may reach a symbol or a generic id;
+- `fill`/`stroke="url(#…)"`, which must reach a paint server exactly;
+- `cite` on `blockquote`/`q`/`ins`/`del` — **EPUB 3 only**, since epubcheck
+  collects it in `OPSHandler30` and the identical EPUB 2 book is clean;
+- a media overlay's `<text src="doc.xhtml#…">`.
 
-Measured one book per shape against epubcheck 5.3.0. **The shelf is blind to
-all of it** — 0 of 346 books define an SVG symbol, gradient, pattern or
-clipPath at all — so the enumeration is the evidence, and this behaviour had
-no unit test before today.
+A fragment that resolves to *nothing* is RSC-012, not RSC-014 — the same
+split epubcheck makes — which closed three silent gaps of its own: a dangling
+`<use>`, a dangling paint reference and a dangling SVG `<a xlink:href>` all
+drew nothing here before.
+
+**Three of epubcheck's cells are dead, and matching that is deliberate.**
+Reporting where it is silent is indistinguishable from a false positive to
+anyone diffing the two tools, so: `clip-path="url(#…)"` is unchecked (nothing
+there ever registers such a reference, and the `case` handling it is
+unreachable), and its SVG handlers read `xlink:href` only — so SVG 2's plain
+`<use href>` and plain `<a href>` register nothing. That last one we *were*
+reporting; an `<a href="#sym">` inside an `<svg>` no longer draws RSC-014.
+
+`marker`, `mask` and `filter` are not on epubcheck's typed list and stay
+clean, checked rather than reasoned from the SVG spec's own idea of a
+definition element. `docs/COVERAGE.md` moves from a bare `Y | Y` — which
+overstated a one-cell implementation — through `~` and back to `Y | Y`,
+now with the matrix written out.
+
+Twenty shapes measured, one book per run, against epubcheck 5.3.0. **No
+instrument here can see this family**: 0 of 356 shelf books define an SVG
+symbol, gradient, pattern or clipPath, and the corpus has no fixture either,
+so the enumeration and the new unit tests are the whole evidence. The
+overlay cell has a probe but no unit test — the crate has no media-overlay
+test builder.
+
+Internally, the per-document `id` map now carries each id's kind alongside
+the document-order index it already held. A first attempt dropped that index
+as unused; two callers do read it (the nav reading-order check and MED-015),
+and both are named something the search for it never covered.
 
 ## [0.9.21] - 2026-08-18
 

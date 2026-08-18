@@ -378,17 +378,124 @@ fn strip_url_fragment(url: &str) -> String {
     url.split('#').next().unwrap_or(url).to_string()
 }
 
-/// Maps every `id` attribute in a document to its element's document-order
-/// index, for reading-order comparisons (media-overlay text order vs. the
-/// content doc's DOM order; the nav toc's fragment order vs. the same).
-fn dom_id_order(d: &roxmltree::Document) -> HashMap<String, usize> {
-    let mut order = HashMap::new();
-    for (i, n) in d.descendants().filter(|n| n.is_element()).enumerate() {
-        if let Some(id) = n.attr_no_ns("id") {
-            order.entry(id.to_string()).or_insert(i);
+/// What an `id` names, which decides whether a given kind of reference may
+/// point at it (RSC-014).
+///
+/// epubcheck types every `id` from the element carrying it and then requires
+/// each reference's type to match: a hyperlink or a `cite` may reach
+/// `Generic` only, an SVG `<use>` may reach `SvgSymbol` or `Generic`, and a
+/// paint reference (`fill`/`stroke="url(#…)"`) must reach `SvgPaint`
+/// exactly. `SvgClipPath` is a *target* kind only — nothing on either side
+/// registers a clip-path reference, so no reference can be compared against
+/// it (see `docs/COVERAGE.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IdKind {
+    Generic,
+    SvgSymbol,
+    SvgPaint,
+    SvgClipPath,
+}
+
+impl IdKind {
+    /// How the kind reads in a finding's message.
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Generic => "an element",
+            Self::SvgSymbol => "an SVG symbol",
+            Self::SvgPaint => "an SVG paint server",
+            Self::SvgClipPath => "an SVG clip path",
         }
     }
-    order
+
+    /// The kind of the element carrying the `id`. Names are compared
+    /// case-insensitively because epubcheck lowercases before comparing, and
+    /// the list is `OPSHandler`'s rather than the SVG spec's notion of a
+    /// definition element — `marker`, `mask` and `filter` are deliberately
+    /// absent, verified against epubcheck one book each.
+    fn of(n: roxmltree::Node) -> Self {
+        if n.tag_name().namespace() != Some("http://www.w3.org/2000/svg") {
+            return Self::Generic;
+        }
+        let name = n.tag_name().name();
+        if name.eq_ignore_ascii_case("symbol") {
+            Self::SvgSymbol
+        } else if ["linearGradient", "radialGradient", "pattern"]
+            .iter()
+            .any(|p| name.eq_ignore_ascii_case(p))
+        {
+            Self::SvgPaint
+        } else if name.eq_ignore_ascii_case("clipPath") {
+            Self::SvgClipPath
+        } else {
+            Self::Generic
+        }
+    }
+}
+
+/// A reference that carries an expectation about its target's [`IdKind`],
+/// and what it will accept (RSC-014).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefKind {
+    /// `<use xlink:href="#…">` — a symbol, or a generic id.
+    Symbol,
+    /// `fill`/`stroke="url(#…)"` — a paint server, exactly.
+    Paint,
+    /// `cite="#…"` on `blockquote`/`q`/`ins`/`del` — a generic id only.
+    /// **EPUB 3 only**: epubcheck collects it in `OPSHandler30`, and an
+    /// EPUB 2 book carrying the same markup is clean, measured both ways.
+    Cite,
+    /// An SVG `<a xlink:href="#…">` — a generic id only, like an XHTML
+    /// hyperlink. **`xlink:href` only**, matching epubcheck's SVG `a`
+    /// handler, which reads that spelling alone: a plain `href` on an SVG
+    /// anchor registers no reference there and draws nothing at all,
+    /// measured both spellings and both outcomes.
+    SvgHyperlink,
+    /// A media overlay's `<text src="doc.xhtml#…">` — a generic id only,
+    /// same acceptance as [`Self::Cite`]. Kept as its own variant because
+    /// it is a different reference in a different file type, and a future
+    /// divergence between the two should be a one-line change rather than a
+    /// re-reading of which callers meant which.
+    OverlayText,
+}
+
+impl RefKind {
+    fn accepts(self, target: IdKind) -> bool {
+        match self {
+            Self::Symbol => matches!(target, IdKind::SvgSymbol | IdKind::Generic),
+            Self::Paint => target == IdKind::SvgPaint,
+            Self::Cite | Self::OverlayText | Self::SvgHyperlink => target == IdKind::Generic,
+        }
+    }
+}
+
+/// Every `id` in one document, mapped to its element's document-order index
+/// and its [`IdKind`]. Cached per target document, `None` when the target
+/// could not be read or parsed.
+type IdMap = HashMap<String, (usize, IdKind)>;
+
+/// Maps every `id` attribute in a document to its element's document-order
+/// index and its [`IdKind`].
+///
+/// The index drives two reading-order comparisons — the nav toc's fragment
+/// order against the content document's DOM order, and MED-015's media
+/// overlay `<text>` order against the same — while the kind drives RSC-014.
+///
+/// A first version of this change deleted the index, on the grounds that
+/// every caller only ever asked `contains_key`. That was a grep over the
+/// names `ids`/`target_ids`, and both real users are called something else
+/// (`id_order_cache`, `id_order`), so the search confirmed exactly what it
+/// had been pointed at. The compiler caught both. The claim to be careful
+/// with is not "this is unused" but "my search would have found it".
+fn dom_id_kinds(d: &roxmltree::Document) -> IdMap {
+    let mut kinds = HashMap::new();
+    for (i, n) in d.descendants().filter(|n| n.is_element()).enumerate() {
+        if let Some(id) = n.attr_no_ns("id") {
+            kinds
+                .entry(id.to_string())
+                .or_insert_with(|| (i, IdKind::of(n)));
+        }
+    }
+    kinds
 }
 
 /// Whether an `(element, attribute)` pair is a reference that *consumes* the
@@ -443,19 +550,19 @@ fn is_resource_reference(node: roxmltree::Node, attr: &str) -> bool {
 /// Decoding is BOM-aware and the XHTML DTD's entities are declared, exactly
 /// as in the main content-document walk - a target document must not fail to
 /// parse *here* for a reason it would not fail to parse *there*.
-fn target_id_order(
+fn target_id_kinds(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     target_nfc: &str,
     is_epub3: bool,
-) -> Option<HashMap<String, usize>> {
+) -> Option<IdMap> {
     let orig = name_index.get(target_nfc)?;
     let bytes = ocf.read(orig)?;
     // The shift is irrelevant here: this reads an id map out of the DOM and
     // never reports a position.
     let (text, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&bytes), is_epub3);
     let doc = parse_xml(&text).ok()?;
-    Some(dom_id_order(&doc))
+    Some(dom_id_kinds(&doc))
 }
 
 /// Default-vocabulary prefixes EPUB reserves, and the exact URI each is
@@ -540,22 +647,6 @@ const RESERVED_PREFIXES_ANY: &[(&str, &str)] = &[
 
 /// Reserved prefixes EPUB 3.4 deprecates (w3c/epubcheck#1649).
 const DEPRECATED_PREFIXES_34: &[&str] = &["xsd", "msv", "prism"];
-
-/// SVG elements whose `id` epubcheck types as something other than GENERIC,
-/// and which a hyperlink therefore may not target (RSC-014).
-///
-/// Taken from `OPSHandler`'s own list rather than from the SVG spec's notion
-/// of a definition element: `<marker>`, `<mask>` and `<filter>` are equally
-/// "definitions" and are **not** on it, so a hyperlink to one is not an
-/// error in epubcheck and must not be one here. Matched case-insensitively
-/// because epubcheck lowercases the element name before comparing.
-const SVG_TYPED_IDS: &[&str] = &[
-    "symbol",
-    "linearGradient",
-    "radialGradient",
-    "pattern",
-    "clipPath",
-];
 
 impl PrefixContext {
     fn reserved(self) -> &'static [(&'static str, &'static str)] {
@@ -1946,7 +2037,7 @@ fn check_guide_references(
     opf_path: &str,
     report: &mut Report,
 ) {
-    let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
+    let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
     for r in doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "reference")
@@ -2041,12 +2132,12 @@ fn check_guide_references(
                     continue;
                 }
                 if !id_cache.contains_key(&resolved) {
-                    let ids = target_id_order(ocf, name_index, &resolved, is_epub3);
+                    let ids = target_id_kinds(ocf, name_index, &resolved, is_epub3);
                     id_cache.insert(resolved.clone(), ids);
                 }
                 // `None` = the target could not be read/parsed, so whether the
                 // fragment resolves is unknown and unreported (see
-                // `target_id_order`).
+                // `target_id_kinds`).
                 let Some(ids) = &id_cache[&resolved] else {
                     continue;
                 };
@@ -2086,7 +2177,7 @@ fn check_ncx_content_fragments(
     report: &mut Report,
 ) {
     let dir = parent_dir(ncx_path);
-    let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
+    let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
     for n in ncx_doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "content")
@@ -2151,12 +2242,12 @@ fn check_ncx_content_fragments(
             continue;
         }
         if !id_cache.contains_key(&resolved) {
-            let ids = target_id_order(ocf, name_index, &resolved, is_epub3);
+            let ids = target_id_kinds(ocf, name_index, &resolved, is_epub3);
             id_cache.insert(resolved.clone(), ids);
         }
         // `None` = the target could not be read/parsed, so whether the
         // fragment resolves is unknown and unreported (see
-        // `target_id_order`).
+        // `target_id_kinds`).
         let Some(ids) = &id_cache[&resolved] else {
             continue;
         };
@@ -6214,7 +6305,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .is_some();
 
         {
-            let mut frag_id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
+            let mut frag_id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
 
             for a in d
                 .descendants()
@@ -6311,15 +6402,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if !frag_id_cache.contains_key(&target_nfc) {
                     let ids = if target_nfc == nfc(&path) {
                         // The document being walked - already parsed.
-                        Some(dom_id_order(&d))
+                        Some(dom_id_kinds(&d))
                     } else {
-                        target_id_order(ocf, &name_index, &target_nfc, is_epub3)
+                        target_id_kinds(ocf, &name_index, &target_nfc, is_epub3)
                     };
                     frag_id_cache.insert(target_nfc.clone(), ids);
                 }
                 // `None` = the target could not be read/parsed, so whether
                 // the fragment resolves is unknown and unreported (see
-                // `target_id_order`).
+                // `target_id_kinds`).
                 let Some(target_ids) = &frag_id_cache[&target_nfc] else {
                     continue;
                 };
@@ -6335,8 +6426,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     );
                     continue;
                 }
-                // RSC-014: a same-document hyperlink to an SVG definition
-                // element - a navigable link can't target one.
+                // RSC-014: a hyperlink to an SVG definition element - a
+                // navigable link can't target one. Cross-document as well as
+                // same-document, since the kind travels in the id map.
                 //
                 // epubcheck decides this by *typing* every id: an SVG
                 // `symbol` is SVG_SYMBOL, a `linearGradient`/`radialGradient`
@@ -6352,21 +6444,138 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // document order only, and the two non-hyperlink reference
                 // kinds (`<use xlink:href>`, `fill`/`stroke="url(#…)"`) are
                 // not collected here at all.
-                if path_part.is_empty()
-                    && let Some(target_node) =
-                        d.descendants().find(|n| n.attr_no_ns("id") == Some(frag))
-                    && target_node.tag_name().namespace() == Some("http://www.w3.org/2000/svg")
-                    && let name = target_node.tag_name().name()
-                    && SVG_TYPED_IDS.iter().any(|d| name.eq_ignore_ascii_case(d))
+                // An SVG `<a>` is handled by the typed-reference walk below,
+                // through `xlink:href`. epubcheck's SVG anchor handler reads
+                // that spelling alone, so a plain `href` there registers no
+                // reference and draws nothing - reporting it would be a
+                // divergence in the direction that reads as a false
+                // positive. Measured: `<a href="#sym">` inside an `<svg>` is
+                // clean from epubcheck and was RSC-014 here.
+                if let Some(&(_, kind)) = target_ids.get(frag)
+                    && kind != IdKind::Generic
+                    && a.tag_name().namespace() != Some("http://www.w3.org/2000/svg")
                 {
                     report.push_at_pos(
                         RSC_014,
                         Severity::Error,
                         format!(
-                            "hyperlink '{href}' targets an SVG {name} (incompatible resource type)"
+                            "hyperlink '{href}' targets {} (incompatible resource type)",
+                            kind.describe()
                         ),
                         path.clone(),
                         Position::of(a),
+                    );
+                }
+            }
+
+            // RSC-012/RSC-014 for the two SVG reference kinds that are not
+            // hyperlinks. epubcheck resolves every reference through one
+            // path and then compares the target id's type against the
+            // reference's; these two are the rest of that comparison.
+            //
+            // - `<use>` may reach an SVG symbol or a generic id, nothing
+            //   else. **`xlink:href` only, deliberately**: epubcheck's
+            //   `checkSymbol()` reads that spelling alone, so SVG 2's plain
+            //   `<use href>` registers no reference there at all. Reading
+            //   both here would report where epubcheck is silent, which to
+            //   anyone diffing the two tools is indistinguishable from a
+            //   false positive. (Our RSC-015 does accept both spellings -
+            //   that check is about a missing fragment, not about the
+            //   target's type, and epubcheck reaches it by another route.)
+            // - `fill`/`stroke="url(#…)"` must reach a paint server exactly,
+            //   not a symbol and not a generic id. Those two attributes are
+            //   epubcheck's whole list. `clip-path` is **not** checked by
+            //   either tool: nothing there ever registers a clip-path
+            //   reference, so its `case` is dead code (see COVERAGE.md).
+            let mut typed_refs: Vec<(roxmltree::Node, String, RefKind)> = Vec::new();
+            for n in d.descendants().filter(|n| {
+                n.is_element() && n.tag_name().namespace() == Some("http://www.w3.org/2000/svg")
+            }) {
+                if n.tag_name().name() == "use"
+                    && let Some(v) = n.attribute(("http://www.w3.org/1999/xlink", "href"))
+                {
+                    typed_refs.push((n, v.to_string(), RefKind::Symbol));
+                }
+                if n.tag_name().name() == "a"
+                    && let Some(v) = n.attribute(("http://www.w3.org/1999/xlink", "href"))
+                {
+                    typed_refs.push((n, v.to_string(), RefKind::SvgHyperlink));
+                }
+                for attr in ["fill", "stroke"] {
+                    if let Some(v) = n.attr_no_ns(attr)
+                        && let Some(inner) =
+                            v.strip_prefix("url(").and_then(|r| r.strip_suffix(')'))
+                    {
+                        typed_refs.push((n, inner.trim().to_string(), RefKind::Paint));
+                    }
+                }
+            }
+            // `cite` on the four elements HTML gives it. EPUB 3 only, and
+            // that is measured rather than assumed: `checkCiteAttribute`
+            // lives in `OPSHandler30`, and an EPUB 2 book carrying the same
+            // `<blockquote cite="#sym">` is clean from epubcheck while the
+            // EPUB 3 one is RSC-014.
+            if is_epub3 {
+                for n in d.descendants().filter(|n| {
+                    n.is_element()
+                        && ["blockquote", "q", "ins", "del"].contains(&n.tag_name().name())
+                }) {
+                    if let Some(v) = n.attr_no_ns("cite") {
+                        typed_refs.push((n, v.to_string(), RefKind::Cite));
+                    }
+                }
+            }
+            for (n, href, ref_kind) in typed_refs {
+                if crate::url::is_absolute(&href) || is_remote_url(&href) || remote_base {
+                    continue;
+                }
+                let Some((path_part, frag)) = href.split_once('#') else {
+                    continue;
+                };
+                if frag.is_empty() || frag.contains(['=', ':', '(']) {
+                    continue;
+                }
+                let target_nfc = if path_part.is_empty() {
+                    nfc(&path)
+                } else {
+                    nfc(&resolve(&dir, path_part))
+                };
+                if target_nfc == nfc(opf_path) {
+                    continue;
+                }
+                if !frag_id_cache.contains_key(&target_nfc) {
+                    let ids = if target_nfc == nfc(&path) {
+                        Some(dom_id_kinds(&d))
+                    } else {
+                        target_id_kinds(ocf, &name_index, &target_nfc, is_epub3)
+                    };
+                    frag_id_cache.insert(target_nfc.clone(), ids);
+                }
+                let Some(target_ids) = &frag_id_cache[&target_nfc] else {
+                    continue;
+                };
+                let Some(&(_, kind)) = target_ids.get(frag) else {
+                    report.push_node(
+                        RSC_012,
+                        Severity::Error,
+                        format!("fragment identifier '{frag}' is not defined in '{target_nfc}'"),
+                        path.clone(),
+                        n,
+                        "opf.content_document.dangling_fragment",
+                        vec![frag.to_string(), target_nfc.clone()],
+                    );
+                    continue;
+                };
+                if !ref_kind.accepts(kind) {
+                    report.push_at_pos(
+                        RSC_014,
+                        Severity::Error,
+                        format!(
+                            "reference '{href}' targets {} (incompatible resource type)",
+                            kind.describe()
+                        ),
+                        path.clone(),
+                        Position::of(n),
                     );
                 }
             }
@@ -6547,8 +6756,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     && n.tag_name().name() == "nav"
                     && n.attribute((EPUB_NS, "type")) == Some("toc")
             }) {
-                let mut id_order_cache: HashMap<String, Option<HashMap<String, usize>>> =
-                    HashMap::new();
+                let mut id_order_cache: HashMap<String, Option<IdMap>> = HashMap::new();
                 // (spine_idx, dom_idx): dom_idx is 0 for a fragment-less
                 // link ("the whole document") and real-fragment-index + 1
                 // otherwise, so it always sorts before any real fragment
@@ -6577,7 +6785,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         Some(f) => {
                             if !id_order_cache.contains_key(&resolved_nfc) {
                                 let order =
-                                    target_id_order(ocf, &name_index, &resolved_nfc, is_epub3);
+                                    target_id_kinds(ocf, &name_index, &resolved_nfc, is_epub3);
                                 id_order_cache.insert(resolved_nfc.clone(), order);
                             }
                             // Missing ids are already caught elsewhere as
@@ -6590,7 +6798,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 .as_ref()
                                 .and_then(|o| o.get(f))
                             {
-                                Some(&idx) => idx + 1,
+                                Some(&(idx, _)) => idx + 1,
                                 None => continue,
                             }
                         }
@@ -8249,15 +8457,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // their target document - same shape as the NCX <content src>
         // fragment check, reusing the same id_cache-per-target pattern.
         {
-            let mut id_cache: HashMap<String, Option<HashMap<String, usize>>> = HashMap::new();
+            let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
             for (target, frag) in &textref_targets {
                 if !id_cache.contains_key(target) {
-                    let ids = target_id_order(ocf, &name_index, target, is_epub3);
+                    let ids = target_id_kinds(ocf, &name_index, target, is_epub3);
                     id_cache.insert(target.clone(), ids);
                 }
                 // `None` = the target could not be read/parsed, so whether
                 // the fragment resolves is unknown and unreported (see
-                // `target_id_order`).
+                // `target_id_kinds`).
                 let Some(target_ids) = &id_cache[target] else {
                     continue;
                 };
@@ -8268,6 +8476,40 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         format!("epub:textref fragment '{frag}' is not defined in '{target}'"),
                         path.clone(),
                         "opf.smil.textref_fragment_not_defined",
+                        vec![frag.clone(), target.clone()],
+                    );
+                }
+            }
+        }
+
+        // RSC-014 for a media overlay's `<text src>`: epubcheck's last
+        // reference type, and it accepts a generic id only - the same rule
+        // as a hyperlink or a `cite`. An overlay pointing at an SVG symbol
+        // is exotic, so this is measured rather than assumed: a minimal
+        // overlay book naming `ch1.xhtml#sym` draws RSC-014 from epubcheck
+        // and, before this, nothing from us.
+        {
+            let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
+            for (target, frag) in &targets {
+                if !id_cache.contains_key(target) {
+                    let ids = target_id_kinds(ocf, &name_index, target, is_epub3);
+                    id_cache.insert(target.clone(), ids);
+                }
+                let Some(target_ids) = &id_cache[target] else {
+                    continue;
+                };
+                if let Some(&(_, kind)) = target_ids.get(frag)
+                    && !RefKind::OverlayText.accepts(kind)
+                {
+                    report.push_at_rule(
+                        RSC_014,
+                        Severity::Error,
+                        format!(
+                            "overlay text link '{target}#{frag}' targets {} (incompatible resource type)",
+                            kind.describe()
+                        ),
+                        path.clone(),
+                        "opf.smil.text_incompatible_target",
                         vec![frag.clone(), target.clone()],
                     );
                 }
@@ -8324,13 +8566,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // DOM-order only, no positions reported - shift irrelevant.
             let (t, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&b), is_epub3);
             let Ok(d) = parse_xml(&t) else { continue };
-            let id_order = dom_id_order(&d);
+            let id_order = dom_id_kinds(&d);
             // Ids the SMIL references but the doc doesn't have are already
             // separately caught as broken references elsewhere - skip them
             // here rather than letting a missing id break the comparison.
             let indices: Vec<usize> = frags
                 .iter()
-                .filter_map(|f| id_order.get(f).copied())
+                .filter_map(|f| id_order.get(f).map(|&(i, _)| i))
                 .collect();
             let in_order = indices.windows(2).all(|w| w[0] <= w[1]);
             if !in_order && indices.len() >= 2 {
@@ -13165,6 +13407,134 @@ mod tests {
             rsc014(&defs("mask", "t")),
             0,
             "mask is GENERIC to epubcheck"
+        );
+    }
+
+    /// The other two reference kinds epubcheck compares against an id's
+    /// type: an SVG `<use>`, which may reach a symbol or a generic id, and a
+    /// paint reference (`fill`/`stroke="url(#…)"`), which must reach a paint
+    /// server exactly. A reference whose fragment resolves to nothing is
+    /// RSC-012, not RSC-014 — the same split epubcheck makes.
+    ///
+    /// Fourteen shapes were built as books and run through epubcheck 5.3.0;
+    /// this pins the ones expressible in a single document.
+    #[test]
+    fn use_and_paint_references_are_typed_too() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_body("3.0", body))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_014 || m.id == crate::ids::RSC_012)
+                .map(|m| m.id)
+                .collect()
+        };
+        // `defs` holds a symbol, a paint server and a generic id.
+        let svg = |body: &str| {
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+                 xmlns:xlink=\"http://www.w3.org/1999/xlink\"><defs>\
+                 <symbol id=\"sym\"/><linearGradient id=\"grad\"/><g id=\"gen\"/>\
+                 </defs>{body}</svg>"
+            )
+        };
+
+        // <use>: a symbol or a generic id is fine, a paint server is not.
+        assert!(ids(&svg("<use xlink:href=\"#sym\"/>")).is_empty());
+        assert!(ids(&svg("<use xlink:href=\"#gen\"/>")).is_empty());
+        assert_eq!(
+            ids(&svg("<use xlink:href=\"#grad\"/>")),
+            vec![crate::ids::RSC_014]
+        );
+
+        // Paint: a paint server exactly.
+        assert!(ids(&svg("<rect fill=\"url(#grad)\"/>")).is_empty());
+        assert_eq!(
+            ids(&svg("<rect fill=\"url(#sym)\"/>")),
+            vec![crate::ids::RSC_014]
+        );
+        assert_eq!(
+            ids(&svg("<rect stroke=\"url(#gen)\"/>")),
+            vec![crate::ids::RSC_014]
+        );
+
+        // A fragment that resolves to nothing is the other message.
+        assert_eq!(
+            ids(&svg("<use xlink:href=\"#nope\"/>")),
+            vec![crate::ids::RSC_012]
+        );
+        assert_eq!(
+            ids(&svg("<rect fill=\"url(#nope)\"/>")),
+            vec![crate::ids::RSC_012]
+        );
+
+        // Two deliberate silences, both matching epubcheck rather than the
+        // SVG spec. Its `checkSymbol()` reads `xlink:href` only, so SVG 2's
+        // plain `href` registers no reference; and nothing on either side
+        // registers a clip-path reference at all. Reporting either would be
+        // indistinguishable from a false positive to anyone diffing the two
+        // tools. Both measured, one book each.
+        assert!(
+            ids(&svg("<use href=\"#grad\"/>")).is_empty(),
+            "SVG 2 use href"
+        );
+        assert!(
+            ids(&svg("<rect clip-path=\"url(#grad)\"/>")).is_empty(),
+            "clip-path is unchecked by epubcheck"
+        );
+    }
+
+    /// The last two reference kinds: `cite` on the four elements HTML gives
+    /// it, and an SVG `<a>`. Both carry a version or spelling condition that
+    /// was measured against epubcheck rather than reasoned about, because
+    /// getting either wrong reports where epubcheck is silent.
+    #[test]
+    fn cite_and_svg_anchor_references_are_typed() {
+        let ids = |ver: &str, body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_body(ver, body))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_014 || m.id == crate::ids::RSC_012)
+                .map(|m| m.id)
+                .collect()
+        };
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+                   xmlns:xlink=\"http://www.w3.org/1999/xlink\"><defs>\
+                   <symbol id=\"sym\"/></defs></svg>";
+
+        // `cite` is EPUB 3 only - epubcheck collects it in `OPSHandler30`,
+        // and the identical EPUB 2 book is clean from it.
+        for el in ["blockquote", "q", "ins", "del"] {
+            let body = format!("{svg}<{el} cite=\"#sym\">x</{el}>");
+            assert_eq!(
+                ids("3.0", &body),
+                vec![crate::ids::RSC_014],
+                "{el} in EPUB 3"
+            );
+            assert!(ids("2.0", &body).is_empty(), "{el} in EPUB 2");
+        }
+        assert!(ids("3.0", &format!("{svg}<p id=\"g\"/><q cite=\"#g\">x</q>")).is_empty());
+
+        // An SVG anchor is read through `xlink:href` and only that: a plain
+        // `href` there registers no reference in epubcheck and draws nothing
+        // at all, so reporting it would be a false-positive-shaped
+        // divergence. The XHTML `<a href>` case is the control - same
+        // attribute name, different namespace, still reported.
+        let svga = |attr: &str| {
+            format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+                 xmlns:xlink=\"http://www.w3.org/1999/xlink\"><defs><symbol id=\"sym\"/></defs>\
+                 <a {attr}=\"#sym\"><rect/></a></svg>"
+            )
+        };
+        assert_eq!(ids("3.0", &svga("xlink:href")), vec![crate::ids::RSC_014]);
+        assert!(
+            ids("3.0", &svga("href")).is_empty(),
+            "plain href on an SVG anchor"
+        );
+        assert_eq!(
+            ids("3.0", &format!("{svg}<a href=\"#sym\">x</a>")),
+            vec![crate::ids::RSC_014],
+            "the XHTML anchor is unaffected"
         );
     }
 
