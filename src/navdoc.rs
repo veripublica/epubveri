@@ -178,7 +178,53 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
         }
         None => {}
     }
-    let Some(ol) = children.get(idx) else { return };
+    // `epub-nav-30.sch`'s `flat-nav`: a `page-list` or `landmarks` nav asserts
+    // `count(.//ol) = 1`, so both zero and two or more fail it. Reported as a
+    // warning, and independent of the missing-`ol` error below - the book in
+    // #79 draws both, its landmarks nav having no `ol` at all, which is why
+    // "should contain only a single ol" appears next to "missing required
+    // element ol" and looks odd.
+    if matches!(ty, "page-list" | "landmarks") {
+        let ols = nav
+            .descendants()
+            .filter(|d| d.is_element() && d.tag_name().name() == "ol")
+            .count();
+        // Only the *zero* case. `count(.//ol) = 1` fails at both ends, but
+        // the other end already has an owner: `check_li` reports
+        // `navdoc.nav.nested_sublist_not_allowed` per nested sublist. Adding
+        // this one unconditionally double-reported a nested landmarks nav -
+        // caught by the test below, which is why it asserts counts and not
+        // just presence.
+        if ols == 0 {
+            report.push_node(
+                RSC_017,
+                Severity::Warning,
+                format!("the \"{ty}\" nav must contain an ol descendant"),
+                path,
+                nav,
+                "navdoc.nav.not_flat",
+                vec![ty.to_string()],
+            );
+        }
+    }
+    // A `nav` requires an `ol` (`epub-nav-30.rnc`: `html5.headings.class?,
+    // epub.nav.ol`). This used to be `else { return }` - the arm below
+    // reports a child that is present and is not an `ol`, so the *absent*
+    // case escaped in silence, which is the one shape a user cannot notice
+    // (CHANGELOG 0.7.12-0.7.14). Found via #79, where a `<nav><h1>…</h1></nav>`
+    // came back VALID here and drew RSC-005 from epubcheck.
+    let Some(ol) = children.get(idx) else {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "element \"nav\" is incomplete; it requires an \"ol\" element",
+            path,
+            nav,
+            "navdoc.nav.missing_ol",
+            Vec::new(),
+        );
+        return;
+    };
     if ol.tag_name().name() != "ol" {
         report.push_node(
             RSC_005,

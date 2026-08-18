@@ -32,11 +32,39 @@ Restrictive, so the direction was checked first: corpus 0 false positives and
 0 over-reported, and the 356-book shelf — 266 of them EPUB 2 with an NCX — is
 byte-identical, so no real book on it has a malformed `navPoint`.
 
-**Still open from the same report**: the navigation document's own content
-model (a `<nav>` with no `<ol>`, and the RSC-017 landmarks rule). That is a
-missing *grammar layer* rather than a missing rule — epubcheck validates the
-nav document against a second, stricter grammar layered on XHTML, while our
-`navEl` is `flowContent` — so it is scoped separately in #79.
+**A `nav` requires an `ol`, and a flat nav must contain one.** The other half
+of the same report. `check_nav_content_model` did
+
+```rust
+let Some(ol) = children.get(idx) else { return };
+```
+
+so a `<nav epub:type="toc"><h1>…</h1></nav>` reported nothing, while the arm
+directly below it reported a child that was *present* and wrong. Only the
+absent case escaped — the silent-skip shape again (CHANGELOG 0.7.12–0.7.14),
+and the fourth instance of it recorded here.
+
+The RSC-017 half is narrower than it first looked. `epub-nav-30.sch`'s
+`flat-nav` asserts `count(.//ol) = 1` on a `page-list` or `landmarks` nav, so
+zero fails it as well as two — but the *two* end already had an owner here
+(`navdoc.nav.nested_sublist_not_allowed`, per nested sublist). A first version
+reported both and double-counted a nested landmarks nav; the new rule now
+covers `ols == 0` only, and the test asserts counts rather than presence,
+which is what caught it.
+
+The reported book now gives 3 RSC-005 and 1 RSC-017 — the same set epubcheck
+reports, on the same elements.
+
+**Scope, measured before implementing:** the nav grammar applies to the
+navigation document only. A `<nav><h1>Sidebar</h1></nav>` in an ordinary
+content document is clean in epubcheck 5.3.0, so a document-wide rule would
+have invented errors on every sidebar nav in the wild.
+
+Unlike most recent work the shelf is not blind here — every EPUB 3 book has a
+navigation document — and it is byte-identical across the change. That is a
+real pass rather than an unexercised path: 21 shelf books carry a
+`landmarks`/`page-list` nav and every one of them has exactly one `ol`, so
+the new rule ran on 21 real navs and correctly said nothing.
 
 ## [0.9.23] - 2026-08-18
 

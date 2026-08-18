@@ -9831,6 +9831,69 @@ mod tests {
         buf
     }
 
+    /// #79: a `nav` requires an `ol`, and a flat nav must have exactly one.
+    ///
+    /// The missing-`ol` half was a silent return — `check_nav_content_model`
+    /// did `let Some(ol) = children.get(idx) else { return }`, so a
+    /// `<nav><h1>…</h1></nav>` reported nothing while the neighbouring arm
+    /// happily reported a child that was present and wrong. Reported on
+    /// MobileRead; measured against epubcheck 5.3.0.
+    ///
+    /// `flat-nav` (RSC-017) is independent of it: `epub-nav-30.sch` asserts
+    /// `count(.//ol) = 1` on a `page-list` or `landmarks` nav, so **zero**
+    /// fails it as well as two, and the reported book draws both messages on
+    /// the same element.
+    #[test]
+    fn a_nav_requires_an_ol_and_a_flat_nav_exactly_one() {
+        let ids = |nav_body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_nav_body(nav_body))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005 || m.id == crate::ids::RSC_017)
+                .map(|m| m.id)
+                .collect()
+        };
+        let ol = "<ol><li><a href=\"ch1.xhtml\">One</a></li></ol>";
+
+        // The control that has to stay clean, or everything below is noise.
+        assert!(ids(&format!("<nav epub:type=\"toc\"><h1>T</h1>{ol}</nav>")).is_empty());
+
+        // No ol at all.
+        assert_eq!(
+            ids("<nav epub:type=\"toc\"><h1>T</h1></nav>"),
+            vec![crate::ids::RSC_005]
+        );
+
+        // A landmarks nav with no ol draws both: the missing element and the
+        // flat-nav assertion, which zero also fails.
+        let mut both = ids(&format!(
+            "<nav epub:type=\"toc\"><h1>T</h1>{ol}</nav>\
+             <nav epub:type=\"landmarks\"><h1>L</h1></nav>"
+        ));
+        both.sort_unstable();
+        assert_eq!(both, vec![crate::ids::RSC_005, crate::ids::RSC_017]);
+
+        // A nested sublist is two ols: the flat rule fires, the content model
+        // does not.
+        // `page-list` rather than `landmarks`: both are in the flat set, but a
+        // landmarks anchor must also carry `epub:type`, which would put an
+        // unrelated RSC-005 in the way of what this case is about.
+        let nested = format!(
+            "<nav epub:type=\"toc\"><h1>T</h1>{ol}</nav>\
+             <nav epub:type=\"page-list\"><h1>P</h1>\
+             <ol><li><a href=\"ch1.xhtml\">A</a>{ol}</li></ol></nav>"
+        );
+        assert_eq!(ids(&nested), vec![crate::ids::RSC_017]);
+
+        // `toc` is not in the flat set, so the same nesting is clean there —
+        // this is the assertion that keeps the rule from widening.
+        let toc_nested = format!(
+            "<nav epub:type=\"toc\"><h1>T</h1>\
+             <ol><li><a href=\"ch1.xhtml\">A</a>{ol}</li></ol></nav>"
+        );
+        assert!(ids(&toc_nested).is_empty());
+    }
+
     fn has_opf_096(nav_body: &str) -> bool {
         let report = crate::validate_bytes(epub_with_nav_body(nav_body));
         report.messages.iter().any(|m| m.id == crate::ids::OPF_096)
