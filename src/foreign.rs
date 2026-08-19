@@ -37,6 +37,12 @@ fn classify(mt: &str) -> Category {
 pub(crate) struct ResourceStatus {
     category: Category,
     reaches_core_via_fallback: bool,
+    /// `audio/*`. Kept beside the category rather than folded into it
+    /// because it answers a *different* question: the category says whether
+    /// a resource needs a fallback at all, this says whether the `<video>`
+    /// position exemption reaches it (see `check_candidate_group`). Audio is
+    /// the one thing that exemption does not cover.
+    is_audio: bool,
 }
 
 /// Bounded (10-hop, same guard as the existing OPF-043/OPF-065 chain
@@ -83,6 +89,7 @@ pub(crate) fn build_resource_status(
             ResourceStatus {
                 category,
                 reaches_core_via_fallback,
+                is_audio: crate::cmt::base_media_type(mt).starts_with("audio/"),
             },
         );
     }
@@ -172,11 +179,46 @@ fn check_single(
     }
 }
 
+/// Whether an href resolves to an `audio/*` resource. Mirrors `resolve_ref`,
+/// including its `data:` handling, and answers only the one question the
+/// `<video>` position exemption turns on.
+fn is_audio_ref(dir: &str, href: &str, status: &HashMap<String, ResourceStatus>) -> bool {
+    let h = href.trim();
+    if h.starts_with("data:") {
+        let mt = data_url_media_type(h).unwrap_or("text/plain");
+        return crate::cmt::base_media_type(mt).starts_with("audio/");
+    }
+    lookup_key(dir, h)
+        .and_then(|k| status.get(&k))
+        .is_some_and(|st| st.is_audio)
+}
+
 /// `<audio>`/`<video>` share an intrinsic fallback mechanism `<embed>` etc.
 /// don't have: a group of candidate resources (either the element's own
 /// `@src`, or its child `<source src>` elements) is fine as long as at
 /// least one candidate is usable without a fallback (Core/exempt-video) or
 /// has its own fallback chain reaching a Core Media Type.
+///
+/// **A `<video>` exempts more than that, by position** (w3c/epubcheck
+/// [#1662](https://github.com/w3c/epubcheck/issues/1662), opened by the spec
+/// editor and measured here 2026-08-19 — epubcheck and epubveri reported the
+/// same false positive on the same book). EPUB 3.3 §3.4: *"All video codecs
+/// referenced from the HTML video — including any child source elements — are
+/// exempt resources."* Unconditional, and about **where** the resource is
+/// referenced rather than what its media type is: a streaming playlist
+/// (`application/x-mpegurl`) plays straight from the element and can carry no
+/// manifest fallback, which is exactly the case that drew RSC-032.
+///
+/// The type-based exemption stays alongside it — a `video/*` resource is
+/// exempt wherever it is used — which is what makes this change **purely
+/// permissive**: nothing that validated before becomes an error.
+///
+/// **Audio is deliberately not covered.** The same section keeps it
+/// restrictive: *"The requirement for fallbacks only applies to audio foreign
+/// resources referenced from audio and video elements."* An `audio/*` foreign
+/// resource inside a `<video>` still needs its fallback, which is why
+/// `is_audio` sits beside the category rather than inside it.
+///
 fn check_candidate_group(
     hrefs: &[&str],
     dir: &str,
@@ -196,7 +238,9 @@ fn check_candidate_group(
         match category {
             Category::Core | Category::ExemptVideo => any_ok = true,
             Category::Foreign => {
-                if reaches_core {
+                // Either its own fallback chain rescues it, or the `<video>`
+                // position exemption covers it — see the doc comment above.
+                if reaches_core || (elname == "video" && !is_audio_ref(dir, href, status)) {
                     any_ok = true;
                 }
             }
@@ -437,6 +481,81 @@ mod tests {
             findings(r#"<embed src="mod.wasm" type="application/wasm"/>"#),
             1,
             "the same resource from <embed> is not exempt - the test has teeth"
+        );
+    }
+
+    /// A `<video>` exempts what it references by **position**, not by media
+    /// type — w3c/epubcheck [#1662](https://github.com/w3c/epubcheck/issues/1662),
+    /// opened by the spec editor after being asked whether an HLS playlist
+    /// reference is valid.
+    ///
+    /// EPUB 3.3 §3.4: *"All video codecs referenced from the HTML video —
+    /// including any child source elements — are exempt resources."*
+    /// `application/x-mpegurl` plays straight from the element and can carry
+    /// no manifest fallback, so requiring one is a false positive. **We had
+    /// the same bug**, measured one book each against epubcheck 5.3.0 on
+    /// 2026-08-19: both tools reported RSC-032.
+    ///
+    /// Three boundaries, because the exemption must not spread — each was
+    /// measured against epubcheck too, and it agrees on both negatives:
+    ///
+    /// - foreign **audio** inside a `<video>` is still reported (the same
+    ///   section keeps audio restrictive);
+    /// - the same foreign resource inside an `<audio>` is still reported;
+    /// - and the positive case is the only thing that changed.
+    #[test]
+    fn a_video_exempts_its_references_by_position_except_audio() {
+        let mut items = HashMap::new();
+        items.insert(
+            "p".to_string(),
+            (
+                "stream.m3u8".to_string(),
+                "application/x-mpegurl".to_string(),
+            ),
+        );
+        items.insert(
+            "a".to_string(),
+            ("sound.wav".to_string(), "audio/x-wav".to_string()),
+        );
+        let status = build_resource_status(&items, &HashMap::new());
+        // Both are foreign with no fallback to rescue them, or the rows
+        // below would pass for the wrong reason.
+        assert!(!status["stream.m3u8"].reaches_core_via_fallback);
+        assert!(!status["sound.wav"].reaches_core_via_fallback);
+
+        let findings = |body: &str| {
+            let doc = format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
+            );
+            let d = roxmltree::Document::parse(&doc).unwrap();
+            let mut report = Report::default();
+            check_content_doc(&d, "ch.xhtml", "", &status, &mut report);
+            report.messages.iter().filter(|m| m.id == RSC_032).count()
+        };
+
+        assert_eq!(
+            findings(
+                r#"<video controls=""><source src="stream.m3u8" type="application/x-mpegurl"/></video>"#
+            ),
+            0,
+            "a non-audio resource referenced from <video> is exempt"
+        );
+        assert_eq!(
+            findings(r#"<video controls="" src="stream.m3u8"></video>"#),
+            0,
+            "the element's own @src is exempt the same way"
+        );
+        assert_eq!(
+            findings(r#"<video controls=""><source src="sound.wav" type="audio/x-wav"/></video>"#),
+            1,
+            "audio inside a <video> still needs its fallback"
+        );
+        assert_eq!(
+            findings(
+                r#"<audio controls=""><source src="stream.m3u8" type="application/x-mpegurl"/></audio>"#
+            ),
+            1,
+            "the exemption is the <video> element's alone"
         );
     }
 }

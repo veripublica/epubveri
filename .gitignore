@@ -12,6 +12,7 @@ __pycache__/
 # Local-only project context / history — not for publication (owner decision).
 /CLAUDE.md
 /docs/PROGRESS_LOG.md
+/docs/UPSTREAM_TRIAGE.md
 
 # Claude Code per-machine settings. Local, not project content — and iCloud
 # makes conflict copies of them ("settings.local 2.json"), the same class of

@@ -3100,14 +3100,43 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             "rendition:flow",
             "rendition:viewport",
         ];
-        // The real EPUB Accessibility 1.1 a11y: meta-property vocabulary
-        // (confirmed via real fixtures for certifiedBy/certifierCredential/
-        // exemption; certifierReport is real public spec vocabulary too,
-        // though only exercised here as a link rel, not a meta property).
+        // The `a11y:` meta-property vocabulary. epubcheck's
+        // `AccessibilityVocab.META_PROPERTIES` holds three names
+        // (`certifiedBy`, `certifierCredential`, `exemption`); this list
+        // differs from it in two measured places, both deliberate and both
+        // permissive.
+        //
+        // **`contactEmail`** is EPUB Accessibility 1.2's addition (w3c/epubcheck
+        // #1669, reported by Gregorio Pellegrino 2026-07-02 and unanswered).
+        // The property is not new: the spec's own change log dates it
+        // **2025-09-04**, three days after epubcheck 5.3.0 shipped, which is
+        // why that release cannot know it — and nothing has been committed
+        // upstream since. We had simply copied the 1.1 list.
+        //
+        // Shipped while the spec is a Candidate Recommendation Draft
+        // (18 August 2026), on direction rather than on maturity: this is a
+        // *permissive* change, so being wrong costs a false negative nobody
+        // can see, while waiting costs an ERROR — an INVALID verdict — on
+        // correct accessibility metadata that its author cannot fix without
+        // deleting it. The same reasoning shipped AVIF/JXL days after the
+        // EPUB 3.4 CR while the restrictive 3.4 items stay behind
+        // `--advisory`.
+        //
+        // **`certifierReport`** is epubcheck's `LINKREL_PROPERTIES`, not its
+        // meta vocabulary, so a `<meta property="a11y:certifierReport">` is
+        // OPF-027 there and accepted here. Pre-existing and left alone: same
+        // direction, and the name is real spec vocabulary either way.
+        //
+        // Re-compare the whole vocabulary when 1.2 reaches Recommendation.
+        // One open question deliberately not answered here: `exemption` did
+        // not appear in a 2026-08-19 reading of the 1.2 property table, and
+        // whether 1.2 dropped it needs its own measurement — accepting it
+        // costs nothing in the meantime.
         const KNOWN_A11Y_META_PROPERTIES: &[&str] = &[
             "a11y:certifiedBy",
             "a11y:certifierCredential",
             "a11y:certifierReport",
+            "a11y:contactEmail",
             "a11y:exemption",
         ];
         // The `media:` meta vocabulary (Media Overlays), the fourth and last
@@ -11207,6 +11236,44 @@ mod tests {
         );
         assert!(!deprecated.contains(&"OPF-027".to_string()));
         assert!(deprecated.contains(&"OPF-086".to_string()));
+    }
+
+    /// The `a11y:` meta vocabulary, and specifically `contactEmail`
+    /// (w3c/epubcheck [#1669](https://github.com/w3c/epubcheck/issues/1669),
+    /// reported 2026-07-02 and unanswered).
+    ///
+    /// **epubcheck reports OPF-027 on it and so did we** — measured one book
+    /// each against 5.3.0, with a `certifiedBy` control that stays clean on
+    /// both sides. Its own vocabulary is three names and cannot include this
+    /// one: EPUB Accessibility 1.2's change log dates `contactEmail`
+    /// **2025-09-04**, three days after 5.3.0 shipped, and nothing has been
+    /// committed upstream since. We had no such excuse — the list was copied
+    /// from 1.1.
+    ///
+    /// The negative half is the point of the test: the vocabulary check must
+    /// still bite, or widening the list would have passed here by disabling
+    /// it.
+    #[test]
+    fn a11y_meta_vocabulary_takes_epub_accessibility_12() {
+        let has_027 = |meta: &str| {
+            vocab_ids(meta, "page-spread-left", "record").contains(&"OPF-027".to_string())
+        };
+        for name in [
+            "a11y:certifiedBy",
+            "a11y:certifierCredential",
+            "a11y:exemption",
+            // 1.2's addition.
+            "a11y:contactEmail",
+        ] {
+            assert!(
+                !has_027(&format!("<meta property=\"{name}\">x</meta>")),
+                "{name} is real accessibility vocabulary"
+            );
+        }
+        assert!(
+            has_027("<meta property=\"a11y:notAThing\">x</meta>"),
+            "an invented a11y name must still be reported"
+        );
     }
 
     /// `remote-resources` declared but nothing remote is used: a warning

@@ -10,6 +10,45 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Two CLI messages tell the truth again.** `--advisory`'s help text still
+described the flag as emitting "unknown CSS property/descriptor names" — the
+whole of it in 0.9.0, and stale from ADV-003 onward. It has since grown a CSS
+type-selector lint, the EPUB-2-package-written-in-EPUB-3 advisory, and the four
+restrictive EPUB 3.4 rules that shipped in 0.9.13/0.9.14, none of which a
+reader of `--help` could learn existed. And passing a *directory* now says so
+in words: epubcheck validates an unpacked EPUB with `-mode exp`, so someone
+porting an invocation reasonably tries it here, and met `Is a directory` from
+the operating system. epubveri takes the packaged `.epub` file, by decision,
+and now says that at the door.
+
+**Two false positives we shared with epubcheck, both found by reading its issue
+tracker rather than by any instrument here.**
+
+`a11y:contactEmail` is valid accessibility metadata and drew OPF-027
+(w3c/epubcheck [#1669](https://github.com/w3c/epubcheck/issues/1669)). EPUB
+Accessibility 1.2 added the property on **2025-09-04**, three days after
+epubcheck 5.3.0 shipped, which is why that release cannot know it; our own
+vocabulary had simply been copied from 1.1.
+
+A resource referenced from a `<video>` — its own `src` or a child `<source>` —
+no longer needs a manifest fallback unless it is audio
+([#1662](https://github.com/w3c/epubcheck/issues/1662), opened by the EPUB spec
+editor). EPUB 3.3 §3.4 exempts *"All video codecs referenced from the HTML
+video, including any child source elements"*, unconditionally and by position
+rather than by media type; both tools instead tested for a `video/` prefix, so
+an HTTP-live-streaming playlist (`application/x-mpegurl`) — which plays
+straight from the element and can carry no fallback — was reported as a foreign
+resource with none. The type-based exemption stays beside the new positional
+one, so nothing that validated before becomes an error, and audio stays
+restrictive as the same section requires: a foreign `audio/*` inside a
+`<video>` is still reported, and epubcheck agrees on both negatives.
+
+Both are permissive — we accept what we used to reject — which is why they ship
+in the default output while restrictive divergences wait behind `--advisory`.
+Being wrong permissively costs a false negative nobody can see; being wrong
+restrictively puts an invented error in front of every user comparing the two
+tools.
+
 **The NCX is validated against a grammar**
 ([#83](https://github.com/veripublica/epubveri/issues/83)). Doitsu reported on
 MobileRead that an empty `<pageList>` and an empty `<navMap>` draw an error

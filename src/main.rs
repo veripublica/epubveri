@@ -40,9 +40,13 @@ OPTIONS:
                            at length. Default: the version the book declares.
                            (Note: -V, below, prints this tool's version.)
         --advisory         Also emit opt-in advisory findings epubcheck has no
-                           verdict on (currently unknown CSS property/descriptor
-                           names, as ADV-* at usage severity). Off by default;
-                           never affects the exit code.
+                           verdict on, as ADV-* at usage severity: unknown CSS
+                           property/descriptor names, a CSS type selector
+                           naming no known element, an EPUB 2 package written
+                           in EPUB 3, and the restrictive EPUB 3.4 rules
+                           (page-spread-* on a reflowable document, roll-layout
+                           constraints, features deprecated in 3.4). Off by
+                           default; never affects the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
     -h, --help             Print this help to stdout and exit 0.
 
@@ -344,6 +348,20 @@ fn run(
                     );
                     Ok(report)
                 }
+                // A directory is the one wrong input a person arrives at on
+                // purpose rather than by typo: epubcheck validates an
+                // unpacked EPUB with `-mode exp`, so someone porting an
+                // invocation reasonably tries it here. **We take the packaged
+                // file only, by decision** — the file is the unit the
+                // veripublica tools hand to each other — so the message says
+                // that outright instead of surfacing an OS error the reader
+                // has to interpret.
+                Err(e) if e.kind() == std::io::ErrorKind::IsADirectory => Err(format!(
+                    "{path} is a directory. epubveri validates the packaged \
+                     .epub file; unpacked EPUB directories are not supported. \
+                     Zip the directory first (mimetype first and stored), or \
+                     pass the .epub file."
+                )),
                 Err(e) => Err(format!("cannot read {path}: {e}")),
             };
             (path, r)
