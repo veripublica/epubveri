@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  epubveri — NCX (the EPUB 2 navigation control file) schema.
+
+  Authored from scratch for epubveri (copyright the project owner; ships under
+  the project's dual AGPL/commercial license). NOT derived from epubcheck's or
+  the DAISY consortium's schema files: the content models below are the ones
+  the NCX format itself defines (ANSI/NISO Z39.86-2005), expressed in our own
+  structure and naming.
+
+  SCOPE. This grammar owns the NCX's *structure* — which elements may appear,
+  in what order, carrying which attributes. The per-document assertions stay
+  hand-coded in `src/ncx.rs`, because no grammar can state them: `playOrder`
+  (four interlocking rules), `id` uniqueness and lexical form, the `dtb:uid`
+  agreement with the package identifier, empty `<text>` labels, and repeated
+  `xml:lang` among sibling `navLabel`/`navInfo`.
+
+  In particular the `id` attributes below are typed as plain strings, NOT as
+  `xsd:ID`. `check_id_attributes` in `src/ncx.rs` already reports both the
+  lexical form and document-wide uniqueness, matching epubcheck (whose own
+  schema comment notes it does the uniqueness half in its SAX handler). Typing
+  them here as well would report a malformed `id` twice where epubcheck
+  reports it once.
+
+  THREE DELIBERATE DIVERGENCES from epubcheck's ncx.rng, each measured against
+  5.3.0 one book per case, and each in the *looser* direction — we accept
+  something it rejects, which costs a false negative rather than inventing an
+  error on a valid book:
+
+  1. `id` and `class` are INDEPENDENTLY optional on `text`, `img` and
+     `pageList`. epubcheck wraps the pair in one `<optional>`, so it demands
+     them together: `<pageList id="x">` alone draws
+     `element "pageList" missing required attribute "class"` there. `class` is
+     never required in the NCX, and telling a user their table of contents
+     needs one would be indefensible. (Its own `navList` has the pair split,
+     with a 2008 revision note saying so — the other three were simply not
+     fixed with it.)
+
+  2. `pageList` admits `navInfo` and `navLabel` any number of times and in
+     either order. epubcheck allows at most one of each and fixes the order as
+     `navLabel` then `navInfo`; the format's own order is the reverse, so
+     either choice would invent an error on books following the other. Its own
+     `ncx_multiNavLabel` Schematron rule — which exists to police *repeated*
+     `xml:lang` among sibling `navLabel`s — assumes several are possible, so
+     the grammar contradicts the Schematron beside it.
+
+  3. No fixed value is demanded of `version` beyond the one the format
+     defines; see the attribute below.
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         ns="http://www.daisy.org/z3986/2005/ncx/"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <start>
+    <element name="ncx">
+      <!-- The format defines exactly one version. All 347 NCX files on the
+           real-book shelf carry `2005-1`. -->
+      <attribute name="version"><value>2005-1</value></attribute>
+      <ref name="i18n"/>
+      <element name="head">
+        <oneOrMore><ref name="metaEl"/></oneOrMore>
+      </element>
+      <ref name="docTitleEl"/>
+      <zeroOrMore><ref name="docAuthorEl"/></zeroOrMore>
+      <ref name="navMapEl"/>
+      <optional><ref name="pageListEl"/></optional>
+      <zeroOrMore><ref name="navListEl"/></zeroOrMore>
+    </element>
+  </start>
+
+  <!-- `xml:lang` and `dir`, carried by the document element and by every
+       element that holds human-readable text. -->
+  <define name="i18n">
+    <optional>
+      <attribute name="lang" ns="http://www.w3.org/XML/1998/namespace">
+        <data type="language"/>
+      </attribute>
+    </optional>
+    <optional>
+      <attribute name="dir">
+        <choice><value>ltr</value><value>rtl</value></choice>
+      </attribute>
+    </optional>
+  </define>
+
+  <!-- Independently optional; see divergence 1 in the header. -->
+  <define name="idClass">
+    <optional><attribute name="id"><data type="string"/></attribute></optional>
+    <optional><attribute name="class"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="metaEl">
+    <element name="meta">
+      <attribute name="name"><data type="string"/></attribute>
+      <attribute name="content"><data type="string"/></attribute>
+      <optional><attribute name="scheme"><data type="string"/></attribute></optional>
+    </element>
+  </define>
+
+  <define name="textEl">
+    <element name="text">
+      <ref name="idClass"/>
+      <text/>
+    </element>
+  </define>
+
+  <define name="imgEl">
+    <element name="img">
+      <ref name="idClass"/>
+      <attribute name="src"><data type="string"/></attribute>
+    </element>
+  </define>
+
+  <define name="contentEl">
+    <element name="content">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <attribute name="src"><data type="string"/></attribute>
+    </element>
+  </define>
+
+  <!-- `docTitle`, `docAuthor`, `navLabel` and `navInfo` share one shape: a
+       required `<text>`, an optional `<img>`, and the i18n pair. They differ
+       only in whether they take an `id`. -->
+  <define name="labelContent">
+    <ref name="textEl"/>
+    <optional><ref name="imgEl"/></optional>
+    <ref name="i18n"/>
+  </define>
+
+  <define name="docTitleEl">
+    <element name="docTitle">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <ref name="labelContent"/>
+    </element>
+  </define>
+
+  <define name="docAuthorEl">
+    <element name="docAuthor">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <ref name="labelContent"/>
+    </element>
+  </define>
+
+  <define name="navLabelEl">
+    <element name="navLabel"><ref name="labelContent"/></element>
+  </define>
+
+  <define name="navInfoEl">
+    <element name="navInfo"><ref name="labelContent"/></element>
+  </define>
+
+  <define name="navMapEl">
+    <element name="navMap">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <zeroOrMore><ref name="navInfoEl"/></zeroOrMore>
+      <zeroOrMore><ref name="navLabelEl"/></zeroOrMore>
+      <oneOrMore><ref name="navPointEl"/></oneOrMore>
+    </element>
+  </define>
+
+  <!-- `navPoint`'s own model is also enforced hand-coded in `src/ncx.rs`
+       (#79), which names the fault more precisely than a grammar can; the two
+       are reconciled at the report level so a defect is reported once. -->
+  <define name="navPointEl">
+    <element name="navPoint">
+      <attribute name="id"><data type="string"/></attribute>
+      <optional><attribute name="class"><data type="string"/></attribute></optional>
+      <optional><attribute name="playOrder"><data type="string"/></attribute></optional>
+      <oneOrMore><ref name="navLabelEl"/></oneOrMore>
+      <ref name="contentEl"/>
+      <zeroOrMore><ref name="navPointEl"/></zeroOrMore>
+    </element>
+  </define>
+
+  <!-- See divergence 2 in the header for the leading `navInfo`/`navLabel`. -->
+  <define name="pageListEl">
+    <element name="pageList">
+      <ref name="idClass"/>
+      <zeroOrMore>
+        <choice><ref name="navInfoEl"/><ref name="navLabelEl"/></choice>
+      </zeroOrMore>
+      <oneOrMore><ref name="pageTargetEl"/></oneOrMore>
+    </element>
+  </define>
+
+  <define name="pageTargetEl">
+    <element name="pageTarget">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <!-- The three values the format defines. `src/ncx.rs` reports a wrong
+           one under its own rule, so this stays a plain string here and the
+           grammar only enforces that the attribute is present. -->
+      <attribute name="type"><data type="string"/></attribute>
+      <optional><attribute name="class"><data type="string"/></attribute></optional>
+      <optional><attribute name="playOrder"><data type="string"/></attribute></optional>
+      <oneOrMore><ref name="navLabelEl"/></oneOrMore>
+      <ref name="contentEl"/>
+    </element>
+  </define>
+
+  <define name="navListEl">
+    <element name="navList">
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="class"><data type="string"/></attribute></optional>
+      <zeroOrMore><ref name="navInfoEl"/></zeroOrMore>
+      <oneOrMore><ref name="navLabelEl"/></oneOrMore>
+      <oneOrMore><ref name="navTargetEl"/></oneOrMore>
+    </element>
+  </define>
+
+  <define name="navTargetEl">
+    <element name="navTarget">
+      <attribute name="id"><data type="string"/></attribute>
+      <optional><attribute name="class"><data type="string"/></attribute></optional>
+      <optional><attribute name="value"><data type="string"/></attribute></optional>
+      <optional><attribute name="playOrder"><data type="string"/></attribute></optional>
+      <oneOrMore><ref name="navLabelEl"/></oneOrMore>
+      <ref name="contentEl"/>
+    </element>
+  </define>
+
+</grammar>

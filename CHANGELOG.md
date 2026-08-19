@@ -10,6 +10,53 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**The NCX is validated against a grammar**
+([#83](https://github.com/veripublica/epubveri/issues/83)). Doitsu reported on
+MobileRead that an empty `<pageList>` and an empty `<navMap>` draw an error
+from epubcheck and nothing from us. Both did — and so did fourteen other
+shapes, because the NCX's structure was checked in exactly one place (the
+`navPoint` content model added in 0.9.24) and the format's other ~26
+constraints were not checked at all.
+
+`schemas/ncx.rng` is new — authored from scratch, like the package and XHTML
+grammars — and the NCX now goes through the same RELAX NG engine as they do.
+Sixteen shapes were measured one book each against epubcheck 5.3.0 and now
+agree with it on both the message ID and the number of findings: the empty
+containers (`navMap`, `pageList`, `navList`, `navLabel`), a `navTarget` or
+`pageTarget` with no `content`, a missing `navMap` or `<head>` `meta`, a
+`pageList` nested inside the `navMap` or placed before it, an element or
+attribute the format does not define, a `navPoint` with no `id`, a `content`
+with no `src`, and markup inside `<text>`.
+
+Two checks rather than a grammar would have closed nine of the format's ~27
+constraints and left the rest to arrive one forum report at a time.
+
+**Every "incomplete content" message now says what is missing.** The engine
+reported `element "html" has incomplete content` where epubcheck says `element
+"html" incomplete; missing required element "body"` — the same divergence on
+every XHTML document, not only in the NCX. It now names the element the model
+demands next, or lists the alternatives when the model offers a choice, which
+is epubcheck's own pair of message forms. On the real-book shelf **6,244 of
+6,247 such findings** now name something; before, 32 did. The remaining three
+are an empty `<guide>`, whose model admits any element and so has no name to
+give.
+
+The text is *appended*, so `has incomplete content` remains a prefix of it and
+downstream consumers matching on that phrase are unaffected.
+
+**A RELAX NG loader fix found by the new grammar**: an `ns` written on an
+`<attribute>` element was dropped, so `<attribute name="lang"
+ns="…/XML/1998/namespace"/>` meant a no-namespace `lang` and a perfectly
+ordinary `xml:lang` was rejected. RELAX NG blocks only the *inherited*
+namespace for attribute names; one written in place is honoured.
+
+Three constraints in epubcheck's own NCX grammar are deliberately **not**
+reproduced, each measured and each in the looser direction: it demands `id` and
+`class` together on `text`, `img` and `pageList` (so `<pageList id="x">` alone
+draws `missing required attribute "class"` there); it allows at most one
+`navLabel` in a `pageList` and fixes the order against the one the format
+itself defines. Reproducing those would mean inventing errors on valid books.
+
 **References that precede a parse failure are recovered**
 ([#73](https://github.com/veripublica/epubveri/issues/73)). A content document
 that is not well-formed lost every check below it, so a book with a missing

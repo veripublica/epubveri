@@ -84,6 +84,21 @@ pub fn xhtml_grammar_epub2() -> Grammar {
     load_from_define(XHTML_RNG, "htmlEl-epub2").expect("built-in xhtml.rng epub2 root must parse")
 }
 
+/// Our own NCX (EPUB 2 navigation control file) RNG, embedded at build time
+/// (committed under the project license; authored from scratch — not derived
+/// from epubcheck's or the DAISY consortium's schema files). See
+/// `schemas/ncx.rng` for the scope notes and the three deliberate divergences
+/// from epubcheck's own grammar.
+pub const NCX_RNG: &str = include_str!("../../schemas/ncx.rng");
+
+/// Load the built-in NCX grammar. Applies to both EPUB versions: epubcheck
+/// validates the NCX identically in an EPUB 3 book, where it is a legacy
+/// table of contents rather than the navigation document (measured one book
+/// per case against 5.3.0).
+pub fn ncx_grammar() -> Grammar {
+    load(NCX_RNG).expect("built-in ncx.rng must parse")
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -452,7 +467,7 @@ mod tests {
         let loose = ol.children().find(roxmltree::Node::is_text).unwrap();
         let a = ol.attributes().next().unwrap();
 
-        let cases: [(Blame, &str); 5] = [
+        let cases: [(Blame, &str); 6] = [
             (
                 Blame::Element(p, ElementFault::NotAllowed(Vec::new())),
                 "element \"p\" is not allowed here",
@@ -468,8 +483,24 @@ mod tests {
                 "element \"ol\" is missing a required attribute",
             ),
             (
-                Blame::Element(ol, ElementFault::IncompleteContent),
+                Blame::Element(
+                    ol,
+                    ElementFault::IncompleteContent {
+                        missing: None,
+                        expected: Vec::new(),
+                    },
+                ),
                 "element \"ol\" has incomplete content",
+            ),
+            (
+                Blame::Element(
+                    ol,
+                    ElementFault::IncompleteContent {
+                        missing: Some("li".into()),
+                        expected: Vec::new(),
+                    },
+                ),
+                "element \"ol\" has incomplete content; missing required element \"li\"",
             ),
             (
                 Blame::Attribute(ol, a, AttributeFault::NotAllowed),
@@ -479,12 +510,14 @@ mod tests {
         for (blame, want) in &cases {
             let (text, params) = blame.describe();
             assert_eq!(text, *want);
-            // the offending name is also surfaced as a structured param
-            assert_eq!(params.len(), 1);
+            // the offending name is always the first structured param; a
+            // suggestion tail ("expected …", "missing required element …")
+            // appends its names after it
+            assert!(!params.is_empty());
         }
         // accessor sanity: attribute-level blame exposes both node and attr
-        assert!(cases[4].0.attribute().is_some());
-        assert_eq!(cases[4].0.node(), ol);
+        assert!(cases[5].0.attribute().is_some());
+        assert_eq!(cases[5].0.node(), ol);
         assert!(cases[0].0.attribute().is_none());
         assert_eq!(cases[0].0.node(), p);
     }
@@ -2576,5 +2609,50 @@ mod tests {
         // report level in opf.rs, not by the grammar - so it's left out of
         // this pure-grammar check.)
         assert!(ok(&xhtml_grammar(), &xml));
+    }
+
+    /// An `ns` written on an `<attribute>` element is honoured (#83).
+    ///
+    /// RELAX NG blocks only the *inherited* namespace for an unprefixed
+    /// attribute name — one spelled out on the `<attribute>` itself still
+    /// applies. The loader forced `""` in both cases, so
+    /// `<attribute name="lang" ns="…/XML/1998/namespace"/>` matched a
+    /// no-namespace `lang` and rejected `xml:lang`. Found by the NCX grammar,
+    /// whose i18n attributes are written that way — and invisible to every
+    /// other instrument, because our own `xhtml.rng` spells the same
+    /// attribute `name="xml:lang"`, which reaches the name through the prefix
+    /// path instead.
+    #[test]
+    fn an_explicit_ns_on_an_attribute_is_honoured() {
+        let g = load(
+            r#"<grammar xmlns="http://relaxng.org/ns/structure/1.0" ns="http://example.org/e">
+                 <start>
+                   <element name="root">
+                     <optional>
+                       <attribute name="lang" ns="http://www.w3.org/XML/1998/namespace"/>
+                     </optional>
+                     <optional><attribute name="plain"/></optional>
+                   </element>
+                 </start>
+               </grammar>"#,
+        )
+        .expect("toy grammar must parse");
+        let valid = |xml: &str| {
+            let d = crate::ocf::parse_xml(xml).unwrap();
+            validate_node_report(&g, d.root_element()).is_empty()
+        };
+        assert!(
+            valid("<root xmlns=\"http://example.org/e\" xml:lang=\"en\"/>"),
+            "the namespaced attribute the schema declares"
+        );
+        assert!(
+            valid("<root xmlns=\"http://example.org/e\" plain=\"x\"/>"),
+            "an unprefixed name still takes no namespace"
+        );
+        // The other direction, which the old code accepted: a no-namespace
+        // `lang` is not what `ns="…/XML/1998/namespace"` declares.
+        assert!(!valid("<root xmlns=\"http://example.org/e\" lang=\"en\"/>"));
+        // And the element name still inherits the grammar's default.
+        assert!(!valid("<root xml:lang=\"en\"/>"));
     }
 }

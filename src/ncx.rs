@@ -110,6 +110,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
     check_play_order_sequence(&d, ncx_path, report);
     check_page_target_uniqueness(&d, ncx_path, report);
     check_multi_lang_siblings(&d, ncx_path, report);
+    check_schema(&d, ncx_path, report);
 }
 
 /// Every `id` attribute anywhere in the NCX must be a valid XML NCName
@@ -581,6 +582,92 @@ fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Rep
     }
 }
 
+/// Validate the NCX against our own grammar (`schemas/ncx.rng`, #83).
+///
+/// Before this the NCX's structure was checked in exactly one place — the
+/// hand-coded `navPoint` model added by #79 — and every other constraint the
+/// format states was unenforced. Sixteen shapes were measured against
+/// epubcheck 5.3.0, one book each, and all sixteen were silent here: an empty
+/// `navMap`, `pageList`, `navList` or `navLabel`; a `navTarget`/`pageTarget`
+/// with no `content`; a missing `navMap` or `meta`; a `pageList` nested in the
+/// `navMap` or placed before it; an undefined element; a `navPoint` with no
+/// `id`; a `content` with no `src`; an undeclared attribute; and an element
+/// inside `<text>`.
+///
+/// Reported by Doitsu on MobileRead (#193) for the first two of those. The
+/// grammar rather than two more hand-coded checks, because the hand-coded
+/// route closes nine of the format's ~27 constraints and leaves the rest to
+/// arrive one forum report at a time — the same per-source shape that cost us
+/// the `<guide>` fragment gap.
+fn check_schema(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+    // `navPoint`'s own content model stays owned by `check_nav_point_model`
+    // above, whose three messages were measured shape-by-shape against
+    // epubcheck (#79) and name the fault far better than a grammar can:
+    // "requires a navLabel first" against "has incomplete content". The
+    // grammar sees the same defects, so without this every one of them was
+    // reported twice - three findings against epubcheck's one for a
+    // `navPoint` whose `content` precedes its `navLabel`.
+    //
+    // Asked of the report rather than assumed, the same shape as the
+    // obsolete-attribute suppression in `opf.rs`: this skips a grammar blame
+    // only where a `navPoint` finding was *actually produced* for that
+    // element. So it cannot drift - if `check_nav_point_model` is ever
+    // removed or narrowed, the grammar's own blames reappear in its place
+    // rather than the defect going silent, which is the failure mode the
+    // 0.7.12-0.7.14 silent-skip audit was about.
+    let claimed: Vec<String> = report
+        .messages
+        .iter()
+        .filter(|m| {
+            m.rule.is_some_and(|r| r.starts_with("ncx.nav_point."))
+                && m.location.as_deref() == Some(ncx_path)
+        })
+        .filter_map(|m| m.element_path.as_ref().map(|p| p.path.clone()))
+        .collect();
+
+    let grammar = crate::rng::ncx_grammar();
+    for blame in crate::rng::validate_node_report(&grammar, doc.root_element()) {
+        if is_nav_point_content_model(&blame)
+            && let Some(np) = nav_point_of(blame.node())
+        {
+            let np_path = crate::xmlext::node_path(np).path;
+            if claimed.iter().any(|c| c.starts_with(&np_path)) {
+                continue;
+            }
+        }
+        crate::opf::push_blame(report, ncx_path, "ncx.schema_violation", &blame);
+    }
+}
+
+/// The grammar blames `check_nav_point_model` also produces: the `navPoint`
+/// itself reported incomplete, or one of the two children whose *ordering* it
+/// polices rejected at its position. A missing `id` on the `navPoint`, or any
+/// blame on a deeper descendant, is the grammar's alone.
+fn is_nav_point_content_model(blame: &crate::rng::Blame) -> bool {
+    use crate::rng::{Blame, ElementFault};
+    match blame {
+        Blame::Element(n, ElementFault::IncompleteContent { .. }) => {
+            n.tag_name().name() == "navPoint"
+        }
+        Blame::Element(n, ElementFault::NotAllowed(_)) => {
+            matches!(n.tag_name().name(), "navLabel" | "content")
+                && n.parent()
+                    .is_some_and(|p| p.is_element() && p.tag_name().name() == "navPoint")
+        }
+        _ => false,
+    }
+}
+
+/// The `navPoint` a blame belongs to - the element itself, or its parent when
+/// the blame is on one of its children.
+fn nav_point_of<'d, 'i>(node: roxmltree::Node<'d, 'i>) -> Option<roxmltree::Node<'d, 'i>> {
+    if node.tag_name().name() == "navPoint" {
+        return Some(node);
+    }
+    node.parent()
+        .filter(|p| p.is_element() && p.tag_name().name() == "navPoint")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -977,5 +1064,239 @@ mod tests {
         </ncx>"#;
         let findings = run(ncx, "NOID");
         assert_eq!(findings, vec![NCX_006]);
+    }
+
+    /// Texts of every finding, for the assertions below that care *what* was
+    /// said rather than only how many were said.
+    fn texts_for(ncx: &str) -> Vec<String> {
+        let mut report = Report::new();
+        check(ncx, "toc.ncx", "uid", &mut report);
+        report.messages.iter().map(|m| m.text.clone()).collect()
+    }
+
+    /// #83 — the NCX grammar (`schemas/ncx.rng`), against which sixteen shapes
+    /// were measured one book each on epubcheck 5.3.0. Every one of them was
+    /// silent here before: only `navPoint`'s model was checked (#79), and the
+    /// format's other ~26 constraints were not checked at all.
+    ///
+    /// Reported by Doitsu on MobileRead (#193) for the first two rows. The
+    /// count is asserted, not just the presence of a finding, because the
+    /// grammar and the hand-coded `navPoint` check see some of the same
+    /// defects and a presence assertion would pass while double-reporting them
+    /// — which is exactly what the first build of this did (three findings
+    /// against epubcheck's one).
+    ///
+    /// The right-hand column is epubcheck's own message for the same book, so
+    /// a future divergence is visible here rather than only in a `compare`
+    /// run.
+    #[test]
+    fn ncx_grammar_matches_epubcheck_on_the_shapes_it_reports() {
+        let pt = "<pageTarget id=\"p1\" type=\"normal\" value=\"1\">\
+                  <navLabel><text>1</text></navLabel><content src=\"a.xhtml\"/></pageTarget>";
+        let nav = "<navMap><navPoint id=\"n1\"><navLabel><text>S</text></navLabel>\
+                   <content src=\"a.xhtml\"/></navPoint></navMap>";
+        // (case, NCX body, findings epubcheck gives, a fragment of its message)
+        let cases: Vec<(&str, String, usize, &str)> = vec![
+            // element "navMap" incomplete; missing required element "navPoint"
+            ("empty navMap", "<navMap></navMap>".into(), 1, "navPoint"),
+            // element "pageList" incomplete; missing required element "pageTarget"
+            (
+                "empty pageList",
+                format!("{nav}<pageList></pageList>"),
+                1,
+                "pageTarget",
+            ),
+            // element "navList" incomplete; missing required element "navLabel"
+            (
+                "empty navList",
+                format!("{nav}<navList></navList>"),
+                1,
+                "navLabel",
+            ),
+            // element "navList" incomplete; missing required element "navTarget"
+            (
+                "navList without navTarget",
+                format!("{nav}<navList><navLabel><text>L</text></navLabel></navList>"),
+                1,
+                "navTarget",
+            ),
+            // element "navTarget" incomplete; missing required element "content"
+            (
+                "navTarget without content",
+                format!(
+                    "{nav}<navList><navLabel><text>L</text></navLabel>\
+                     <navTarget id=\"t1\"><navLabel><text>A</text></navLabel></navTarget></navList>"
+                ),
+                1,
+                "content",
+            ),
+            // element "pageTarget" incomplete; missing required element "content"
+            (
+                "pageTarget without content",
+                format!(
+                    "{nav}<pageList><pageTarget id=\"p1\" type=\"normal\" value=\"1\">\
+                     <navLabel><text>1</text></navLabel></pageTarget></pageList>"
+                ),
+                1,
+                "content",
+            ),
+            // element "navLabel" incomplete; missing required element "text"
+            (
+                "empty navLabel",
+                "<navMap><navPoint id=\"n1\"><navLabel></navLabel>\
+                 <content src=\"a.xhtml\"/></navPoint></navMap>"
+                    .into(),
+                1,
+                "text",
+            ),
+            // element "ncx" incomplete; missing required element "navMap"
+            ("no navMap at all", String::new(), 1, "navMap"),
+            // element "pageList" not allowed here; expected element "navInfo",
+            // "navLabel" or "navPoint" — plus the two incomplete containers.
+            // Doitsu's snippet verbatim.
+            (
+                "pageList nested in navMap",
+                "<navMap><pageList></pageList></navMap>".into(),
+                3,
+                "not allowed here",
+            ),
+            // element "bogus" not allowed anywhere
+            (
+                "element the format does not define",
+                format!("{nav}<bogus/>"),
+                1,
+                "not allowed",
+            ),
+            // element "navPoint" missing required attribute "id"
+            (
+                "navPoint without id",
+                "<navMap><navPoint><navLabel><text>S</text></navLabel>\
+                 <content src=\"a.xhtml\"/></navPoint></navMap>"
+                    .into(),
+                1,
+                "required attribute",
+            ),
+            // element "content" missing required attribute "src"
+            (
+                "content without src",
+                "<navMap><navPoint id=\"n1\"><navLabel><text>S</text></navLabel>\
+                 <content/></navPoint></navMap>"
+                    .into(),
+                1,
+                "required attribute",
+            ),
+            // attribute "bogus" not allowed here
+            (
+                "attribute the format does not define",
+                "<navMap><navPoint id=\"n1\" bogus=\"x\"><navLabel><text>S</text></navLabel>\
+                 <content src=\"a.xhtml\"/></navPoint></navMap>"
+                    .into(),
+                1,
+                "not allowed",
+            ),
+            // A control that must stay silent, or every row above proves
+            // nothing: the same constructs, correctly formed.
+            (
+                "valid navMap, pageList and navList",
+                format!(
+                    "{nav}<pageList id=\"pl\" class=\"c\">{pt}</pageList>\
+                     <navList><navLabel><text>L</text></navLabel>\
+                     <navTarget id=\"t1\"><navLabel><text>A</text></navLabel>\
+                     <content src=\"a.xhtml\"/></navTarget></navList>"
+                ),
+                0,
+                "",
+            ),
+        ];
+        for (case, body, want, fragment) in cases {
+            let texts = texts_for(&ncx_with(&body));
+            assert_eq!(
+                texts.len(),
+                want,
+                "{case}: expected {want} finding(s), got {texts:?}"
+            );
+            if !fragment.is_empty() {
+                assert!(
+                    texts.iter().any(|t| t.contains(fragment)),
+                    "{case}: no finding mentioning {fragment:?} in {texts:?}"
+                );
+            }
+        }
+    }
+
+    /// The `navPoint` model is reported once, by `check_nav_point_model`,
+    /// even though the grammar sees the same three defects — and the counts
+    /// are epubcheck's, measured one book each.
+    ///
+    /// The suppression asks the report whether a `navPoint` finding was
+    /// actually produced, so removing that check would restore the grammar's
+    /// own blames rather than silence the defect. This test is what would
+    /// notice if the two ever both fired again.
+    #[test]
+    fn nav_point_defects_are_reported_once_not_twice() {
+        let np = |inner: &str| format!("<navMap><navPoint id=\"n1\">{inner}</navPoint></navMap>");
+        let label = "<navLabel><text>x</text></navLabel>";
+        let content = "<content src=\"a.xhtml\"/>";
+        // epubcheck: one error, "content not allowed yet; missing required
+        // element navLabel".
+        assert_eq!(texts_for(&ncx_with(&np(content))).len(), 1);
+        // epubcheck: two errors — the misplaced content, then the trailing
+        // label.
+        assert_eq!(
+            texts_for(&ncx_with(&np(&format!("{content}{label}")))).len(),
+            2
+        );
+        // epubcheck: one error, "navPoint incomplete; missing required
+        // element content".
+        assert_eq!(texts_for(&ncx_with(&np(label))).len(), 1);
+        // A missing `id` is the grammar's alone — the hand-coded check has no
+        // opinion on it, so it must survive the suppression.
+        assert_eq!(
+            texts_for(&ncx_with(
+                "<navMap><navPoint><navLabel><text>x</text></navLabel>\
+                                 <content src=\"a.xhtml\"/></navPoint></navMap>"
+            ))
+            .len(),
+            1
+        );
+    }
+
+    /// Three places where we deliberately accept what epubcheck rejects, all
+    /// measured against 5.3.0 and all in the looser direction. See the header
+    /// of `schemas/ncx.rng` for why. Pinned here because each is a silence,
+    /// and a silence is exactly what no other instrument can see.
+    #[test]
+    fn deliberate_divergences_from_epubchecks_own_ncx_grammar() {
+        let pt = "<pageTarget id=\"p1\" type=\"normal\" value=\"1\">\
+                  <navLabel><text>1</text></navLabel><content src=\"a.xhtml\"/></pageTarget>";
+        let nav = "<navMap><navPoint id=\"n1\"><navLabel><text>S</text></navLabel>\
+                   <content src=\"a.xhtml\"/></navPoint></navMap>";
+        // epubcheck: `element "pageList" missing required attribute "class"`.
+        // It wraps the pair in one <optional>, so it demands them together.
+        assert!(
+            texts_for(&ncx_with(&format!(
+                "{nav}<pageList id=\"pl\">{pt}</pageList>"
+            )))
+            .is_empty()
+        );
+        // epubcheck: `... missing required attribute "id"`, the same quirk
+        // seen from the other side.
+        assert!(
+            texts_for(&ncx_with(&format!(
+                "{nav}<pageList class=\"c\">{pt}</pageList>"
+            )))
+            .is_empty()
+        );
+        // epubcheck allows at most one navLabel in a pageList and fixes the
+        // order as navLabel-then-navInfo; the format's own order is the
+        // reverse, so either choice invents an error on books following the
+        // other.
+        assert!(
+            texts_for(&ncx_with(&format!(
+                "{nav}<pageList><navInfo><text>I</text></navInfo>\
+                 <navLabel><text>A</text></navLabel><navLabel xml:lang=\"de\"><text>B</text></navLabel>{pt}</pageList>"
+            )))
+            .is_empty()
+        );
     }
 }

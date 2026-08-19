@@ -1,4 +1,4 @@
-//! Derivative-based RELAX NG validation (James Clark's algorithm), driven over
+//! D                    if !out.contains(&n) {rivative-based RELAX NG validation (James Clark's algorithm), driven over
 //! a `roxmltree` document. We compute the derivative of the start pattern with
 //! respect to the XML event stream; the document is valid iff the final pattern
 //! is `nullable`.
@@ -284,6 +284,66 @@ impl<'a> Env<'a> {
                 self.expected_names(&self.defs[*i], out, visited);
             }
             // Text/Data/Value/Attribute/Empty/NotAllowed name no element.
+            _ => {}
+        }
+    }
+
+    /// The element names this pattern still *requires* before it can end, in
+    /// the order it requires them — the complement of [`expected_names`],
+    /// which answers "what would have been accepted here" and therefore
+    /// includes every optional continuation as well.
+    ///
+    /// Used for the "incomplete content" message: `<navMap></navMap>` has a
+    /// first-set of `navInfo`, `navLabel`, `navPoint` (the first two being
+    /// `zeroOrMore`), and naming all three tells the author nothing about
+    /// what is actually missing. epubcheck names `navPoint`, and so should
+    /// we. The caller takes the first name — in an ordered `Group` that is
+    /// the one that must come next, which is also the one epubcheck reports.
+    ///
+    /// Conservative by construction: a nullable sub-pattern requires nothing,
+    /// and a `Choice` requires only what *both* branches do, so a genuinely
+    /// ambiguous model yields an empty set and the message keeps its old
+    /// wording rather than guessing.
+    fn required_names(&self, p: &Pat, out: &mut Vec<String>, visited: &mut HashSet<usize>) {
+        if self.nullable(p) {
+            return;
+        }
+        match &**p {
+            Pattern::Element(nc, _) => {
+                let mut locals = Vec::new();
+                nc.concrete_locals(&mut locals);
+                for l in locals {
+                    if !out.iter().any(|e| e == l) {
+                        out.push(l.to_string());
+                    }
+                }
+            }
+            // Order matters: `a` before `b` is what makes the first name the
+            // one that must come next.
+            Pattern::Group(a, b) | Pattern::Interleave(a, b) => {
+                self.required_names(a, out, visited);
+                self.required_names(b, out, visited);
+            }
+            Pattern::Choice(a, b) => {
+                // Only what holds down *either* road. Collected separately and
+                // intersected, keeping `a`'s order.
+                let (mut na, mut nb) = (Vec::new(), Vec::new());
+                self.required_names(a, &mut na, &mut visited.clone());
+                self.required_names(b, &mut nb, visited);
+                for n in na.into_iter().filter(|n| nb.contains(n)) {
+                    if !out.contains(&n) {
+                        out.push(n);
+                    }
+                }
+            }
+            // The continuation past this element's end tag is the parent's,
+            // never required *here* - the same distinction `expected_names`
+            // documents at length.
+            Pattern::After(a, _) => self.required_names(a, out, visited),
+            Pattern::OneOrMore(a) => self.required_names(a, out, visited),
+            Pattern::Ref(i) if visited.insert(*i) => {
+                self.required_names(&self.defs[*i], out, visited);
+            }
             _ => {}
         }
     }
@@ -752,7 +812,20 @@ impl<'a> Env<'a> {
         let inside = cur.clone();
         cur = self.end_tag_deriv(&cur);
         if is_not_allowed(&cur) {
-            blames.push(Blame::Element(node, ElementFault::IncompleteContent));
+            // What the model still wants, in epubcheck's own two forms: the
+            // single element it demands next, else the set of alternatives
+            // that would have satisfied it.
+            let mut required = Vec::new();
+            self.required_names(&inside, &mut required, &mut HashSet::new());
+            let missing = required.into_iter().next();
+            let mut expected = Vec::new();
+            if missing.is_none() {
+                self.expected_names(&inside, &mut expected, &mut HashSet::new());
+            }
+            blames.push(Blame::Element(
+                node,
+                ElementFault::IncompleteContent { missing, expected },
+            ));
             // Recover: carry on as if this element's content had been
             // complete, so its *siblings* are still checked. Without this a
             // body of four empty containers reported only the first, where
@@ -819,7 +892,16 @@ pub enum ElementFault {
     /// The element is missing a required attribute.
     MissingAttribute,
     /// The element's content is incomplete - a required child is absent.
-    IncompleteContent,
+    ///
+    /// `missing` is the one element the model demands next, when it demands
+    /// exactly one (see `required_names`). `expected` is the first-set at the
+    /// same point, used when the model offers a choice and so has no single
+    /// missing name. epubcheck draws the same distinction, in the same two
+    /// message forms.
+    IncompleteContent {
+        missing: Option<String>,
+        expected: Vec<String>,
+    },
 }
 
 /// An attribute's name as the author wrote it, prefix included.
@@ -932,7 +1014,8 @@ impl<'d, 'i> Blame<'d, 'i> {
                         // which epubcheck lists in full), low enough to suppress
                         // our permissive pools' 80-name flow set, which is
                         // "almost anything" rather than a constraint.
-                        const MAX_SUGGESTED: usize = 24;
+                        // (hoisted to module scope: the incomplete-content
+                        // branch below applies the same cap.)
                         let distinct = distinct_sorted(expected);
                         if !distinct.is_empty() && distinct.len() <= MAX_SUGGESTED {
                             t.push_str(&format!("; expected {}", one_of(&distinct)));
@@ -943,8 +1026,42 @@ impl<'d, 'i> Blame<'d, 'i> {
                     ElementFault::MissingAttribute => {
                         format!("element \"{name}\" is missing a required attribute")
                     }
-                    ElementFault::IncompleteContent => {
-                        format!("element \"{name}\" has incomplete content")
+                    ElementFault::IncompleteContent { missing, expected } => {
+                        // What is missing, *appended* rather than substituted.
+                        // epubcheck says `element "html" incomplete; missing
+                        // required element "body"` where this said only `has
+                        // incomplete content`, and the difference is the whole
+                        // diagnosis — #83 met it while wiring the NCX grammar,
+                        // where every content model is a short required
+                        // sequence.
+                        //
+                        // Appending keeps the old wording a prefix of the new
+                        // one, which matters downstream: epubsana's fixer at
+                        // `fixers.rs:1734` selects on `contains "has
+                        // incomplete content"`. Rewording would silence it
+                        // quietly rather than break it loudly — see the
+                        // schema-violation-wording note in CLAUDE.md.
+                        //
+                        // Two forms, because epubcheck has two: a model
+                        // demanding one particular element next names it, and
+                        // one offering a choice lists the alternatives
+                        // instead. An empty `<blockquote>` in EPUB 2 is the
+                        // second kind and the dominant one on real books —
+                        // 5,805 of the shelf's 6,247 incomplete-content
+                        // findings — so leaving it bare would have improved
+                        // the rare case and not the common one.
+                        let mut t = format!("element \"{name}\" has incomplete content");
+                        if let Some(m) = missing {
+                            t.push_str(&format!("; missing required element \"{m}\""));
+                            params.push(m.clone());
+                        } else {
+                            let distinct = distinct_sorted(expected);
+                            if !distinct.is_empty() && distinct.len() <= MAX_SUGGESTED {
+                                t.push_str(&format!("; expected {}", one_of(&distinct)));
+                                params.extend(distinct);
+                            }
+                        }
+                        t
                     }
                 };
                 (text, params)
@@ -994,6 +1111,12 @@ impl<'d, 'i> Blame<'d, 'i> {
     }
 }
 
+/// Cap on how many names a "; expected …" tail will list. See the long note at
+/// its first use in `Blame::describe`: past this the set is "almost anything is
+/// allowed here" rather than a constraint, and printing it buries the problem.
+/// Both message forms that carry such a tail use this same cap.
+const MAX_SUGGESTED: usize = 24;
+
 /// The first-set as a stable, de-duplicated, sorted list - so both the count
 /// (for the suggestion threshold) and the message order are deterministic
 /// regardless of the order names fell out of the pattern.
@@ -1034,7 +1157,13 @@ pub fn validate_node_report<'d, 'i>(
     // pattern somehow ends non-nullable with nothing recorded, still surface the
     // document as invalid rather than silently pass it.
     if !env.nullable(&p) && blames.is_empty() {
-        blames.push(Blame::Element(root, ElementFault::IncompleteContent));
+        blames.push(Blame::Element(
+            root,
+            ElementFault::IncompleteContent {
+                missing: None,
+                expected: Vec::new(),
+            },
+        ));
     }
     blames
 }

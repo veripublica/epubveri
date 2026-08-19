@@ -189,7 +189,20 @@ const ANN: &[Ann] = &[
          Attribute *values* stay permissive throughout (MathML attributes are \
          unconstrained, `role` accepts any token, `aria-*` unranged) - a \
          separate surface with its own false-positive risk and much less to \
-         catch."),
+         catch. **The NCX is grammar-validated too** (#83, `schemas/ncx.rng`): \
+         its structure was checked in exactly one place - the `navPoint` \
+         content model - and the format's other ~26 constraints not at all, \
+         so sixteen shapes epubcheck errors on were silent here. Three \
+         constraints of epubcheck's own NCX grammar are deliberately **not** \
+         reproduced, each measured one book against 5.3.0 and each in the \
+         looser direction: it demands `id` and `class` *together* on `text`, \
+         `img` and `pageList` (so `<pageList id='x'>` alone draws `missing \
+         required attribute \"class\"` there, a message no NCX author could \
+         act on), and it admits at most one `navLabel` in a `pageList` while \
+         fixing the order against the one the format itself defines - which \
+         its own `ncx_multiNavLabel` Schematron rule contradicts by \
+         presupposing several. Reproducing them would mean inventing errors \
+         on valid books."),
     ("RSC-020", Some("partial"),
         "Checked: host syntax and scheme (space/comma in host, missing `//`) \
          on any reference, plus an unencoded space in a manifest href. Not \

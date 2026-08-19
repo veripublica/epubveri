@@ -108,14 +108,24 @@ fn load_impl(xml: &str, start_define: Option<&str>) -> Result<Grammar, String> {
 
 impl Loader {
     fn build<'a>(&self, node: Node<'a, 'a>, ns: &str, dtlib: &str) -> Result<Pat, String> {
-        let ns = node.attr_no_ns("ns").unwrap_or(ns);
+        // An `ns` written *on this element* — as distinct from one inherited
+        // from an ancestor. The difference only matters for `<attribute>`: an
+        // unprefixed attribute name takes no namespace by default (RELAX NG
+        // blocks the inheritance that elements get), but an `ns` spelled out
+        // on the `<attribute>` itself is honoured. Dropping it made
+        // `<attribute name="lang" ns="…/XML/1998/namespace"/>` mean a
+        // no-namespace `lang`, so a perfectly ordinary `xml:lang` was
+        // rejected — found by the NCX grammar (#83), whose i18n attributes
+        // are written that way.
+        let explicit_ns = node.attr_no_ns("ns");
+        let ns = explicit_ns.unwrap_or(ns);
         let dtlib = node.attr_no_ns("datatypeLibrary").unwrap_or(dtlib);
         match lname(node) {
             "element" => {
                 let kids: Vec<_> = rng_children(node).collect();
                 let (nc, content) = if let Some(nm) = node.attr_no_ns("name") {
                     (
-                        self.name_from_str(node, nm, false, ns)?,
+                        self.name_from_str(node, nm, ns)?,
                         self.group_nodes(&kids, ns, dtlib)?,
                     )
                 } else {
@@ -132,10 +142,13 @@ impl Loader {
             "attribute" => {
                 let kids: Vec<_> = rng_children(node).collect();
                 let (nc, rest): (NameClass, &[Node]) = if let Some(nm) = node.attr_no_ns("name") {
-                    (self.name_from_str(node, nm, true, ns)?, &kids)
+                    (
+                        self.name_from_str(node, nm, explicit_ns.unwrap_or(""))?,
+                        &kids,
+                    )
                 } else {
                     let (first, rest) = kids.split_first().ok_or("<attribute> missing name")?;
-                    (self.name_class(*first, ns)?, rest)
+                    (self.name_class(*first, explicit_ns.unwrap_or(""))?, rest)
                 };
                 let content = if rest.is_empty() {
                     text()
@@ -207,11 +220,13 @@ impl Loader {
         Ok(acc)
     }
 
+    /// `ns` is the namespace already resolved for this position by the
+    /// caller: the inherited default for an element name, and the explicitly
+    /// written `ns` (else none at all) for an attribute name.
     fn name_from_str<'a>(
         &self,
         node: Node<'a, 'a>,
         name: &str,
-        is_attr: bool,
         ns: &str,
     ) -> Result<NameClass, String> {
         if let Some((pfx, local)) = name.split_once(':') {
@@ -227,7 +242,6 @@ impl Loader {
             };
             Ok(qname(&uri, local))
         } else {
-            let ns = if is_attr { "" } else { ns };
             Ok(qname(ns, name))
         }
     }
@@ -235,7 +249,7 @@ impl Loader {
     fn name_class<'a>(&self, node: Node<'a, 'a>, ns: &str) -> Result<NameClass, String> {
         let ns = node.attr_no_ns("ns").unwrap_or(ns);
         match lname(node) {
-            "name" => self.name_from_str(node, node.text().unwrap_or("").trim(), false, ns),
+            "name" => self.name_from_str(node, node.text().unwrap_or("").trim(), ns),
             "anyName" => Ok(match self.except_of(node, ns)? {
                 Some(e) => NameClass::AnyNameExcept(Box::new(e)),
                 None => NameClass::AnyName,

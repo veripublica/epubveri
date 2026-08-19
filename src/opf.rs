@@ -19,7 +19,12 @@ use crate::xmlext::{NodeExt, attr_no_ns_node, attr_ns_node};
 /// written out at each. The two had identical copies of a two-way match, and
 /// when `Blame::Text` arrived (#68) a copy would have been the natural place to
 /// forget it - which is precisely the bug being fixed, one layer up.
-fn push_blame(report: &mut Report, location: &str, rule: &'static str, blame: &crate::rng::Blame) {
+pub(crate) fn push_blame(
+    report: &mut Report,
+    location: &str,
+    rule: &'static str,
+    blame: &crate::rng::Blame,
+) {
     let (text, params) = blame.describe();
     if let Some(a) = blame.attribute() {
         report.push_node_attr(
