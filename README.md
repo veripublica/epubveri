@@ -90,6 +90,46 @@ If none of that describes you, but you just have one `.epub` file you're
 curious about, the command-line tool works fine for that too (see
 "Trying it out" below).
 
+## Why two tools? epubveri finds, epubsana repairs
+
+`epubveri` never changes a book. It reads and reports — that is the whole of
+its job, and it is why it is safe to run on anything.
+
+Its sibling [`epubsana`](https://github.com/veripublica/epubsana) repairs the
+defects that have **exactly one correct, content-preserving repair**: an entity
+written without its semicolon, a manifest reference with an unencoded space, a
+duplicate `id`. It proposes each change, shows you what it did, and can be told
+to confirm every step.
+
+**It will never repair everything, and that is the design rather than a
+shortfall.** A great many defects are a *choice about the book*: which of two
+languages is the right one, which identifier is canonical, where a broken link
+was meant to point. Nothing can make those choices for you, and a tool that
+guessed would be worse than one that stops and says so.
+
+So the division of labour is:
+
+| | |
+|---|---|
+| **epubveri** | finds what is wrong |
+| **epubsana** | repairs it where there is one right answer |
+| **your editor** | is where the judgement calls belong |
+
+**We deliberately do not write an editor.** [Sigil](https://sigil-ebook.com/)
+and [calibre](https://calibre-ebook.com/) already exist, people know them, and
+their authors have spent years on them. A validator that competed with those
+tools could not be *integrated* by them — and to somebody holding a broken book,
+being integrated into the editor they already use is worth far more than another
+editor would be.
+
+The aim was never a hundred percent. It is to leave a person with less to do by
+hand, and to be honest about where the hand-work starts.
+
+*(A third project, [epublift](https://github.com/ePubLift/epublift), modernises
+and optimises EPUB files — upgrading structure and re-encoding images. A book
+whose real problem is its age is standing in that queue rather than this one.)*
+
+
 ## What does epubveri actually check?
 
 An EPUB file has a few layers, and epubveri validates each one:
@@ -328,10 +368,17 @@ over the whole codebase, which needs a Contributor License Agreement
 process that isn't built yet). Opening an issue to discuss an idea is
 always welcome.
 
-**Does it support WebAssembly (WASM) yet?** Not yet — it's on the
-roadmap, and it's one of the more exciting reasons this project exists:
-a pure-Rust validator can compile to WASM and run **directly in a web
-browser**, something a JVM-based tool fundamentally cannot do.
+**Does it support WebAssembly (WASM) yet?** Yes, and it has since
+`0.1.0` — see "Use it in the browser (WASM)" above. The package is
+[`@veripublica/epubveri-wasm`](https://www.npmjs.com/package/@veripublica/epubveri-wasm)
+on npm, tracking the same version as the crate. Being able to compile to
+WASM and run **directly in a web browser** is one of the more exciting
+reasons this project exists: the `.epub` never leaves the page, and a
+JVM-based tool fundamentally cannot do it.
+
+**Will epubveri fix my book?** No — it never writes to a book at all.
+Its sibling `epubsana` repairs the defects that have one correct answer,
+and your editor is where the rest belong. See "Why two tools?" above.
 
 **Why is it called "epubveri"?** "Veri" carries a deliberate triple
 meaning: it's the start of "veri(fy)" (English), it echoes "veritas /

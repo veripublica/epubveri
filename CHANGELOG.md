@@ -10,6 +10,29 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**The README now says why there are two tools.** `epubveri` finds, `epubsana`
+repairs the defects with exactly one correct answer, and an editor is where the
+judgement calls belong — with the part that was never written down anywhere
+public: **we deliberately do not write an editor.** Sigil and calibre already
+exist and their authors have spent years on them; a validator that competed with
+those tools could not be integrated *by* them, and being integrated is worth far
+more to someone holding a broken book. The aim was never a hundred percent, and
+saying where the hand-work starts is a service rather than an excuse.
+
+epubsana was mentioned exactly once in the whole README before this, in the
+licensing section, as "the sibling project" — with nothing about what it does.
+The division of labour has been the operative design since the first day of the
+project and had no public statement at all.
+
+**A stale FAQ answer is fixed, and it had been contradicting the same
+document.** *"Does it support WebAssembly (WASM) yet? Not yet — it's on the
+roadmap"* sat 76 lines below a full "Use it in the browser (WASM)" section with
+install instructions. WASM shipped in 0.1.0 and the npm package has tracked the
+crate version ever since, so the front page had been wrong for about seven
+weeks — and newly consequential, with a Sigil plugin now sending people to it.
+A second question was added beside it: *will epubveri fix my book?* No, it never
+writes to a book at all.
+
 **RSC-031 asks whether a remote URL is `https`, not whether it is `http://`.**
 epubcheck's condition (`ResourceReferencesChecker`:382-388) warns for any remote
 reference in an EPUB 3 whose scheme is neither `https` nor `file`; ours matched
