@@ -5062,6 +5062,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 is_epub3,
                                 report,
                             );
+                            // Outside the `package_identifier_text` guard
+                            // above on purpose: this one has nothing to do
+                            // with `dtb:uid`, and that guard is exactly how
+                            // unrelated NCX checks got switched off once.
+                            if advisory {
+                                crate::ncx::check_duplicate_targets(&ncx_doc, ncx_path, report);
+                            }
                         }
                     }
                 }

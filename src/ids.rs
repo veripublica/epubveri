@@ -187,6 +187,7 @@ pub const ADV_005: &str = "ADV-005"; // EPUB 3.4: page-spread-* on a reflowable 
 pub const ADV_006: &str = "ADV-006"; // EPUB 3.4: a spine layout override beside a roll layout (usage, w3c/epubcheck#1651)
 pub const ADV_007: &str = "ADV-007"; // EPUB 3.4: a roll spine document without ICB dimensions (usage, w3c/epubcheck#1651)
 pub const ADV_008: &str = "ADV-008"; // EPUB 3.4: a feature deprecated in 3.4 (usage, w3c/epubcheck#1649)
+pub const ADV_009: &str = "ADV-009"; // two sibling nav entries land on one document, no fragment (usage, MobileRead #195)
 
 // --- Resource limits (epubveri-owned; see the module note) ---
 //

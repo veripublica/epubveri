@@ -10,6 +10,33 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**ADV-009 notes two navigation entries that land in the same place.** JSWolf
+reported on MobileRead (#195) two `<navPoint>`s sharing a `playOrder` *and* a
+`content src`, expecting an error. Both tools are silent and both are right —
+epubcheck's `ncx_playOrderMatch` **obliges** two entries pointing at one target
+to share a `playOrder`, so "fixing" the duplicate number would make a valid NCX
+invalid. The real defect is one level up, where no validator looks: two table-of
+contents entries resolving to one document, so one of them names nothing the
+reader can reach. Behind `--advisory`, `Usage`, and it never touches the verdict.
+
+**Only *sibling* entries are reported, and that restriction is structural rather
+than a tuning.** `<content>` is mandatory inside `navPoint`, so a purely
+structural parent — a part heading, an omnibus volume title — has nowhere to
+point but its first child's document. That duplicate is the only legal way to
+write such a heading, and reporting it would be reporting the format.
+
+Measured across the shelf's 364 NCX files: 12 duplicate targets in 6 books, of
+which **8 are parent/child and every one is legitimate** (7 of them in a single
+translation of *Der Zauberberg*, whose seven part headings each share a file
+with their first chapter). Of the 4 sibling pairs, 3 are genuine — an unreachable
+chapter XXXIX, a second author's biography, and a spacecraft diagram — and 1 is
+Calibre listing a title page twice. **One false alarm in 375 books**, against the
+1-in-16.8 of the ADV-003 version that was rejected for crying wolf.
+
+The message is worded as an observation, not a verdict: the finding is factually
+true in all 12 cases — two entries really do resolve to one document — and only
+the inference "that is probably a mistake" is sometimes wrong.
+
 **An unencoded space in an NCX `<content src>` is now reported (RSC-020).** A
 Calibre book whose files are named `Kamelyali Kadin_split_000.html` drew 32
 findings from us and 60 from epubcheck: both tools reported one per manifest

@@ -668,6 +668,115 @@ fn nav_point_of<'d, 'i>(node: roxmltree::Node<'d, 'i>) -> Option<roxmltree::Node
         .filter(|p| p.is_element() && p.tag_name().name() == "navPoint")
 }
 
+/// The text of a `navPoint`'s first `navLabel`, for naming it in a message.
+fn nav_label_text(np: roxmltree::Node) -> String {
+    np.children()
+        .find(|c| c.is_element() && c.tag_name().name() == "navLabel")
+        .and_then(|l| {
+            l.children()
+                .find(|t| t.is_element() && t.tag_name().name() == "text")
+        })
+        .and_then(|t| t.text())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
+/// ADV-009: two *sibling* navigation entries resolve to the same document,
+/// with no fragment to tell them apart — so whichever the reader picks, they
+/// land in the same place and one of the two names nothing reachable.
+///
+/// Neither tool errors here and both are right. JSWolf reported the shape on
+/// MobileRead (#195) expecting an error, having found two `navPoint`s sharing
+/// a `playOrder` *and* a `content src`; epubcheck's `ncx_playOrderMatch`
+/// **obliges** two entries pointing at one target to share a `playOrder`, so
+/// "fixing" the duplicate number would make a valid NCX invalid. The real
+/// defect is one level up, and no validator catches it — which is what this
+/// advisory is for.
+///
+/// **The sibling restriction is structural, not a tuning.** `<content>` is
+/// mandatory inside `navPoint` (see `schemas/ncx.rng`), so a purely
+/// structural parent — a part heading, an omnibus volume title — has nowhere
+/// to point but its first child's document. A parent/child duplicate is the
+/// only legal way to write that, and reporting it would be reporting the
+/// format. Measured across the shelf's 364 NCX files (2026-08-20): 12
+/// duplicate targets in 6 books, of which **8 are parent/child and every one
+/// of those is legitimate** — 7 in one book alone, a translation of *Der
+/// Zauberberg* whose seven part headings each share a file with their first
+/// chapter. Of the 4 sibling pairs, 3 are genuine defects (a chapter, a
+/// second author's biography, and a diagram, each unreachable from the table
+/// of contents) and 1 is Calibre listing a title page twice.
+///
+/// So the bar ADV-003 set is cleared on both counts: **one false alarm in 375
+/// books**, against the 1-in-16.8 of the ADV-003 version that was rejected for
+/// crying wolf. Note what the earlier record got wrong, because the numbers
+/// are quotable and were: it counted *books* rather than findings (6, not 12),
+/// and it recorded "nesting is not a discriminator — all pairs are siblings",
+/// which is false and had discarded the correct first guess.
+///
+/// Worded as an observation rather than a verdict, deliberately. The finding
+/// is *factually true* in all 12 cases — two entries really do resolve to one
+/// document — and only the inference "that is probably a mistake" is
+/// sometimes wrong. That is a different class of advisory from one that
+/// asserts something untrue about the book.
+///
+/// `navPoint` only: a `pageList`'s `pageTarget`s legitimately mark positions
+/// within one document, and no measurement here covers them.
+pub(crate) fn check_duplicate_targets(
+    doc: &roxmltree::Document,
+    ncx_path: &str,
+    report: &mut Report,
+) {
+    use std::collections::HashMap;
+
+    // Walked in document order, so the finding lands on the later entry and
+    // the message can name the earlier one.
+    let mut seen: HashMap<&str, Vec<roxmltree::Node>> = HashMap::new();
+    for np in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "navPoint")
+    {
+        let Some(src) = np
+            .children()
+            .find(|c| c.is_element() && c.tag_name().name() == "content")
+            .and_then(|c| c.attr_no_ns("src"))
+        else {
+            continue;
+        };
+        let src = src.trim();
+        // A fragment is precisely how the format says "a different place in
+        // the same file", so entries carrying one are not landing together.
+        // A remote target is nobody's table of contents entry to fix.
+        if src.is_empty() || src.contains('#') || crate::url::is_absolute(src) {
+            continue;
+        }
+        let prior = seen.entry(src).or_default();
+        // Only an entry that is not an ancestor of this one counts; see the
+        // structural argument above. Document order makes this one-sided.
+        if let Some(earlier) = prior
+            .iter()
+            .find(|p| !np.ancestors().any(|a| a == **p))
+            .copied()
+        {
+            let (a, b) = (nav_label_text(earlier), nav_label_text(np));
+            report.push_node(
+                ADV_009,
+                Severity::Usage,
+                format!(
+                    "two navigation entries point to '{src}' with no fragment to \
+                     tell them apart: '{a}' and '{b}'. Whichever the reader \
+                     picks, they land in the same place"
+                ),
+                ncx_path,
+                np,
+                "ncx.nav_point.duplicate_target",
+                vec![src.to_string(), a, b],
+            );
+        }
+        prior.push(np);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -682,6 +791,101 @@ mod tests {
             .iter()
             .map(|m| (m.rule, m.position.map(|p| p.line).unwrap_or(0)))
             .collect()
+    }
+
+    /// The ADV-009 findings for a navMap body, as `(target, label_a, label_b)`.
+    fn dup_targets(body: &str) -> Vec<(String, String, String)> {
+        let xml = ncx_with(body);
+        let doc = crate::ocf::parse_xml(&xml).expect("fixture parses");
+        let mut report = Report::new();
+        check_duplicate_targets(&doc, "toc.ncx", &mut report);
+        report
+            .messages
+            .iter()
+            .filter(|m| m.id == ADV_009)
+            .map(|m| {
+                (
+                    m.params[0].clone(),
+                    m.params[1].clone(),
+                    m.params[2].clone(),
+                )
+            })
+            .collect()
+    }
+
+    fn np(id: &str, label: &str, src: &str, children: &str) -> String {
+        format!(
+            "<navPoint id=\"{id}\"><navLabel><text>{label}</text></navLabel>\
+             <content src=\"{src}\"/>{children}</navPoint>"
+        )
+    }
+
+    /// ADV-009 reports two *sibling* navigation entries landing on one
+    /// document, and stays silent when one is the other's parent.
+    ///
+    /// The parent case is the whole reason the check is shippable, so it is
+    /// asserted first and by itself. `<content>` is mandatory in `navPoint`,
+    /// so a part heading has nowhere to point but its first child's file —
+    /// reporting it would be reporting the format, and it is the shape that
+    /// produced 8 of the 12 duplicate targets on a 375-book shelf, every one
+    /// of them legitimate.
+    #[test]
+    fn a_parent_sharing_its_childs_target_is_not_a_duplicate() {
+        // Der Zauberberg's shape: a part heading whose first chapter is in
+        // the same file. Seven of these in one real book.
+        let part = np(
+            "p1",
+            "PART ONE",
+            "ch1.xhtml",
+            &np("c1", "Arrival", "ch1.xhtml", ""),
+        );
+        assert!(
+            dup_targets(&format!("<navMap>{part}</navMap>")).is_empty(),
+            "a parent pointing at its own child's document is how the format \
+             expresses a section heading"
+        );
+        // Two levels up is the same argument, so an ancestor at any depth
+        // counts - not only the direct parent.
+        let deep = np(
+            "p1",
+            "PART ONE",
+            "ch1.xhtml",
+            &np(
+                "s1",
+                "Section",
+                "ch1a.xhtml",
+                &np("c1", "Arrival", "ch1.xhtml", ""),
+            ),
+        );
+        assert!(dup_targets(&format!("<navMap>{deep}</navMap>")).is_empty());
+    }
+
+    /// The other half: siblings *are* reported, a fragment tells two entries
+    /// apart, and a distinct target says nothing. Without these the test
+    /// above would pass on a check that never fires at all.
+    #[test]
+    fn two_sibling_entries_on_one_document_are_reported() {
+        let two = |a: &str, b: &str| {
+            format!(
+                "<navMap>{}{}</navMap>",
+                np("n1", "XXXVIII", a, ""),
+                np("n2", "XXXIX", b, "")
+            )
+        };
+        assert_eq!(
+            dup_targets(&two("ch38.xhtml", "ch38.xhtml")),
+            vec![(
+                "ch38.xhtml".to_string(),
+                "XXXVIII".to_string(),
+                "XXXIX".to_string()
+            )],
+            "one finding, on the later entry, naming both"
+        );
+        // A fragment is how the format says "elsewhere in the same file".
+        assert!(dup_targets(&two("ch38.xhtml", "ch38.xhtml#b")).is_empty());
+        assert!(dup_targets(&two("ch38.xhtml#a", "ch38.xhtml#b")).is_empty());
+        // And the ordinary case stays silent.
+        assert!(dup_targets(&two("ch38.xhtml", "ch39.xhtml")).is_empty());
     }
 
     /// Wraps a navMap body in a minimal, otherwise-valid NCX.

@@ -32,7 +32,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
 | **All** | **203** | **5** | **2** | **105** | **210** | **208/210** | |
 
-**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 203 fully, 5 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 203 fully, 5 partially — plus 10 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -431,4 +431,5 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-006 | EPUB 3.4: a spine layout override beside a roll layout (usage, w3c/epubcheck#1651) | — | Y |
 | ADV-007 | EPUB 3.4: a roll spine document without ICB dimensions (usage, w3c/epubcheck#1651) | — | Y |
 | ADV-008 | EPUB 3.4: a feature deprecated in 3.4 (usage, w3c/epubcheck#1649) | — | Y |
+| ADV-009 | two sibling nav entries land on one document, no fragment (usage, MobileRead #195) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
