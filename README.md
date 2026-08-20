@@ -190,7 +190,21 @@ to be valid or to trip exactly one specific rule. Measured on 0.9.18
 These are the numbers epubveri's own release pre-flight prints, and they
 cover epubcheck's corpus only. That corpus is built from synthetic
 fixtures, each tripping one rule; it says nothing about how the two tools
-compare on a real book, which is measured separately.
+compare on a real book.
+
+That is measured separately, by running both tools over a private shelf
+of commercially published EPUBs and diffing them by message ID. On
+**375 books (2026-08-20): 373 agreed on the reported message-ID set
+exactly, and there was no message ID epubveri reported that epubcheck
+did not.** The two books that differed are both accounted for — one is
+an artefact of epubcheck's own error recovery, and the other is a
+documented, deliberate divergence about a stray semicolon in CSS. Where
+the two tools report the *same* ID a different number of times, epubveri
+is always the lower of the two.
+
+Both halves matter and neither substitutes for the other: the corpus
+says whether the rules are right, the shelf says whether they misfire on
+books people actually bought.
 
 For a check-by-check answer rather than a headline, see
 **[`docs/COVERAGE.md`](./docs/COVERAGE.md)** — a per-message-ID matrix
@@ -328,13 +342,24 @@ for the full API and the one CLI-only difference (the filename-based
 
 ## Frequently asked questions
 
-**Is this a drop-in replacement for epubcheck?** Not yet, and maybe
-never entirely — see "How good is it right now?" above. It's much
-further along on structural/packaging correctness than on some of the
-deeper content-model checks. If you need epubcheck's full authority
-today (e.g. for a retailer's official ingestion gate), keep using real
-epubcheck; epubveri is a complementary, lighter-weight option that's
-improving quickly.
+**Is this a drop-in replacement for epubcheck?** Close on the checks;
+still not a substitute for its standing. The per-message matrix is at
+**208 of 210 live epubcheck checks** — 203 fully, 5 partially — and the
+two that are absent are scope decisions rather than unfinished work: an
+unregistered-URI-scheme check that only fires inside *DTBook* content
+(a legacy format epubveri deliberately doesn't validate), and an
+informational message announcing which profile was selected. The deeper
+content-model checking that used to be the honest caveat here has since
+landed: the XHTML, SVG and MathML grammars all run, and the EPUB 2
+content models were audited element by element against epubcheck's own
+schemas.
+
+What none of that buys is **authority**. If something downstream of you
+says "must pass epubcheck", then passing epubveri is not the same
+sentence, and no amount of agreement between the two tools changes that.
+The sensible split: use epubveri to find problems early, quickly, in
+your editor or your pipeline or a browser tab; use epubcheck when
+somebody is going to ask for epubcheck by name.
 
 **Can I use it in production today?** You can — several
 publisher/retailer-style checks are already at 100% recall against the

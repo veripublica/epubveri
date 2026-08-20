@@ -10,6 +10,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**The "drop-in replacement" answer no longer undersells, and the real-book
+comparison is now in the README instead of only being alluded to.** The answer
+still says epubveri is not a drop-in replacement — but the reason it gave was a
+technical caveat that expired: "further along on structural/packaging
+correctness than on some of the deeper content-model checks", written before the
+XHTML, SVG and MathML grammars and the element-by-element EPUB 2 content-model
+audit all landed. The honest remaining difference is **authority, not
+capability**: if something downstream says "must pass epubcheck", passing
+epubveri is not the same sentence, and no amount of agreement changes that. The
+two absent checks are named as the scope decisions they are.
+
+The status section promised a real-book measurement and never gave one — it
+said the corpus "says nothing about how the two tools compare on a real book,
+which is measured separately", and stopped there. It now carries the number:
+375 books, 373 agreeing on the message-ID set exactly, **no ID epubveri reports
+that epubcheck does not**, and epubveri always the lower of the two where counts
+differ. Both books that differ are accounted for in one sentence each.
+
 **The README now says why there are two tools.** `epubveri` finds, `epubsana`
 repairs the defects with exactly one correct answer, and an editor is where the
 judgement calls belong — with the part that was never written down anywhere
