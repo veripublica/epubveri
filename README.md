@@ -54,15 +54,18 @@ tool on a server. It's a real obstacle if you want to:
 - **embed** a validator inside a native desktop/mobile app without
   bundling an entire Java runtime,
 - run validation as part of a **fast, lightweight command-line tool or
-  CI pipeline** without the JVM startup cost, or
+  CI pipeline** — measured at about a tenth of epubcheck's time per
+  book, which is the validation work rather than the JVM's launch (see
+  "How fast is it?" below), or
 - just avoid the operational overhead of "make sure a compatible JVM is
   installed" as a deployment requirement.
 
 epubveri is written in **pure Rust**, with **zero C dependencies** and
 **zero JVM dependency**. Rust code compiles down to a small, fast native
-binary — and, crucially, can also compile to **WebAssembly (WASM)**,
-meaning the exact same validation logic can eventually run directly in a
-web browser tab, with no server round-trip and no Java anywhere.
+binary — and, crucially, also compiles to **WebAssembly (WASM)**, so the
+exact same validation logic runs directly in a web browser tab, with no
+server round-trip and no Java anywhere. That build ships today as
+`@veripublica/epubveri-wasm` on npm.
 
 It reuses epubcheck's own short error-code scheme (`OPF-002`, `RSC-005`,
 `PKG-007`, and so on) wherever the checks overlap, specifically so that
@@ -78,7 +81,7 @@ deliberate compatibility choice, not a coincidence.
 - **Retailers and distributors** who ingest EPUB files from many sources
   and need to reject malformed ones automatically.
 - **Reading-app / e-reader developers** who want a lightweight,
-  embeddable check — including, eventually, one that runs client-side
+  embeddable check — including one that runs client-side
   in a browser via WebAssembly.
 - **Developers building any tool that touches EPUB files** and wants a
   validator as a library dependency (a Rust crate) rather than shelling
@@ -194,17 +197,41 @@ compare on a real book.
 
 That is measured separately, by running both tools over a private shelf
 of commercially published EPUBs and diffing them by message ID. On
-**375 books (2026-08-20): 373 agreed on the reported message-ID set
+**385 books (2026-08-21): 383 agreed on the reported message-ID set
 exactly, and there was no message ID epubveri reported that epubcheck
 did not.** The two books that differed are both accounted for — one is
 an artefact of epubcheck's own error recovery, and the other is a
 documented, deliberate divergence about a stray semicolon in CSS. Where
 the two tools report the *same* ID a different number of times, epubveri
-is always the lower of the two.
+is always the lower of the two — across all 152 such rows, without
+exception.
 
 Both halves matter and neither substitutes for the other: the corpus
 says whether the rules are right, the shelf says whether they misfire on
 books people actually bought.
+
+### How fast is it?
+
+Both tools were timed over the same 20 books on an idle machine, invoked
+the same way — one run per book, which is how an editor plugin or an
+ingestion pipeline actually calls them:
+
+| | per book | that shelf of 385 |
+|---|---|---|
+| epubcheck 5.3.0 | 2013 ms | ~13 min |
+| **epubveri** | **191 ms** | **~70 s** |
+
+About **ten times faster** on the same books, reaching the same verdict.
+
+One number worth stating precisely, because the obvious guess is wrong:
+this is **not** the JVM being slow to start. epubcheck's startup is
+about 70 ms of that 2013 — a little over 3% — and the rest is the
+validation itself. epubveri's own process startup is 6 ms. So the honest
+claim is that the same work takes about a tenth of the time, not that
+Java is slow to launch.
+
+Times move with the machine, the books and the version; measure your own
+before depending on any of this.
 
 For a check-by-check answer rather than a headline, see
 **[`docs/COVERAGE.md`](./docs/COVERAGE.md)** — a per-message-ID matrix

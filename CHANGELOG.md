@@ -10,6 +10,35 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**The README now carries a measured speed comparison, and it corrects the claim
+this project has been making about *why* epubveri is faster.** Timed over the
+same 20 books on an idle machine, one invocation per book — the shape an editor
+plugin or an ingestion pipeline actually uses:
+
+| | per book | the 385-book shelf |
+|---|---|---|
+| epubcheck 5.3.0 | 2013 ms | ~13 min |
+| epubveri | **191 ms** | **~70 s** |
+
+About ten times faster, reaching the same verdict. **The reason is not JVM
+startup, which is the thing both this README and `CLAUDE.md` had been implying.**
+epubcheck's launch is 70 ms of that 2013 — a little over 3% — and the rest is
+the validation work. Our own process startup is 6 ms, from timing 385 books in
+one process (68.9 s) against one process per book (71.3 s). So the honest claim
+is "the same work in about a tenth of the time", which is stronger than the one
+that was being made and happens to be true.
+
+**The real-book comparison is re-measured on the current shelf: 385 books
+(2026-08-21), 383 agreeing on the message-ID set exactly**, no ID epubveri
+reports that epubcheck does not, and epubveri lower in all 152 rows where the
+two report the same ID a different number of times. This was also the first full
+run since the RSC-031 widening, which turns out to move nothing on real books —
+the ID does not appear anywhere in the diff.
+
+Three stale claims went with it: two "eventually"s about WebAssembly, which has
+shipped on npm since `0.1.0`, and the bullet that sold the CLI on avoiding "the
+JVM startup cost".
+
 **The "drop-in replacement" answer no longer undersells, and the real-book
 comparison is now in the README instead of only being alluded to.** The answer
 still says epubveri is not a drop-in replacement — but the reason it gave was a
