@@ -143,6 +143,38 @@ pub(crate) fn has_unregistered_scheme(href: &str) -> bool {
         .any(|s| s.eq_ignore_ascii_case(scheme))
 }
 
+/// RSC-031: a remote reference that is not transport-secure.
+///
+/// **epubcheck's test is "not `https`", not "is `http://`"**, and the
+/// difference is a real gap rather than a nicety.
+/// `ResourceReferencesChecker`:382-388 reads
+///
+/// ```text
+/// version == VERSION_3
+///   && !EnumSet.of(LINK, HYPERLINK).contains(reference.type)
+///   && !"https".equals(url.scheme())
+///   && !"file".equals(url.scheme())
+/// ```
+///
+/// so a `res:///system/fonts/HelveticaNeue.ttf` in a Calibre/Kobo
+/// `@font-face` draws RSC-031 there and drew nothing here. Measured against
+/// 5.3.0 with one book per version, which is also how the caller's `is_epub3`
+/// guard was confirmed.
+///
+/// `file:` is excluded because it is disallowed and reported elsewhere;
+/// `data:` never reaches this predicate, since [`is_remote_url`] already
+/// rules it out (epubcheck's `OCFContainer.isRemote` does the same). The two
+/// reference-type exemptions are structural here rather than conditional:
+/// hyperlink targets live in `remote_link_refs`, a separate set, and the
+/// package document's `<link>` elements are not collected into either of the
+/// sets that reach RSC-031.
+///
+/// [`is_remote_url`]: crate::opf::is_remote_url
+pub(crate) fn is_insecure_remote(href: &str) -> bool {
+    let scheme = href.trim().split_once(':').map(|(s, _)| s).unwrap_or("");
+    !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("file")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +265,27 @@ mod tests {
         assert!(has_unregistered_scheme("httpf://example.org"));
         assert!(!has_unregistered_scheme("http://example.org"));
         assert!(!has_unregistered_scheme("mailto:a@b.com"));
+    }
+
+    /// The predicate is "not https", not "is http" — see the doc comment.
+    /// Scheme comparison is case-insensitive because a URL scheme is, and
+    /// `HTTPS://` reaching the insecure branch would be a false positive on
+    /// a book doing nothing wrong.
+    #[test]
+    fn insecure_remote_is_anything_but_https() {
+        for secure in [
+            "https://example.com/f",
+            "HTTPS://example.com/f",
+            "file:///x",
+        ] {
+            assert!(!is_insecure_remote(secure), "{secure}");
+        }
+        for insecure in [
+            "http://example.com/f",
+            "res:///system/fonts/HelveticaNeue.ttf",
+            "ftp://example.com/f",
+        ] {
+            assert!(is_insecure_remote(insecure), "{insecure}");
+        }
     }
 }

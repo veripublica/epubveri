@@ -7902,7 +7902,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // scenarios expect RSC-006 "and no other errors or warnings"; we
         // were adding RSC-031 to every one (issue #26).
         for r in remote_refs.difference(&restricted_remote_refs) {
-            if r.starts_with("http://") {
+            if crate::url::is_insecure_remote(r) {
                 report.push_at_pos(
                     RSC_031,
                     Severity::Warning,
@@ -8526,7 +8526,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // the per-document site above already documents - telling
                 // someone to switch to https points at the wrong half of
                 // their problem. Probed both versions against 5.3.0.
-                if is_epub3 && u.starts_with("http://") {
+                if is_epub3 && crate::url::is_insecure_remote(&u) {
                     report.push_at_rule(
                         RSC_031,
                         Severity::Warning,
@@ -8538,6 +8538,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
             }
         }
+        // **No `is_epub3` here, and that is deliberate — do not "fix" it.**
+        // Its neighbour twelve lines up (RSC-031) is EPUB 3 only, so the
+        // absence of a guard on this one reads like an oversight; epubsana
+        // read it that way on 2026-08-21 and asked. Measured that day, one
+        // book per version against 5.3.0, same stylesheet and same
+        // `res:///…` URL, changing nothing but `version`: **epubcheck
+        // reports OPF-014 for both 2.0 and 3.0.** The neighbour's reasoning
+        // ("in EPUB 2 nothing may be remote at all, so pointing at the
+        // scheme aims at the wrong half of the problem") is specific to the
+        // https advice and does not transfer to the missing-property error.
+        //
+        // A repairer must still decline to *act* on this in an EPUB 2
+        // package, because `properties` is not an OPS 2.0.1 attribute -
+        // but that is a fact about the edit, not about the finding, and it
+        // is epubsana's guard to hold rather than ours to suppress.
         if css_has_remote
             && !item_properties
                 .get(&nfc(&path))
@@ -10987,6 +11002,48 @@ mod tests {
                 .any(|m| m.rule == Some("css.font_face.non_core_media_type")),
             "font/ttf is a Core Media Type"
         );
+    }
+
+    /// RSC-031 asks whether the scheme is `https`, not whether it is
+    /// `http://` — and until 0.9.27 we asked the second question.
+    ///
+    /// epubcheck's condition (`ResourceReferencesChecker`:382-388) is
+    /// EPUB 3, the reference is not a `LINK`/`HYPERLINK`, and the scheme is
+    /// neither `https` nor `file`. Ours was `starts_with("http://")`, so a
+    /// Calibre/Kobo `url(res:///system/fonts/HelveticaNeue.ttf)` — the exact
+    /// shape that made 0.9.20 widen `is_remote_url` — drew the warning there
+    /// and nothing here. Found while settling an unrelated OPF-014 question
+    /// for epubsana, not by any instrument: **no shelf book has a remote URL
+    /// in CSS at all**, which is also why the site had no test before this
+    /// one, as the comment at the emission site says in as many words.
+    ///
+    /// Measured one book per scheme against 5.3.0, at both emission sites
+    /// (this one and the content-document site, via a remote `<audio>`):
+    /// nine probes, all exact matches, no overshoot.
+    ///
+    /// The control is the point — `https` and a case-shifted `HTTPS` must
+    /// stay silent, or the widening would just be "warn on every remote URL".
+    #[test]
+    fn rsc_031_asks_for_https_rather_than_against_http() {
+        let rsc_031 = |url: &str| {
+            let css = format!("@font-face {{\n  font-family: X;\n  src: url({url});\n}}");
+            crate::validate_bytes(epub_with_stylesheet(&css, "font/ttf"))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_031)
+                .count()
+        };
+        // Secure, and the same scheme spelled loudly: silent either way.
+        assert_eq!(rsc_031("https://example.com/f.ttf"), 0);
+        assert_eq!(rsc_031("HTTPS://example.com/f.ttf"), 0);
+        // Insecure, whatever the scheme is called.
+        assert_eq!(rsc_031("http://example.com/f.ttf"), 1, "the case we had");
+        assert_eq!(
+            rsc_031("res:///system/fonts/HelveticaNeue.ttf"),
+            1,
+            "the real Calibre/Kobo shape this was found on"
+        );
+        assert_eq!(rsc_031("ftp://example.com/f.ttf"), 1);
     }
 
     /// CSS-029 must point at the stylesheet the class name is written in.

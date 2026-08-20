@@ -8,6 +8,38 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**RSC-031 asks whether a remote URL is `https`, not whether it is `http://`.**
+epubcheck's condition (`ResourceReferencesChecker`:382-388) warns for any remote
+reference in an EPUB 3 whose scheme is neither `https` nor `file`; ours matched
+`starts_with("http://")`, so a Calibre/Kobo `url(res:///system/fonts/HelveticaNeue.ttf)`
+— the exact shape that made 0.9.20 widen `is_remote_url` — drew the warning
+there and nothing here. Both emission sites now share one predicate.
+
+Measured one book per scheme against 5.3.0 at both sites, nine probes: `https`
+and a case-shifted `HTTPS` stay silent in both tools, while `http:`, `res:` and
+`ftp:` now agree exactly. No overshoot anywhere, which is what makes a
+restrictive change safe. epubcheck's two reference-type exemptions (`LINK`,
+`HYPERLINK`) need no condition here: hyperlink targets live in a separate set,
+and the package document's `<link>` elements reach neither site.
+
+**No instrument here could have found it, and the shelf cannot confirm the
+fix**: RSC-031 fires on 0 of 375 shelf books before and after, because none has
+a remote URL in CSS — the emission site's own comment already said as much. The
+evidence is the nine probes and two new tests, one of which was checked by
+restoring the old condition and watching it fail on the `res:` case. It surfaced
+while settling an unrelated question for epubsana, not from any measurement of
+ours.
+
+**OPF-014's stylesheet site is correctly ungated, and now says so.** It carries
+no `is_epub3` while its RSC-031 neighbour does, which reads like an oversight;
+epubsana reported a downstream regression and asked. Measured the same day, one
+book per version, changing nothing but `version`: epubcheck reports OPF-014 for
+both EPUB 2 and EPUB 3. No code change — a comment, so the next reader does not
+re-derive it or "fix" it.
+
+
 ## [0.9.26] - 2026-08-20
 
 **An unencoded space in an NCX `<content src>` is now reported (RSC-020).** A
