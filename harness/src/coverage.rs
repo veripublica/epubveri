@@ -389,7 +389,19 @@ const ANN: &[Ann] = &[
          what is malformed under the current spec *and* epubcheck flags - \
          and extending it from one to the other was the decision, since the \
          policy had only ever been written for selectors. Measured: 1 shelf \
-         book of 346 contains an empty declaration at all. A *second* book \
+         book of 375 contains an empty declaration at all (re-measured \
+         2026-08-20; it was 1 of 346). **Unlike the RSC-016 divergence, this \
+         one changes the verdict, and that is the part to know before diffing \
+         the two tools**: CSS-008 is an ERROR, so on that book epubcheck \
+         reports INVALID and we report VALID, with no other difference \
+         between the two reports. It is the only verdict disagreement across \
+         all 375 books. A minimal reproduction and an upstream issue draft are \
+         held in `docs/UPSTREAM_TRIAGE.md` (draft G): both placements are \
+         affected (`{;color:#000}` and `{color:#000;;}`), epubcheck's \
+         `CSSHandler.error()` turns any parser exception into CSS-008 \
+         unconditionally, and none of its own CSS-008 fixtures covers this \
+         shape - they are unterminated blocks, which really are malformed. \
+         A *second* book \
          used to sit in this row for a \
          different reason and no longer does - a stray declaration outside \
          any rule was reported once per bad token (4 against epubcheck's 1), \
@@ -402,8 +414,12 @@ const ANN: &[Ann] = &[
          difference, left as is (measured 2026-08-09): we report once per \
          `@font-face` **rule**, epubcheck once per **declaration inside it**, \
          so a block of four descriptors is 1 finding here and 4 there. It is \
-         informational either way and never touches the verdict. Visible on 32 \
-         of 136 shelf books, all from one producer whose blocks each carry \
+         informational either way and never touches the verdict. Visible on \
+         **118 of 375 shelf books** (re-measured 2026-08-20; it was 32 of \
+         136). The ratio is exactly 4x in 104 of those and 2x or 3x in the \
+         other 14, which is the mechanism showing through rather than an \
+         exception - a block with three descriptors gives 3x. Mostly from one \
+         producer whose blocks each carry \
          four descriptors - which is why the ratio looks like a suspiciously \
          exact 4x."),
     // --- MED (reviewed) ---

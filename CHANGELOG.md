@@ -10,6 +10,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**The CSS-008 divergence now says that it changes the verdict.** A stray
+semicolon in a declaration block (`a:link {;color:#000}`) is valid CSS — both
+*Consume a style block's contents* and *Consume a list of declarations* in CSS
+Syntax 3 answer a `<semicolon-token>` with "Do nothing", and CSS 2.1's core
+grammar makes every declaration slot optional. epubcheck's older parser reports
+it as an ERROR; we stay silent, by a decision already recorded here on
+2026-08-17.
+
+What the note did not say is the part a reader most needs: **that ERROR flips
+the verdict.** On the one shelf book that contains an empty declaration,
+epubcheck reports INVALID and epubveri reports VALID, with no other difference
+between the two reports — the only verdict disagreement across all 375 books.
+The RSC-016 divergence has always carried the opposite sentence ("the verdict
+never differs"), so leaving it unsaid here read as though it did not.
+
+Also re-measured while the numbers were in hand: the empty-declaration
+population is 1 book of 375 (was 1 of 346), and the CSS-028 granularity
+difference is visible on 118 of 375 (was 32 of 136), with the 4x ratio holding
+in 104 of them and 2x/3x in the rest — which is the per-descriptor mechanism
+showing through, not an exception to it.
+
 **RSC-020's remaining sites are now measured rather than estimated, and the
 answer is that they stay empty.** This check is organised per *source* here and
 per *reference* in epubcheck, so the useful question is which of our sites it
