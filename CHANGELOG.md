@@ -8,6 +8,35 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**An unencoded space in an NCX `<content src>` is now reported (RSC-020).** A
+Calibre book whose files are named `Kamelyali Kadin_split_000.html` drew 32
+findings from us and 60 from epubcheck: both tools reported one per manifest
+item, and only epubcheck reported the 28 `<navPoint>`s naming the same files.
+We now agree on all 60, and on the line of every one.
+
+The cause is structural rather than a missing case. **URL validity is organised
+per _source_ here and per _reference_ in epubcheck** — it registers every
+reference and runs them through one path, while ours grew a site at a time
+(manifest href, then content-document references, then SVG `href`/`xlink:href`)
+and the NCX was never added to that list. This is the same shape that left the
+`<guide>` out of fragment resolution before 0.9.15, and it is worth stating as a
+standing hazard: a per-source design owes a re-enumeration every time a new
+reference kind appears, and nothing fails loudly when one is forgotten.
+
+Found by `compare`'s count-gap section, not by its two ID lists — the ID sets
+agreed exactly, because we did report RSC-020 on the book, just 28 times too
+few. Three of 375 shelf books carried the shape and all three now match
+epubcheck; the corpus was byte-identical before and after, and has no fixture
+for it.
+
+The finding anchors to the `src` attribute (`…/ncx:content[1]/@src`), matching
+what the manifest site does with `@href`. For consumers keyed on `rule`, the
+new site is `opf.ncx.content_src_unencoded_space` — a new key, so an allowlist
+written against the previous release will not contain it.
+
+
 ## [0.9.25] - 2026-08-19
 
 **The NCX is validated against a grammar**

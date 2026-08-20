@@ -205,22 +205,28 @@ const ANN: &[Ann] = &[
          on valid books."),
     ("RSC-020", Some("partial"),
         "Checked: host syntax and scheme (space/comma in host, missing `//`) \
-         on any reference, plus an unencoded space in a manifest href. Not \
-         checked: an unencoded space in a *content document* reference, \
-         backslashes, malformed percent-escapes, and the illegal-character \
-         set. **Correcting an earlier note here**: it claimed a path space is \
-         valid and that this matched epubcheck. It does not - epubcheck parses \
-         every URL twice through galimatias, once with a strict error handler \
-         that turns WHATWG's recoverable warnings into errors, and its own two \
-         sibling fixtures settle it (a `%20` href is PKG-010 warning, an \
-         unencoded one is RSC-020 error). Deliberately left partial \
+         on any reference, plus an unencoded space in a manifest href, in a \
+         content-document reference (including SVG `href`/`xlink:href`) and in \
+         an NCX `<content src>`. Not checked: backslashes, malformed \
+         percent-escapes, and the illegal-character set. **Correcting an \
+         earlier note here**: it claimed a path space is valid and that this \
+         matched epubcheck. It does not - epubcheck parses every URL twice \
+         through galimatias, once with a strict error handler that turns \
+         WHATWG's recoverable warnings into errors, and its own two sibling \
+         fixtures settle it (a `%20` href is PKG-010 warning, an unencoded one \
+         is RSC-020 error). What remains unchecked is still deliberate \
          (2026-07-26): galimatias is a Maven dependency rather than vendored, \
-         so the exact rule cannot be read here; the corpus carries one RSC-020 \
-         scenario, which we already pass; and a scan of 61 real books found \
-         exactly one malformed relative URL - the manifest-href space we \
-         already catch. Building strictness against an unreadable reference, \
-         on one test case, for something 60 of 61 books never do is more \
-         likely to invent false positives than to catch defects."),
+         so the exact rule cannot be read here, and the corpus carries one \
+         RSC-020 scenario, which we already pass. **The deferral's own \
+         evidence has since expired, twice, which is why the space cases are \
+         now done.** It rested on a scan of 61 real books finding exactly one \
+         malformed relative URL; on a 375-book shelf, 17 books carry unencoded \
+         spaces and one carried 28 in its NCX alone. Each space case was \
+         closed only after measuring our count against epubcheck's per book \
+         and finding it lower, never higher - strictly gap-closing, so none of \
+         them could invent a false positive. Re-measure before extending this \
+         to the remaining shapes; the argument against them is population, not \
+         principle."),
     ("RSC-010", Some("partial"),
         "Three of epubcheck's four cells. It runs RSC-010 from two places in \
          `ResourceReferencesChecker`: `case HYPERLINK` (:231), where the \

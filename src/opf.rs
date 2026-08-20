@@ -2278,6 +2278,35 @@ fn check_ncx_content_fragments(
         if is_external(src) {
             continue;
         }
+        // RSC-020: an unencoded space in the reference itself. epubcheck
+        // validates every *registered* reference's URL, so a Calibre book
+        // whose files are named `Kamelyali Kadin_split_000.html` draws one
+        // finding per manifest href *and* one per NCX `<content src>` - 32
+        // and 28 on one real book, of which we reported only the 32. This
+        // check is organised per source here rather than per reference, so
+        // the NCX simply never joined the list (the same shape that left the
+        // `<guide>` out of fragment resolution).
+        //
+        // Reported before the RSC-007 resolution below, not after: the two
+        // are independent there - the file usually *does* exist, spaces and
+        // all, so the `continue` would have swallowed nothing, but a
+        // reference that is both malformed and missing earns both findings.
+        // Interior space only; leading/trailing is stripped by the URL
+        // parser and valid, as at the content-document sites.
+        if src.trim().contains(' ')
+            && let Some(src_attr) = attr_no_ns_node(n, "src")
+        {
+            report.push_node_attr(
+                RSC_020,
+                Severity::Error,
+                format!("NCX content src '{src}' contains unencoded spaces"),
+                ncx_path,
+                n,
+                src_attr,
+                "opf.ncx.content_src_unencoded_space",
+                vec![src.to_string()],
+            );
+        }
         let (target, frag) = match src.split_once('#') {
             Some((p, f)) => (p, Some(f)),
             None => (src, None),
@@ -13153,6 +13182,108 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// An EPUB 2 whose single content document is named `name`, referenced
+    /// under that name from both the manifest and the NCX.
+    fn epub2_named(name: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="{name}" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        let ncx = format!(
+            "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+             version=\"2005-1\"><head><meta name=\"dtb:uid\" \
+             content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+             <navLabel><text>T</text></navLabel><content src=\"{name}\"/></navPoint>\
+             </navMap></ncx>"
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            let doc = format!("OEBPS/{name}");
+            for (n, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                (doc.as_str(), CH1),
+                ("OEBPS/toc.ncx", ncx.as_str()),
+            ] {
+                z.start_file(n, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// RSC-020: an unencoded space in an NCX `<content src>` is its own
+    /// finding, separate from the manifest href naming the same file.
+    ///
+    /// The URL check is organised per *source* here — manifest href, then
+    /// content-document references — while epubcheck validates every
+    /// registered *reference* through one path. The NCX was simply never
+    /// added to our list, so a Calibre book whose files are named
+    /// `Kamelyali Kadin_split_000.html` drew 32 findings from us and 60 from
+    /// epubcheck: one per manifest item from both, plus 28 navPoints naming
+    /// the same files that only epubcheck reported. Measured against 5.3.0 on
+    /// a real book, 2026-08-20; three shelf books carried the shape.
+    ///
+    /// **The count is asserted, not just the presence.** The two sites walk
+    /// the same filename, so an over-eager shared walk would report one of
+    /// them twice and a bare `any()` would pass throughout.
+    #[test]
+    fn an_unencoded_space_in_an_ncx_content_src_is_reported() {
+        let rules = |name: &str| {
+            crate::validate_bytes(epub2_named(name))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_020)
+                .map(|m| m.rule.unwrap_or("(unkeyed)"))
+                .collect::<Vec<_>>()
+        };
+        // The control runs first, so a pass here can never mean "RSC-020
+        // always fires": the same book with a space-free name says nothing.
+        assert!(
+            rules("ch1.xhtml").is_empty(),
+            "a space-free name must stay silent, got {:?}",
+            rules("ch1.xhtml")
+        );
+        assert_eq!(
+            rules("a b.xhtml"),
+            vec![
+                "opf.manifest_item.unencoded_space_in_href",
+                "opf.ncx.content_src_unencoded_space",
+            ],
+            "exactly one finding per site"
+        );
     }
 
     /// An OEBPS 1.2 package draws OPF-047 and stops being judged by EPUB 2's
