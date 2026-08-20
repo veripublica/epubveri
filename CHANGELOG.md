@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.27] - 2026-08-21
 
 **`Message::render_human()` is now in the library, and the CLI calls it instead
 of formatting its own line.** epubsana asked for the *per-message* form as the
@@ -40,22 +40,91 @@ byte-comparing two runs while verifying the render refactor above, and only
 because the control — the *same* binary twice — failed as well, which is what
 cleared the refactor and convicted the sort.
 
-**Correcting a sentence about epubsana that this README published yesterday, and
-which inverted the guarantee it was describing.** The section said epubsana "can
-be told to confirm every step". It is the other way round: **confirming every
-fix is the default** (`Policy::AskEach`), applying the provably-safe tier
-unattended is what you opt into with `--auto-safe`, and `-y` is an explicit
-non-interactive choice. Verified in their source rather than taken on trust,
-which also turned up a detail neither of us had written down: when it cannot
-prompt — no terminal — it stops loudly instead of silently answering "no".
+**RSC-031 asks whether a remote URL is `https`, not whether it is `http://`.**
+epubcheck's condition (`ResourceReferencesChecker`:382-388) warns for any remote
+reference in an EPUB 3 whose scheme is neither `https` nor `file`; ours matched
+`starts_with("http://")`, so a Calibre/Kobo `url(res:///system/fonts/HelveticaNeue.ttf)`
+— the exact shape that made 0.9.20 widen `is_remote_url` — drew the warning
+there and nothing here. Both emission sites now share one predicate.
 
-epubsana caught it and asked for the fix. The clause matters more than a word:
+Measured one book per scheme against 5.3.0 at both sites, nine probes: `https`
+and a case-shifted `HTTPS` stay silent in both tools, while `http:`, `res:` and
+`ftp:` now agree exactly. No overshoot anywhere, which is what makes a
+restrictive change safe. epubcheck's two reference-type exemptions (`LINK`,
+`HYPERLINK`) need no condition here: hyperlink targets live in a separate set,
+and the package document's `<link>` elements reach neither site.
+
+**No instrument here could have found it, and the shelf cannot confirm the
+fix**: RSC-031 fires on 0 of 375 shelf books before and after, because none has
+a remote URL in CSS — the emission site's own comment already said as much. The
+evidence is the nine probes and two new tests, one of which was checked by
+restoring the old condition and watching it fail on the `res:` case. It surfaced
+while settling an unrelated question for epubsana, not from any measurement of
+ours.
+
+**OPF-014's stylesheet site is correctly ungated, and now says so.** It carries
+no `is_epub3` while its RSC-031 neighbour does, which reads like an oversight;
+epubsana reported a downstream regression and asked. Measured the same day, one
+book per version, changing nothing but `version`: epubcheck reports OPF-014 for
+both EPUB 2 and EPUB 3. No code change — a comment, so the next reader does not
+re-derive it or "fix" it.
+
+**The README now says why there are two tools.** `epubveri` finds, `epubsana`
+repairs the defects with exactly one correct answer, and an editor is where the
+judgement calls belong — with the part that was never written down anywhere
+public: **we deliberately do not write an editor.** Sigil and calibre already
+exist and their authors have spent years on them; a validator that competed with
+those tools could not be integrated *by* them, and being integrated is worth far
+more to someone holding a broken book. The aim was never a hundred percent, and
+saying where the hand-work starts is a service rather than an excuse.
+
+epubsana was mentioned exactly once in the whole README before this, in the
+licensing section, as "the sibling project" — with nothing about what it does.
+The division of labour has been the operative design since the first day of the
+project and had no public statement at all.
+
+**One clause of that section was wrong, and epubsana caught it before any of
+this shipped.** The draft said epubsana "can be told to confirm every step". It
+is the other way round: confirming every fix is the **default**, applying the
+provably-safe tier unattended is what you opt into, and — a detail neither
+project had written down — when it cannot prompt, it stops rather than guessing.
+Read out of their source rather than assumed, which is how the sentence should
+have been written in the first place.
+
+Nobody saw the wrong version: it was corrected between commits, and this release
+is the first time any of the section is public. Recorded anyway, because
 "especially conservative about repair, never mutate silently" is the oldest line
-in that project's brief, and describing it as a flag would have led a plugin
-author to wire up an unattended run believing that was the normal mode. It is
-also the second time in two days that a confident sentence about *another
-tool's* behaviour turned out to be wrong here — the first was an OPF-014 guard,
-which went the other way. Read the source; both projects are on this disk.
+in that project's brief, and describing a guarantee as a feature flag would have
+led a plugin author to wire up an unattended run believing that was normal. Two
+confident sentences about another tool's behaviour were wrong here in two days;
+both repositories are on the same disk, and reading beats assuming.
+
+**A stale FAQ answer is fixed, and it had been contradicting the same
+document.** *"Does it support WebAssembly (WASM) yet? Not yet — it's on the
+roadmap"* sat 76 lines below a full "Use it in the browser (WASM)" section with
+install instructions. WASM shipped in 0.1.0 and the npm package has tracked the
+crate version ever since, so the front page had been wrong for about seven
+weeks — and newly consequential, with a Sigil plugin now sending people to it.
+A second question was added beside it: *will epubveri fix my book?* No, it never
+writes to a book at all.
+
+**The "drop-in replacement" answer no longer undersells, and the real-book
+comparison is now in the README instead of only being alluded to.** The answer
+still says epubveri is not a drop-in replacement — but the reason it gave was a
+technical caveat that expired: "further along on structural/packaging
+correctness than on some of the deeper content-model checks", written before the
+XHTML, SVG and MathML grammars and the element-by-element EPUB 2 content-model
+audit all landed. The honest remaining difference is **authority, not
+capability**: if something downstream says "must pass epubcheck", passing
+epubveri is not the same sentence, and no amount of agreement changes that. The
+two absent checks are named as the scope decisions they are.
+
+The status section promised a real-book measurement and never gave one — it
+said the corpus "says nothing about how the two tools compare on a real book,
+which is measured separately", and stopped there. It now carries the number:
+375 books, 373 agreeing on the message-ID set exactly, **no ID epubveri reports
+that epubcheck does not**, and epubveri always the lower of the two where counts
+differ. Both books that differ are accounted for in one sentence each.
 
 **The README now carries a measured speed comparison, and it corrects the claim
 this project has been making about *why* epubveri is faster.** Timed over the
@@ -86,75 +155,6 @@ Three stale claims went with it: two "eventually"s about WebAssembly, which has
 shipped on npm since `0.1.0`, and the bullet that sold the CLI on avoiding "the
 JVM startup cost".
 
-**The "drop-in replacement" answer no longer undersells, and the real-book
-comparison is now in the README instead of only being alluded to.** The answer
-still says epubveri is not a drop-in replacement — but the reason it gave was a
-technical caveat that expired: "further along on structural/packaging
-correctness than on some of the deeper content-model checks", written before the
-XHTML, SVG and MathML grammars and the element-by-element EPUB 2 content-model
-audit all landed. The honest remaining difference is **authority, not
-capability**: if something downstream says "must pass epubcheck", passing
-epubveri is not the same sentence, and no amount of agreement changes that. The
-two absent checks are named as the scope decisions they are.
-
-The status section promised a real-book measurement and never gave one — it
-said the corpus "says nothing about how the two tools compare on a real book,
-which is measured separately", and stopped there. It now carries the number:
-375 books, 373 agreeing on the message-ID set exactly, **no ID epubveri reports
-that epubcheck does not**, and epubveri always the lower of the two where counts
-differ. Both books that differ are accounted for in one sentence each.
-
-**The README now says why there are two tools.** `epubveri` finds, `epubsana`
-repairs the defects with exactly one correct answer, and an editor is where the
-judgement calls belong — with the part that was never written down anywhere
-public: **we deliberately do not write an editor.** Sigil and calibre already
-exist and their authors have spent years on them; a validator that competed with
-those tools could not be integrated *by* them, and being integrated is worth far
-more to someone holding a broken book. The aim was never a hundred percent, and
-saying where the hand-work starts is a service rather than an excuse.
-
-epubsana was mentioned exactly once in the whole README before this, in the
-licensing section, as "the sibling project" — with nothing about what it does.
-The division of labour has been the operative design since the first day of the
-project and had no public statement at all.
-
-**A stale FAQ answer is fixed, and it had been contradicting the same
-document.** *"Does it support WebAssembly (WASM) yet? Not yet — it's on the
-roadmap"* sat 76 lines below a full "Use it in the browser (WASM)" section with
-install instructions. WASM shipped in 0.1.0 and the npm package has tracked the
-crate version ever since, so the front page had been wrong for about seven
-weeks — and newly consequential, with a Sigil plugin now sending people to it.
-A second question was added beside it: *will epubveri fix my book?* No, it never
-writes to a book at all.
-
-**RSC-031 asks whether a remote URL is `https`, not whether it is `http://`.**
-epubcheck's condition (`ResourceReferencesChecker`:382-388) warns for any remote
-reference in an EPUB 3 whose scheme is neither `https` nor `file`; ours matched
-`starts_with("http://")`, so a Calibre/Kobo `url(res:///system/fonts/HelveticaNeue.ttf)`
-— the exact shape that made 0.9.20 widen `is_remote_url` — drew the warning
-there and nothing here. Both emission sites now share one predicate.
-
-Measured one book per scheme against 5.3.0 at both sites, nine probes: `https`
-and a case-shifted `HTTPS` stay silent in both tools, while `http:`, `res:` and
-`ftp:` now agree exactly. No overshoot anywhere, which is what makes a
-restrictive change safe. epubcheck's two reference-type exemptions (`LINK`,
-`HYPERLINK`) need no condition here: hyperlink targets live in a separate set,
-and the package document's `<link>` elements reach neither site.
-
-**No instrument here could have found it, and the shelf cannot confirm the
-fix**: RSC-031 fires on 0 of 375 shelf books before and after, because none has
-a remote URL in CSS — the emission site's own comment already said as much. The
-evidence is the nine probes and two new tests, one of which was checked by
-restoring the old condition and watching it fail on the `res:` case. It surfaced
-while settling an unrelated question for epubsana, not from any measurement of
-ours.
-
-**OPF-014's stylesheet site is correctly ungated, and now says so.** It carries
-no `is_epub3` while its RSC-031 neighbour does, which reads like an oversight;
-epubsana reported a downstream regression and asked. Measured the same day, one
-book per version, changing nothing but `version`: epubcheck reports OPF-014 for
-both EPUB 2 and EPUB 3. No code change — a comment, so the next reader does not
-re-derive it or "fix" it.
 
 
 ## [0.9.26] - 2026-08-20
