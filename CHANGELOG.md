@@ -10,6 +10,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**RSC-020's remaining sites are now measured rather than estimated, and the
+answer is that they stay empty.** This check is organised per *source* here and
+per *reference* in epubcheck, so the useful question is which of our sites it
+has joined — RSC-012 runs at all four reference sites (guide, NCX, content
+document, media overlay), RSC-020 at three. The five it does not reach — the
+guide, the EPUB 3 navigation document, media overlays, CSS `url()` and the
+dictionary's search-key-group href — were each scanned across 375 real books
+for an interior space, and **the population is zero in every one**. The NCX was
+the only remaining site with real books behind it, which is why it was the one
+worth closing. `docs/COVERAGE.md` now carries the matrix and the measurement,
+so the next reader inherits it instead of re-deriving it.
+
+**A tripwire test now guards `--advisory`'s help text.** The paragraph
+enumerates what the flag emits, in prose, and nothing linked that prose to
+`ids.rs`. It went stale once already — through 0.9.13/0.9.14 it still described
+only the CSS lint from 0.9.0, while the flag had gained four more checks — and
+the failure is invisible by construction: a wrong help text breaks nothing, and
+no instrument here reads it. Adding an `ADV-*` now fails a test that names the
+new id and says to describe it.
+
 **ADV-009 notes two navigation entries that land in the same place.** JSWolf
 reported on MobileRead (#195) two `<navPoint>`s sharing a `playOrder` *and* a
 `content src`, expecting an error. Both tools are silent and both are right —

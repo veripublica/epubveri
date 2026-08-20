@@ -224,9 +224,21 @@ const ANN: &[Ann] = &[
          spaces and one carried 28 in its NCX alone. Each space case was \
          closed only after measuring our count against epubcheck's per book \
          and finding it lower, never higher - strictly gap-closing, so none of \
-         them could invent a false positive. Re-measure before extending this \
-         to the remaining shapes; the argument against them is population, not \
-         principle."),
+         them could invent a false positive. **The remaining sites were then \
+         enumerated and measured, and the answer is do nothing** (2026-08-20). \
+         This check is organised per *source* here and per *reference* in \
+         epubcheck, so the honest question is which of our sites it has \
+         joined: RSC-012 runs at all four reference sites (guide, NCX, content \
+         document, media overlay) while RSC-020 runs at three (manifest, \
+         content document, NCX) - leaving the guide, the EPUB 3 navigation \
+         document, media overlays, CSS `url()` and the dictionary's \
+         search-key-group href. Every one of those was scanned across 375 real \
+         books for an interior space and **the population is zero in all of \
+         them**; the NCX was the only site with real books behind it. So these \
+         cells stay empty on evidence rather than on estimate, and the \
+         argument for the remaining *shapes* (backslashes, percent-escapes, \
+         the illegal-character set) is likewise population, not principle. \
+         Re-measure rather than re-deriving this matrix."),
     ("RSC-010", Some("partial"),
         "Three of epubcheck's four cells. It runs RSC-010 from two places in \
          `ResourceReferencesChecker`: `case HYPERLINK` (:231), where the \

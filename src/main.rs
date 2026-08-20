@@ -460,6 +460,48 @@ fn print_report(report: &epubveri::report::Report, path: &str, format: &str, mul
 mod tests {
     use super::*;
 
+    /// A tripwire rather than a behaviour test: `--advisory`'s help text
+    /// enumerates what the flag emits, in prose, and **nothing links that
+    /// prose to `ids.rs`**.
+    ///
+    /// It has already gone stale once. Through 0.9.13/0.9.14 the paragraph
+    /// still described only the CSS lint that shipped in 0.9.0, while the
+    /// flag had grown a type-selector lint, the EPUB-2-package advisory and
+    /// four EPUB 3.4 rules — none of which a reader of `--help` could learn
+    /// existed. 0.9.25 rewrote it by hand, and ADV-009 nearly recreated the
+    /// same gap a day later.
+    ///
+    /// The failure mode is why this is worth a test: a stale help text breaks
+    /// no check, changes no verdict, and **no instrument here reads it** —
+    /// not the corpus, not the shelf, not `compare`. It is only ever caught
+    /// by a person noticing, which is how it survived five releases.
+    ///
+    /// So when this fails, an `ADV-*` was added or removed. Describe it in
+    /// `HELP`'s `--advisory` paragraph, then update the count below.
+    #[test]
+    fn a_new_advisory_check_must_be_described_in_the_help_text() {
+        let declared: Vec<&str> = include_str!("ids.rs")
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const ADV_"))
+            .filter_map(|l| l.split('"').nth(1))
+            .collect();
+        assert_eq!(
+            declared.len(),
+            9,
+            "the ADV family changed ({declared:?}) — describe the new check in \
+             --advisory's help text, then update this count"
+        );
+        // The count above means nothing if the paragraph it guards has gone.
+        let advisory_help = HELP
+            .split("--advisory")
+            .nth(1)
+            .expect("HELP documents --advisory");
+        assert!(
+            advisory_help.contains("ADV-*") && advisory_help.len() > 200,
+            "the --advisory paragraph should still describe what the flag emits"
+        );
+    }
+
     fn parse_str(argv: &[&str]) -> Cli {
         parse(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
