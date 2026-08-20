@@ -10,6 +10,36 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**`Message::render_human()` is now in the library, and the CLI calls it instead
+of formatting its own line.** epubsana asked for the *per-message* form as the
+primitive rather than a whole-report call, and the reasoning generalises: its
+output groups findings by rule, and by message shape inside `schema_violation`,
+because a flat 3,113-line dump is the experience it exists to improve. A
+consumer with only a whole-report call would reimplement the line and drift from
+it the first time either side touched a severity word or the location brackets —
+silently, with nothing failing. `Report::render_summary()` (the verdict line)
+and `Report::render_human()` (findings plus verdict) are built on top.
+
+**Findings now come out in manifest document order, and the same book validated
+twice gives byte-identical output. It did not before.** `content_docs` and
+`css_items` were built from `items.values()`, and `items` is a `HashMap` —
+randomly seeded, so the visit order differed on every run. That order decides
+which file's findings arrive first, and `Report::sort_by_document_order` derives
+the report's whole file ordering from exactly that. The effect on real books:
+**94 of 385 printed their findings in a different order on each run of the same
+binary.** Same findings, same byte count, shuffled. Fixing the content documents
+took it to 5, all stylesheets; fixing those took it to 0, verified over three
+full-shelf runs.
+
+**Nothing here could have found it.** The corpus, the shelf, `compare` and every
+existing test compare ID sets or counts, which are order-insensitive by
+construction — and `sort_by_document_order`'s own doc comment asserted the
+property that was false ("files keep their existing first-seen order — the
+spine/processing order the validator already emits them in"). It surfaced from
+byte-comparing two runs while verifying the render refactor above, and only
+because the control — the *same* binary twice — failed as well, which is what
+cleared the refactor and convicted the sort.
+
 **Correcting a sentence about epubsana that this README published yesterday, and
 which inverted the guarantee it was describing.** The section said epubsana "can
 be told to confirm every step". It is the other way round: **confirming every

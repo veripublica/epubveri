@@ -128,6 +128,38 @@ pub struct Message {
     pub element_path: Option<crate::xmlext::NodePath>,
 }
 
+impl Message {
+    /// One finding, in the exact line format the `epubveri` CLI prints. No
+    /// trailing newline.
+    ///
+    /// ```text
+    /// ERROR RSC-020: NCX content src 'a b.xhtml' contains unencoded spaces [toc.ncx:18:7]
+    /// ```
+    ///
+    /// **This is the primitive on purpose, and [`Report::render_human`] is
+    /// built on it rather than the other way round.** epubsana asked for it
+    /// that way (2026-08-21) and the reasoning generalises to any consumer:
+    /// its own output groups findings by rule, and by message shape inside
+    /// `schema_violation`, because a flat 3,113-line dump is the experience it
+    /// exists to improve. A whole-report call cannot serve that — a consumer
+    /// that only has one would reimplement this line and drift from it the
+    /// first time either side touches a severity word, the location brackets
+    /// or the spacing, silently and with nothing failing.
+    ///
+    /// So: group however you like, and never diverge on the line itself.
+    pub fn render_human(&self) -> String {
+        let loc = self
+            .location
+            .as_deref()
+            .map(|l| match self.position {
+                Some(p) => format!(" [{l}:{}:{}]", p.line, p.column),
+                None => format!(" [{l}]"),
+            })
+            .unwrap_or_default();
+        format!("{} {}: {}{}", self.severity, self.id, self.text, loc)
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 pub struct Report {
     pub messages: Vec<Message>,
@@ -419,6 +451,50 @@ impl Report {
     /// never make a book invalid.
     pub fn is_valid(&self) -> bool {
         self.errors() == 0 && self.fatals() == 0
+    }
+
+    /// The verdict line the CLI closes a report with. No trailing newline.
+    ///
+    /// ```text
+    /// — 0 error(s), 1 warning(s): VALID
+    /// ```
+    ///
+    /// The fatal count leads only when there is one, so a fatal-only book does
+    /// not read as "0 error(s) … INVALID".
+    ///
+    /// Separate from [`render_human`](Self::render_human) because a consumer
+    /// that prints our findings under its own verdict wants the lines without
+    /// this, and one that mirrors the CLI wants both.
+    pub fn render_summary(&self) -> String {
+        let fatals = self.fatals();
+        let head = if fatals > 0 {
+            format!("{fatals} fatal, ")
+        } else {
+            String::new()
+        };
+        format!(
+            "— {}{} error(s), {} warning(s): {}",
+            head,
+            self.errors(),
+            self.warnings(),
+            if self.is_valid() { "VALID" } else { "INVALID" }
+        )
+    }
+
+    /// Every finding, one per line, then the verdict — the body of what the
+    /// CLI prints for a single book. No trailing newline.
+    ///
+    /// Built on [`Message::render_human`], which is the primitive; see its
+    /// note for why that direction matters to consumers that group findings
+    /// rather than listing them flat.
+    pub fn render_human(&self) -> String {
+        let mut out = String::new();
+        for m in &self.messages {
+            out.push_str(&m.render_human());
+            out.push('\n');
+        }
+        out.push_str(&self.render_summary());
+        out
     }
 
     /// Order findings the way epubcheck does — by document position — so a book

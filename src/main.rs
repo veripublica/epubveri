@@ -424,36 +424,12 @@ fn print_report(report: &epubveri::report::Report, path: &str, format: &str, mul
     if multi {
         println!("=== {path} ===");
     }
-    for m in &report.messages {
-        let loc = m
-            .location
-            .as_deref()
-            .map(|l| match m.position {
-                Some(p) => format!(" [{l}:{}:{}]", p.line, p.column),
-                None => format!(" [{l}]"),
-            })
-            .unwrap_or_default();
-        println!("{} {}: {}{}", m.severity, m.id, m.text, loc);
-    }
-    // Lead with the fatal count only when there is one, so a fatal-only book
-    // does not read as "0 error(s) … INVALID".
-    let fatals = report.fatals();
-    let fatal_head = if fatals > 0 {
-        format!("{fatals} fatal, ")
-    } else {
-        String::new()
-    };
-    println!(
-        "— {}{} error(s), {} warning(s): {}",
-        fatal_head,
-        report.errors(),
-        report.warnings(),
-        if report.is_valid() {
-            "VALID"
-        } else {
-            "INVALID"
-        }
-    );
+    // The line format lives in the library, not here, so a consumer embedding
+    // epubveri prints byte-identical findings instead of reimplementing this
+    // and drifting from it (epubsana's request, 2026-08-21). The multi-input
+    // header above stays CLI-only: it is about this program's arguments, not
+    // about a report.
+    println!("{}", report.render_human());
 }
 
 #[cfg(test)]

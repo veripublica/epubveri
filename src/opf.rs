@@ -3773,6 +3773,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // --- manifest ---
     // id -> (resolved-path, media-type)
     let mut items: HashMap<String, (String, String)> = HashMap::new();
+    // The same (resolved-path, media-type) pairs in **manifest document
+    // order**, which `items` cannot preserve.
+    //
+    // Rust's `HashMap` is randomly seeded, so iterating `items.values()` gives
+    // a different order on every run. That order used to decide which content
+    // document was visited first, which in turn decided the file order of the
+    // whole report — `Report::sort_by_document_order` derives it from the
+    // order findings arrive in. Result: **94 of 385 real books printed their
+    // findings in a different order on each run of the same binary**, same
+    // findings, same byte count, shuffled.
+    //
+    // Nothing could see it. The corpus, the shelf, `compare` and the tests all
+    // compare ID sets or counts, which are order-insensitive by construction;
+    // it surfaced only from byte-comparing two runs while verifying an
+    // unrelated refactor.
+    let mut manifest_order: Vec<(String, String)> = Vec::new();
     // content-doc resolved-path -> declared media-overlay manifest id (raw,
     // resolved to an overlay path once the full manifest is known below).
     let mut media_overlay_attrs: Vec<(String, String)> = Vec::new();
@@ -4252,6 +4268,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if let Some(fb) = item.attr_no_ns("fallback") {
                 fallback_map.insert(id.to_string(), fb.trim().to_string());
             }
+            manifest_order.push((resolved.clone(), mt.to_string()));
             items.insert(id.to_string(), (resolved, mt.to_string()));
         }
         if cover_image_count > 1 {
@@ -5278,8 +5295,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // resources, and a document that wasn't even well-formed XML reported
     // nothing at all (issue #72). That is the silent-skip shape again - a
     // document dropped from every check reads exactly like a clean one.
-    let content_docs: Vec<String> = items
-        .values()
+    // Manifest document order, not `items.values()` — the loop below decides
+    // the order findings arrive in, and therefore the file order of the whole
+    // report. See `manifest_order`'s note: sourcing this from the HashMap made
+    // a quarter of real books print a differently-ordered report on every run.
+    let content_docs: Vec<String> = manifest_order
+        .iter()
         .filter(|(_, mt)| {
             mt == "application/xhtml+xml" || (!is_epub3 && is_deprecated_content_document_type(mt))
         })
@@ -8433,8 +8454,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     }
 
     // --- CSS resources declared in the manifest ---
-    let css_items: Vec<String> = items
-        .values()
+    // Manifest order, for the same reason as `content_docs` — this loop is the
+    // other place whose visit order reaches the report. Fixing only the
+    // content documents took the unstable books from 94 to 5, and every one of
+    // the five was a stylesheet.
+    let css_items: Vec<String> = manifest_order
+        .iter()
         .filter(|(_, mt)| mt == "text/css")
         .map(|(path, _)| path.clone())
         .collect();
@@ -11001,6 +11026,115 @@ mod tests {
                 .iter()
                 .any(|m| m.rule == Some("css.font_face.non_core_media_type")),
             "font/ttf is a Core Media Type"
+        );
+    }
+
+    /// Findings come out in **manifest document order**, and the same book
+    /// validated twice gives byte-identical output.
+    ///
+    /// `content_docs` and `css_items` used to be built from `items.values()`,
+    /// and `items` is a `HashMap` — randomly seeded, so the visit order
+    /// differed on every run. That order decides which file's findings arrive
+    /// first, and `Report::sort_by_document_order` derives the report's file
+    /// order from exactly that. **94 of 385 real books printed their findings
+    /// in a different order on each run of the same binary** — same findings,
+    /// same byte count, shuffled. Fixing the content documents took it to 5,
+    /// all stylesheets; fixing those took it to 0, verified over three
+    /// full-shelf runs.
+    ///
+    /// **No instrument here could have seen it**: the corpus, the shelf,
+    /// `compare` and every other test compare ID sets or counts, which are
+    /// order-insensitive by construction. It surfaced from byte-comparing two
+    /// runs while verifying an unrelated refactor, and only because the first
+    /// comparison failed and the control — the *same* binary twice — failed
+    /// too.
+    ///
+    /// The manifest below is deliberately not in alphabetical order, so
+    /// passing means the order was taken from the manifest rather than from
+    /// anything that happens to agree with it. Validating twice makes a
+    /// lucky hash order a 1-in-14400 event rather than 1-in-120.
+    #[test]
+    fn findings_follow_manifest_order_and_do_not_shuffle_between_runs() {
+        let docs = ["e.xhtml", "b.xhtml", "d.xhtml", "a.xhtml", "c.xhtml"];
+        let manifest: String = docs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                format!("<item id=\"i{i}\" href=\"{d}\" media-type=\"application/xhtml+xml\"/>")
+            })
+            .collect();
+        let spine: String = (0..docs.len())
+            .map(|i| format!("<itemref idref=\"i{i}\"/>"))
+            .collect();
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>{manifest}</manifest>
+  <spine>{spine}</spine>
+</package>"#
+        );
+        // One error per document, identical in every one, so only the file
+        // ordering can distinguish the runs.
+        let bad = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p><bogus/></p></body></html>";
+        let build = || {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                z.start_file("META-INF/container.xml", o).unwrap();
+                z.write_all(CONTAINER.as_bytes()).unwrap();
+                z.start_file("OEBPS/content.opf", o).unwrap();
+                z.write_all(opf.as_bytes()).unwrap();
+                for d in docs {
+                    z.start_file(format!("OEBPS/{d}"), o).unwrap();
+                    z.write_all(bad.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        };
+        // The file order the report actually came out in, first-seen.
+        let file_order = || {
+            let r = crate::validate_bytes(build());
+            let mut seen: Vec<String> = Vec::new();
+            for m in &r.messages {
+                if let Some(l) = m.location.as_deref()
+                    && l.ends_with(".xhtml")
+                    && !seen.iter().any(|s| s == l)
+                {
+                    seen.push(l.to_string());
+                }
+            }
+            seen
+        };
+        let expected: Vec<String> = docs.iter().map(|d| format!("OEBPS/{d}")).collect();
+        assert_eq!(
+            file_order(),
+            expected,
+            "findings must follow manifest order"
+        );
+        assert_eq!(
+            file_order(),
+            expected,
+            "and must not shuffle on a second run"
         );
     }
 
