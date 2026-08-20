@@ -8,48 +8,34 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.26] - 2026-08-20
 
-**The CSS-008 divergence now says that it changes the verdict.** A stray
-semicolon in a declaration block (`a:link {;color:#000}`) is valid CSS — both
-*Consume a style block's contents* and *Consume a list of declarations* in CSS
-Syntax 3 answer a `<semicolon-token>` with "Do nothing", and CSS 2.1's core
-grammar makes every declaration slot optional. epubcheck's older parser reports
-it as an ERROR; we stay silent, by a decision already recorded here on
-2026-08-17.
+**An unencoded space in an NCX `<content src>` is now reported (RSC-020).** A
+Calibre book whose files are named `Kamelyali Kadin_split_000.html` drew 32
+findings from us and 60 from epubcheck: both tools reported one per manifest
+item, and only epubcheck reported the 28 `<navPoint>`s naming the same files.
+We now agree on all 60, and on the line of every one.
 
-What the note did not say is the part a reader most needs: **that ERROR flips
-the verdict.** On the one shelf book that contains an empty declaration,
-epubcheck reports INVALID and epubveri reports VALID, with no other difference
-between the two reports — the only verdict disagreement across all 375 books.
-The RSC-016 divergence has always carried the opposite sentence ("the verdict
-never differs"), so leaving it unsaid here read as though it did not.
+The cause is structural rather than a missing case. **URL validity is organised
+per _source_ here and per _reference_ in epubcheck** — it registers every
+reference and runs them through one path, while ours grew a site at a time
+(manifest href, then content-document references, then SVG `href`/`xlink:href`)
+and the NCX was never added to that list. This is the same shape that left the
+`<guide>` out of fragment resolution before 0.9.15, and it is worth stating as a
+standing hazard: a per-source design owes a re-enumeration every time a new
+reference kind appears, and nothing fails loudly when one is forgotten.
 
-Also re-measured while the numbers were in hand: the empty-declaration
-population is 1 book of 375 (was 1 of 346), and the CSS-028 granularity
-difference is visible on 118 of 375 (was 32 of 136), with the 4x ratio holding
-in 104 of them and 2x/3x in the rest — which is the per-descriptor mechanism
-showing through, not an exception to it.
+Found by `compare`'s count-gap section, not by its two ID lists — the ID sets
+agreed exactly, because we did report RSC-020 on the book, just 28 times too
+few. Three of 375 shelf books carried the shape and all three now match
+epubcheck; the corpus was byte-identical before and after, and has no fixture
+for it.
 
-**RSC-020's remaining sites are now measured rather than estimated, and the
-answer is that they stay empty.** This check is organised per *source* here and
-per *reference* in epubcheck, so the useful question is which of our sites it
-has joined — RSC-012 runs at all four reference sites (guide, NCX, content
-document, media overlay), RSC-020 at three. The five it does not reach — the
-guide, the EPUB 3 navigation document, media overlays, CSS `url()` and the
-dictionary's search-key-group href — were each scanned across 375 real books
-for an interior space, and **the population is zero in every one**. The NCX was
-the only remaining site with real books behind it, which is why it was the one
-worth closing. `docs/COVERAGE.md` now carries the matrix and the measurement,
-so the next reader inherits it instead of re-deriving it.
+The finding anchors to the `src` attribute (`…/ncx:content[1]/@src`), matching
+what the manifest site does with `@href`. For consumers keyed on `rule`, the
+new site is `opf.ncx.content_src_unencoded_space` — a new key, so an allowlist
+written against the previous release will not contain it.
 
-**A tripwire test now guards `--advisory`'s help text.** The paragraph
-enumerates what the flag emits, in prose, and nothing linked that prose to
-`ids.rs`. It went stale once already — through 0.9.13/0.9.14 it still described
-only the CSS lint from 0.9.0, while the flag had gained four more checks — and
-the failure is invisible by construction: a wrong help text breaks nothing, and
-no instrument here reads it. Adding an `ADV-*` now fails a test that names the
-new id and says to describe it.
 
 **ADV-009 notes two navigation entries that land in the same place.** JSWolf
 reported on MobileRead (#195) two `<navPoint>`s sharing a `playOrder` *and* a
@@ -78,32 +64,46 @@ The message is worded as an observation, not a verdict: the finding is factually
 true in all 12 cases — two entries really do resolve to one document — and only
 the inference "that is probably a mistake" is sometimes wrong.
 
-**An unencoded space in an NCX `<content src>` is now reported (RSC-020).** A
-Calibre book whose files are named `Kamelyali Kadin_split_000.html` drew 32
-findings from us and 60 from epubcheck: both tools reported one per manifest
-item, and only epubcheck reported the 28 `<navPoint>`s naming the same files.
-We now agree on all 60, and on the line of every one.
+**RSC-020's remaining sites are now measured rather than estimated, and the
+answer is that they stay empty.** This check is organised per *source* here and
+per *reference* in epubcheck, so the useful question is which of our sites it
+has joined — RSC-012 runs at all four reference sites (guide, NCX, content
+document, media overlay), RSC-020 at three. The five it does not reach — the
+guide, the EPUB 3 navigation document, media overlays, CSS `url()` and the
+dictionary's search-key-group href — were each scanned across 375 real books
+for an interior space, and **the population is zero in every one**. The NCX was
+the only remaining site with real books behind it, which is why it was the one
+worth closing. `docs/COVERAGE.md` now carries the matrix and the measurement,
+so the next reader inherits it instead of re-deriving it.
 
-The cause is structural rather than a missing case. **URL validity is organised
-per _source_ here and per _reference_ in epubcheck** — it registers every
-reference and runs them through one path, while ours grew a site at a time
-(manifest href, then content-document references, then SVG `href`/`xlink:href`)
-and the NCX was never added to that list. This is the same shape that left the
-`<guide>` out of fragment resolution before 0.9.15, and it is worth stating as a
-standing hazard: a per-source design owes a re-enumeration every time a new
-reference kind appears, and nothing fails loudly when one is forgotten.
+**A tripwire test now guards `--advisory`'s help text.** The paragraph
+enumerates what the flag emits, in prose, and nothing linked that prose to
+`ids.rs`. It went stale once already — through 0.9.13/0.9.14 it still described
+only the CSS lint from 0.9.0, while the flag had gained four more checks — and
+the failure is invisible by construction: a wrong help text breaks nothing, and
+no instrument here reads it. Adding an `ADV-*` now fails a test that names the
+new id and says to describe it.
 
-Found by `compare`'s count-gap section, not by its two ID lists — the ID sets
-agreed exactly, because we did report RSC-020 on the book, just 28 times too
-few. Three of 375 shelf books carried the shape and all three now match
-epubcheck; the corpus was byte-identical before and after, and has no fixture
-for it.
+**The CSS-008 divergence now says that it changes the verdict.** A stray
+semicolon in a declaration block (`a:link {;color:#000}`) is valid CSS — both
+*Consume a style block's contents* and *Consume a list of declarations* in CSS
+Syntax 3 answer a `<semicolon-token>` with "Do nothing", and CSS 2.1's core
+grammar makes every declaration slot optional. epubcheck's older parser reports
+it as an ERROR; we stay silent, by a decision already recorded here on
+2026-08-17.
 
-The finding anchors to the `src` attribute (`…/ncx:content[1]/@src`), matching
-what the manifest site does with `@href`. For consumers keyed on `rule`, the
-new site is `opf.ncx.content_src_unencoded_space` — a new key, so an allowlist
-written against the previous release will not contain it.
+What the note did not say is the part a reader most needs: **that ERROR flips
+the verdict.** On the one shelf book that contains an empty declaration,
+epubcheck reports INVALID and epubveri reports VALID, with no other difference
+between the two reports — the only verdict disagreement across all 375 books.
+The RSC-016 divergence has always carried the opposite sentence ("the verdict
+never differs"), so leaving it unsaid here read as though it did not.
 
+Also re-measured while the numbers were in hand: the empty-declaration
+population is 1 book of 375 (was 1 of 346), and the CSS-028 granularity
+difference is visible on 118 of 375 (was 32 of 136), with the 4x ratio holding
+in 104 of them and 2x/3x in the rest — which is the per-descriptor mechanism
+showing through, not an exception to it.
 
 ## [0.9.25] - 2026-08-19
 
