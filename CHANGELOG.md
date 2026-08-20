@@ -10,6 +10,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Correcting a sentence about epubsana that this README published yesterday, and
+which inverted the guarantee it was describing.** The section said epubsana "can
+be told to confirm every step". It is the other way round: **confirming every
+fix is the default** (`Policy::AskEach`), applying the provably-safe tier
+unattended is what you opt into with `--auto-safe`, and `-y` is an explicit
+non-interactive choice. Verified in their source rather than taken on trust,
+which also turned up a detail neither of us had written down: when it cannot
+prompt — no terminal — it stops loudly instead of silently answering "no".
+
+epubsana caught it and asked for the fix. The clause matters more than a word:
+"especially conservative about repair, never mutate silently" is the oldest line
+in that project's brief, and describing it as a flag would have led a plugin
+author to wire up an unattended run believing that was the normal mode. It is
+also the second time in two days that a confident sentence about *another
+tool's* behaviour turned out to be wrong here — the first was an OPF-014 guard,
+which went the other way. Read the source; both projects are on this disk.
+
 **The README now carries a measured speed comparison, and it corrects the claim
 this project has been making about *why* epubveri is faster.** Timed over the
 same 20 books on an idle machine, one invocation per book — the shape an editor

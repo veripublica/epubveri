@@ -101,8 +101,10 @@ its job, and it is why it is safe to run on anything.
 Its sibling [`epubsana`](https://github.com/veripublica/epubsana) repairs the
 defects that have **exactly one correct, content-preserving repair**: an entity
 written without its semicolon, a manifest reference with an unencoded space, a
-duplicate `id`. It proposes each change, shows you what it did, and can be told
-to confirm every step.
+duplicate `id`. It proposes each change and asks before making it: **confirming
+every fix is the default**, applying the provably-safe ones unattended is
+something you opt into, and if it cannot ask — no terminal to prompt on — it
+stops rather than guessing.
 
 **It will never repair everything, and that is the design rather than a
 shortfall.** A great many defects are a *choice about the book*: which of two
