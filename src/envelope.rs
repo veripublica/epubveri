@@ -301,15 +301,21 @@ impl Item<Data> {
                 column: p.column,
             }),
             m.text.clone(),
-            (!m.params.is_empty() || m.element_path.is_some()).then(|| Data {
-                params: m.params.clone(),
-                element_path: m.element_path.as_ref().map(|p| p.path.clone()),
-                namespaces: m
-                    .element_path
-                    .as_ref()
-                    .map(|p| p.namespaces.clone())
-                    .unwrap_or_default(),
-            }),
+            {
+                let basis = crate::ids::advisory_basis(m.id);
+                (!m.params.is_empty() || m.element_path.is_some() || basis.is_some()).then(|| {
+                    Data {
+                        params: m.params.clone(),
+                        element_path: m.element_path.as_ref().map(|p| p.path.clone()),
+                        namespaces: m
+                            .element_path
+                            .as_ref()
+                            .map(|p| p.namespaces.clone())
+                            .unwrap_or_default(),
+                        advisory_basis: basis.map(|b| b.as_str()),
+                    }
+                })
+            },
         )
     }
 }
@@ -337,6 +343,16 @@ pub struct Data {
     /// no `element_path`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub namespaces: BTreeMap<String, String>,
+    /// `spec-ahead` | `spec-silent` — what an `ADV-*` finding is grounded in.
+    /// Present only on advisory findings; absent everywhere else.
+    ///
+    /// In `data` rather than on the shared `Item` deliberately: the envelope is
+    /// a family-wide contract (FORMATS.md) and this is a fact about *our*
+    /// advisory family, which no other tool has. See
+    /// [`AdvisoryBasis`](crate::ids::AdvisoryBasis) for what the two mean and
+    /// why only one of them is temporary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advisory_basis: Option<&'static str>,
 }
 
 fn is_zero(n: &usize) -> bool {

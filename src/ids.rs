@@ -189,6 +189,61 @@ pub const ADV_007: &str = "ADV-007"; // EPUB 3.4: a roll spine document without 
 pub const ADV_008: &str = "ADV-008"; // EPUB 3.4: a feature deprecated in 3.4 (usage, w3c/epubcheck#1649)
 pub const ADV_009: &str = "ADV-009"; // two sibling nav entries land on one document, no fragment (usage, MobileRead #195)
 
+/// What an `ADV-*` finding is grounded in. **Two different claims live in the
+/// advisory family and they justify themselves differently**, which until now
+/// was only legible in the comments above.
+///
+/// The distinction is not cosmetic. It says whether a finding is *going to
+/// become* an error, or never will — and those are different things to show a
+/// user. An editor integration in particular wants to present "epubcheck will
+/// report this once it catches up" differently from "nobody says this is
+/// wrong, but you may want to look".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdvisoryBasis {
+    /// **A published specification requires it and epubcheck has not
+    /// implemented it yet.** Pure catch-up: these are behind `--advisory` only
+    /// because reporting what epubcheck does not is indistinguishable from a
+    /// false positive to anyone diffing the two tools. **They are temporary by
+    /// design** — when epubcheck ships the rule, the finding moves to the
+    /// default output under whatever ID epubcheck assigns, and its `ADV-*` code
+    /// retires.
+    SpecAhead,
+    /// **No specification says anything, but the book is still wrong.** These
+    /// never graduate; they are ours permanently. The bolder of the two claims
+    /// — nobody is late, we are looking where no one looks — so the bar in
+    /// `CLAUDE.md` applies to them most strictly: the finding must be true
+    /// every time it fires, and worded as an observation rather than a verdict.
+    SpecSilent,
+}
+
+impl AdvisoryBasis {
+    /// The stable token published in the machine envelope.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            AdvisoryBasis::SpecAhead => "spec-ahead",
+            AdvisoryBasis::SpecSilent => "spec-silent",
+        }
+    }
+}
+
+/// The basis of an `ADV-*` id, or `None` for anything else.
+///
+/// Exhaustive over the family by construction: the `_` arm is `None`, so a new
+/// `ADV-*` that is never added here publishes no basis at all rather than the
+/// wrong one. `advisory_basis_covers_every_adv_id` fails when that happens.
+pub fn advisory_basis(id: &str) -> Option<AdvisoryBasis> {
+    use AdvisoryBasis::*;
+    match id {
+        // EPUB 3.4 rules epubcheck has not implemented; its own milestone for
+        // them is 8 open / 0 closed. These retire when it ships them.
+        "ADV-005" | "ADV-006" | "ADV-007" | "ADV-008" => Some(SpecAhead),
+        // Ours permanently: CSS names nothing defines, an EPUB 2 package
+        // written in EPUB 3, two navigation entries landing in one place.
+        "ADV-001" | "ADV-002" | "ADV-003" | "ADV-004" | "ADV-009" => Some(SpecSilent),
+        _ => None,
+    }
+}
+
 // --- Resource limits (epubveri-owned; see the module note) ---
 //
 // The second epubveri-owned family, and owned for the same reason `ADV-*`
@@ -307,3 +362,65 @@ pub const OPF_028: &str = "OPF-028"; // an undeclared (and non-reserved) prefix 
 pub const OPF_089: &str = "OPF-089"; // an "alternate" link is combined with another rel keyword
 pub const OPF_094: &str = "OPF-094"; // a "record"/"voicing" link is missing a media-type
 pub const OPF_095: &str = "OPF-095"; // a "voicing" link's media-type isn't an audio type
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every `ADV-*` constant must be classified by [`advisory_basis`].
+    ///
+    /// A tripwire, and the same shape as `--advisory`'s help-text guard: the
+    /// classification is a hand-written `match` whose `_` arm returns `None`,
+    /// so a new advisory that nobody classifies publishes **no basis at all**
+    /// rather than a wrong one. That fails safe, but it fails *silently* —
+    /// the envelope simply omits the key and no consumer can tell an
+    /// unclassified check from a non-advisory one.
+    ///
+    /// Reads the constants out of this file rather than listing them, so the
+    /// test cannot drift from the family it guards.
+    #[test]
+    fn advisory_basis_covers_every_adv_id() {
+        let declared: Vec<&str> = include_str!("ids.rs")
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const ADV_"))
+            .filter_map(|l| l.split('"').nth(1))
+            .collect();
+        assert!(
+            !declared.is_empty(),
+            "no ADV constants found — parser broke"
+        );
+        let unclassified: Vec<&str> = declared
+            .iter()
+            .copied()
+            .filter(|id| advisory_basis(id).is_none())
+            .collect();
+        assert!(
+            unclassified.is_empty(),
+            "these ADV ids have no basis in advisory_basis(): {unclassified:?} — \
+             classify each as SpecAhead (the spec says it, epubcheck has not \
+             shipped it) or SpecSilent (nothing says it, but the book is wrong)"
+        );
+    }
+
+    /// The reverse direction: `advisory_basis` must not classify an id that no
+    /// longer exists. A retired `ADV-*` left in the match would keep publishing
+    /// a basis for a code nothing emits.
+    #[test]
+    fn advisory_basis_classifies_nothing_that_is_not_an_adv_id() {
+        let declared: Vec<&str> = include_str!("ids.rs")
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const ADV_"))
+            .filter_map(|l| l.split('"').nth(1))
+            .collect();
+        for n in 1..=40u32 {
+            let id = format!("ADV-{n:03}");
+            if advisory_basis(&id).is_some() {
+                assert!(
+                    declared.contains(&id.as_str()),
+                    "{id} is classified but no constant declares it"
+                );
+            }
+        }
+        assert!(advisory_basis("RSC-005").is_none(), "not an advisory");
+    }
+}

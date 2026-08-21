@@ -8,6 +8,28 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+
+**The advisory family's two kinds are machine-readable.** An `ADV-*` finding in
+the JSON envelope now carries `data.advisory_basis`, either `spec-ahead` (a
+published specification requires it and epubcheck has not implemented it yet —
+**temporary by design**, retiring when epubcheck ships the rule) or
+`spec-silent` (nothing forbids it, but the book is still wrong — ours
+permanently). Today that is four and five.
+
+It matters most to an editor integration, which is no longer hypothetical: "this
+becomes an error when epubcheck catches up" and "nobody says this is wrong, but
+you may want to look" are different things to put in front of a user, and until
+now the difference existed only in `ids.rs` comments.
+
+**In `data` rather than on the shared `Item`**: the envelope is a family-wide
+contract and this is a fact about *our* advisory family, which no other tool
+has. Two tripwires guard the classification, because a hand-written `match` with
+a `_ => None` arm fails safe but *silently* — an unclassified advisory would
+simply omit the key, indistinguishable from a non-advisory finding. One asserts
+every `ADV-*` constant is classified; the other asserts nothing classified has
+stopped existing. Both read the constants out of `ids.rs` rather than listing
+them, so they cannot drift from the family they guard, and the first was checked
+by adding a fake `ADV-010` and watching it name the id and say what to do.
 ## [Unreleased]
 
 **The README explains `--advisory`, and the commitment underneath it is now
