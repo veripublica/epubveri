@@ -5713,6 +5713,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 continue;
             }
         };
+
+        // **A viewport meta in a document that is not in the spine.**
+        // `check_reflowable_viewport` runs in the spine-itemref loop above,
+        // so a manifest XHTML document outside the spine — a nav document,
+        // an unreferenced cover page — was never asked. epubcheck asks every
+        // XHTML content document: the check lives in `OPSHandler30`, which
+        // runs per document, and the layout comes from the item
+        // (`OPFItem.isFixedLayout`).
+        //
+        // A non-spine document is therefore **reflowable whatever the package
+        // says**, which is the part worth writing down: `fixedLayout` is set
+        // only in `OPFHandler30.processItemrefProperties`, and an item with no
+        // itemref never reaches it. So a `rendition:layout` of `pre-paginated`
+        // at package level does not make the nav document fixed-layout.
+        // W3C's `lay-pp-embedded-images` is exactly that shape — a
+        // pre-paginated book whose nav and cover both carry a viewport.
+        //
+        // Spine members keep their own call above; this covers the rest, and
+        // `fixed_layout_docs` holds precisely the spine members.
+        if is_epub3 && !fixed_layout_docs.contains_key(&nfc(&path)) {
+            crate::layout::check_reflowable_viewport(&d, &path, report);
+        }
         crate::htm::check_dom(&d, &path, is_epub3, report);
         if !is_epub3 {
             crate::htm::check_dom_epub2(&d, &path, report);
@@ -11456,6 +11478,102 @@ mod tests {
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
         );
+    }
+
+    /// A viewport meta outside the spine is still asked about.
+    ///
+    /// `check_reflowable_viewport` ran in the spine-itemref loop, so a
+    /// manifest XHTML document with no itemref — a nav document, an
+    /// unreferenced cover page — was never asked. epubcheck asks every XHTML
+    /// content document; the check lives in `OPSHandler30`, which runs per
+    /// document.
+    ///
+    /// **A non-spine document is reflowable whatever the package says**, and
+    /// that is the non-obvious half: `fixedLayout` is set only in
+    /// `OPFHandler30.processItemrefProperties`, which an item with no itemref
+    /// never reaches. So a package-level `rendition:layout` of
+    /// `pre-paginated` does not make the nav document fixed-layout — which is
+    /// why the assertion below uses a pre-paginated package.
+    #[test]
+    fn a_viewport_outside_the_spine_is_reported_as_reflowable() {
+        fn htm060b(nav_viewport: bool, spine_doc_viewport: bool) -> usize {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let vp = r#"<meta name="viewport" content="width=800,height=600"/>"#;
+            let head = |on: bool| if on { vp } else { "" };
+            let nav = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title>{}</head>\
+                 <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>",
+                head(nav_viewport)
+            );
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title>{}</head>\
+                 <body><p>x</p></body></html>",
+                head(spine_doc_viewport)
+            );
+            // Pre-paginated at package level: the spine document is
+            // fixed-layout, the nav document is not.
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"
+         prefix="rendition: http://www.idpf.org/vocab/rendition/#">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="rendition:layout">pre-paginated</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/nav.xhtml", nav.as_str()),
+                    ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::HTM_060B)
+                .count()
+        }
+
+        assert_eq!(
+            htm060b(true, true),
+            1,
+            "the nav document's viewport is reported; the spine document's is fixed-layout"
+        );
+        assert_eq!(
+            htm060b(false, true),
+            0,
+            "a fixed-layout spine document's viewport is checked, not ignored"
+        );
+        assert_eq!(htm060b(false, false), 0, "no viewport, nothing to say");
     }
 
     /// A duplicated global `rendition:*` property is one finding, not one

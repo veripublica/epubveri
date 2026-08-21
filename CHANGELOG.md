@@ -226,6 +226,24 @@ when a matching `meta` existed, so `= 1` would have reported every book that
 does not use the property at all. All 385 shelf books are unchanged, which is
 the evidence for that half; the corpus is unchanged too.
 
+**A viewport meta in a document outside the spine was never asked about.** The
+reflowable-viewport check ran inside the spine-itemref loop, so a manifest XHTML
+document with no itemref — a nav document, an unreferenced cover page — was
+skipped. epubcheck asks every XHTML content document: its check lives in the
+per-document handler, not in the spine pass. HTM_060b was missing entirely on 7
+of W3C's 209 publications and undercounted on 4 more; all 13 books that report
+it now agree with epubcheck exactly.
+
+Worth knowing for anything else that reasons about layout: **a non-spine
+document is reflowable whatever the package says.** The fixed-layout flag is set
+only while processing a spine itemref, so an item with no itemref never acquires
+it — a package-level `rendition:layout` of `pre-paginated` does not make the nav
+document fixed-layout.
+
+The shelf can barely speak to this one: exactly **one** of its 385 books has a
+viewport meta in any XHTML document at all, and it is unchanged. The evidence is
+the 13 publications, not the shelf's silence.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
