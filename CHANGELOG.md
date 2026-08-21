@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.9.29] - 2026-08-21
 
 **Two CSS-004 false positives, found in epubcheck's own CSS test files, which no
 instrument here had ever reached.** The corpus holds 24 bare `.css` fixtures —
