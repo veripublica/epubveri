@@ -8,6 +8,26 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**A closure written on shelf evidence now says so, starting with RSC-020's.**
+The owner's criticism, and it lands: *"we are measuring against our library only
+and then generalising — we are not the world's library."* The five RSC-020
+reference sites were closed on "population zero across 375 books", and that
+shelf is one person's collection: mostly Turkish reflowable trade fiction,
+almost no fixed-layout, no media overlays, no dictionary or index profile.
+Population zero *there* is weak evidence that a case does not exist.
+
+The sharper half is that **the note already carried the caveat and the decision
+rested on the measurement anyway** — epubsana's phrase for it is the right one:
+a caveat that does not change the decision is decoration. The row now says which
+kind of evidence closed it and names the second source for anyone reconsidering:
+epubcheck's own corpus, whose fixtures are built to trigger each rule
+deliberately, which is exactly the coverage negative evidence needs and exactly
+what a non-random sample of real books cannot supply.
+
+No behaviour changes; this is the matrix telling the truth about its own
+grounds.
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`

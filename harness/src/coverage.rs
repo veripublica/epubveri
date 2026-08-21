@@ -238,7 +238,18 @@ const ANN: &[Ann] = &[
          cells stay empty on evidence rather than on estimate, and the \
          argument for the remaining *shapes* (backslashes, percent-escapes, \
          the illegal-character set) is likewise population, not principle. \
-         Re-measure rather than re-deriving this matrix."),
+         Re-measure rather than re-deriving this matrix. **And read that zero \
+         for what it is** (owner, 2026-08-21): the shelf is one person's \
+         library — mostly Turkish reflowable trade fiction, almost no \
+         fixed-layout, no media overlays, no dictionary or index profile — so \
+         \"population zero here\" is weak evidence that a case does not exist, \
+         and these five cells are closed on it. The caveat above was written \
+         *and then the decision rested on the measurement it warns about*, \
+         which is decoration rather than a caveat. If one of these is ever \
+         reconsidered, the second source is epubcheck's own corpus: its \
+         fixtures are built to trigger each rule deliberately, which is exactly \
+         the coverage negative evidence needs and exactly what a non-random \
+         sample of real books cannot supply."),
     ("RSC-010", Some("partial"),
         "Three of epubcheck's four cells. It runs RSC-010 from two places in \
          `ResourceReferencesChecker`: `case HYPERLINK` (:231), where the \
