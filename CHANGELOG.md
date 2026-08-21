@@ -8,6 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
 are now `NEXT-005`…`008`.** Same checks, same severity, same flag — but the code
@@ -74,7 +75,6 @@ every `ADV-*` constant is classified; the other asserts nothing classified has
 stopped existing. Both read the constants out of `ids.rs` rather than listing
 them, so they cannot drift from the family they guard, and the first was checked
 by adding a fake `ADV-010` and watching it name the id and say what to do.
-## [Unreleased]
 
 **The README explains `--advisory`, and the commitment underneath it is now
 written down rather than merely honoured.** `ADV-*` reports real defects
