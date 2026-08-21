@@ -8661,9 +8661,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // EPUB 3 only - the rule lives in epubcheck's EPUB-3 checker, and there
     // is no EPUB 2 counterpart.
     if is_epub3 {
+        // **The overlays' own references, folded in before the question is
+        // asked.** The comment below always claimed the SMIL's audio/text
+        // targets were "collected by the overlay pass" — they were not, and
+        // could not have been: that pass runs *after* this block, so nothing
+        // it collects can reach `resource_refs` in time. The audio file of
+        // every media-overlay book was therefore reported unreferenced, on
+        // 19 of W3C's 209 `epub-tests` publications. `smil::resource_refs`
+        // answers only the reference question and reports nothing, so the
+        // second parse costs a finding-free walk of a small file.
+        for (path, mt) in &manifest_order {
+            if mt != "application/smil+xml" {
+                continue;
+            }
+            let Some(orig) = name_index.get(&nfc(path)) else {
+                continue;
+            };
+            let Some(b) = ocf.read(orig) else { continue };
+            let dir = parent_dir(path);
+            resource_refs.extend(crate::smil::resource_refs(
+                &String::from_utf8_lossy(&b),
+                &dir,
+            ));
+        }
         // A media-overlay attribute consumes its SMIL, and the SMIL's own
-        // audio/text targets are consumed in turn (collected by the overlay
-        // pass); both arrive as manifest ids or paths rather than as
+        // audio/text targets are consumed in turn (folded in just above);
+        // both arrive as manifest ids or paths rather than as
         // document references, so fold them in here.
         let overlay_paths: HashSet<&String> = content_doc_overlay.values().collect();
         let manifest = pkg
@@ -8729,8 +8752,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         .values()
         .map(|(path, mt)| (nfc(path), mt.clone()))
         .collect();
-    let smil_items: Vec<String> = items
-        .values()
+    // Manifest order, not `items.values()`: the HashMap's iteration order is
+    // randomly seeded, so a book with two overlays printed their findings in
+    // a different order every run. Third site of that bug — see
+    // `manifest_order`'s note.
+    let smil_items: Vec<String> = manifest_order
+        .iter()
         .filter(|(_, mt)| mt == "application/smil+xml")
         .map(|(path, _)| path.clone())
         .collect();
@@ -11292,6 +11319,120 @@ mod tests {
         assert!(
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
+        );
+    }
+
+    /// A Media Overlay's own references count for OPF-097.
+    ///
+    /// The audio file of a media-overlay book is referenced by its SMIL and
+    /// by nothing else — that is what the format prescribes — so asking
+    /// whether a *content document* draws it reported every such book's
+    /// audio as unreferenced. 19 of W3C's 209 `epub-tests` publications
+    /// tripped it.
+    ///
+    /// **Both directions, because the cheap fix passes only one of them.**
+    /// Exempting audio media types outright, or every SMIL-adjacent
+    /// resource, would silence the first assertion and the second: an audio
+    /// file no overlay mentions is still unreferenced and epubcheck still
+    /// says so. The distinguishing fact is the reference, not the type.
+    ///
+    /// Neither the corpus nor the shelf could have caught this — no book on
+    /// the shelf carries an overlay at all — which is the argument for
+    /// `epub-tests` as an instrument rather than for a wider shelf.
+    #[test]
+    fn a_media_overlays_audio_is_referenced_and_an_orphan_audio_is_not() {
+        fn book(smil_audio_src: Option<&str>) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let audio_el = match smil_audio_src {
+                Some(src) => format!(r#"<audio src="{src}" clipBegin="0s" clipEnd="1s"/>"#),
+                None => String::new(),
+            };
+            let smil = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+  <body><par><text src="../ch1.xhtml#p1"/>{audio_el}</par></body>
+</smil>"#
+            );
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="mo"/>
+    <item id="mo" href="mo/ch1.smil" media-type="application/smil+xml"/>
+    <item id="a" href="audio/a.mp3" media-type="audio/mpeg"/>
+    <item id="orphan" href="audio/orphan.mp3" media-type="audio/mpeg"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p id=\"p1\">x</p></body></html>";
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", CH1),
+                    ("OEBPS/mo/ch1.smil", smil.as_str()),
+                    ("OEBPS/audio/a.mp3", "\0\0\0\0"),
+                    ("OEBPS/audio/orphan.mp3", "\0\0\0\0"),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+
+        let unreferenced = |smil_audio_src: Option<&str>| -> Vec<String> {
+            let mut v: Vec<String> = crate::validate_bytes(book(smil_audio_src))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_097)
+                .flat_map(|m| m.params.clone())
+                .collect();
+            v.sort();
+            v
+        };
+
+        // The overlay names a.mp3, so only the orphan is unreferenced.
+        assert_eq!(
+            unreferenced(Some("../audio/a.mp3")),
+            vec!["audio/orphan.mp3".to_string()],
+            "an audio file the overlay references must not be called unreferenced"
+        );
+        // Drop that one reference and it joins the orphan — the check still
+        // works, it is not exempting audio wholesale.
+        assert_eq!(
+            unreferenced(None),
+            vec!["audio/a.mp3".to_string(), "audio/orphan.mp3".to_string()],
+            "an audio file no overlay references is still unreferenced"
         );
     }
 

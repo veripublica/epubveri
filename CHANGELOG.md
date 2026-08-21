@@ -116,6 +116,28 @@ harness carries a note saying why that question is not its to answer.
 If you match on any of these IDs, the spelling changes. No condition, severity,
 message or position moves.
 
+**A media overlay's own references now count for OPF-097 — a false positive on
+every media-overlay book.** The audio file of such a book is referenced by its
+SMIL overlay and by nothing else, which is exactly what the format prescribes.
+OPF-097 asked whether any *content document* drew a manifest resource, and a
+Media Overlay is not one, so the audio was reported as declared-but-unreferenced.
+
+The cause was ordering rather than a missing rule. A comment at the check
+claimed the overlays' audio and text targets were "collected by the overlay
+pass"; that pass runs *after* this one, so nothing it collects could ever
+arrive in time. A new `smil::resource_refs` answers only the reference question
+and reports nothing, and runs before the check.
+
+Found by running W3C's `epub-tests` — 209 reading-system conformance
+publications — against both tools for the first time. It fired on 19 of them.
+**No book on the 385-book shelf carries an overlay at all**, and epubcheck's
+corpus has no scenario that pairs one with this check, so neither instrument
+could have found it; the shelf is byte-identical across the fix.
+
+While there: `smil_items` was still ordered by `HashMap` iteration, the third
+site of the nondeterminism fixed in 0.9.28. A book with two overlays printed
+their findings in a different order on every run.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`

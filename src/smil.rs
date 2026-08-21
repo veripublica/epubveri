@@ -149,6 +149,60 @@ pub(crate) fn check(
     (text_targets, textref_targets)
 }
 
+/// Every manifest resource this overlay references, resolved and NFC-normalized.
+///
+/// **Deliberately separate from [`check`], because it answers a different
+/// question**: `check` asks *is this overlay valid* and reports; this asks
+/// *what does it point at* and reports nothing. They also run at different
+/// times — OPF-097 needs the answer before the validation pass reaches the
+/// overlays at all, which is exactly why the gap below existed.
+///
+/// A malformed overlay yields nothing here and is reported by `check`; a
+/// second parse error would be the same finding twice.
+///
+/// The gap this closes: OPF-097 asked whether any *content document*
+/// referenced a manifest item, and a Media Overlay is not one. So the audio
+/// file of every media-overlay book — referenced only by its SMIL, exactly
+/// as the format intends — was reported as unreferenced. 19 of W3C's 209
+/// `epub-tests` publications tripped it, and no book on the shelf could:
+/// none of them carries an overlay.
+///
+/// This is the per-source shape `CLAUDE.md` records for fragment resolution,
+/// recurring: references are collected one *source* at a time here and per
+/// *reference* in epubcheck, so each new source has to be added by hand and
+/// nothing fails loudly when it is forgotten. Before adding a reference
+/// kind, ask which per-source lists it must join.
+pub(crate) fn resource_refs(smil_xml: &str, base_dir: &str) -> Vec<String> {
+    let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    let mut push = |v: &str| {
+        if !is_external(v) {
+            let (path_part, _) = split_fragment(v);
+            if !path_part.is_empty() {
+                out.push(nfc(&resolve(base_dir, path_part)));
+            }
+        }
+    };
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        match n.tag_name().name() {
+            "audio" | "text" => {
+                if let Some(src) = n.attr_no_ns("src") {
+                    push(src);
+                }
+            }
+            "seq" | "par" => {
+                if let Some(textref) = n.attribute((EPUB_NS, "textref")) {
+                    push(textref);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 /// Walks `<body>`/`<seq>`/`<par>` nesting. `<par>` may only contain
 /// `<text>`/`<audio>`; `<seq>`/`<body>` may only contain `<seq>`/`<par>` —
 /// confirmed against the corpus as RSC-005, not a dedicated MED code.
