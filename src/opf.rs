@@ -2136,6 +2136,32 @@ fn check_guide_references(
         if is_external(href) {
             continue;
         }
+        // RSC-020: an unencoded space in the reference itself, before the
+        // resolution below. epubcheck validates every *registered* reference's
+        // URL, and a `<guide>` reference is one — probed 2026-08-21 with a
+        // book carrying `href="a b.xhtml"` here, which it reports and we did
+        // not. This is the per-source/per-reference asymmetry again, the same
+        // gap the NCX had in 0.9.27; the `<guide>` was simply never added to
+        // the list.
+        //
+        // **Neither the shelf nor the corpus could have found it**: 0 of 385
+        // real books have a spaced guide href, and epubcheck's own test suite
+        // has no fixture for it either. The oracle is the only witness, which
+        // is why parity questions get probed rather than measured.
+        if href.trim().contains(' ')
+            && let Some(href_attr) = attr_no_ns_node(r, "href")
+        {
+            report.push_node_attr(
+                RSC_020,
+                Severity::Error,
+                format!("guide reference '{href}' contains unencoded spaces"),
+                opf_path.to_string(),
+                r,
+                href_attr,
+                "opf.guide.reference_unencoded_space",
+                vec![href.to_string()],
+            );
+        }
         let path_part = href.split(['#', '?']).next().unwrap_or(href);
         let resolved = nfc(&resolve(base_dir, path_part));
         match items.iter().find(|(_, (p, _))| nfc(p) == resolved) {
@@ -8507,6 +8533,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if !is_external(&u) {
                 resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
             }
+            // RSC-020, same reasoning as the guide and the NCX: a `url()` is a
+            // registered reference and epubcheck validates every one. Probed
+            // 2026-08-21 — `url(i m.png)` draws RSC-020 there and drew nothing
+            // here. Interior space only; leading/trailing is stripped by the
+            // URL parser and valid.
+            if !is_external(&u) && u.trim().contains(' ') {
+                report.push_at_rule(
+                    RSC_020,
+                    Severity::Error,
+                    format!("URL '{u}' is not conforming"),
+                    path.clone(),
+                    "css.url.malformed_relative_url",
+                    vec![u.clone()],
+                );
+            }
             if is_remote_url(&u) {
                 css_has_remote = true;
                 let u = strip_url_fragment(&u);
@@ -11135,6 +11176,122 @@ mod tests {
             file_order(),
             expected,
             "and must not shuffle on a second run"
+        );
+    }
+
+    /// An EPUB 2 with a caller-supplied package document and stylesheet, one
+    /// content document and one font — enough manifest for the guide and CSS
+    /// reference checks to have somewhere to point.
+    fn epub_with_opf_and_css(opf: &str, css: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title>\
+            <link rel=\"stylesheet\" type=\"text/css\" href=\"Styles/s.css\"/></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/Styles/s.css", css),
+                ("OEBPS/Fonts/f.ttf", "\0\u{1}\0\0"),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// RSC-020 reaches the `<guide>` and CSS `url()` too — the last two
+    /// reference sites it did not.
+    ///
+    /// **These were closed on 2026-08-20 as "population zero across 375
+    /// books", and that was the wrong kind of evidence.** The shelf is one
+    /// person's library; a rule can be absent from it and present everywhere
+    /// else. epubcheck's own corpus has no fixture for these either, which
+    /// says something about *its test suite* rather than about real books. The
+    /// witness that settled it was the oracle: a probe book with
+    /// `<reference href="a b.xhtml">` and `url("i m.png")` draws RSC-020 from
+    /// epubcheck at both sites and drew nothing here (2026-08-21).
+    ///
+    /// So the lesson is about which question to ask. "How often does this
+    /// occur" needs real books and ours are not representative. "Does
+    /// epubcheck report it" needs a probe, always answers, and is the only
+    /// question a parity gap actually turns on.
+    ///
+    /// **One divergence stays and is deliberate**: `url(i m.png)` *unquoted*.
+    /// An unescaped space makes that an invalid url-token, so styloria does not
+    /// produce a URL from it and neither the reference nor this check sees one;
+    /// epubcheck's older parser extracts it anyway. Same class as the CSS-008
+    /// empty-declaration divergence — their parser predates the spec it is
+    /// judged against, and teaching our CSS layer to recover from invalid
+    /// syntax to match it would be the detector serving parity. The quoted
+    /// form, which is valid CSS, is the case that matters and it agrees.
+    #[test]
+    fn rsc_020_reaches_the_guide_and_css_url_sites() {
+        let rules = |css: &str, guide_href: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="s" href="Styles/s.css" media-type="text/css"/>
+    <item id="f" href="Fonts/f.ttf" media-type="font/ttf"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+  <guide><reference type="toc" title="T" href="{guide_href}"/></guide>
+</package>"#
+            );
+            let mut r: Vec<&'static str> = crate::validate_bytes(epub_with_opf_and_css(&opf, css))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_020)
+                .filter_map(|m| m.rule)
+                .collect();
+            r.sort_unstable();
+            r
+        };
+        // Control first: clean references say nothing, so a pass below is not
+        // "RSC-020 always fires".
+        assert!(
+            rules("body { color: red; }", "ch1.xhtml").is_empty(),
+            "clean references must stay silent"
+        );
+        assert_eq!(
+            rules("body { color: red; }", "a b.xhtml"),
+            vec!["opf.guide.reference_unencoded_space"],
+            "a spaced guide href"
+        );
+        assert_eq!(
+            rules(r#"body { background: url("i m.png"); }"#, "ch1.xhtml"),
+            vec!["css.url.malformed_relative_url"],
+            "a spaced url() in a stylesheet, quoted so it is valid CSS"
+        );
+        // The deliberate divergence: unquoted, so not a url-token at all.
+        assert!(
+            rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
+            "an unquoted url with a space is invalid CSS and yields no URL"
         );
     }
 

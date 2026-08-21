@@ -10,6 +10,37 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**RSC-020 now reaches the `<guide>` and CSS `url()` — the two sites that were
+closed on the wrong kind of evidence.** Three days ago the five remaining
+reference sites were closed because the population was zero across 375 books.
+The owner's criticism ended that: a rule can be absent from one person's library
+and present everywhere else, and negative evidence is exactly what a
+non-representative sample cannot supply.
+
+Acting on it rather than writing it down: **epubcheck's own corpus has no
+fixture for these sites either** — checked, all 409 expanded fixtures — which
+says something about its test suite rather than about real books. The witness
+that settled it was the oracle. A probe book carrying
+`<reference href="a b.xhtml">` and `url("i m.png")` draws RSC-020 from epubcheck
+at both sites and drew nothing here. Both now agree.
+
+**The question was the problem, not the measurement.** "How often does this
+occur" needs real books, and ours are not a random sample. "Does epubcheck
+report it" needs a probe, always answers, and is the only question a parity gap
+actually turns on. Two of the five sites were real gaps; the shelf and the
+corpus had both been asked the wrong thing.
+
+**One divergence stays and is deliberate:** `url(i m.png)` *unquoted*. An
+unescaped space makes that an invalid url-token, so no URL is produced and no
+reference exists to check; epubcheck's older parser extracts it anyway. Same
+class as the CSS-008 empty-declaration divergence — teaching our CSS layer to
+recover from invalid syntax in order to match would be the detector serving
+parity. The quoted form is valid CSS and agrees exactly.
+
+The shelf is unchanged and the corpus is byte-identical, which is the expected
+result for a gap neither could see: the evidence is the probes and two tests,
+each verified by disabling its site and watching the assertion name it.
+
 **A closure written on shelf evidence now says so, starting with RSC-020's.**
 The owner's criticism, and it lands: *"we are measuring against our library only
 and then generalising — we are not the world's library."* The five RSC-020
