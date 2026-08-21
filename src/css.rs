@@ -69,6 +69,35 @@ pub(crate) fn has_utf16_bom(bytes: &[u8]) -> bool {
         && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE))
 }
 
+/// A UTF-8 byte order mark. Its presence settles the encoding, so any
+/// `@charset` after it is decoration — CSS Syntax 3 §3.1 gives the BOM
+/// precedence and only falls back to the declaration when none is found.
+pub(crate) fn has_utf8_bom(bytes: &[u8]) -> bool {
+    bytes.starts_with(&[0xEF, 0xBB, 0xBF])
+}
+
+/// The encoding label of a **byte-exact** `@charset` declaration, per CSS
+/// Syntax 3 §3.1: the literal bytes `@charset "`, then the label, then `";`.
+///
+/// Matched against the raw bytes rather than the parsed stylesheet on purpose.
+/// A tokenizer sees `@charset '' ;` as a perfectly good at-rule named
+/// `charset`; the *encoding declaration* it is not, because the spec says
+/// "multiple spaces, comments, or single quotes … will cause the encoding
+/// declaration to not be recognized". Reading it off the parse tree accepts
+/// all three and reports a charset nobody declared.
+///
+/// The pattern must appear at the very start and within the first 1024 bytes,
+/// which the fixed prefix and the label scan below enforce between them.
+pub(crate) fn byte_exact_charset(bytes: &[u8]) -> Option<String> {
+    const PREFIX: &[u8] = b"@charset \"";
+    let rest = bytes.strip_prefix(PREFIX)?;
+    let end = rest.iter().take(1024).position(|&b| b == b'"')?;
+    if rest.get(end + 1) != Some(&b';') {
+        return None;
+    }
+    std::str::from_utf8(&rest[..end]).ok().map(str::to_owned)
+}
+
 pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
     let units = bytes.chunks_exact(2).map(|c| {
         if big_endian {
@@ -189,12 +218,34 @@ pub(crate) fn check(
                 css_path,
             );
         }
-        if let Some(charset) = sheet.rules.iter().find_map(|r| match &r.node {
-            spanned::Rule::At(a) if a.name.eq_ignore_ascii_case("charset") => {
-                charset_value_spanned(&a.prelude)
-            }
-            _ => None,
-        }) && !is_utf8_or_utf16(&charset)
+        // **A BOM outranks the declaration, and a declaration that is not
+        // byte-exact is not a declaration at all.** Both come from CSS Syntax
+        // 3 §3.1: the decode algorithm "gives precedence to a byte order mark
+        // (BOM), and only uses the fallback when none is found", and the
+        // encoding declaration is recognised by an exact byte pattern —
+        // `@charset "` with one space and a *double* quote, then the label,
+        // then `";`. The spec says outright that "multiple spaces, comments,
+        // or single quotes … will cause the encoding declaration to not be
+        // recognized".
+        //
+        // We were doing neither, and epubcheck's own CSS test files are what
+        // showed it (2026-08-21): `bom-charset15.css` is a UTF-8 BOM followed
+        // by `@charset "iso-8859-15"` — the BOM wins, so there is nothing to
+        // report, and we reported CSS-004. `charset-empty.css` is
+        // `@charset '' ;` — single quotes and a space before the semicolon, so
+        // not an encoding declaration in the first place, and we reported
+        // CSS-004 for it too. epubcheck is silent on both. **Two false
+        // positives, found by running the 24 bare CSS fixtures no instrument
+        // here had ever reached** — the shelf has no such stylesheet and the
+        // corpus harness only walks CSS that lives inside a book.
+        //
+        // Not styloria's: its tokenizer note says encoding determination
+        // happens before it runs (§3.2) and it merely tolerates a leftover
+        // BOM. Determining the declared encoding from bytes is the caller's
+        // job, which is here.
+        if !has_utf8_bom(bytes)
+            && let Some(charset) = byte_exact_charset(bytes)
+            && !is_utf8_or_utf16(&charset)
         {
             report.push_at(
                 CSS_004,
@@ -540,13 +591,6 @@ pub(crate) fn check_style_attribute(
             report.push_at_rule(id, Severity::Usage, text, path, rule, params);
         }
     }
-}
-
-fn charset_value_spanned(prelude: &[Spanned<spanned::ComponentValue>]) -> Option<String> {
-    prelude.iter().find_map(|v| match &v.node {
-        spanned::ComponentValue::Token(Token::String(s)) => Some(s.to_string()),
-        _ => None,
-    })
 }
 
 const FLAGGED_PROPERTIES: [&str; 2] = ["direction", "unicode-bidi"];
@@ -1670,6 +1714,69 @@ mod tests {
     fn utf8_stylesheet_no_encoding_warning() {
         let findings = run_bytes(b"body { color: red; }");
         assert!(!findings.contains(&CSS_003));
+    }
+
+    /// A BOM outranks `@charset`, and a declaration that is not byte-exact is
+    /// not a declaration at all.
+    ///
+    /// Both from CSS Syntax 3 §3.1, and both were false positives until
+    /// 2026-08-21. **They were found by running epubcheck's 24 bare CSS test
+    /// files** — fixtures no instrument here had ever reached, because the
+    /// shelf has no such stylesheet and the corpus harness only walks CSS that
+    /// lives inside a book. epubcheck is silent on both and we were not.
+    ///
+    /// The controls matter more than the cases: a real non-UTF-8 declaration
+    /// must still error, or this "fix" is just the check switched off.
+    #[test]
+    fn a_bom_outranks_charset_and_a_loose_charset_is_not_one() {
+        // The two fixtures, in the bytes they actually carry.
+        let bom_then_charset = {
+            let mut v = vec![0xEF, 0xBB, 0xBF];
+            v.extend_from_slice(b"@charset \"iso-8859-15\";\n.a { color: red }");
+            v
+        };
+        assert!(
+            !run_bytes(&bom_then_charset).contains(&CSS_004),
+            "a UTF-8 BOM settles the encoding; the declaration after it is decoration"
+        );
+        assert!(
+            !run_bytes(b"@charset '' ;\ndiv { color: green }").contains(&CSS_004),
+            "single quotes and a space before the semicolon: not an encoding declaration"
+        );
+        // Controls — the check must still bite.
+        assert!(
+            run_bytes(b"@charset \"iso-8859-15\";\n.a { color: red }").contains(&CSS_004),
+            "byte-exact and not utf-8/16: still an error"
+        );
+        assert!(
+            !run_bytes(b"@charset \"utf-8\";\n.a { color: red }").contains(&CSS_004),
+            "byte-exact and utf-8: fine"
+        );
+        // The byte-exact matcher itself, at its edges.
+        assert_eq!(
+            byte_exact_charset(b"@charset \"utf-8\";").as_deref(),
+            Some("utf-8")
+        );
+        assert_eq!(
+            byte_exact_charset(b"@charset  \"utf-8\";"),
+            None,
+            "two spaces"
+        );
+        assert_eq!(
+            byte_exact_charset(b"@charset 'utf-8';"),
+            None,
+            "single quotes"
+        );
+        assert_eq!(
+            byte_exact_charset(b"@charset \"utf-8\" ;"),
+            None,
+            "space before ;"
+        );
+        assert_eq!(
+            byte_exact_charset(b"\n@charset \"utf-8\";"),
+            None,
+            "not at the start"
+        );
     }
 
     #[test]

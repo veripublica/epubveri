@@ -10,6 +10,36 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Two CSS-004 false positives, found in epubcheck's own CSS test files, which no
+instrument here had ever reached.** The corpus holds 24 bare `.css` fixtures —
+epubcheck's CSS *parser* unit tests — and they live outside any book, so the
+corpus harness (which walks scenarios) never sees them and the shelf has no
+stylesheet like them. Wrapping each in a minimal book and diffing both tools
+found six differences, four of them the documented CSS-028 and selector-list
+granularity. The other two were ours:
+
+- `bom-charset15.css` — a UTF-8 BOM followed by `@charset "iso-8859-15"`. **The
+  BOM settles the encoding**; CSS Syntax 3 §3.1 says the decode algorithm
+  "gives precedence to a byte order mark, and only uses the fallback when none
+  is found". We read the declaration anyway. We checked for a UTF-16 BOM and
+  never a UTF-8 one.
+- `charset-empty.css` — `@charset '' ;`. **Not an encoding declaration at all**:
+  the spec recognises it by an exact byte pattern (`@charset "`, one space, a
+  *double* quote, then the label, then `";`) and states outright that "multiple
+  spaces, comments, or single quotes … will cause the encoding declaration to
+  not be recognized". We were reading it off the parse tree, where a tokenizer
+  quite correctly sees a perfectly good at-rule named `charset`.
+
+Both now go through `byte_exact_charset`, matched against the raw bytes, and a
+UTF-8 BOM suppresses the check. epubcheck is silent on both fixtures and so are
+we; the two that should error still do.
+
+**Not styloria's, and worth stating because the boundary is easy to get wrong.**
+Its tokenizer note already says encoding determination happens before it runs
+(§3.2) and that it merely tolerates a leftover BOM. Determining a declared
+encoding from bytes is the caller's job — and styloria's syntax errors landed at
+exactly epubcheck's positions on all 24 files, with no crash.
+
 **RSC-020 now reaches the `<guide>` and CSS `url()` — the two sites that were
 closed on the wrong kind of evidence.** Three days ago the five remaining
 reference sites were closed because the population was zero across 375 books.
