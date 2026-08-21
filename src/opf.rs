@@ -5009,16 +5009,33 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
                             // --- Fixed-layout viewport/viewBox checks ---
                             let props = ir.attr_no_ns("properties").unwrap_or("");
+                            // **Pre-paginated is tested first, and the order
+                            // is load-bearing when an itemref carries both
+                            // overrides.** They are mutually exclusive and
+                            // both tools say so (RSC-005), but the document
+                            // still has to be validated as *something*, and
+                            // epubcheck resolves it pre-paginated:
+                            // `OPFHandler30.processItemrefProperties` reads
+                            // `properties.contains(PRE_PAGINATED) || ...`, so
+                            // the pre-paginated disjunct short-circuits before
+                            // reflowable is consulted. We tested reflowable
+                            // first and called such a document reflowable,
+                            // which skipped its viewport requirement —
+                            // HTM-046 on W3C's `fxl-spine-overrides_duplicate`.
+                            //
+                            // An error on a book does not excuse the checks
+                            // after it from being right: the reader still gets
+                            // a verdict on the rest of the document.
                             let is_fixed_layout = if props
-                                .split_whitespace()
-                                .any(|p| p == "rendition:layout-reflowable")
-                            {
-                                false
-                            } else if props
                                 .split_whitespace()
                                 .any(|p| p == "rendition:layout-pre-paginated")
                             {
                                 true
+                            } else if props
+                                .split_whitespace()
+                                .any(|p| p == "rendition:layout-reflowable")
+                            {
+                                false
                             } else {
                                 package_fixed_layout
                             };
@@ -11477,6 +11494,107 @@ mod tests {
         assert!(
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
+        );
+    }
+
+    /// When an itemref carries both layout overrides, pre-paginated wins.
+    ///
+    /// They are mutually exclusive and both tools say so (RSC-005) — but the
+    /// document still has to be validated as *something*, and epubcheck
+    /// resolves it pre-paginated: `processItemrefProperties` reads
+    /// `properties.contains(PRE_PAGINATED) || ...`, so that disjunct
+    /// short-circuits before reflowable is consulted. We tested reflowable
+    /// first, called such a document reflowable, and skipped its viewport
+    /// requirement — HTM-046 on W3C's `fxl-spine-overrides_duplicate`.
+    ///
+    /// **An error on a book does not excuse the checks after it from being
+    /// right.** The reader still gets a verdict on the rest of the document,
+    /// and here the wrong branch silently dropped a real error.
+    ///
+    /// The shelf is no witness at all: **none** of its 385 books uses a
+    /// `rendition:layout` spine override, so its silence across this change
+    /// means nothing. The corpus and this test are the evidence.
+    #[test]
+    fn both_layout_overrides_on_one_itemref_resolve_pre_paginated() {
+        fn htm046(props: &str) -> usize {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"
+         prefix="rendition: http://www.idpf.org/vocab/rendition/#">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1" properties="{props}"/></spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+            // No viewport meta: a fixed-layout document owes one.
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p>x</p></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", CH1),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::HTM_046)
+                .count()
+        }
+
+        assert_eq!(
+            htm046("rendition:layout-reflowable rendition:layout-pre-paginated"),
+            1,
+            "both present resolves pre-paginated, so the viewport is owed"
+        );
+        // Order in the attribute must not decide it either.
+        assert_eq!(
+            htm046("rendition:layout-pre-paginated rendition:layout-reflowable"),
+            1,
+            "the resolution is by property, not by document order"
+        );
+        assert_eq!(
+            htm046("rendition:layout-pre-paginated"),
+            1,
+            "plain fixed-layout"
+        );
+        assert_eq!(
+            htm046("rendition:layout-reflowable"),
+            0,
+            "plain reflowable owes nothing"
         );
     }
 

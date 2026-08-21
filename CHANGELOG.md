@@ -244,6 +244,25 @@ The shelf can barely speak to this one: exactly **one** of its 385 books has a
 viewport meta in any XHTML document at all, and it is unchanged. The evidence is
 the 13 publications, not the shelf's silence.
 
+**An itemref carrying both `rendition:layout` overrides now resolves to
+pre-paginated.** The two are mutually exclusive and both tools report that
+(RSC-005) — but the document still has to be validated as *something*, and
+epubcheck resolves it pre-paginated: its condition reads "contains
+pre-paginated, or (not reflowable and the package says pre-paginated)", so the
+first disjunct short-circuits. We tested reflowable first, called such a
+document reflowable, and skipped its viewport requirement, losing HTM-046 on
+W3C's `fxl-spine-overrides_duplicate`.
+
+**An error on a book does not excuse the checks after it from being right.** The
+reader still gets a verdict on the rest of the document, and the wrong branch
+dropped a real error silently.
+
+This one is restrictive — it moves a document from reflowable to fixed-layout —
+so the direction was checked rather than assumed: the corpus is unchanged, and
+the shelf is **no witness at all**, since none of its 385 books uses a
+`rendition:layout` spine override. The test carries the evidence instead, in
+both property orders.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
