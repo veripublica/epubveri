@@ -154,6 +154,60 @@ fn resolve_ref(
 /// The plain "needs a manifest fallback chain to a Core Media Type"
 /// rule - embed/input[image]/math-altimg/video-poster/plain-img all share
 /// this; no intrinsic alternative-markup mechanism applies to them.
+/// Does this element count as palpable content — HTML's notion of "something
+/// the reader would actually perceive"?
+///
+/// It exists here for one reason: **an `<object>` carries its own fallback in
+/// its child content**, so asking whether that content is palpable is the
+/// difference between "this foreign resource has no fallback" and a false
+/// positive on every correctly-authored `<object>` in existence.
+///
+/// epubcheck's rule (`OPSHandler30.isPalpable`), followed closely because
+/// getting it wrong is expensive in both directions:
+/// - `hidden` makes anything impalpable, whatever it is. Its own
+///   `foreign-xhtml-object-no-fallback-error` fixture turns on exactly this:
+///   the object *has* a `<p>` child, and that `<p>` is `hidden`, so the
+///   fallback is not really there.
+/// - embedded content is palpable by being present;
+/// - `svg` and `math` roots are palpable;
+/// - the document-structure elements never are;
+/// - anything else is palpable if it *contains* something palpable, counting
+///   non-whitespace text.
+fn is_palpable(n: roxmltree::Node) -> bool {
+    const XHTML: &str = "http://www.w3.org/1999/xhtml";
+    const SVG: &str = "http://www.w3.org/2000/svg";
+    const MATHML: &str = "http://www.w3.org/1998/Math/MathML";
+    if n.attr_no_ns("hidden").is_some() {
+        return false;
+    }
+    match n.tag_name().namespace() {
+        Some(SVG) => n.tag_name().name() == "svg",
+        Some(MATHML) => n.tag_name().name() == "math",
+        // A document with no namespace at all is malformed and reported
+        // elsewhere; treating its elements as XHTML keeps this from becoming a
+        // second, quieter complaint about the same thing.
+        Some(XHTML) | None => match n.tag_name().name() {
+            "audio" | "canvas" | "embed" | "iframe" | "img" | "object" | "picture" | "video" => {
+                true
+            }
+            "html" | "head" | "script" | "link" | "meta" | "title" | "style" => false,
+            _ => has_palpable_content(n),
+        },
+        _ => false,
+    }
+}
+
+/// Non-whitespace text, or a palpable descendant.
+fn has_palpable_content(n: roxmltree::Node) -> bool {
+    n.children().any(|c| {
+        if c.is_text() {
+            c.text().is_some_and(|t| !t.trim().is_empty())
+        } else {
+            c.is_element() && is_palpable(c)
+        }
+    })
+}
+
 fn check_single(
     href: &str,
     dir: &str,
@@ -416,6 +470,22 @@ pub(crate) fn check_content_doc(
         } else if name == "embed" {
             if let Some(src) = node.attr_no_ns("src") {
                 check_single(src, dir, status, "embed", path, node, report);
+            }
+        } else if name == "object" {
+            // `<object>` was simply never added to this list, which is the
+            // per-source shape again: the elements that can point at a
+            // foreign resource are enumerated here by hand, and nothing fails
+            // loudly when one is missing. epubcheck reports RSC-032 on its
+            // own `foreign-xhtml-object-no-fallback-error` fixture; we
+            // reported nothing at all.
+            //
+            // The resource is `data`, and the element's *own content* is its
+            // fallback — so an object that has palpable content owes nothing,
+            // whatever the manifest says.
+            if let Some(data) = node.attr_no_ns("data")
+                && !has_palpable_content(node)
+            {
+                check_single(data, dir, status, "object", path, node, report);
             }
         } else if name == "input" && node.attr_no_ns("type") == Some("image") {
             if let Some(src) = node.attr_no_ns("src") {

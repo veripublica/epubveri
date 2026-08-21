@@ -11545,6 +11545,116 @@ mod tests {
         );
     }
 
+    /// An `<object>` pointing at a foreign resource needs a fallback.
+    ///
+    /// `<object>` was simply never added to the list of elements that can
+    /// reference a foreign resource — the per-source shape again, where the
+    /// elements are enumerated by hand and nothing fails loudly when one is
+    /// missing. epubcheck reports RSC-032 on its own
+    /// `foreign-xhtml-object-no-fallback-error` fixture; we reported nothing.
+    ///
+    /// **The fallback is the element's own content**, which is what makes this
+    /// dangerous to implement carelessly: an `<object>` with real content owes
+    /// nothing, and reporting one would be a false positive on the ordinary,
+    /// correct way to author the element. That is the second assertion.
+    ///
+    /// The third is the trick in epubcheck's fixture, and it is the reason the
+    /// `hidden` rule is not optional: the object *has* a `<p>` child and that
+    /// `<p>` is `hidden`, so the fallback is not really there. An
+    /// implementation that only asked "does it have child content" would call
+    /// that book clean.
+    ///
+    /// The shelf is no witness — **none of its 385 books contains an
+    /// `<object>` at all** — so this test is the evidence.
+    #[test]
+    fn an_object_referencing_a_foreign_resource_needs_a_fallback() {
+        fn rsc032(body: &str) -> usize {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="slides" href="slideshow.xml" media-type="application/x-demo-slideshow"/>
+    <item id="pic" href="pic.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", ch1.as_str()),
+                    ("OEBPS/slideshow.xml", "<x/>"),
+                    ("OEBPS/pic.png", "\0\0\0\0"),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_032)
+                .count()
+        }
+
+        assert_eq!(
+            rsc032(r#"<object data="slideshow.xml" type="application/x-demo-slideshow"/>"#),
+            1,
+            "a foreign resource with an empty object has no fallback"
+        );
+        assert_eq!(
+            rsc032(
+                r#"<object data="slideshow.xml" type="application/x-demo-slideshow"><p>a description</p></object>"#
+            ),
+            0,
+            "the object's own content is its fallback"
+        );
+        assert_eq!(
+            rsc032(
+                r#"<object data="slideshow.xml" type="application/x-demo-slideshow"><p hidden="hidden">nope</p></object>"#
+            ),
+            1,
+            "hidden content is not a fallback"
+        );
+        assert_eq!(
+            rsc032(r#"<object data="pic.png" type="image/png"/>"#),
+            0,
+            "a core media type is not foreign and owes no fallback"
+        );
+    }
+
     /// A `file:` URL inside `@font-face` is reported like any other.
     ///
     /// The generic `url()` pass in `css.rs` deliberately skips `@font-face`

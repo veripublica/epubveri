@@ -310,6 +310,23 @@ own `file-url-in-css-error` fixture it reports two file-URL errors and we
 reported the manifest one alone. The predicate is now shared between the two
 sites so they cannot drift apart again.
 
+**An `<object>` pointing at a foreign resource with no fallback drew nothing.**
+The elements that can reference a foreign resource are enumerated by hand and
+`<object>` was never added — the per-source shape once more. epubcheck reports
+RSC-032 on its own `foreign-xhtml-object-no-fallback-error` fixture; we reported
+nothing at all.
+
+**The fallback is the element's own content**, which is the part that makes this
+dangerous to implement carelessly: an `<object>` with real content owes nothing,
+and reporting one would be a false positive on the ordinary way to author the
+element. epubcheck's fixture turns on the sharper half of that rule — the object
+*has* a `<p>` child and the `<p>` is `hidden`, so the fallback is not really
+there. An implementation that only asked "does it have child content" would call
+that book clean, so the `hidden` rule is not optional.
+
+The shelf cannot speak to this: **none of its 385 books contains an `<object>`
+at all.** The fixture and the test are the evidence.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
