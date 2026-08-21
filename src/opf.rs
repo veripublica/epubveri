@@ -2831,6 +2831,24 @@ fn declared_resources_of(ocf: &mut Ocf, package_path: &str) -> HashSet<String> {
     out
 }
 
+/// `audio/ogg; codecs=opus` is how an Opus file is declared in a manifest, and
+/// the content side writes it as plain `audio/ogg`. epubcheck folds the two by
+/// hand in `checkMimetypeMatches`; without it every Opus book draws an OPF-013
+/// from us and none from epubcheck.
+fn normalize_opus(mt: &str) -> &str {
+    let t = mt.trim();
+    let (head, rest) = t.split_once(';').unwrap_or((t, ""));
+    if head.trim().eq_ignore_ascii_case("audio/ogg")
+        && rest.split(';').any(|p| {
+            p.split_once('=')
+                .is_some_and(|(k, v)| k.trim().eq_ignore_ascii_case("codecs") && v.trim() == "opus")
+        })
+    {
+        return "audio/ogg";
+    }
+    t
+}
+
 pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
     let profile = options.profile.as_deref();
     let advisory = options.advisory;
@@ -6673,6 +6691,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 {
                     ("srcset", true)
                 }
+                // A `<source>` inside `<audio>`/`<video>` names its resource
+                // with `src`, not `srcset`, and was not covered at all — the
+                // arm above requires a `<picture>` ancestor. epubcheck asks
+                // the question of every `<source>`; its
+                // `type-mismatch-in-audio-warning` fixture is exactly this
+                // shape and drew nothing from us.
+                "source"
+                    if n.ancestors().skip(1).any(|a| {
+                        a.is_element() && matches!(a.tag_name().name(), "audio" | "video")
+                    }) =>
+                {
+                    ("src", false)
+                }
                 _ => continue,
             };
             let Some(declared_type) = n.attr_no_ns("type") else {
@@ -6695,8 +6726,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 continue;
             }
             let resolved = nfc(&resolve(&dir, target));
+            // **Both sides are normalized, and the two normalizations are not
+            // the same** — this mirrors `OPSHandler30.checkMimetypeMatches`
+            // rather than tidying it up.
+            //
+            // The content-side type always loses its parameters:
+            // `type="audio/mp4; codecs=mp4"` is a claim about `audio/mp4`, and
+            // comparing the whole string would have reported every
+            // `type="audio/mpeg; codecs=mp3"` against a manifest `audio/mpeg`
+            // — a false positive on correct markup, and one we were carrying
+            // latently for `<object>`/`<embed>` before this.
+            //
+            // The manifest side keeps its parameters except for one case
+            // epubcheck special-cases by hand: `audio/ogg; codecs=opus`, which
+            // is how an Opus file is legitimately declared. Their source calls
+            // this a hack pending real MIME parsing; matched anyway, because
+            // an OPUS book must not draw a warning here from either tool.
+            let declared_type = declared_type.split(';').next().unwrap_or("").trim();
             if let Some((_, actual_type)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
-                && !actual_type.eq_ignore_ascii_case(declared_type)
+                && !normalize_opus(actual_type).eq_ignore_ascii_case(declared_type)
             {
                 report.push_at_pos(
                         OPF_013,
@@ -11542,6 +11590,109 @@ mod tests {
         assert!(
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
+        );
+    }
+
+    /// A `<source>` inside `<audio>`/`<video>` is asked whether its declared
+    /// type matches the manifest — and the comparison is normalized.
+    ///
+    /// The `<source>` arm required a `<picture>` ancestor and read `srcset`, so
+    /// a media `<source src type>` was covered by nothing. epubcheck's
+    /// `type-mismatch-in-audio-warning` fixture is exactly that shape and drew
+    /// nothing from us.
+    ///
+    /// **The normalization is the half that could have gone wrong**, and the
+    /// last two assertions are the reason it is written the way it is:
+    /// - the content-side type loses its parameters, so
+    ///   `type="audio/mpeg; codecs=mp3"` against a manifest `audio/mpeg` is a
+    ///   match. Comparing whole strings would have invented a warning on
+    ///   correct markup — a false positive we were already carrying latently
+    ///   on `<object>`/`<embed>`;
+    ///   `audio/ogg; codecs=opus` is how an Opus file is legitimately declared
+    ///   in a manifest while the content writes plain `audio/ogg`. epubcheck
+    ///   folds those two by hand and calls it a hack; matched anyway, because
+    ///   an Opus book must not draw a warning from one tool and not the other.
+    #[test]
+    fn a_media_source_type_is_compared_against_the_manifest_normalized() {
+        fn opf013(manifest_type: &str, declared: &str) -> Vec<String> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="a" href="a.snd" media-type="{manifest_type}"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body><audio controls=\"controls\">\
+                 <source src=\"a.snd\" type=\"{declared}\"/></audio></body></html>"
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", ch1.as_str()),
+                    ("OEBPS/a.snd", "\0\0\0\0"),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_013)
+                .map(|m| m.text.clone())
+                .collect()
+        }
+
+        assert_eq!(
+            opf013("audio/mpeg", "audio/mp4; codecs=mp4").len(),
+            1,
+            "a real mismatch is reported, parameters and all"
+        );
+        assert!(
+            opf013("audio/mpeg", "audio/mpeg").is_empty(),
+            "matching types say nothing"
+        );
+        assert!(
+            opf013("audio/mpeg", "audio/mpeg; codecs=mp3").is_empty(),
+            "a parameter on the declared type is not a mismatch"
+        );
+        assert!(
+            opf013("audio/ogg; codecs=opus", "audio/ogg").is_empty(),
+            "the Opus manifest spelling matches plain audio/ogg in content"
         );
     }
 

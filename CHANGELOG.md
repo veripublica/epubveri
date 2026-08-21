@@ -327,6 +327,28 @@ that book clean, so the `hidden` rule is not optional.
 The shelf cannot speak to this: **none of its 385 books contains an `<object>`
 at all.** The fixture and the test are the evidence.
 
+**A `<source>` inside `<audio>`/`<video>` was never asked whether its declared
+type matches the manifest.** The `<source>` case required a `<picture>`
+ancestor and read `srcset`, so a media source's `src`/`type` pair was covered by
+nothing. epubcheck's `type-mismatch-in-audio-warning` fixture is exactly that
+shape and drew nothing from us.
+
+**The comparison is now normalized on both sides, and the two normalizations
+differ** — this follows epubcheck rather than tidying it up:
+
+- the content-side type loses its parameters, so `type="audio/mpeg; codecs=mp3"`
+  against a manifest `audio/mpeg` is a match. Comparing whole strings would
+  invent a warning on correct markup, which we were already carrying latently on
+  `<object>` and `<embed>`;
+- the manifest side keeps its parameters except for `audio/ogg; codecs=opus`,
+  which is how an Opus file is legitimately declared while the content writes
+  plain `audio/ogg`. epubcheck folds those two by hand and calls it a hack in
+  its own source; matched anyway, because an Opus book must not draw a warning
+  from one tool and not the other.
+
+One shelf book carries a `<source type>` and is unchanged, so the new coverage
+ran and stayed correctly silent. The corpus is unchanged.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
