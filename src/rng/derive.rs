@@ -1017,9 +1017,40 @@ impl<'d, 'i> Blame<'d, 'i> {
                         // (hoisted to module scope: the incomplete-content
                         // branch below applies the same cap.)
                         let distinct = distinct_sorted(expected);
+                        let collides = distinct.iter().any(|e| e == name);
                         if !distinct.is_empty() && distinct.len() <= MAX_SUGGESTED {
                             t.push_str(&format!("; expected {}", one_of(&distinct)));
                             params.extend(distinct);
+                        }
+                        // **When the offending name is also an expected one,
+                        // the message contradicts itself** — `element "html"
+                        // is not allowed here; expected "html"` (issue #84,
+                        // BeckyDTP). It is true and useless, and the same
+                        // shape was already noted for the package document,
+                        // where an OEBPS 1.2 package produced nothing but
+                        // `element package is not allowed here; expected
+                        // package`.
+                        //
+                        // The names carry no namespace — `NotAllowed` holds
+                        // local names by design — so when they collide, the
+                        // namespace is the only thing that can differ, and
+                        // naming the offending one is the whole diagnosis.
+                        // epubcheck says `elements from namespace "" are not
+                        // allowed`, which is the same fact from the other end.
+                        //
+                        // **Appended, never substituted.** epubsana's fixer at
+                        // `fixers.rs:1706` selects on the prefix `element `,
+                        // and rewording would silence it quietly rather than
+                        // break it loudly — the same reason the
+                        // incomplete-content branch below appends. See the
+                        // schema-violation-wording note in CLAUDE.md.
+                        if collides {
+                            t.push_str(&match n.tag_name().namespace() {
+                                None => " (same name, different namespace: this element is in no namespace)".to_string(),
+                                Some(ns) => format!(
+                                    " (same name, different namespace: this element is in \"{ns}\")"
+                                ),
+                            });
                         }
                         t
                     }

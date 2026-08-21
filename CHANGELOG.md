@@ -10,6 +10,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**A schema violation whose message contradicted itself now says what actually
+differs** (#84, BeckyDTP). A content document whose root was a bare `<html>`
+with no namespace drew `element "html" is not allowed here; expected "html"` —
+true, useless, and the sentence a reader stalls on. The rejected name and the
+expected one carry no namespace (the grammar's first-set is local names by
+design), so when they collide the namespace is the only thing left that can
+differ; the message now names it. epubcheck reports the same fact from the other
+end, as `elements from namespace "" are not allowed`.
+
+The clause is **appended**, not substituted: epubsana selects on the `element `
+prefix, and rewording would silence a fixer quietly rather than break it loudly.
+A message whose names differ is untouched, so the common case gains no noise.
+
+No book on the 385-book shelf produces the collision, so the test carries the
+evidence rather than the shelf.
+
+
 **Usage-severity findings are hidden from the human output by default, as they
 are in epubcheck** (`-u`/`--usage` shows them). Asked on MobileRead and answered
 there: JSWolf met CSS-028 twice and read it as an error message on correct

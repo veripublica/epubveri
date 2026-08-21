@@ -522,6 +522,61 @@ mod tests {
         assert_eq!(cases[0].0.node(), p);
     }
 
+    /// When the rejected element's name is also an expected one, the message
+    /// says what actually differs.
+    ///
+    /// `element "html" is not allowed here; expected "html"` contradicts
+    /// itself — true, useless, and the thing a reader stalls on (issue #84,
+    /// BeckyDTP, on a content document whose root was a bare `<html>` with no
+    /// namespace). `NotAllowed` carries local names by design, so when they
+    /// collide the namespace is the only thing left that can differ, and
+    /// naming it is the whole diagnosis.
+    ///
+    /// **The clause is appended, and the assertion checks that**: epubsana
+    /// selects on the prefix `element `, so rewording would silence a fixer
+    /// quietly instead of breaking it loudly.
+    ///
+    /// No book on the 385-book shelf produces this collision, so this test is
+    /// the evidence rather than a regression guard.
+    #[test]
+    fn a_name_that_collides_with_an_expected_one_names_the_namespace() {
+        fn ns_name(ns: &str, local: &str) -> NameClass {
+            NameClass::Name {
+                ns: ns.to_string(),
+                local: local.to_string(),
+            }
+        }
+        // The grammar wants `<to>` in a namespace; the document has `<to>` in
+        // none, so both sides print as "to".
+        let g = Grammar::single(element(
+            local_name("note"),
+            element(ns_name("urn:x", "to"), text()),
+        ));
+        let doc = roxmltree::Document::parse("<note><to>x</to></note>").unwrap();
+        let (msg, _) = validate_node_report(&g, doc.root_element())[0].describe();
+        assert!(
+            msg.starts_with("element "),
+            "the prefix a consumer selects on must survive: {msg}"
+        );
+        assert!(
+            msg.contains("same name, different namespace") && msg.contains("in no namespace"),
+            "the collision must be explained: {msg}"
+        );
+
+        // Control: names that genuinely differ need no clause, and adding one
+        // everywhere would be noise on the common case.
+        let g2 = Grammar::single(element(
+            local_name("note"),
+            element(local_name("from"), text()),
+        ));
+        let doc2 = roxmltree::Document::parse("<note><to>x</to></note>").unwrap();
+        let (msg2, _) = validate_node_report(&g2, doc2.root_element())[0].describe();
+        assert!(
+            !msg2.contains("different namespace"),
+            "a plain mismatch stays plain: {msg2}"
+        );
+    }
+
     /// The message text actually reaches the RSC-005 finding: a stray `<p>`
     /// directly in `<ol>` names the element, not a blanket "does not conform"
     /// (forum #78).
