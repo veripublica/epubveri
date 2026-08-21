@@ -2777,6 +2777,60 @@ fn check_declared_version_advisory(
     );
 }
 
+/// The `full-path` of every `<rootfile>`, read straight from
+/// `META-INF/container.xml` and **reporting nothing**.
+///
+/// `ocf::find_rootfiles` answers the same question but reports as it goes, so
+/// calling it a second time would duplicate its findings. OPF-003 needs the
+/// list only to know what the *other* renditions declare.
+fn container_rootfiles_silently(ocf: &mut Ocf) -> Vec<String> {
+    let Some(bytes) = ocf.read("META-INF/container.xml") else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let Ok(doc) = crate::ocf::parse_xml(&text) else {
+        return Vec::new();
+    };
+    doc.descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "rootfile")
+        .filter_map(|n| n.attr_no_ns("full-path"))
+        .map(|p| nfc(p.trim()))
+        .filter(|p| !p.is_empty())
+        .collect()
+}
+
+/// Everything a package document declares: its manifest item hrefs and, on
+/// EPUB 3, its metadata `<link href>` targets. Resolved against that
+/// package's own directory and NFC-normalized. Reports nothing.
+///
+/// Used for the *other* renditions of a multiple-rendition publication, whose
+/// resources are declared somewhere this package's manifest cannot see.
+fn declared_resources_of(ocf: &mut Ocf, package_path: &str) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(bytes) = ocf.read(package_path) else {
+        return out;
+    };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let Ok(doc) = crate::ocf::parse_xml(&text) else {
+        return out;
+    };
+    let dir = parent_dir(package_path);
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        let name = n.tag_name().name();
+        if name != "item" && name != "link" {
+            continue;
+        }
+        if let Some(href) = n.attr_no_ns("href")
+            && !is_external(href)
+            && !is_remote_url(href)
+            && !is_file_url(href)
+        {
+            out.insert(nfc(&resolve(&dir, strip_url_fragment(href).trim())));
+        }
+    }
+    out
+}
+
 pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
     let profile = options.profile.as_deref();
     let advisory = options.advisory;
@@ -5278,20 +5332,59 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // real corpus fixture pair).
     {
         const IGNORED_BASENAMES: [&str; 2] = [".ds_store", "thumbs.db"];
-        let opf_own = nfc(opf_path);
-        for name in &ocf.names {
+        // **This is a container-level question, and epubcheck asks it in
+        // `OCFChecker`, once, against every package document at the same
+        // time**: `Iterables.tryFind(opfHandlers, ...)` searches *all* of
+        // them, and counts a match in either a manifest `<item>` or — on
+        // EPUB 3 — a metadata `<link>` (`getLinkedResources`).
+        //
+        // Ours ran inside the per-package check with only that package's
+        // manifest in hand, which was wrong twice over, and W3C's
+        // `epub-tests` has one publication for each:
+        //
+        // - `ocf-package_multiple` declares three renditions in three
+        //   directories. Each rendition's manifest legitimately lists only
+        //   its own files, so every package blamed the other two's — 18
+        //   findings where epubcheck reports none.
+        // - `pkg-linked-records` references an ONIX record with
+        //   `<link rel="record" href="sampleONIX-30.xml"/>` in the package
+        //   metadata. A `<link>` is a declaration; we only looked at
+        //   `<item>`.
+        //
+        // So: the declared set is the union across every rootfile, a
+        // `<link href>` counts, and the finding is emitted once for the
+        // publication rather than once per rendition — hence the
+        // default-rendition guard below.
+        let rootfiles = container_rootfiles_silently(ocf);
+        let is_default_rendition = rootfiles
+            .first()
+            .is_none_or(|first| *first == nfc(opf_path));
+        let mut declared = manifest_paths.clone();
+        if is_default_rendition {
+            // `declared_resources_of` re-reads this package too, which is
+            // what picks up its own `<link href>` targets; `manifest_paths`
+            // holds only the `<item>`s.
+            for rf in std::iter::once(nfc(opf_path)).chain(rootfiles.iter().cloned()) {
+                declared.extend(declared_resources_of(ocf, &rf));
+            }
+        }
+        let structural: HashSet<String> = std::iter::once(nfc(opf_path))
+            .chain(rootfiles.iter().cloned())
+            .collect();
+        let names: Vec<String> = ocf.names.clone();
+        for name in names.iter().filter(|_| is_default_rendition) {
             if name == "mimetype" || name.starts_with("META-INF/") || name.ends_with('/') {
                 continue;
             }
             let key = nfc(name);
-            if key == opf_own {
+            if structural.contains(&key) {
                 continue;
             }
             let basename = name.rsplit('/').next().unwrap_or(name).to_ascii_lowercase();
             if IGNORED_BASENAMES.contains(&basename.as_str()) {
                 continue;
             }
-            if !manifest_paths.contains(&key) {
+            if !declared.contains(&key) {
                 report.push_at_rule(
                     OPF_003,
                     Severity::Usage,
@@ -5951,12 +6044,42 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             crate::mathml::check_math_element(math_el, &path, report);
         }
 
-        // <title> present but empty, or missing entirely.
-        match d
-            .descendants()
-            .find(|n| n.is_element() && n.tag_name().name() == "title")
-        {
-            Some(title) => {
+        // **Two Schematron rules with two different contexts**, and they are
+        // kept apart because that is what they are: `title.non-empty` has
+        // context `h:title`, `title.present` has context `h:head`
+        // (`epub-xhtml-30.sch`).
+        //
+        // They were ported as a single `find` for the first descendant named
+        // `title`, which lost both contexts at once. `title.present` then
+        // fired on documents with no `<head>` at all: W3C's
+        // `pub-xml-external-id` carries a one-line `<span>The test
+        // fails.</span>` and drew "the head element should have a title child
+        // element" — about a head that does not exist. And matching on the
+        // local name alone accepted a `title` in any namespace at any depth,
+        // where `h:title` means the XHTML namespace and, as a child of
+        // `h:head`, a direct child.
+        //
+        // **A Schematron rule without its context is a wider rule.** When
+        // porting one, the context is half the rule; carry it over with the
+        // assertion.
+        const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
+        let is_xhtml = |n: roxmltree::Node, name: &str| {
+            n.is_element()
+                && n.tag_name().name() == name
+                && n.tag_name().namespace() == Some(XHTML_NS)
+        };
+        // EPUB 3 only, for both. `title.non-empty` has no equivalent under
+        // `schema/20`, where XHTML 1.1 types `<title>` as `<text/>` and RELAX
+        // NG matches that on empty content, so an empty title is valid in an
+        // EPUB 2 book — we rejected it once, for 115 findings across ten real
+        // books. `title.present` is EPUB 3 only for a different reason: XHTML
+        // 1.1 makes `title` *required* by the grammar (`head.content =
+        // title`), which is an RSC-005 error and is enforced by
+        // `headEl-epub2`; reporting both would double up on one missing
+        // element.
+        if is_epub3 {
+            // title.non-empty — context `h:title`.
+            for title in d.descendants().filter(|n| is_xhtml(*n, "title")) {
                 // `Node::text()` returns content for comment nodes too, not
                 // just text nodes - filter to real text first, or a title
                 // containing only a comment (e.g. `<title><!--x--></title>`)
@@ -5966,16 +6089,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter(|n| n.is_text())
                     .filter_map(|n| n.text())
                     .collect();
-                // EPUB 3 only. epubcheck's rule is a Schematron assertion in
-                // `epub-xhtml-30.sch` (`title.non-empty`); there is no
-                // equivalent under `schema/20`, and XHTML 1.1's own grammar
-                // types `<title>` as `<text/>`, which RELAX NG matches on
-                // empty content. So an empty title is valid in an EPUB 2
-                // book, and we were rejecting it - 115 findings across ten
-                // real EPUB 2 books on the first mixed-producer shelf run.
-                // Same shape as #43 and #47: an EPUB 3 rule leaking into the
-                // EPUB 2 branch.
-                if is_epub3 && text.trim().is_empty() {
+                if text.trim().is_empty() {
                     report.push_node(
                         RSC_005,
                         Severity::Error,
@@ -5987,26 +6101,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     );
                 }
             }
-            None if is_epub3 => {
-                // EPUB 3 only. epubcheck's `title.present` is a Schematron
-                // assertion whose message begins with "WARNING:", and its
-                // error handler maps that prefix to RSC-017 rather than
-                // RSC-005 - so a warning is right here. XHTML 1.1 instead
-                // makes `title` *required* by the grammar itself
-                // (`head.content = title`), which is an RSC-005 error and is
-                // now enforced by `headEl-epub2`. Reporting both would double
-                // up on the same missing element.
-                report.push_node(
-                    RSC_017,
-                    Severity::Warning,
-                    "The \"head\" element should have a \"title\" child element.",
-                    path.clone(),
-                    d.root_element(),
-                    "opf.content_document.head_missing_title",
-                    Vec::new(),
-                );
+            // title.present — context `h:head`, so no head means no rule.
+            // epubcheck's assertion message begins with "WARNING:", and its
+            // error handler maps that prefix to RSC-017 rather than RSC-005,
+            // which is why a warning is right here.
+            for head in d.descendants().filter(|n| is_xhtml(*n, "head")) {
+                if !head.children().any(|c| is_xhtml(c, "title")) {
+                    report.push_node(
+                        RSC_017,
+                        Severity::Warning,
+                        "The \"head\" element should have a \"title\" child element.",
+                        path.clone(),
+                        head,
+                        "opf.content_document.head_missing_title",
+                        Vec::new(),
+                    );
+                }
             }
-            None => {}
         }
 
         // Duplicate `id` attribute values within this document.
@@ -7273,7 +7384,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             vec![v.to_string()],
                         );
                     }
-                    if v.trim_start().starts_with("file:") {
+                    if is_file_url(v) {
                         report.push_node(
                             RSC_030,
                             Severity::Error,
@@ -7283,7 +7394,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             "opf.content_document.file_url_reference",
                             vec![v.to_string()],
                         );
-                        continue;
+                        // **No `continue` here, and that is the fix.** It used
+                        // to stop, on the reasonable-sounding grounds that
+                        // RSC-030 is the whole story for a file URL. It is
+                        // not: the reference still has to be *classified*,
+                        // and skipping that cost a finding in each direction
+                        // on W3C's `pub-file-urls`. `has_remote` stayed false,
+                        // so the `remote-resources` property the author had
+                        // correctly declared drew OPF-018 "declared but
+                        // doesn't appear to be needed"; and the restricted-
+                        // context branch never ran, so the three `<iframe>`s
+                        // drew no RSC-006 where epubcheck reports one each.
+                        // epubcheck agrees a file URL is remote — `isRemote`
+                        // is "not `data:` and not same-origin" — it simply
+                        // does not stop after saying so.
+                        //
+                        // Third instance of the silent-skip shape in this
+                        // file: a check suppresses the rest of a path because
+                        // it believes it owns the case. A wrong answer gets
+                        // reported; no answer does not.
                     }
                     let tag = node.tag_name().name();
                     // A `<link>` whose `rel` isn't "stylesheet" (e.g.
@@ -7299,7 +7428,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             r.split_whitespace()
                                 .any(|t| t.eq_ignore_ascii_case("stylesheet"))
                         });
-                    if is_remote_url(v) && !is_non_stylesheet_link {
+                    if (is_remote_url(v) || is_file_url(v)) && !is_non_stylesheet_link {
                         let bare = strip_url_fragment(v);
                         // A plain hyperlink to a remote resource is
                         // navigation, not an embedded dependency - it
@@ -11319,6 +11448,332 @@ mod tests {
         assert!(
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
+        );
+    }
+
+    /// OPF-003 is a container-level question, asked once against every
+    /// package document.
+    ///
+    /// epubcheck searches *all* package documents (`Iterables.tryFind(
+    /// opfHandlers, ...)`) and counts a metadata `<link href>` as a
+    /// declaration alongside a manifest `<item>`. Ours ran per package with
+    /// only that package's `<item>`s, which W3C's `epub-tests` caught twice:
+    /// `pkg-linked-records` (an ONIX record referenced by `<link>`) and
+    /// `ocf-package_multiple` (three renditions, each blaming the other two's
+    /// files — 18 findings against epubcheck's none).
+    ///
+    /// The control is the point of the test: a file nothing declares is
+    /// still reported. Both fixes widen what counts as declared, and a
+    /// widening with no floor under it is just a deletion.
+    #[test]
+    fn opf_003_unions_every_rendition_and_counts_a_link_as_a_declaration() {
+        fn opf003(
+            container_rootfiles: &str,
+            packages: &[(&str, &str)],
+            extra: &[&str],
+        ) -> Vec<String> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let container = format!(
+                r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>{container_rootfiles}</rootfiles>
+</container>"#
+            );
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                z.start_file("META-INF/container.xml", o).unwrap();
+                z.write_all(container.as_bytes()).unwrap();
+                for (name, body) in packages {
+                    z.start_file(*name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                for name in extra {
+                    z.start_file(*name, o).unwrap();
+                    z.write_all(b"x").unwrap();
+                }
+                z.finish().unwrap();
+            }
+            let mut v: Vec<String> = crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_003)
+                .flat_map(|m| m.params.clone())
+                .collect();
+            v.sort();
+            v
+        }
+
+        // One rendition, one package. `extra.bin` is declared by nothing;
+        // `record.xml` only by a metadata <link>.
+        let pkg = |dir: &str, link: bool| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>
+  <spine><itemref idref="nav"/></spine>
+</package>"#,
+                if link {
+                    r#"<link rel="record" href="record.xml" media-type="application/xml"/>"#
+                } else {
+                    ""
+                },
+            )
+            .replace("nav.xhtml", &format!("{dir}nav.xhtml"))
+        };
+
+        const RF1: &str =
+            r#"<rootfile full-path="A/package.opf" media-type="application/oebps-package+xml"/>"#;
+        const RF2: &str =
+            r#"<rootfile full-path="B/package.opf" media-type="application/oebps-package+xml"/>"#;
+
+        // A metadata <link> is a declaration.
+        assert_eq!(
+            opf003(
+                RF1,
+                &[("A/package.opf", &pkg("", true))],
+                &["A/nav.xhtml", "A/record.xml"]
+            ),
+            Vec::<String>::new(),
+            "a resource referenced by a metadata <link> is declared"
+        );
+        // Control: drop the <link> and the same file is undeclared.
+        assert_eq!(
+            opf003(
+                RF1,
+                &[("A/package.opf", &pkg("", false))],
+                &["A/nav.xhtml", "A/record.xml"]
+            ),
+            vec!["A/record.xml".to_string()],
+            "a resource nothing declares is still reported"
+        );
+        // Two renditions: neither may be blamed for the other's files, and
+        // the finding is emitted once for the publication, not per package.
+        assert_eq!(
+            opf003(
+                &format!("{RF1}{RF2}"),
+                &[
+                    ("A/package.opf", &pkg("", false)),
+                    ("B/package.opf", &pkg("", false)),
+                ],
+                &["A/nav.xhtml", "B/nav.xhtml"]
+            ),
+            Vec::<String>::new(),
+            "one rendition's files are declared, by its own package"
+        );
+    }
+
+    /// A file URL is reported *and* still classified.
+    ///
+    /// RSC-030 used to `continue`, on the reasonable-sounding grounds that
+    /// it was the whole story for a file URL. It was not: the reference
+    /// still has to be classified, and skipping that cost one finding in
+    /// each direction on W3C's `pub-file-urls` — a `remote-resources`
+    /// property the author had correctly declared drew OPF-018 "doesn't
+    /// appear to be needed", and three `<iframe>`s in a restricted context
+    /// drew no RSC-006 where epubcheck reports one each.
+    ///
+    /// **Both directions are asserted because the bug had both**, and a test
+    /// for either alone would have passed throughout its lifetime: dropping
+    /// the false OPF-018 without gaining RSC-006 is a different, wrong fix.
+    #[test]
+    fn a_file_url_is_reported_and_still_counts_as_a_remote_reference() {
+        fn ids(props: &str, body: &str) -> Vec<String> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"{props}/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            let mut v: Vec<String> = crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .map(|m| m.id.to_string())
+                .filter(|i| i.starts_with("RSC-0") || i.starts_with("OPF-01"))
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        }
+
+        const IFRAME: &str = r#"<iframe src="file:///var/log/lastlog"></iframe>"#;
+        // The property is declared and a file URL justifies it: RSC-030 for
+        // the URL, RSC-006 because an iframe is a restricted context, and no
+        // OPF-018 saying the property is unneeded.
+        assert_eq!(
+            ids(r#" properties="remote-resources""#, IFRAME),
+            vec!["RSC-006".to_string(), "RSC-030".to_string()],
+            "a file URL is remote enough to justify the property and to be refused in context"
+        );
+        // Control: no file URL, property still declared — OPF-018 is exactly
+        // the right complaint, so the fix did not simply disable it.
+        assert_eq!(
+            ids(r#" properties="remote-resources""#, "<p>x</p>"),
+            vec!["OPF-018".to_string()],
+            "an unjustified remote-resources property is still reported"
+        );
+    }
+
+    /// `title.present` only applies where its Schematron context does.
+    ///
+    /// The rule is `<rule context="h:head"><assert test="exists(h:title)">`.
+    /// Ported without the context it fired on any EPUB 3 content document
+    /// with no `<title>` anywhere — including one with no `<head>` at all,
+    /// where the message describes an element the document does not contain.
+    /// W3C's `pub-xml-external-id` carries exactly that: a content document
+    /// whose whole body is `<span>The test fails.</span>`.
+    ///
+    /// The control matters more than the fix here: a document that *does*
+    /// have a head and no title must still be reported, or the fix is just a
+    /// deletion. Both are asserted, and so is the namespace, since `h:title`
+    /// is XHTML's `title` and not SVG's.
+    #[test]
+    fn the_head_title_rule_needs_a_head_to_apply_to() {
+        fn findings(doc: &str) -> Vec<String> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", doc),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter_map(|m| m.rule)
+                .filter(|r| r.contains("head_missing_title") || r.contains("empty_title"))
+                .map(str::to_owned)
+                .collect()
+        }
+
+        const NS: &str = "xmlns=\"http://www.w3.org/1999/xhtml\"";
+        // No head: the rule has no context node, so it does not apply. The
+        // document is still rejected, by the grammar, for other reasons.
+        assert!(
+            findings("<span>The test fails.</span>").is_empty(),
+            "a document with no head must not be told its head needs a title"
+        );
+        // Control: a head with no title is exactly what the rule is for.
+        assert_eq!(
+            findings(&format!(
+                "<html {NS}><head></head><body><p>x</p></body></html>"
+            )),
+            vec!["opf.content_document.head_missing_title"],
+            "a head without a title is still reported"
+        );
+        // A present-but-empty title is the sibling rule, context `h:title`.
+        assert_eq!(
+            findings(&format!(
+                "<html {NS}><head><title>  </title></head><body><p>x</p></body></html>"
+            )),
+            vec!["opf.content_document.empty_title"],
+            "an empty title is the other rule, and still fires"
+        );
+        // A well-formed head says nothing.
+        assert!(
+            findings(&format!(
+                "<html {NS}><head><title>t</title></head><body><p>x</p></body></html>"
+            ))
+            .is_empty(),
+            "a head with a title must be silent"
         );
     }
 

@@ -138,6 +138,43 @@ While there: `smil_items` was still ordered by `HashMap` iteration, the third
 site of the nondeterminism fixed in 0.9.28. A book with two overlays printed
 their findings in a different order on every run.
 
+**The last three false positives W3C's `epub-tests` found, and one false
+negative that came with them.** After the media-overlay fix above, four of the
+209 reading-system conformance publications still carried an ID epubcheck does
+not report. All three causes turned out to be different, and none of them was a
+rule that was simply too strict.
+
+- **OPF-003 is a container-level question.** epubcheck asks it once in
+  `OCFChecker`, searching *every* package document at the same time, and counts
+  a metadata `<link href>` as a declaration alongside a manifest `<item>`. Ours
+  ran inside the per-package check with only that package's `<item>`s.
+  `ocf-package_multiple` declares three renditions in three directories, so
+  each package blamed the other two's files — 18 findings against epubcheck's
+  none — and `pkg-linked-records` referenced an ONIX record by `<link>`.
+- **A file URL was reported and then dropped.** RSC-030 ended with a
+  `continue`, on the reasonable-sounding grounds that it was the whole story
+  for a `file:` URL. It is not — the reference still has to be classified, and
+  skipping that cost a finding in *each* direction on `pub-file-urls`: a
+  correctly declared `remote-resources` property drew OPF-018 "doesn't appear
+  to be needed", and three `<iframe>`s in a restricted context drew no RSC-006
+  where epubcheck reports one each. epubcheck agrees a file URL is remote
+  (`isRemote` is "not `data:` and not same-origin"); it just does not stop
+  after saying so. Third instance of this shape in `opf.rs`.
+- **A Schematron rule lost its context in the port.** `title.present` is
+  `<rule context="h:head"><assert test="exists(h:title)">`, ported as a search
+  for the first descendant named `title` anywhere. It therefore fired on a
+  document with no `<head>` at all — `pub-xml-external-id` carries a one-line
+  `<span>The test fails.</span>` and was told its head should have a title. The
+  sibling rule `title.non-empty` has a different context (`h:title`) and is now
+  kept separate, and both are namespace-qualified as `h:` means.
+
+On the 209 publications: IDs reported by epubveri alone go from
+`{OPF-003: 2, OPF-018: 1, RSC-017: 1}` to **none at all**, exact ID-set
+agreement from 172/209 to 195/209, and RSC-006 leaves the list of IDs only
+epubcheck reports. The shelf is byte-identical across all three, including the
+11 books that report OPF-003, the 2 with file URLs and the 2 that hit the
+head/title rule; the corpus is unchanged at 606/607 with 0 false positives.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
