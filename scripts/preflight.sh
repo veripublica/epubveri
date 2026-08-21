@@ -174,6 +174,30 @@ else
     bad "corpus produced nothing — it cannot answer 'no change' from an empty run"
   fi
 
+  # W3C's conformance suite. Cheap (~9 s, no JVM) and it sees a part of the
+  # format the other two instruments do not reach at all: no book on the shelf
+  # carries a media overlay, a rendition:layout spine override, or a viewport
+  # meta in more than one file, and the corpus fixtures each trip exactly one
+  # rule. Seven defects on its first run were invisible to both.
+  #
+  # The clone is gitignored, so its absence is a setup gap and not a release
+  # blocker - but a *silent* absence would be the same mistake the shelf block
+  # above exists to avoid.
+  EPUB_TESTS="${EPUB_TESTS_DIR:-corpus/epub-tests}"
+  if [ -d "$EPUB_TESTS/tests" ]; then
+    if ET=$(cargo run --release -q -p epubveri-harness --bin epubtests 2>&1) && [ -n "$ET" ]; then
+      ok "epub-tests ran and produced output"
+      grep -E "^packaged|^  (VALID|INVALID) " <<< "$ET" | sed 's/^/        /'
+      echo "        ^ these are conformance tests: most are meant to be valid,"
+      echo "        so a rise in INVALID is more likely ours than W3C's"
+    else
+      bad "epub-tests produced nothing - an empty run cannot answer anything"
+    fi
+  else
+    skip "epub-tests not cloned ($EPUB_TESTS) - W3C's conformance suite is absent"
+    echo "        git clone --depth 1 https://github.com/w3c/epub-tests.git corpus/epub-tests"
+  fi
+
   check "hostile (no abort, panic or timeout)" \
     cargo run --release -q -p epubveri-harness --bin hostile
 
