@@ -5,8 +5,6 @@
 //! with no `epub:type` at all is completely unrestricted (confirmed via a
 //! real fixture using arbitrary markup in one).
 
-use std::collections::HashMap;
-
 use crate::ids::*;
 use crate::report::{Report, Severity};
 use crate::xmlext::NodeExt;
@@ -228,57 +226,6 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
     check_ol(*ol, ty, path, report);
 }
 
-/// RSC-010: a `toc` nav's link must target a real Content Document -
-/// confirmed via a real fixture linking to a plain image instead.
-fn check_toc_links(
-    nav: roxmltree::Node,
-    dir: &str,
-    items: &HashMap<String, (String, String)>,
-    fallback_map: &HashMap<String, String>,
-    path: &str,
-    report: &mut Report,
-) {
-    for a in nav
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "a")
-    {
-        let Some(href) = a.attr_no_ns("href") else {
-            continue;
-        };
-        if crate::opf::is_external(href) {
-            continue;
-        }
-        let path_part = href.split(['#', '?']).next().unwrap_or(href);
-        let resolved = crate::opf::nfc(&crate::opf::resolve(dir, path_part));
-        // The third clause of epubcheck's RSC-010 condition: an item whose
-        // `fallback` chain reaches a Content Document is a legitimate target.
-        // Doitsu, MobileRead #168 - an image-based book links its nav straight
-        // at the JPEGs, each with `fallback` to an XHTML document.
-        if let Some((id, (_, mt))) = items
-            .iter()
-            .find(|(_, (p, _))| crate::opf::nfc(p) == resolved)
-            && mt != "application/xhtml+xml"
-            && mt != "image/svg+xml"
-            // epubcheck's hyperlink branch (`ResourceReferencesChecker`:227)
-            // exempts the deprecated content-document types and is not
-            // version-gated, so this applies to the EPUB 3 nav document too
-            // (verified against epubcheck with a `text/html` nav target).
-            && !crate::opf::is_deprecated_content_document_type(mt)
-            && !crate::opf::fallback_reaches_content_document(id, items, fallback_map)
-        {
-            report.push_node(
-                RSC_010,
-                Severity::Error,
-                format!("toc nav link '{href}' does not target a Content Document"),
-                path,
-                a,
-                "navdoc.toc.link_not_content_document",
-                vec![href.to_string()],
-            );
-        }
-    }
-}
-
 /// `landmarks`-specific rules: every entry needs an `epub:type` (reported
 /// once per missing occurrence), and no two entries may share both an
 /// `epub:type` token and their target resource (reported once per
@@ -347,16 +294,16 @@ fn check_landmarks(nav: roxmltree::Node, dir: &str, path: &str, report: &mut Rep
     }
 }
 
-/// Entry point, called once for the actual nav document. `items` is the
-/// manifest's id -> (resolved path, media-type) map, needed for RSC-010.
-pub(crate) fn check(
-    doc: &roxmltree::Document,
-    path: &str,
-    dir: &str,
-    items: &HashMap<String, (String, String)>,
-    fallback_map: &HashMap<String, String>,
-    report: &mut Report,
-) {
+/// Entry point, called once for the actual nav document.
+///
+/// It used to take the manifest map and the fallback map for its own RSC-010
+/// on `toc` links. That check was generalised to every hyperlink in #78
+/// (`opf.rs`, `opf.content_document.hyperlink_not_content_document`) and the
+/// narrower one was left in place, so a nav link to a non-Content-Document
+/// drew the finding **twice** — caught by W3C's `pub-foreign_bad-fallback`,
+/// where epubcheck reports one and we reported two at the same position.
+/// The general site subsumes this one; the parameters left with it.
+pub(crate) fn check(doc: &roxmltree::Document, path: &str, dir: &str, report: &mut Report) {
     check_hidden_attrs(doc, path, report);
 
     let navs: Vec<_> = doc
@@ -472,9 +419,6 @@ pub(crate) fn check(
                     Vec::new(),
                 );
             }
-        }
-        if ty == "toc" {
-            check_toc_links(nav, dir, items, fallback_map, path, report);
         }
         if ty == "landmarks" {
             check_landmarks(nav, dir, path, report);

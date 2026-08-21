@@ -191,6 +191,22 @@ media-type dispatch so the next one joins them rather than being forgotten.
 The shelf is byte-identical, including the 15 books that declare
 `image/svg+xml` items; the corpus is unchanged.
 
+**A `toc` nav link to a non-Content-Document drew RSC-010 twice.** #78
+generalised that check from the two toc paths to every hyperlink and left the
+narrower `navdoc` one in place, so both fired on the same reference at the same
+position. epubcheck reports one; W3C's `pub-foreign_bad-fallback` is where the
+pair showed up side by side. The general site subsumes the narrow one, which is
+removed along with the two parameters that existed only to feed it.
+
+The removed check had no test of its own, which is why nothing failed when the
+duplicate appeared. Its replacement asserts the **count**, not presence — a
+`> 0` assertion would have passed throughout the duplicate's entire lifetime,
+which is the lesson #76 already left here.
+
+The shelf cannot speak to this one: **no book on it reports RSC-010 at all**, so
+its silence is not evidence. The corpus is unchanged and the finding is verified
+against epubcheck on the publication that exposed it.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`

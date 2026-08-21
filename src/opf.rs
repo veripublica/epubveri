@@ -7095,7 +7095,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
         // --- Navigation document checks (NAV-010/011) ---
         if nav_path.as_deref() == Some(path.as_str()) {
-            crate::navdoc::check(&d, &path, &dir, &items, &fallback_map, report);
+            crate::navdoc::check(&d, &path, &dir, report);
             // NAV-010: external links inside the required toc/page-list/
             // landmarks nav elements aren't allowed (links to remote
             // resources are fine in other, custom nav types).
@@ -11455,6 +11455,92 @@ mod tests {
         assert!(
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
+        );
+    }
+
+    /// A nav link to a non-Content-Document draws RSC-010 exactly **once**.
+    ///
+    /// #78 generalised this check from the two toc paths to every hyperlink
+    /// and left the narrower `navdoc` one in place, so a `toc` nav link drew
+    /// it twice at the same position. epubcheck reports one; W3C's
+    /// `pub-foreign_bad-fallback` is where the two showed up side by side.
+    ///
+    /// **The assertion is on the count, not on presence**, which is the whole
+    /// point: `> 0` passed throughout the duplicate's entire lifetime. Same
+    /// lesson #76 left, applied to the rule that inherited it — and the
+    /// removed check had no test of its own, which is why nothing failed when
+    /// the duplicate appeared.
+    #[test]
+    fn a_nav_link_to_a_non_content_document_is_reported_once() {
+        fn rsc010(fallback: bool) -> usize {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="blob" href="foo.dmg" media-type="application/octet-stream"{}/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#,
+                if fallback { r#" fallback="ch1""# } else { "" }
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol>\
+                <li><a href=\"ch1.xhtml\">c</a></li>\
+                <li><a href=\"foo.dmg\">d</a></li></ol></nav></body></html>";
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p>x</p></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", CH1),
+                    ("OEBPS/foo.dmg", "\0\0\0\0"),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_010)
+                .count()
+        }
+
+        assert_eq!(rsc010(false), 1, "reported once, not once per check");
+        // Control: a fallback chain reaching a Content Document is a
+        // legitimate target (Doitsu, MobileRead #168), so nothing is due.
+        assert_eq!(
+            rsc010(true),
+            0,
+            "a fallback to a Content Document is legitimate"
         );
     }
 
