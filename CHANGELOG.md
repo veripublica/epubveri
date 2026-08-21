@@ -10,6 +10,34 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Usage-severity findings are hidden from the human output by default, as they
+are in epubcheck** (`-u`/`--usage` shows them). Asked on MobileRead and answered
+there: JSWolf met CSS-028 twice and read it as an error message on correct
+content, and Doitsu proposed mirroring epubcheck's flag.
+
+The asymmetry was ours, not epubcheck's, and it was measurable: of 385 real
+books, **60 produce nothing but usage findings** — perfectly good books that
+printed a median of six lines a reader could reasonably mistake for problems.
+The default level now matches epubcheck's exactly: fatal, error, warning and
+**info**, with usage excluded — `info` stays, which was read off epubcheck's own
+`--help` rather than assumed.
+
+Two boundaries this deliberately does not cross:
+
+- **It is a display filter, never suppression in the library.** Three of
+  epubsana's fixers dispatch on rules that fire below error severity; hiding
+  those from `validate_bytes` would take them dark silently, with nothing on
+  either side reporting it. `--format json` and `--format ids` are likewise
+  never filtered — a machine consumer receiving fewer findings than the library
+  produced is the same harm in a different coat.
+- **`ADV-*`/`NEXT-*` are exempt.** They are emitted at usage severity, so a
+  filter written as "severity is not usage" would make `--advisory` print
+  nothing at all — the flag would not fail, it would go quietly inert. They
+  print whenever present, because `--advisory` already decided that.
+
+The verdict cannot move either way: usage findings never counted toward it.
+
+
 **The two `media:*` cardinality rules were wrong in both directions at once.**
 They had the shifted context 0.9.29 fixed for the `rendition:*` family — firing
 once per occurrence rather than once per constraint — and a second defect on top:

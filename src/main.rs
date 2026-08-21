@@ -39,6 +39,14 @@ OPTIONS:
                            version wins, so a 3.0 book checked as 2.0 reports
                            at length. Default: the version the book declares.
                            (Note: -V, below, prints this tool's version.)
+    -u, --usage            Show usage-severity findings, which name a feature a
+                           book uses rather than anything wrong with it (an
+                           @font-face declaration, an epub:type value outside
+                           the default vocabulary, a manifest entry no document
+                           references). Hidden by default, as in epubcheck.
+                           Findings from --advisory print whichever way this is
+                           set - that flag is their switch. The machine formats
+                           (--format json, ids) are never filtered.
         --advisory         Also emit opt-in findings epubcheck has no verdict
                            on, at usage severity, in two families:
                              NEXT-*  a published spec requires it and epubcheck
@@ -93,6 +101,7 @@ enum Cli {
         /// declares - epubcheck's `-v`. `None` means "as declared".
         epub_version: Option<String>,
         advisory: bool,
+        usage: bool,
     },
     /// `-h`/`--help` was requested (short-circuits everything else).
     Help,
@@ -117,6 +126,7 @@ fn parse(args: &[String]) -> Cli {
     let mut profile: Option<String> = None;
     let mut epub_version: Option<String> = None;
     let mut advisory = false;
+    let mut usage = false;
     let mut help = false;
     let mut version = false;
     let mut error: Option<String> = None;
@@ -151,6 +161,7 @@ fn parse(args: &[String]) -> Cli {
                 "help" => help = true,
                 "version" => version = true,
                 "advisory" => advisory = true,
+                "usage" => usage = true,
                 "input" | "format" | "profile" | "epub-version" => {
                     let value = match attached {
                         Some(v) => v,
@@ -189,6 +200,7 @@ fn parse(args: &[String]) -> Cli {
             while j < chars.len() {
                 match chars[j] {
                     'h' => help = true,
+                    'u' => usage = true,
                     'V' => version = true,
                     // epubcheck spells this `-v`; `-V` is this tool's own
                     // version, as the convention requires. The two being one
@@ -280,6 +292,7 @@ fn parse(args: &[String]) -> Cli {
         profile,
         epub_version,
         advisory,
+        usage,
     }
 }
 
@@ -305,7 +318,8 @@ fn main() -> ExitCode {
             profile,
             epub_version,
             advisory,
-        } => run(&inputs, &format, profile, epub_version, advisory),
+            usage,
+        } => run(&inputs, &format, profile, epub_version, advisory, usage),
     }
 }
 
@@ -326,6 +340,7 @@ fn run(
     profile: Option<String>,
     epub_version: Option<String>,
     advisory: bool,
+    usage: bool,
 ) -> ExitCode {
     let options = epubveri::Options {
         profile,
@@ -406,7 +421,7 @@ fn run(
         let multi = results.len() > 1;
         for (path, r) in &results {
             match r {
-                Ok(report) => print_report(report, path, format, multi),
+                Ok(report) => print_report(report, path, format, multi, usage),
                 Err(e) => eprintln!("error: {e}"),
             }
         }
@@ -421,7 +436,37 @@ fn run(
 /// Print one input's report to stdout in the requested `human`/`ids` format.
 /// With multiple inputs, a `human` report is preceded by a path header so each
 /// verdict is attributable.
-fn print_report(report: &epubveri::report::Report, path: &str, format: &str, multi: bool) {
+/// Is this finding shown in the human rendering?
+///
+/// **Only usage findings are ever hidden, and only from this rendering.**
+/// epubcheck's default level is fatal/error/warning/info with usage excluded
+/// unless `-u` — read off its own `--help`, not assumed — so `info` stays
+/// visible here too.
+///
+/// **The exception is the category epubcheck does not have.** `ADV-*`/`NEXT-*`
+/// findings are emitted at usage severity, so filtering on severity alone
+/// would make `--advisory` print nothing at all: the flag would go quietly
+/// inert, which is the failure mode this project keeps having to undo. They
+/// are shown whenever they are present, because `--advisory` has already
+/// decided that — the library does not emit them otherwise.
+fn shown_to_a_reader(m: &epubveri::report::Message, usage: bool) -> bool {
+    m.severity != epubveri::report::Severity::Usage
+        || usage
+        || epubveri::ids::advisory_basis(m.id).is_some()
+}
+
+fn print_report(
+    report: &epubveri::report::Report,
+    path: &str,
+    format: &str,
+    multi: bool,
+    usage: bool,
+) {
+    // **The machine formats stay complete.** The filter is about a person
+    // reading a terminal; a consumer parsing `json` or `ids` and silently
+    // receiving fewer findings than the library produced is the same class of
+    // harm as suppressing them in the library, which is the line this change
+    // may not cross. They can filter on `severity` themselves.
     if format == "ids" {
         for m in &report.messages {
             println!("{}", m.id);
@@ -436,12 +481,82 @@ fn print_report(report: &epubveri::report::Report, path: &str, format: &str, mul
     // and drifting from it (epubsana's request, 2026-08-21). The multi-input
     // header above stays CLI-only: it is about this program's arguments, not
     // about a report.
-    println!("{}", report.render_human());
+    //
+    // Rendered message by message rather than through `Report::render_human`
+    // so the filter can sit between them: that method is public API and its
+    // contract is the whole report. `render_summary` is the same primitive it
+    // uses, so the verdict line is unchanged — and the verdict itself cannot
+    // move, since usage findings never counted toward it.
+    for m in report
+        .messages
+        .iter()
+        .filter(|m| shown_to_a_reader(m, usage))
+    {
+        println!("{}", m.render_human());
+    }
+    println!("{}", report.render_summary());
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Usage findings are hidden by default — **except the family that shares
+    /// their severity but not their meaning**.
+    ///
+    /// `ADV-*`/`NEXT-*` are emitted at usage severity, so a filter written as
+    /// `severity != Usage` would make `--advisory` print nothing at all. The
+    /// flag would not fail; it would go quietly inert, and nothing on either
+    /// side would report it. That is the assertion worth having here — the
+    /// plain usage case is the easy half.
+    ///
+    /// The verdict cannot move either way: usage findings never counted toward
+    /// it, which is why this can be a display filter at all.
+    #[test]
+    fn only_usage_hides_and_the_advisory_family_is_exempt() {
+        use epubveri::report::{Report, Severity};
+
+        let mut r = Report::new();
+        r.push(epubveri::ids::CSS_028, Severity::Usage, "a feature note");
+        r.push(epubveri::ids::ADV_003, Severity::Usage, "an advisory");
+        r.push(
+            epubveri::ids::NEXT_005,
+            Severity::Usage,
+            "a spec-ahead advisory",
+        );
+        r.push(epubveri::ids::RSC_005, Severity::Error, "an error");
+        r.push(epubveri::ids::CSS_007, Severity::Info, "an info");
+
+        let visible = |usage: bool| -> Vec<&'static str> {
+            r.messages
+                .iter()
+                .filter(|m| shown_to_a_reader(m, usage))
+                .map(|m| m.id)
+                .collect()
+        };
+
+        assert_eq!(
+            visible(false),
+            vec![
+                epubveri::ids::ADV_003,
+                epubveri::ids::NEXT_005,
+                epubveri::ids::RSC_005,
+                epubveri::ids::CSS_007,
+            ],
+            "by default: usage hidden, advisory kept, info kept as epubcheck keeps it"
+        );
+        assert_eq!(
+            visible(true),
+            vec![
+                epubveri::ids::CSS_028,
+                epubveri::ids::ADV_003,
+                epubveri::ids::NEXT_005,
+                epubveri::ids::RSC_005,
+                epubveri::ids::CSS_007,
+            ],
+            "-u shows everything"
+        );
+    }
 
     /// A tripwire rather than a behaviour test: `--advisory`'s help text
     /// enumerates what the flag emits, in prose, and **nothing links that
@@ -484,10 +599,16 @@ mod tests {
         );
         // The count above means nothing if the paragraph it guards has gone,
         // and both families have to stay named in it.
+        // Split on the *option entry*, not the first mention of the flag. It
+        // used to be `split("--advisory")`, which broke the moment another
+        // entry referred to the flag in prose — `-u`'s does, since the two
+        // interact — and the failure looked like the advisory paragraph had
+        // gone missing. The definition line is the thing being guarded, so
+        // match its exact shape.
         let advisory_help = HELP
-            .split("--advisory")
+            .split("\n        --advisory ")
             .nth(1)
-            .expect("HELP documents --advisory");
+            .expect("HELP documents the --advisory option entry");
         assert!(
             advisory_help.contains("ADV-*")
                 && advisory_help.contains("NEXT-*")
