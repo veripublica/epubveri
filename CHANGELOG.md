@@ -8,6 +8,42 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**The README explains `--advisory`, and the commitment underneath it is now
+written down rather than merely honoured.** `ADV-*` reports real defects
+epubcheck has no opinion about — either because no specification forbids them,
+or because one does and epubcheck has not caught up. The new section says what
+that is for, and states the line plainly: **it is opt-in and never changes the
+verdict or the exit code.** A book that passes epubcheck passes epubveri, with
+or without the flag. That is permanent, not a current limitation — a validator
+that quietly rejected books the industry standard accepts would be worse than
+useless to anyone whose distributor gates on epubcheck, and holding that line
+is exactly what lets the flag be as opinionated as the evidence supports.
+
+It also names the two kinds that live there, because they are not the same
+claim: **spec-ahead** (the specification says it, epubcheck has not shipped it
+— these stop being advisory when it does) and **spec-silent** (nothing says
+anything, but the book is still wrong — these never graduate). Today that is
+four and five.
+
+**And the bar for admitting one is no longer a precision rate** (owner's
+correction). A rate measured on our shelf is a fact about that shelf — 385
+Turkish trade titles, Calibre output and Project Gutenberg — not about the
+check, so 10% and 100% should not decide the question. The corpus-independent
+test, which was in the record all along and which the rate obscured: **is the
+finding true every time it fires**, and is it worded as an observation rather
+than a verdict. "These two navigation entries resolve to the same document" is
+always true; "one of them is a mistake" sometimes is not, which is why the
+message does not say it.
+
+Our own history is the evidence: ADV-009 was first *rejected* on its rate, and
+shipped only once a structural fact settled it — `<content>` is mandatory in
+`navPoint`, so a section heading has nowhere to point but its first child's
+document. That holds in every library, not just this one. The statistic misled;
+the structure decided. `CLAUDE.md` now records all three wrong turns that
+candidate took, including two of its own numbers that were wrong.
+
 ## [0.9.27] - 2026-08-21
 
 **`Message::render_human()` is now in the library, and the CLI calls it instead

@@ -335,6 +335,45 @@ rules. epubveri supports the same four profiles (`dict`, `edupub`,
 ./target/release/epubveri --profile dict -i my-dictionary.epub
 ```
 
+## Optional extra checks (`--advisory`)
+
+```sh
+./target/release/epubveri --advisory -i book.epub
+```
+
+epubcheck is the standard, and where it has an opinion epubveri matches it.
+But there are real defects it has no opinion about — because no specification
+forbids them, or because the specification does and epubcheck has not caught
+up yet. `--advisory` is where those live, as `ADV-*` findings.
+
+**It is opt-in, and it never changes the verdict or the exit code.** A book
+that passes epubcheck passes epubveri, with or without the flag. That is a
+deliberate, permanent commitment rather than a current limitation: a validator
+that quietly rejected books the industry standard accepts would be worse than
+useless to anybody whose retailer or distributor gates on epubcheck. Inside the
+flag we can be as opinionated as the evidence supports, precisely because
+nothing outside it moves.
+
+Two different things live there, and it is worth knowing which you are looking
+at:
+
+- **The specification says it; epubcheck has not implemented it yet.** EPUB 3.4
+  froze its features in 2026 and epubcheck's own milestone for it is still at
+  zero. These will stop being advisory the day epubcheck ships them.
+- **No specification says anything, but the book is still wrong.** Two table-of
+  contents entries pointing at the same page, so one of them goes nowhere
+  useful. A CSS rule styling an element that does not exist. Nobody is late
+  here; these are simply things a validator can notice and nothing obliges it
+  to.
+
+**What it takes for a check to be admitted**, since an advisory that cries wolf
+teaches people never to pass the flag: the finding has to be **true every time
+it fires**, and worded as an observation rather than a verdict. "These two
+navigation entries resolve to the same document" is always true; "one of these
+is a mistake" sometimes is not, and so is not what the message says. Whether
+the reader considers it a problem is left to the reader.
+
+
 ## Use it in the browser (WASM)
 
 Because epubveri is pure Rust with no JVM and no native dependencies, it
