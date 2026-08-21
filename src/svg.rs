@@ -111,6 +111,49 @@ fn is_recognized_element(name: &str) -> bool {
 /// `check_foreign_object`/`check_title_content`) and only ever looks at
 /// SVG-namespaced children, so foreign content nested inside (embedded
 /// RDF in `<metadata>`, etc.) is never touched by this check.
+/// Every container resource this SVG document references, resolved and
+/// NFC-normalized. Reports nothing.
+///
+/// **The same per-source gap as `smil::resource_refs`, found the same way.**
+/// A standalone SVG in the spine is a content document, but `content_docs`
+/// selects on `application/xhtml+xml`, so an SVG's own references were
+/// collected by nothing. W3C's `lay-pp-embedded-images-svg` is eight
+/// `<svg><image xlink:href="../images/A.png"/></svg>` plates in the spine;
+/// we called all eight PNGs unreferenced and epubcheck called none of them.
+///
+/// References are gathered per *source* here and per *reference* in
+/// epubcheck, so every new source has to be added by hand and nothing fails
+/// loudly when one is missed. That is now twice. Before adding a reference
+/// kind, ask which per-source lists it must join.
+///
+/// `xlink:href` and plain `href` both, since SVG 2 allows the unprefixed
+/// form; a fragment-only value addresses this document and is not a
+/// container resource.
+pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
+    use crate::opf::{is_external, nfc, resolve};
+    const XLINK: &str = "http://www.w3.org/1999/xlink";
+    let Ok(doc) = crate::ocf::parse_xml(svg_xml) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        for v in [n.attribute((XLINK, "href")), n.attr_no_ns("href")]
+            .into_iter()
+            .flatten()
+        {
+            let v = v.trim();
+            if v.is_empty() || v.starts_with('#') || is_external(v) {
+                continue;
+            }
+            let path_part = v.split('#').next().unwrap_or(v);
+            if !path_part.is_empty() {
+                out.push(nfc(&resolve(base_dir, path_part)));
+            }
+        }
+    }
+    out
+}
+
 pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     for child in svg_root.children().filter(|n| n.is_element()) {
         if child.tag_name().namespace() != Some(SVG_NS) {

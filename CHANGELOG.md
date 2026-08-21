@@ -175,6 +175,22 @@ epubcheck reports. The shelf is byte-identical across all three, including the
 11 books that report OPF-003, the 2 with file URLs and the 2 that hit the
 head/title rule; the corpus is unchanged at 606/607 with 0 false positives.
 
+**A spine SVG's own references now count for OPF-097 — the same per-source gap
+as the media overlay, in a second source.** `content_docs` selects on
+`application/xhtml+xml`, so a standalone SVG content document's references were
+collected by nothing. W3C's `lay-pp-embedded-images-svg` is eight
+`<svg><image xlink:href="../images/A.png"/></svg>` plates in the spine: we
+called all eight PNGs unreferenced where epubcheck called none of them, nine
+findings against its one.
+
+References are gathered per *source* here and per *reference* in epubcheck, so
+each new source has to be added by hand and nothing fails loudly when one is
+missed. That is now twice, and the two extractors sit side by side behind one
+media-type dispatch so the next one joins them rather than being forgotten.
+
+The shelf is byte-identical, including the 15 books that declare
+`image/svg+xml` items; the corpus is unchanged.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`

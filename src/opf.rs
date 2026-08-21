@@ -8799,19 +8799,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // 19 of W3C's 209 `epub-tests` publications. `smil::resource_refs`
         // answers only the reference question and reports nothing, so the
         // second parse costs a finding-free walk of a small file.
+        //
+        // **SVG is the second source with the same problem, found the same
+        // way.** A standalone SVG in the spine is a content document, but
+        // `content_docs` selects on `application/xhtml+xml`, so an SVG's own
+        // references were collected by nothing. W3C's
+        // `lay-pp-embedded-images-svg` is eight `<svg><image
+        // xlink:href="../images/A.png"/></svg>` plates; we called all eight
+        // PNGs unreferenced against epubcheck's none.
+        type RefExtractor = fn(&str, &str) -> Vec<String>;
         for (path, mt) in &manifest_order {
-            if mt != "application/smil+xml" {
-                continue;
-            }
+            let extract: RefExtractor = match mt.as_str() {
+                "application/smil+xml" => crate::smil::resource_refs,
+                "image/svg+xml" => crate::svg::resource_refs,
+                _ => continue,
+            };
             let Some(orig) = name_index.get(&nfc(path)) else {
                 continue;
             };
             let Some(b) = ocf.read(orig) else { continue };
-            let dir = parent_dir(path);
-            resource_refs.extend(crate::smil::resource_refs(
-                &String::from_utf8_lossy(&b),
-                &dir,
-            ));
+            resource_refs.extend(extract(&String::from_utf8_lossy(&b), &parent_dir(path)));
         }
         // A media-overlay attribute consumes its SMIL, and the SMIL's own
         // audio/text targets are consumed in turn (folded in just above);
@@ -11448,6 +11455,100 @@ mod tests {
         assert!(
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
+        );
+    }
+
+    /// A standalone SVG's own references count for OPF-097.
+    ///
+    /// An SVG in the spine is a content document, but `content_docs` selects
+    /// on `application/xhtml+xml`, so its references were collected by
+    /// nothing. W3C's `lay-pp-embedded-images-svg` is eight
+    /// `<svg><image xlink:href="../images/A.png"/></svg>` plates: we called
+    /// all eight PNGs unreferenced where epubcheck called none of them.
+    ///
+    /// **Second instance of the per-source shape**, after the media-overlay
+    /// one above. References are gathered per source here and per reference
+    /// in epubcheck, so each new source has to be added by hand and nothing
+    /// fails loudly when one is missed.
+    #[test]
+    fn a_spine_svgs_own_references_count_for_opf_097() {
+        fn unreferenced(image_ref: Option<&str>) -> Vec<String> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 10 10">
+  <title>t</title>{}
+</svg>"#,
+                match image_ref {
+                    Some(h) => format!(r#"<image xlink:href="{h}" width="10" height="10"/>"#),
+                    None => String::new(),
+                }
+            );
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="plate" href="plates/a.svg" media-type="image/svg+xml"/>
+    <item id="png" href="images/a.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="plate"/></spine>
+</package>"#;
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"plates/a.svg\">c</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/plates/a.svg", svg.as_str()),
+                    ("OEBPS/images/a.png", "\0\0\0\0"),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            let mut v: Vec<String> = crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_097)
+                .flat_map(|m| m.params.clone())
+                .collect();
+            v.sort();
+            v
+        }
+
+        assert_eq!(
+            unreferenced(Some("../images/a.png")),
+            Vec::<String>::new(),
+            "an image the spine SVG embeds must not be called unreferenced"
+        );
+        // Control: nothing points at it, so it is unreferenced — the fix does
+        // not exempt images, it collects a reference.
+        assert_eq!(
+            unreferenced(None),
+            vec!["images/a.png".to_string()],
+            "an image no document references is still unreferenced"
         );
     }
 
