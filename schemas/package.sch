@@ -504,8 +504,8 @@
   </pattern>
 
   <pattern id="rendition-layout-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'rendition:layout'][not(@refines)]">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:layout'][not(@refines)]) = 1"
+    <rule context="opf:package/opf:metadata">
+      <assert test="count(opf:meta[normalize-space(@property) = 'rendition:layout'][not(@refines)]) &lt;= 1"
         >The "rendition:layout" property must not occur more than one time as a global value</assert>
     </rule>
   </pattern>
@@ -525,8 +525,8 @@
   </pattern>
 
   <pattern id="rendition-orientation-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'rendition:orientation'][not(@refines)]">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:orientation'][not(@refines)]) = 1"
+    <rule context="opf:package/opf:metadata">
+      <assert test="count(opf:meta[normalize-space(@property) = 'rendition:orientation'][not(@refines)]) &lt;= 1"
         >The "rendition:orientation" property must not occur more than one time as a global value</assert>
     </rule>
   </pattern>
@@ -546,8 +546,8 @@
   </pattern>
 
   <pattern id="rendition-spread-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'rendition:spread'][not(@refines)]">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:spread'][not(@refines)]) = 1"
+    <rule context="opf:package/opf:metadata">
+      <assert test="count(opf:meta[normalize-space(@property) = 'rendition:spread'][not(@refines)]) &lt;= 1"
         >The "rendition:spread" property must not occur more than one time as a global value</assert>
     </rule>
   </pattern>
@@ -567,8 +567,8 @@
   </pattern>
 
   <pattern id="rendition-flow-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'rendition:flow'][not(@refines)]">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:flow'][not(@refines)]) = 1"
+    <rule context="opf:package/opf:metadata">
+      <assert test="count(opf:meta[normalize-space(@property) = 'rendition:flow'][not(@refines)]) &lt;= 1"
         >The "rendition:flow" property must not occur more than one time as a global value</assert>
     </rule>
   </pattern>
@@ -584,8 +584,8 @@
        warning (OPF-086, every occurrence) and syntax check are hand-coded
        in opf.rs since they reuse the layout.rs viewport-grammar parser. -->
   <pattern id="rendition-viewport-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'rendition:viewport'][not(@refines)]">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'rendition:viewport'][not(@refines)]) = 1"
+    <rule context="opf:package/opf:metadata">
+      <assert test="count(opf:meta[normalize-space(@property) = 'rendition:viewport'][not(@refines)]) &lt;= 1"
         >The "rendition:viewport" property must not occur more than one time as a global value</assert>
     </rule>
   </pattern>

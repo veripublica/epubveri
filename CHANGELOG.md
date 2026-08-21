@@ -207,6 +207,25 @@ The shelf cannot speak to this one: **no book on it reports RSC-010 at all**, so
 its silence is not evidence. The corpus is unchanged and the finding is verified
 against epubcheck on the publication that exposed it.
 
+**A duplicated global `rendition:*` property drew one finding per occurrence
+instead of one per constraint.** The Schematron rule is a cardinality assertion
+whose context is the *metadata container* — "this property must not occur more
+than once" is a single statement about the document — and ours had the context
+on the `meta` element, so two duplicates produced two findings where epubcheck
+produces one. All five `rendition:*` cardinality rules (`layout`,
+`orientation`, `spread`, `flow`, `viewport`) carried the same shifted context.
+
+**Third Schematron context defect this release**, after `title.present`. A rule
+copied without its context is a different rule, and the two ways it goes wrong
+are now both on record: lose the context and it fires where it does not apply;
+shift it down to the item and it fires once per item.
+
+Moving the context up meant the assertion had to become `<= 1` rather than
+`= 1`: the rule now runs on *every* package document, where before it only ran
+when a matching `meta` existed, so `= 1` would have reported every book that
+does not use the property at all. All 385 shelf books are unchanged, which is
+the evidence for that half; the corpus is unchanged too.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`

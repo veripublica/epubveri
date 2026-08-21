@@ -11458,6 +11458,100 @@ mod tests {
         );
     }
 
+    /// A duplicated global `rendition:*` property is one finding, not one
+    /// per occurrence.
+    ///
+    /// The Schematron rule is a cardinality assertion whose context is the
+    /// **metadata container** — `count(...) le 1` said once — and ours had
+    /// the context on the `meta` element instead, so two duplicates drew two
+    /// findings. epubcheck reports one; W3C's `fxl-layout-duplication` and
+    /// `lay-pp-layout-duplication` are where the pair showed up. All five
+    /// `rendition:*` cardinality rules had the same shifted context.
+    ///
+    /// **The zero case is the one that could have gone badly.** Moving the
+    /// context to the container makes the rule run on *every* book, where it
+    /// had previously only run when a matching `meta` existed — so the
+    /// assertion had to become `<=` rather than `= 1`, or every book without
+    /// the property would have been reported. All three counts are asserted
+    /// for that reason.
+    #[test]
+    fn a_duplicated_global_rendition_property_is_reported_once() {
+        fn findings(metas: &str) -> usize {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"
+         prefix="rendition: http://www.idpf.org/vocab/rendition/#">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {metas}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p>x</p></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", CH1),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.text.contains("must not occur more than one time"))
+                .count()
+        }
+
+        const ONE: &str = r#"<meta property="rendition:layout">pre-paginated</meta>"#;
+        // The trap: with the context on the container the rule runs on every
+        // book, so absence must stay silent.
+        assert_eq!(findings(""), 0, "no property at all must be silent");
+        assert_eq!(findings(ONE), 0, "one global value is exactly right");
+        assert_eq!(
+            findings(&format!("{ONE}{ONE}")),
+            1,
+            "two duplicates are one violation of one constraint, not two"
+        );
+        assert_eq!(
+            findings(&format!("{ONE}{ONE}{ONE}")),
+            1,
+            "three duplicates are still one violation"
+        );
+    }
+
     /// A nav link to a non-Content-Document draws RSC-010 exactly **once**.
     ///
     /// #78 generalised this check from the two toc paths to every hyperlink
