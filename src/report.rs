@@ -538,9 +538,11 @@ mod tests {
     #[test]
     fn fatal_and_error_invalidate_a_book_but_a_warning_does_not() {
         let mut r = Report::new();
-        r.push("HTM-060", Severity::Warning, "a warning");
-        r.push("OPF-090", Severity::Usage, "an advisory");
-        r.push("HTM-055", Severity::Info, "a note");
+        // Real constants, not literals: `"HTM-060"` stood here, a spelling
+        // epubcheck never emits (it has only `HTM_060a`/`b`).
+        r.push(crate::ids::HTM_060A, Severity::Warning, "a warning");
+        r.push(crate::ids::OPF_090, Severity::Usage, "an advisory");
+        r.push(crate::ids::HTM_055, Severity::Info, "a note");
         assert!(
             r.is_valid(),
             "warning/info/usage alone must stay valid (exit 0)"

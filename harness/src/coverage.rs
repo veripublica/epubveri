@@ -619,6 +619,15 @@ fn main() {
     // inconsistent (some use "HTM_054" with an underscore instead of
     // "HTM-054"). Normalize to hyphens.
     //
+    // That normalization is right for this matrix, whose question is *which
+    // checks exist*, not how they are spelled — but it is also why this
+    // instrument could not see the seventeen ids we spelled with a hyphen
+    // where epubcheck uses an underscore (fixed 2026-08-21). It normalizes
+    // away the exact difference. `ids::tests::epubcheck_spells_this_block_
+    // with_underscores` owns that question instead; do not "improve" this by
+    // comparing raw spellings here, or the two will disagree about what they
+    // are for.
+    //
     // The name may end in a lowercase letter, and 17 of them do
     // (`HTM_060a`, `OPF_004a`..`f`, `OPF_007a`..`c`, `RSC_007w`, ...).
     // Requiring digits at the end dropped every one of them from the ID

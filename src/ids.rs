@@ -294,18 +294,18 @@ pub const LIM_001: &str = "LIM-001"; // a resource exceeds ocf::MAX_ENTRY_BYTES 
 pub const MED_003: &str = "MED-003"; // a <picture> element's own <img> fallback references a foreign resource
 pub const MED_004: &str = "MED-004"; // an image resource is corrupt
 pub const MED_005: &str = "MED-005"; // <audio> resource is not a Core Media Type
-pub const MED_007: &str = "MED-007"; // a <picture> <source> references a foreign resource with no type attribute
+pub const MED_007: &str = "MED_007"; // a <picture> <source> references a foreign resource with no type attribute
 pub const MED_008: &str = "MED-008"; // clipBegin is after clipEnd
 pub const MED_009: &str = "MED-009"; // clipBegin equals clipEnd
-pub const MED_010: &str = "MED-010"; // content doc's ids aren't covered by its declared overlay
-pub const MED_011: &str = "MED-011"; // content doc is referenced by more than one overlay
-pub const MED_012: &str = "MED-012"; // content doc is referenced by the wrong overlay
-pub const MED_013: &str = "MED-013"; // content doc declares an overlay that doesn't reference it
-pub const MED_014: &str = "MED-014"; // <audio src> has a URL fragment (use clipBegin/clipEnd instead)
-pub const MED_015: &str = "MED-015"; // SMIL <text> order doesn't match the content doc's DOM order
-pub const MED_016: &str = "MED-016"; // media:duration total doesn't match the sum of overlay durations
-pub const MED_017: &str = "MED-017"; // scheme-based fragment on an XHTML media-overlay text target
-pub const MED_018: &str = "MED-018"; // invalid SVG fragment identifier on a media-overlay text target
+pub const MED_010: &str = "MED_010"; // content doc's ids aren't covered by its declared overlay
+pub const MED_011: &str = "MED_011"; // content doc is referenced by more than one overlay
+pub const MED_012: &str = "MED_012"; // content doc is referenced by the wrong overlay
+pub const MED_013: &str = "MED_013"; // content doc declares an overlay that doesn't reference it
+pub const MED_014: &str = "MED_014"; // <audio src> has a URL fragment (use clipBegin/clipEnd instead)
+pub const MED_015: &str = "MED_015"; // SMIL <text> order doesn't match the content doc's DOM order
+pub const MED_016: &str = "MED_016"; // media:duration total doesn't match the sum of overlay durations
+pub const MED_017: &str = "MED_017"; // scheme-based fragment on an XHTML media-overlay text target
+pub const MED_018: &str = "MED_018"; // invalid SVG fragment identifier on a media-overlay text target
 
 // --- Navigation document ---
 // NAV-001 is deliberately never emitted - dead in epubcheck (see the comment
@@ -332,14 +332,28 @@ pub const HTM_045: &str = "HTM-045"; // an empty href="" points the document at 
 pub const HTM_046: &str = "HTM-046"; // fixed-layout XHTML doc has no viewport meta
 pub const HTM_047: &str = "HTM-047"; // viewport content has a blank value after '='
 pub const HTM_048: &str = "HTM-048"; // fixed-layout SVG doc's root <svg> has no viewBox
-pub const HTM_056: &str = "HTM-056"; // viewport content is missing the width or height key
-pub const HTM_057: &str = "HTM-057"; // viewport width/height value fails the format grammar
-pub const HTM_059: &str = "HTM-059"; // viewport width or height key appears more than once
+pub const HTM_056: &str = "HTM_056"; // viewport content is missing the width or height key
+pub const HTM_057: &str = "HTM_057"; // viewport width/height value fails the format grammar
+pub const HTM_059: &str = "HTM_059"; // viewport width or height key appears more than once
 // epubcheck has no bare `HTM-060`: `MessageId` declares only `HTM_060a` and
-// `HTM_060b`, and — unlike its `OPF_086b("OPF-086b")` neighbour — spells both
-// with underscores in the value it prints. Odd, and mirrored anyway: the whole
-// point of adopting the ID scheme is that a toolchain grepping epubcheck's
-// output finds ours. We shipped `HTM-060`, which matches nothing.
+// `HTM_060b`. Mirrored, because the whole point of adopting the ID scheme is
+// that a toolchain grepping epubcheck's output finds ours; we shipped
+// `HTM-060`, which matches nothing.
+//
+// **And the underscore is not local to this pair — it is a contiguous block of
+// 21 ids**, `HTM_053`..`HTM_061` and `MED_006`..`MED_018`, every one of which
+// epubcheck prints with an underscore where its neighbours (`HTM-052`,
+// `OPF-086b`) use a hyphen. Nothing in the source explains the switch; it
+// simply happens partway down `MessageId.java` and is load-bearing anyway,
+// since the printed value is what a grep sees.
+//
+// This comment was written for the pair and applied only to the pair, while
+// `HTM_056`/`057`/`059` sat three lines above it spelling the same block with
+// hyphens. Seventeen ids were wrong for as long as this file has existed.
+// `epubcheck_spells_this_block_with_underscores` below is the tripwire, and
+// the habit it encodes is the reusable half: **when a rule is discovered
+// through one instance, ask what class the instance belongs to before
+// writing it down.**
 pub const HTM_060A: &str = "HTM_060a"; // a secondary viewport meta in a fixed-layout doc (usage)
 pub const HTM_060B: &str = "HTM_060b"; // a viewport meta in a reflowable doc (usage)
 
@@ -351,10 +365,10 @@ pub const HTM_003: &str = "HTM-003"; // an entity is declared SYSTEM/PUBLIC (ext
 pub const HTM_004: &str = "HTM-004"; // a DOCTYPE has a PUBLIC identifier (obsolete)
 pub const HTM_007: &str = "HTM-007"; // ssml:ph attribute with an empty/blank value
 pub const HTM_009: &str = "HTM-009"; // the OPF document has a DOCTYPE
-pub const HTM_054: &str = "HTM-054"; // custom attribute uses a reserved (w3.org/idpf.org) namespace
-pub const HTM_055: &str = "HTM-055"; // a discouraged element (base/embed/rp) is used (usage)
-pub const HTM_058: &str = "HTM-058"; // content document isn't UTF-8 encoded
-pub const HTM_061: &str = "HTM-061"; // an invalid data-* attribute name
+pub const HTM_054: &str = "HTM_054"; // custom attribute uses a reserved (w3.org/idpf.org) namespace
+pub const HTM_055: &str = "HTM_055"; // a discouraged element (base/embed/rp) is used (usage)
+pub const HTM_058: &str = "HTM_058"; // content document isn't UTF-8 encoded
+pub const HTM_061: &str = "HTM_061"; // an invalid data-* attribute name
 
 // --- Extension profiles: EDUPUB, Region-Based Navigation ---
 pub const HTM_051: &str = "HTM-051"; // HTML5 microdata attribute in an edupub content document
@@ -400,6 +414,52 @@ pub const OPF_095: &str = "OPF-095"; // a "voicing" link's media-type isn't an a
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **epubcheck prints one contiguous block of ids with an underscore**,
+    /// and ours must match it character for character: a toolchain grepping
+    /// its output for `MED_013` has to find our finding too, which is the
+    /// entire reason this project adopted the ID scheme instead of inventing
+    /// one.
+    ///
+    /// The block is `HTM_053`..`HTM_061` and `MED_006`..`MED_018`, read off
+    /// `MessageId.java`. `HTM_053` and `MED_006` are not implemented here, so
+    /// 19 of the 21 appear below.
+    ///
+    /// This test exists because the rule was known and applied to two ids out
+    /// of nineteen — the comment on `HTM_060A` stated it correctly while the
+    /// seventeen others, three of them within three lines of it, spelled the
+    /// same block with hyphens. No instrument could see it: the corpus and
+    /// `compare` regexes both accept `[-_]`, so every one of the seventeen
+    /// scored as a match against epubcheck's differently-spelled id.
+    #[test]
+    fn epubcheck_spells_this_block_with_underscores() {
+        const UNDERSCORED: &[&str] = &[
+            "HTM_054", "HTM_055", "HTM_056", "HTM_057", "HTM_058", "HTM_059", "HTM_060a",
+            "HTM_060b", "HTM_061", "MED_007", "MED_010", "MED_011", "MED_012", "MED_013",
+            "MED_014", "MED_015", "MED_016", "MED_017", "MED_018",
+        ];
+
+        let declared: Vec<String> = include_str!("ids.rs")
+            .lines()
+            .filter(|l| l.trim_start().starts_with("pub const "))
+            .filter_map(|l| l.split('"').nth(1).map(str::to_owned))
+            .collect();
+        assert!(declared.len() > 200, "parser broke: {}", declared.len());
+
+        let found: Vec<&String> = declared.iter().filter(|id| id.contains('_')).collect();
+        let expected: Vec<&str> = {
+            let mut v = UNDERSCORED.to_vec();
+            v.sort_unstable();
+            v
+        };
+        let mut got: Vec<&str> = found.iter().map(|s| s.as_str()).collect();
+        got.sort_unstable();
+
+        assert_eq!(
+            got, expected,
+            "the set of underscore-spelled ids drifted from epubcheck's block"
+        );
+    }
 
     /// Every advisory constant declared in this file, as `(rust_name, id)`.
     fn advisory_constants() -> Vec<(String, String)> {

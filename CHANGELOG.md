@@ -89,6 +89,33 @@ what a non-random sample of real books cannot supply.
 
 No behaviour changes; this is the matrix telling the truth about its own
 grounds.
+**Seventeen message IDs were spelled with a hyphen where epubcheck prints an
+underscore.** `HTM-054`, `HTM-055`, `HTM-056`, `HTM-057`, `HTM-058`, `HTM-059`,
+`HTM-061` and `MED-007`, `MED-010`..`MED-018` are now emitted as `HTM_054`,
+`MED_013` and so on, matching `MessageId.java` character for character. A
+toolchain grepping epubcheck's output for `MED_013` now finds ours too, which is
+the entire reason this project adopted epubcheck's ID scheme rather than
+inventing one.
+
+epubcheck switches from hyphens to underscores partway down its message list —
+`HTM-052` then `HTM_053` — for one contiguous block of 21 IDs, and nothing in
+its source explains why. The oddity was already known here and written up
+correctly in a comment on `HTM_060A`; it was applied to that pair and to nothing
+else, while `HTM_056`/`057`/`059` sat three lines above the comment spelling the
+same block with hyphens.
+
+**No instrument could have caught it.** The corpus and `compare` regexes both
+accept `[-_]`, so all seventeen scored as matches against epubcheck's
+differently-spelled IDs; the coverage matrix normalizes both sides to hyphens on
+purpose, since its question is which checks exist rather than how they are
+spelled. All 385 shelf books are silent here too — every one of the seventeen is
+a fixed-layout viewport or media-overlay check, and no book on the shelf uses
+either. A test now pins the set against `MessageId.java`, and the coverage
+harness carries a note saying why that question is not its to answer.
+
+If you match on any of these IDs, the spelling changes. No condition, severity,
+message or position moves.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
