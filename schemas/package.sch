@@ -464,15 +464,15 @@
        above, from the CSS-029/030 increment). -->
 
   <pattern id="media-active-class-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'media:active-class']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'media:active-class'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+    <rule context="opf:package/opf:metadata">
+      <assert test="count(opf:meta[normalize-space(@property) = 'media:active-class']) &lt;= 1"
         >the "media:active-class" property must not occur more than one time</assert>
     </rule>
   </pattern>
 
   <pattern id="media-playback-active-class-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'media:playback-active-class']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'media:playback-active-class'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
+    <rule context="opf:package/opf:metadata">
+      <assert test="count(opf:meta[normalize-space(@property) = 'media:playback-active-class']) &lt;= 1"
         >the "media:playback-active-class" property must not occur more than one time</assert>
     </rule>
   </pattern>

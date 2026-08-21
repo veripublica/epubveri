@@ -12179,8 +12179,8 @@ mod tests {
         assert_eq!(htm060b(false, false), 0, "no viewport, nothing to say");
     }
 
-    /// A duplicated global `rendition:*` property is one finding, not one
-    /// per occurrence.
+    /// A duplicated cardinality property is one finding, not one per
+    /// occurrence — and the count is global, not per `@refines` group.
     ///
     /// The Schematron rule is a cardinality assertion whose context is the
     /// **metadata container** — `count(...) le 1` said once — and ours had
@@ -12196,14 +12196,14 @@ mod tests {
     /// the property would have been reported. All three counts are asserted
     /// for that reason.
     #[test]
-    fn a_duplicated_global_rendition_property_is_reported_once() {
+    fn a_duplicated_cardinality_property_is_reported_once() {
         fn findings(metas: &str) -> usize {
             use std::io::Write;
             use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
             let opf = format!(
                 r#"<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"
-         prefix="rendition: http://www.idpf.org/vocab/rendition/#">
+         prefix="rendition: http://www.idpf.org/vocab/rendition/# media: http://www.idpf.org/vocab/overlays/#">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
     <dc:title>T</dc:title><dc:language>en</dc:language>
@@ -12270,6 +12270,29 @@ mod tests {
             findings(&format!("{ONE}{ONE}{ONE}")),
             1,
             "three duplicates are still one violation"
+        );
+
+        // **The `media:*` pair had the same shifted context and a second
+        // defect on top: they counted only within a `@refines` group.** Two
+        // measured against epubcheck, one probe each:
+        // - same group, ours reported twice where epubcheck reports once;
+        // - different groups, ours reported *nothing* where epubcheck still
+        //   reports once, because each group held one.
+        // So the rule was wrong in both directions at the same time, and the
+        // global count fixes both.
+        const MEDIA: &str = r#"<meta property="media:active-class">c</meta>"#;
+        assert_eq!(findings(MEDIA), 0, "one active-class is right");
+        assert_eq!(
+            findings(&format!("{MEDIA}{MEDIA}")),
+            1,
+            "two in one group: one violation, not two"
+        );
+        assert_eq!(
+            findings(
+                r##"<meta property="media:active-class" refines="#ch1">a</meta><meta property="media:active-class" refines="#nav">b</meta>"##
+            ),
+            1,
+            "two in different groups is still one violation — the count is global"
         );
     }
 

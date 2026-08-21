@@ -8,6 +8,22 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**The two `media:*` cardinality rules were wrong in both directions at once.**
+They had the shifted context 0.9.29 fixed for the `rendition:*` family — firing
+once per occurrence rather than once per constraint — and a second defect on top:
+they counted only within a `@refines` group, where epubcheck counts globally.
+Measured with one probe per shape:
+
+- two `media:active-class` in the same group: we reported twice, epubcheck once;
+- two in *different* groups: we reported **nothing**, epubcheck still reports
+  once.
+
+So a book could carry the defect and hear nothing from us, or hear about it
+twice. The global count fixes both, and the `@refines` sub-rule — which the two
+tools already agreed on — is untouched.
+
 ## [0.9.29] - 2026-08-21
 
 **Two CSS-004 false positives, found in epubcheck's own CSS test files, which no
