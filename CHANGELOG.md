@@ -301,6 +301,15 @@ The shelf speaks to one direction only, and it is the one that matters for a
 change that adds findings: none of its 385 books gained a NAV-011 (none reported
 one before either). The corpus is unchanged.
 
+**A `file:` URL inside `@font-face` drew nothing.** The generic `url()` pass
+deliberately skips `@font-face` blocks and hands them to the font-face checker,
+which asked about the declaration, an empty block and an empty `url()` — but
+never about the scheme. Every question the generic pass asks has to be asked
+again there or it is asked about nothing, and this one was not: on epubcheck's
+own `file-url-in-css-error` fixture it reports two file-URL errors and we
+reported the manifest one alone. The predicate is now shared between the two
+sites so they cannot drift apart again.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`

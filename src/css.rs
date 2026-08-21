@@ -328,7 +328,7 @@ pub(crate) fn check(
     for u in urls {
         let url = u.node;
         let pos = origin.position(css, u.span.start);
-        if url.trim_start().starts_with("file:") {
+        if is_file_url_str(&url) {
             report.push_full(
                 RSC_030,
                 Severity::Error,
@@ -1004,6 +1004,13 @@ fn check_declaration_shapes(
     }
 }
 
+/// A `file:` URL, by scheme. Shared so the generic `url()` pass and the
+/// `@font-face` one cannot drift apart — they are two sites asking one
+/// question, which is exactly how the `@font-face` gap opened.
+fn is_file_url_str(url: &str) -> bool {
+    url.trim_start().starts_with("file:")
+}
+
 fn check_font_face_spanned(
     block_values: &[Spanned<spanned::ComponentValue>],
     name_span: Span,
@@ -1056,6 +1063,24 @@ fn check_font_face_spanned(
         }
         let mut src_urls = Vec::new();
         collect_urls_spanned(chunk, &mut src_urls);
+        // RSC-030 has to be asked here as well as in the generic `urls` pass,
+        // because that pass deliberately skips `@font-face` blocks and hands
+        // them to this function — so every question it asks about a url has
+        // to be asked again here or it is asked about nothing. epubcheck
+        // reports two file-url errors on its own `file-url-in-css-error`
+        // fixture (the manifest item and the `src`); we reported the manifest
+        // one alone.
+        for u in src_urls.iter().filter(|u| is_file_url_str(&u.node)) {
+            report.push_full(
+                RSC_030,
+                Severity::Error,
+                format!("'{}' is a file URL, which is not allowed", u.node),
+                css_path,
+                origin.position(css, u.span.start),
+                "css.url.file_scheme_not_allowed",
+                vec![u.node.clone()],
+            );
+        }
         if let Some(empty) = src_urls.iter().find(|u| u.node.is_empty()) {
             report.push_at_pos(
                 CSS_002,

@@ -11545,6 +11545,65 @@ mod tests {
         );
     }
 
+    /// A `file:` URL inside `@font-face` is reported like any other.
+    ///
+    /// The generic `url()` pass in `css.rs` deliberately skips `@font-face`
+    /// blocks and hands them to `check_font_face`, which asked about the
+    /// declaration, an empty block and an empty `url()` — but never about the
+    /// scheme. So every question the generic pass asks had to be asked again
+    /// there, and this one was not: epubcheck reports two file-URL errors on
+    /// its own `file-url-in-css-error` fixture and we reported the manifest
+    /// one alone.
+    ///
+    /// Same shape as the rest of this release: a special-cased branch takes
+    /// ownership of a case and the general handling is skipped. The predicate
+    /// is now shared between the two sites so they cannot drift apart again.
+    #[test]
+    fn a_file_url_in_a_font_face_src_is_reported() {
+        let opf = |_: ()| {
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css" href="Styles/s.css" media-type="text/css"/>
+    <item id="f" href="Fonts/f.ttf" media-type="application/x-font-ttf"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+                .to_string()
+        };
+        let file_urls = |css: &str| -> Vec<String> {
+            crate::validate_bytes(epub_with_opf_and_css(&opf(()), css))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_030)
+                .flat_map(|m| m.params.clone())
+                .collect()
+        };
+
+        assert_eq!(
+            file_urls("@font-face { font-family: \"f\"; src: url('file:/font.woff'); }"),
+            vec!["file:/font.woff".to_string()],
+            "a file URL in @font-face src is a file URL"
+        );
+        // Control: the ordinary case must stay silent, or the check is just
+        // noise on every book that embeds a font.
+        assert!(
+            file_urls("@font-face { font-family: \"f\"; src: url('../Fonts/f.ttf'); }").is_empty(),
+            "a relative font url is not a file URL"
+        );
+        // And the generic pass still works, so the two sites agree.
+        assert_eq!(
+            file_urls("body { background: url('file:/bg.png'); }"),
+            vec!["file:/bg.png".to_string()],
+            "the generic url() pass asks the same question"
+        );
+    }
+
     /// A nav link with a dangling fragment still takes part in the
     /// spine-order comparison.
     ///
