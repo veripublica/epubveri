@@ -26,6 +26,13 @@ path = "src/coverage.rs"
 name = "compare"
 path = "src/compare.rs"
 
+# W3C's epub-tests conformance suite: packages the expanded publications and
+# runs epubveri over them. No JVM — `compare` owns the oracle half. The clone
+# is not vendored; see the binary's own docs.
+[[bin]]
+name = "epubtests"
+path = "src/epubtests.rs"
+
 [dependencies]
 epubveri = { path = ".." }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
