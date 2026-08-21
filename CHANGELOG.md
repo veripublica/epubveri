@@ -263,6 +263,44 @@ the shelf is **no witness at all**, since none of its 385 books uses a
 `rendition:layout` spine override. The test carries the evidence instead, in
 both property orders.
 
+**A nav link with a dangling fragment left the reading-order check entirely**
+(JSWolf, MobileRead 2026-08-21). It was dropped from the comparison on the
+grounds that a dangling fragment "is already caught elsewhere as a broken
+reference". RSC-012 does catch it — but RSC-012 answers *is this fragment
+defined* and NAV-011 answers *is the order right*, so such a link vanished from
+the ordering question altogether. epubcheck skips only the *document-order*
+half for an unresolvable fragment; the spine-order comparison has already run.
+
+On the book he sent, 67 of the links have dangling fragments: epubcheck reported
+71 NAV-011 and we reported 5. Both tools now report 71, and the 67 RSC-012 were
+identical throughout — his report said exactly that ("the number of errors
+matches"), which is what narrowed the search to one rule.
+
+Two more things came with it:
+
+- **Every finding now names the offending link and points at it.** All five used
+  to be anchored on the `<nav>` element with no target named, so the output was
+  five identical lines and an editor would mark one line five times.
+- **The comparison is now a two-level state machine**, matching epubcheck: the
+  document-order baseline resets when the spine advances, and a link whose
+  fragment did not resolve leaves it untouched. Scanning adjacent pairs got this
+  wrong whenever an unresolvable link sat between two resolvable ones — neither
+  pair compared, so the two real positions were never checked against each
+  other.
+
+This is the fourth time a check has suppressed a case because it believed
+another check owned it, and the fourth time the other check owned a *different
+question*.
+
+**New `rule` key**: these findings now carry `navdoc.toc.link_out_of_reading_order`,
+where the site was previously unkeyed. Nothing consumes NAV-011 today, but a
+downstream list of handled rules written against the old world will not contain
+it.
+
+The shelf speaks to one direction only, and it is the one that matters for a
+change that adds findings: none of its 385 books gained a NAV-011 (none reported
+one before either). The corpus is unchanged.
+
 ## [0.9.28] - 2026-08-21
 
 **The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`

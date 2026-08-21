@@ -7192,7 +7192,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // link ("the whole document") and real-fragment-index + 1
                 // otherwise, so it always sorts before any real fragment
                 // into the same document without needing a separate flag.
-                let mut keys: Vec<(usize, usize)> = Vec::new();
+                // (spine_idx, anchor, the <a> node, href). `anchor` is
+                // `None` when the fragment cannot be resolved: such a link
+                // still takes part in the *spine* comparison and only sits
+                // out the document-order one, which is epubcheck's
+                // `targetAnchorPosition > -1` guard.
+                //
+                // It used to `continue` here instead, on the grounds that a
+                // dangling fragment "is already caught elsewhere as a broken
+                // reference". RSC-012 does catch it — but RSC-012 answers
+                // *is this fragment defined* and this rule answers *is the
+                // order right*, so the link vanished from the ordering
+                // question entirely. JSWolf's `scrambled.epub` (MobileRead,
+                // 2026-08-21) is 67 links with dangling fragments: epubcheck
+                // reports 71 NAV-011 and we reported 5.
+                //
+                // Fourth time a check has suppressed a case because it
+                // believed another check owned it, and the fourth time the
+                // other check owned a *different question*.
+                #[allow(clippy::type_complexity)]
+                let mut keys: Vec<(usize, Option<usize>, roxmltree::Node, String)> = Vec::new();
                 for a in toc_nav
                     .descendants()
                     .filter(|n| n.is_element() && n.tag_name().name() == "a")
@@ -7212,7 +7231,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         continue;
                     };
                     let dom_idx = match frag {
-                        None => 0,
+                        None => Some(0),
                         Some(f) => {
                             if !id_order_cache.contains_key(&resolved_nfc) {
                                 let order =
@@ -7225,26 +7244,55 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             // An unreadable target (`None`) is skipped for
                             // the same reason - its DOM order is unknown,
                             // not empty.
-                            match id_order_cache[&resolved_nfc]
+                            id_order_cache[&resolved_nfc]
                                 .as_ref()
                                 .and_then(|o| o.get(f))
-                            {
-                                Some(&(idx, _)) => idx + 1,
-                                None => continue,
-                            }
+                                .map(|&(idx, _)| idx + 1)
                         }
                     };
-                    keys.push((spine_idx, dom_idx));
+                    keys.push((spine_idx, dom_idx, a, href.to_string()));
                 }
-                for w in keys.windows(2) {
-                    if w[0] > w[1] {
-                        report.push_at_pos(
+                // epubcheck's two-level state machine, rather than a scan of
+                // adjacent pairs: the document-order baseline resets whenever
+                // the spine advances or a spine violation is reported, and a
+                // link whose fragment did not resolve leaves it untouched.
+                // Adjacent pairs got this wrong whenever an unresolvable link
+                // sat between two resolvable ones — neither pair compared, so
+                // the two real positions were never checked against each
+                // other.
+                let mut last_spine: Option<usize> = None;
+                let mut last_anchor: Option<usize> = None;
+                for (spine, anchor, node, href) in &keys {
+                    // Position and target on every finding. They were all
+                    // anchored on the <nav> element with no target named, so
+                    // a book with five of them showed five identical lines
+                    // and an editor would mark one line five times.
+                    let mut say = |what: &str| {
+                        report.push_node(
                             NAV_011,
                             Severity::Warning,
-                            "toc nav link order does not match reading order",
+                            format!("toc nav link '{href}' is out of {what} order"),
                             path.clone(),
-                            Position::of(toc_nav),
+                            *node,
+                            "navdoc.toc.link_out_of_reading_order",
+                            vec![href.clone()],
                         );
+                    };
+                    if last_spine.is_some_and(|ls| *spine < ls) {
+                        say("spine");
+                        last_spine = Some(*spine);
+                        last_anchor = None;
+                        continue;
+                    }
+                    if last_spine != Some(*spine) {
+                        last_spine = Some(*spine);
+                        last_anchor = None;
+                    }
+                    if let Some(a) = anchor {
+                        if last_anchor.is_some_and(|la| *a < la) {
+                            say("document");
+                        }
+                        last_anchor = Some(*a);
                     }
                 }
             }
@@ -11494,6 +11542,123 @@ mod tests {
         assert!(
             rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
             "an unquoted url with a space is invalid CSS and yields no URL"
+        );
+    }
+
+    /// A nav link with a dangling fragment still takes part in the
+    /// spine-order comparison.
+    ///
+    /// It used to be dropped from the comparison entirely, on the grounds
+    /// that a dangling fragment "is already caught elsewhere as a broken
+    /// reference". RSC-012 does catch it — but RSC-012 answers *is this
+    /// fragment defined* and NAV-011 answers *is the order right*, so the
+    /// link left the ordering question altogether. JSWolf's `scrambled.epub`
+    /// (MobileRead, 2026-08-21) is 67 such links: epubcheck reported 71
+    /// NAV-011 and we reported 5. After the fix, 71 and 71.
+    ///
+    /// epubcheck's guard is `targetAnchorPosition > -1` around the
+    /// *document-order* half only; the spine half has already run.
+    ///
+    /// The findings also carry the offending link and its position now. All
+    /// five used to be anchored on the `<nav>` element with no target named,
+    /// so a reader saw five identical lines and an editor would mark one line
+    /// five times.
+    #[test]
+    fn a_nav_link_with_a_dangling_fragment_is_still_ordered() {
+        fn nav011(links: &[&str]) -> Vec<String> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let items: String = links
+                .iter()
+                .map(|h| format!("<li><a href=\"{h}\">x</a></li>"))
+                .collect();
+            let nav = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                 <body><nav epub:type=\"toc\"><ol>{items}</ol></nav></body></html>"
+            );
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="a" href="a.xhtml" media-type="application/xhtml+xml"/>
+    <item id="b" href="b.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="a"/><itemref idref="b"/></spine>
+</package>"#;
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            let doc = |ids: &str| {
+                format!(
+                    "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                     <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                     <body>{ids}</body></html>"
+                )
+            };
+            let a = doc("<p id=\"p1\">x</p><p id=\"p2\">y</p>");
+            let b = doc("<p id=\"q1\">x</p>");
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/nav.xhtml", nav.as_str()),
+                    ("OEBPS/a.xhtml", a.as_str()),
+                    ("OEBPS/b.xhtml", b.as_str()),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::NAV_011)
+                .flat_map(|m| m.params.clone())
+                .collect()
+        }
+
+        // Control: reading order, nothing to say.
+        assert!(
+            nav011(&["a.xhtml#p1", "a.xhtml#p2", "b.xhtml#q1"]).is_empty(),
+            "a nav in reading order is silent"
+        );
+        // A plain spine regression, both fragments resolvable.
+        assert_eq!(
+            nav011(&["b.xhtml#q1", "a.xhtml#p1"]),
+            vec!["a.xhtml#p1".to_string()],
+            "the offending link is named, not the nav element"
+        );
+        // The fix: the second link's fragment does not exist, so its document
+        // position is unknown — but it still goes backwards in the spine.
+        assert_eq!(
+            nav011(&["b.xhtml#q1", "a.xhtml#nosuchid"]),
+            vec!["a.xhtml#nosuchid".to_string()],
+            "a dangling fragment does not excuse the link from spine ordering"
+        );
+        // And a dangling fragment between two good links must not hide the
+        // document-order comparison between them.
+        assert_eq!(
+            nav011(&["a.xhtml#p2", "a.xhtml#nosuchid", "a.xhtml#p1"]),
+            vec!["a.xhtml#p1".to_string()],
+            "the unresolvable link leaves the document-order baseline untouched"
         );
     }
 
