@@ -177,17 +177,52 @@ pub const CSS_028: &str = "CSS-028"; // a @font-face declaration is present (usa
 pub const CSS_029: &str = "CSS-029"; // well-known media-overlay class used but its property isn't declared (usage)
 pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has no matching CSS selector
 
-// --- Advisory (epubveri-owned, opt-in via --advisory; see the module note) ---
+// --- ADV-*: advisory, and nobody says the book is wrong -----------------
+//
+// epubveri-owned, opt-in via --advisory, always Usage, never touches the
+// verdict. **No specification forbids these; the book is still wrong.** They
+// never graduate: there is nobody to hand them to. See the module note.
 pub const ADV_001: &str = "ADV-001"; // a declaration uses a property CSS does not define (usage)
 pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not define (usage)
 // ADV-003 is reserved for the unknown-type-selector advisory (#28), deferred.
 pub const ADV_003: &str = "ADV-003"; // a CSS type selector names an element no vocabulary defines (usage, #28)
 pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)
-pub const ADV_005: &str = "ADV-005"; // EPUB 3.4: page-spread-* on a reflowable document (usage, w3c/epubcheck#1652)
-pub const ADV_006: &str = "ADV-006"; // EPUB 3.4: a spine layout override beside a roll layout (usage, w3c/epubcheck#1651)
-pub const ADV_007: &str = "ADV-007"; // EPUB 3.4: a roll spine document without ICB dimensions (usage, w3c/epubcheck#1651)
-pub const ADV_008: &str = "ADV-008"; // EPUB 3.4: a feature deprecated in 3.4 (usage, w3c/epubcheck#1649)
 pub const ADV_009: &str = "ADV-009"; // two sibling nav entries land on one document, no fragment (usage, MobileRead #195)
+
+// --- NEXT-*: the specification already says it; epubcheck has not caught up --
+//
+// **Why this family starts at 005, and does not start over at 001** (owner's
+// call, 2026-08-21). These four shipped as `ADV-005`..`ADV-008` in 0.9.13 and
+// 0.9.14, and were announced under those codes in the CHANGELOG and on the
+// MobileRead thread. Renumbering them to `NEXT-001`..`004` would have severed
+// every one of those references for the sake of a tidier first line; keeping
+// the numbers means `NEXT-005` is instantly recognisable as the thing the
+// changelog called `ADV-005`. A family that visibly begins at 005 is a little
+// odd on first sight and tells its own history on second, which is the better
+// trade. `NEXT-001`..`004` will never exist.
+//
+// **Why they were split off at all.** Same severity, same flag, but a
+// different claim: here a published specification *requires* it and epubcheck
+// simply has not implemented it yet. They sit behind `--advisory` only because
+// reporting what epubcheck does not is indistinguishable from a false positive
+// to anyone diffing the two tools — not because the rule is our opinion.
+//
+// **These are temporary in principle and long-lived in practice.** They retire
+// the day epubcheck ships the rule, moving to the default output under
+// whatever ID epubcheck assigns. But EPUB 3.3 took 2.4 years from first
+// Working Draft (2021-01-12) to Recommendation (2023-05-25); 3.4 is still a
+// Candidate Recommendation Draft; and epubcheck's own 3.4 milestone is 8 open
+// / 0 closed with no due date and no validation-code commit since 2025-09-02.
+// "Temporary" here means years, which is exactly why the family earns a name
+// of its own rather than a bracketed label.
+//
+// **Do not encode a spec version in the prefix.** `NEXT-` says "the next
+// epubcheck reports this"; `EPUB34-` would age the moment 3.5 exists and would
+// have to be renamed, which is the thing this split exists to avoid.
+pub const NEXT_005: &str = "NEXT-005"; // EPUB 3.4: page-spread-* on a reflowable document (was ADV-005; usage, w3c/epubcheck#1652)
+pub const NEXT_006: &str = "NEXT-006"; // EPUB 3.4: a spine layout override beside a roll layout (was ADV-006; usage, w3c/epubcheck#1651)
+pub const NEXT_007: &str = "NEXT-007"; // EPUB 3.4: a roll spine document without ICB dimensions (was ADV-007; usage, w3c/epubcheck#1651)
+pub const NEXT_008: &str = "NEXT-008"; // EPUB 3.4: a feature deprecated in 3.4 (was ADV-008; usage, w3c/epubcheck#1649)
 
 /// What an `ADV-*` finding is grounded in. **Two different claims live in the
 /// advisory family and they justify themselves differently**, which until now
@@ -228,19 +263,18 @@ impl AdvisoryBasis {
 
 /// The basis of an `ADV-*` id, or `None` for anything else.
 ///
-/// Exhaustive over the family by construction: the `_` arm is `None`, so a new
-/// `ADV-*` that is never added here publishes no basis at all rather than the
-/// wrong one. `advisory_basis_covers_every_adv_id` fails when that happens.
+/// **Derived from the prefix, not from a table.** Since the two bases have
+/// their own ID families the classification cannot drift from the code a user
+/// sees — which is the whole reason the families were split. The function
+/// stays because a consumer reading the JSON envelope should not have to know
+/// our prefix convention to route on the distinction.
 pub fn advisory_basis(id: &str) -> Option<AdvisoryBasis> {
-    use AdvisoryBasis::*;
-    match id {
-        // EPUB 3.4 rules epubcheck has not implemented; its own milestone for
-        // them is 8 open / 0 closed. These retire when it ships them.
-        "ADV-005" | "ADV-006" | "ADV-007" | "ADV-008" => Some(SpecAhead),
-        // Ours permanently: CSS names nothing defines, an EPUB 2 package
-        // written in EPUB 3, two navigation entries landing in one place.
-        "ADV-001" | "ADV-002" | "ADV-003" | "ADV-004" | "ADV-009" => Some(SpecSilent),
-        _ => None,
+    if id.starts_with("NEXT-") {
+        Some(AdvisoryBasis::SpecAhead)
+    } else if id.starts_with("ADV-") {
+        Some(AdvisoryBasis::SpecSilent)
+    } else {
+        None
     }
 }
 
@@ -367,60 +401,112 @@ pub const OPF_095: &str = "OPF-095"; // a "voicing" link's media-type isn't an a
 mod tests {
     use super::*;
 
-    /// Every `ADV-*` constant must be classified by [`advisory_basis`].
-    ///
-    /// A tripwire, and the same shape as `--advisory`'s help-text guard: the
-    /// classification is a hand-written `match` whose `_` arm returns `None`,
-    /// so a new advisory that nobody classifies publishes **no basis at all**
-    /// rather than a wrong one. That fails safe, but it fails *silently* —
-    /// the envelope simply omits the key and no consumer can tell an
-    /// unclassified check from a non-advisory one.
-    ///
-    /// Reads the constants out of this file rather than listing them, so the
-    /// test cannot drift from the family it guards.
-    #[test]
-    fn advisory_basis_covers_every_adv_id() {
-        let declared: Vec<&str> = include_str!("ids.rs")
+    /// Every advisory constant declared in this file, as `(rust_name, id)`.
+    fn advisory_constants() -> Vec<(String, String)> {
+        include_str!("ids.rs")
             .lines()
-            .filter_map(|l| l.trim().strip_prefix("pub const ADV_"))
-            .filter_map(|l| l.split('"').nth(1))
-            .collect();
-        assert!(
-            !declared.is_empty(),
-            "no ADV constants found — parser broke"
-        );
-        let unclassified: Vec<&str> = declared
-            .iter()
-            .copied()
-            .filter(|id| advisory_basis(id).is_none())
-            .collect();
-        assert!(
-            unclassified.is_empty(),
-            "these ADV ids have no basis in advisory_basis(): {unclassified:?} — \
-             classify each as SpecAhead (the spec says it, epubcheck has not \
-             shipped it) or SpecSilent (nothing says it, but the book is wrong)"
-        );
+            .filter_map(|l| {
+                let t = l.trim();
+                let name = t
+                    .strip_prefix("pub const ADV_")
+                    .map(|r| format!("ADV_{}", r.split(':').next().unwrap_or("")))
+                    .or_else(|| {
+                        t.strip_prefix("pub const NEXT_")
+                            .map(|r| format!("NEXT_{}", r.split(':').next().unwrap_or("")))
+                    })?;
+                let id = t.split('"').nth(1)?.to_string();
+                Some((name, id))
+            })
+            .collect()
     }
 
-    /// The reverse direction: `advisory_basis` must not classify an id that no
-    /// longer exists. A retired `ADV-*` left in the match would keep publishing
-    /// a basis for a code nothing emits.
+    /// A constant's name and its id must agree on the family.
+    ///
+    /// Cheap, and it catches the copy-paste that a prefix-derived
+    /// classification would otherwise turn into a silent misfiling:
+    /// `pub const NEXT_010: &str = "ADV-010"` would classify as spec-silent
+    /// while every reader of the source believes otherwise.
     #[test]
-    fn advisory_basis_classifies_nothing_that_is_not_an_adv_id() {
-        let declared: Vec<&str> = include_str!("ids.rs")
-            .lines()
-            .filter_map(|l| l.trim().strip_prefix("pub const ADV_"))
-            .filter_map(|l| l.split('"').nth(1))
-            .collect();
-        for n in 1..=40u32 {
-            let id = format!("ADV-{n:03}");
-            if advisory_basis(&id).is_some() {
-                assert!(
-                    declared.contains(&id.as_str()),
-                    "{id} is classified but no constant declares it"
-                );
+    fn an_advisory_constants_name_agrees_with_its_id() {
+        let consts = advisory_constants();
+        assert!(consts.len() >= 9, "parser broke: {consts:?}");
+        for (name, id) in &consts {
+            let expected = if name.starts_with("NEXT_") {
+                "NEXT-"
+            } else {
+                "ADV-"
+            };
+            assert!(
+                id.starts_with(expected),
+                "{name} declares {id:?}; expected the {expected} family"
+            );
+            assert_eq!(
+                advisory_basis(id).map(|b| b.as_str()),
+                Some(if expected == "NEXT-" {
+                    "spec-ahead"
+                } else {
+                    "spec-silent"
+                }),
+                "{name} classifies wrongly"
+            );
+        }
+    }
+
+    /// **The families share one number line and must not collide.** They were
+    /// split out of a single sequence (`NEXT-*` begins at 005 because those
+    /// four shipped as `ADV-005`..`008`), so the next advisory of either kind
+    /// has to take the next free number across *both*, not the next free
+    /// number in its own family. Two findings numbered `007` would be a
+    /// permanent ambiguity in every changelog and forum post that mentions
+    /// "007".
+    #[test]
+    fn the_two_advisory_families_never_reuse_a_number() {
+        let mut seen: Vec<(String, String)> = Vec::new();
+        for (name, id) in advisory_constants() {
+            let n = id.rsplit('-').next().unwrap_or_default().to_string();
+            if let Some((other, other_id)) = seen
+                .iter()
+                .find(|(_, i)| i.rsplit('-').next().unwrap_or_default() == n)
+            {
+                panic!("{name} ({id}) reuses the number in {other} ({other_id})");
+            }
+            seen.push((name, id));
+        }
+    }
+
+    /// **A `NEXT-*` check names the specification it is ahead of; an `ADV-*`
+    /// check does not.** This is the only machine check on the thing that can
+    /// actually go wrong now that classification is prefix-derived: filing a
+    /// spec-mandated rule under `ADV-`, or an opinion of ours under `NEXT-`.
+    ///
+    /// The proxy is the comment on the constant, which is where every one of
+    /// these already states its grounds — the four spec-ahead checks open with
+    /// `EPUB 3.4:` and their messages do too. A convention held by habit is
+    /// one bad day from being lost; this makes it a rule.
+    #[test]
+    fn only_spec_ahead_checks_cite_a_specification_version() {
+        for line in include_str!("ids.rs").lines() {
+            let t = line.trim();
+            let Some(rest) = t
+                .strip_prefix("pub const ADV_")
+                .map(|r| ("ADV", r))
+                .or_else(|| t.strip_prefix("pub const NEXT_").map(|r| ("NEXT", r)))
+            else {
+                continue;
+            };
+            let (family, decl) = rest;
+            let cites_spec = decl.contains("EPUB 3.");
+            match family {
+                "NEXT" => assert!(
+                    cites_spec,
+                    "a NEXT-* check must say which specification requires it: {t}"
+                ),
+                _ => assert!(
+                    !cites_spec,
+                    "an ADV-* check cites a specification version, so it is \
+                     probably spec-ahead and belongs in NEXT-*: {t}"
+                ),
             }
         }
-        assert!(advisory_basis("RSC-005").is_none(), "not an advisory");
     }
 }

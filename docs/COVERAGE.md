@@ -427,9 +427,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-002 | an at-rule uses a descriptor it does not define (usage) | — | Y |
 | ADV-003 | a CSS type selector names an element no vocabulary defines (usage, #28) | — | Y |
 | ADV-004 | an EPUB 2 package document is written in EPUB 3 (usage, #62) | — | Y |
-| ADV-005 | EPUB 3.4: page-spread-* on a reflowable document (usage, w3c/epubcheck#1652) | — | Y |
-| ADV-006 | EPUB 3.4: a spine layout override beside a roll layout (usage, w3c/epubcheck#1651) | — | Y |
-| ADV-007 | EPUB 3.4: a roll spine document without ICB dimensions (usage, w3c/epubcheck#1651) | — | Y |
-| ADV-008 | EPUB 3.4: a feature deprecated in 3.4 (usage, w3c/epubcheck#1649) | — | Y |
 | ADV-009 | two sibling nav entries land on one document, no fragment (usage, MobileRead #195) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
+| NEXT-005 | EPUB 3.4: page-spread-* on a reflowable document (was ADV-005; usage, w3c/epubcheck#1652) | — | Y |
+| NEXT-006 | EPUB 3.4: a spine layout override beside a roll layout (was ADV-006; usage, w3c/epubcheck#1651) | — | Y |
+| NEXT-007 | EPUB 3.4: a roll spine document without ICB dimensions (was ADV-007; usage, w3c/epubcheck#1651) | — | Y |
+| NEXT-008 | EPUB 3.4: a feature deprecated in 3.4 (was ADV-008; usage, w3c/epubcheck#1649) | — | Y |

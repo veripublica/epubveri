@@ -9,6 +9,50 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 
+**The four EPUB 3.4 advisories move to a family of their own: `ADV-005`…`008`
+are now `NEXT-005`…`008`.** Same checks, same severity, same flag — but the code
+now says which of two very different claims it is making. `NEXT-*` means a
+published specification requires it and epubcheck has not implemented it yet, so
+it **becomes a real error once epubcheck catches up**. `ADV-*` means no
+specification says anything and the book is still wrong; those never become
+errors.
+
+**Why the ID rather than a label in the message.** An integrator can route on
+`code.startswith("NEXT-")` in any language. The alternative considered was a
+bracketed tag in the human line (`USAGE ADV-005 [spec-ahead]: …`) and it was
+rejected as the more dangerous option: it adds a second bracket group beside the
+location bracket, and every plugin that parses our output — the Sigil one is
+Python, the next may not be — would have to handle it, each in its own way. The
+line shape is also shared with epubsana now that the formatter lives in the
+library. A prefix breaks nothing and needs no parsing.
+
+**Why the numbers were kept, so the family visibly starts at 005.** These four
+shipped as `ADV-005`…`008` in 0.9.13/0.9.14 and were announced under those codes
+in the CHANGELOG and on MobileRead. Renumbering to `NEXT-001`…`004` would have
+severed every one of those references for a tidier first line. `NEXT-005` is
+instantly recognisable as what the changelog called `ADV-005`. `NEXT-001`…`004`
+will never exist.
+
+**And why now.** epubsana never enables `--advisory`, so nothing dispatches on
+these codes today; the Sigil plugin landed yesterday. This is the one window
+where the rename costs a measured zero, and it narrows every week.
+
+The distinction was "temporary" in principle, which is what argued against
+giving it a name — but the measurement says otherwise. EPUB 3.3 took **2.4
+years** from first Working Draft to Recommendation; 3.4 is still a Candidate
+Recommendation Draft; epubcheck's own 3.4 milestone is 8 open / 0 closed with no
+due date and no validation-code commit since 2025-09-02. "Temporary" here means
+years.
+
+`data.advisory_basis` stays and is now derived from the prefix rather than a
+lookup table, so the JSON token cannot drift from the code a user sees. Three
+tripwires guard the split: a constant's name must agree with its id, the two
+families may never reuse a number (they share one sequence), and **a `NEXT-*`
+check must cite the specification it is ahead of while an `ADV-*` must not** —
+that last one is the only machine check on the thing that can still go wrong,
+filing a spec-mandated rule under the wrong prefix. Each was verified by
+breaking it deliberately.
+
 **The advisory family's two kinds are machine-readable.** An `ADV-*` finding in
 the JSON envelope now carries `data.advisory_basis`, either `spec-ahead` (a
 published specification requires it and epubcheck has not implemented it yet —

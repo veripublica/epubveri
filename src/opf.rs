@@ -802,7 +802,7 @@ fn check_epub34_itemref_deprecations(
             && (token == "rendition:layout-reflowable" || token == "rendition:layout-pre-paginated")
         {
             report.push_node(
-                ADV_006,
+                NEXT_006,
                 Severity::Usage,
                 format!(
                     "EPUB 3.4: a roll layout admits no per-spine layout override, \
@@ -816,7 +816,7 @@ fn check_epub34_itemref_deprecations(
         }
         if token == "rendition:align-x-center" {
             report.push_node(
-                ADV_008,
+                NEXT_008,
                 Severity::Usage,
                 "EPUB 3.4: the \"rendition:align-x-center\" property is deprecated",
                 path.to_string(),
@@ -860,7 +860,7 @@ fn check_reflowable_page_spread(props: &str, path: &str, ir: roxmltree::Node, re
     for token in props.split_whitespace() {
         if PROHIBITED.contains(&token) {
             report.push_node(
-                ADV_005,
+                NEXT_005,
                 Severity::Usage,
                 format!(
                     "EPUB 3.4: the \"{token}\" spine override applies to \
@@ -1861,7 +1861,7 @@ fn check_prefix_declaration(
         // restrictive 3.4 work.
         if advisory && DEPRECATED_PREFIXES_34.contains(&name.as_str()) {
             report.push_node_attr(
-                ADV_008,
+                NEXT_008,
                 Severity::Usage,
                 format!("EPUB 3.4: the reserved prefix \"{name}\" is deprecated"),
                 path,
@@ -4999,7 +4999,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                         && !has_icb_dimensions(&d)
                                     {
                                         report.push_at(
-                                            ADV_007,
+                                            NEXT_007,
                                             Severity::Usage,
                                             "EPUB 3.4: a roll layout requires fixed-layout \
                                              documents, but this one declares no viewport \
@@ -13813,7 +13813,10 @@ mod tests {
                 .messages
                 .iter()
                 .map(|m| m.id)
-                .filter(|id| id.starts_with("ADV-00") && *id != crate::ids::ADV_005)
+                .filter(|id| {
+                    (id.starts_with("NEXT-") || id.starts_with("ADV-"))
+                        && *id != crate::ids::NEXT_005
+                })
                 .collect();
                 v.sort_unstable();
                 v.dedup();
@@ -13823,11 +13826,11 @@ mod tests {
         // #1651: no per-spine layout override beside a roll layout.
         assert_eq!(
             ids("roll", "rendition:layout-reflowable", "", VIEWPORT, true),
-            vec![crate::ids::ADV_006]
+            vec![crate::ids::NEXT_006]
         );
         assert_eq!(
             ids("roll", "rendition:layout-pre-paginated", "", VIEWPORT, true),
-            vec![crate::ids::ADV_006]
+            vec![crate::ids::NEXT_006]
         );
         // The same override is ordinary outside a roll layout.
         assert!(ids("", "rendition:layout-reflowable", "", VIEWPORT, true).is_empty());
@@ -13835,7 +13838,7 @@ mod tests {
         // #1651: a roll spine document must declare its ICB dimensions.
         assert_eq!(
             ids("roll", "", "", NO_VIEWPORT, true),
-            vec![crate::ids::ADV_007]
+            vec![crate::ids::NEXT_007]
         );
         assert!(ids("roll", "", "", VIEWPORT, true).is_empty());
         // Only under a roll layout — a plain reflowable book has no ICB.
@@ -13844,7 +13847,7 @@ mod tests {
         // #1649: two deprecations, one ID.
         assert_eq!(
             ids("", "rendition:align-x-center", "", VIEWPORT, true),
-            vec![crate::ids::ADV_008]
+            vec![crate::ids::NEXT_008]
         );
         for prefix in ["xsd", "msv", "prism"] {
             assert_eq!(
@@ -13855,7 +13858,7 @@ mod tests {
                     VIEWPORT,
                     true
                 ),
-                vec![crate::ids::ADV_008],
+                vec![crate::ids::NEXT_008],
                 "{prefix} is deprecated in EPUB 3.4"
             );
         }
@@ -14027,7 +14030,7 @@ mod tests {
         )
         .messages
         .iter()
-        .filter(|m| m.id == crate::ids::ADV_005)
+        .filter(|m| m.id == crate::ids::NEXT_005)
         .count()
     }
 

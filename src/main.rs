@@ -39,15 +39,22 @@ OPTIONS:
                            version wins, so a 3.0 book checked as 2.0 reports
                            at length. Default: the version the book declares.
                            (Note: -V, below, prints this tool's version.)
-        --advisory         Also emit opt-in advisory findings epubcheck has no
-                           verdict on, as ADV-* at usage severity: unknown CSS
-                           property/descriptor names, a CSS type selector
-                           naming no known element, an EPUB 2 package written
-                           in EPUB 3, the restrictive EPUB 3.4 rules
-                           (page-spread-* on a reflowable document, roll-layout
-                           constraints, features deprecated in 3.4), and two
-                           NCX navigation entries landing on one document. Off
-                           by default; never affects the exit code.
+        --advisory         Also emit opt-in findings epubcheck has no verdict
+                           on, at usage severity, in two families:
+                             NEXT-*  a published spec requires it and epubcheck
+                                     has not implemented it yet, so it becomes
+                                     a real error once it does — today the
+                                     EPUB 3.4 rules (page-spread-* on a
+                                     reflowable document, roll-layout
+                                     constraints, features deprecated in 3.4).
+                             ADV-*   no spec says anything, but the book is
+                                     still wrong — unknown CSS property or
+                                     descriptor names, a type selector naming
+                                     no known element, an EPUB 2 package
+                                     written in EPUB 3, two NCX navigation
+                                     entries landing on one document.
+                           Off by default; neither ever affects the verdict or
+                           the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
     -h, --help             Print this help to stdout and exit 0.
 
@@ -452,29 +459,40 @@ mod tests {
     /// not the corpus, not the shelf, not `compare`. It is only ever caught
     /// by a person noticing, which is how it survived five releases.
     ///
-    /// So when this fails, an `ADV-*` was added or removed. Describe it in
-    /// `HELP`'s `--advisory` paragraph, then update the count below.
+    /// So when this fails, an advisory check was added or removed. Describe it
+    /// in `HELP`'s `--advisory` paragraph, then update the count below.
+    ///
+    /// Counts **both** families: the flag emits `NEXT-*` and `ADV-*`, and a
+    /// new check of either kind needs describing. Watching only one would have
+    /// let four EPUB 3.4 rules move families unremarked.
     #[test]
     fn a_new_advisory_check_must_be_described_in_the_help_text() {
         let declared: Vec<&str> = include_str!("ids.rs")
             .lines()
-            .filter_map(|l| l.trim().strip_prefix("pub const ADV_"))
+            .filter_map(|l| {
+                let t = l.trim();
+                t.strip_prefix("pub const ADV_")
+                    .or_else(|| t.strip_prefix("pub const NEXT_"))
+            })
             .filter_map(|l| l.split('"').nth(1))
             .collect();
         assert_eq!(
             declared.len(),
             9,
-            "the ADV family changed ({declared:?}) — describe the new check in \
-             --advisory's help text, then update this count"
+            "the advisory families changed ({declared:?}) — describe the new \
+             check in --advisory's help text, then update this count"
         );
-        // The count above means nothing if the paragraph it guards has gone.
+        // The count above means nothing if the paragraph it guards has gone,
+        // and both families have to stay named in it.
         let advisory_help = HELP
             .split("--advisory")
             .nth(1)
             .expect("HELP documents --advisory");
         assert!(
-            advisory_help.contains("ADV-*") && advisory_help.len() > 200,
-            "the --advisory paragraph should still describe what the flag emits"
+            advisory_help.contains("ADV-*")
+                && advisory_help.contains("NEXT-*")
+                && advisory_help.len() > 200,
+            "the --advisory paragraph should still describe both families"
         );
     }
 

@@ -344,7 +344,7 @@ rules. epubveri supports the same four profiles (`dict`, `edupub`,
 epubcheck is the standard, and where it has an opinion epubveri matches it.
 But there are real defects it has no opinion about — because no specification
 forbids them, or because the specification does and epubcheck has not caught
-up yet. `--advisory` is where those live, as `ADV-*` findings.
+up yet. `--advisory` is where those live, in two families — `NEXT-*` and `ADV-*`.
 
 **It is opt-in, and it never changes the verdict or the exit code.** A book
 that passes epubcheck passes epubveri, with or without the flag. That is a
@@ -354,17 +354,19 @@ useless to anybody whose retailer or distributor gates on epubcheck. Inside the
 flag we can be as opinionated as the evidence supports, precisely because
 nothing outside it moves.
 
-Two different things live there, and it is worth knowing which you are looking
-at:
+Two different things live there, and they have their own ID families so you
+can tell them apart without reading the message:
 
-- **The specification says it; epubcheck has not implemented it yet.** EPUB 3.4
-  froze its features in 2026 and epubcheck's own milestone for it is still at
-  zero. These will stop being advisory the day epubcheck ships them.
-- **No specification says anything, but the book is still wrong.** Two table-of
-  contents entries pointing at the same page, so one of them goes nowhere
-  useful. A CSS rule styling an element that does not exist. Nobody is late
-  here; these are simply things a validator can notice and nothing obliges it
-  to.
+- **`NEXT-*` — the specification says it; epubcheck has not implemented it
+  yet.** These become real errors the day epubcheck catches up, so they are
+  worth fixing before somebody downstream runs epubcheck on your book. Today
+  they are the EPUB 3.4 rules; that specification froze its features in 2026
+  and epubcheck's own milestone for it is still at zero.
+- **`ADV-*` — no specification says anything, but the book is still wrong.**
+  Two table-of-contents entries pointing at the same page, so one of them goes
+  nowhere useful. A CSS rule styling an element that does not exist. Nobody is
+  late here; these are things a validator can notice and nothing obliges it to,
+  and they never become errors.
 
 **What it takes for a check to be admitted**, since an advisory that cries wolf
 teaches people never to pass the flag: the finding has to be **true every time
