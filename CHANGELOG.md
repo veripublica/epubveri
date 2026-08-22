@@ -8,7 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.11.0] - 2026-08-22
+
+**A minor bump because the JSON output changes for consumers, not because the
+validation did.** Two things move for anything parsing `--format json` or
+`--format ids`:
+
+- **`-u`/`--usage` now decides what those formats contain**, as it already did
+  for the human report and as epubcheck's own `-u` does. Without it, usage
+  findings are absent.
+- **The `summary` keys are singular** — `fatal`, `error`, `warning` — and it
+  gained `info` and `usage`.
+
+Findings, IDs, severities and verdicts are unchanged. The library API is
+untouched and still never filters.
 
 **Nothing ran rustdoc — not the pre-flight, not CI — and six documentation
 defects had shipped because of it.** Two doc links pointed at private items, so
