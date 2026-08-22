@@ -75,17 +75,36 @@ function version(): string;
 
 ### Advisory checks
 
-`advisory` mirrors the CLI `--advisory` flag: pass `true` to also emit the opt-in advisory
-findings epubcheck has no verdict on — currently unknown CSS property and descriptor names
-(`ADV-001`/`ADV-002`, at `usage` severity). It is **off by default**: leaving the argument
-out, or passing `false`/`undefined`, produces a byte-identical report, so existing
-two-argument callers are unaffected.
+`advisory` mirrors the CLI `--advisory` flag: pass `true` to also emit the opt-in findings
+epubcheck has no verdict on, in two families, both at `usage` severity:
 
-### One CLI-only difference
+- **`NEXT-*`** — a published specification requires it and epubcheck has not implemented it
+  yet, so it becomes an ordinary error the day it catches up (today: the EPUB 3.4 rules).
+- **`ADV-*`** — no specification says anything, but the book is still probably wrong
+  (unknown CSS property and descriptor names, a type selector naming no known element, an
+  EPUB 2 package written in EPUB 3, two navigation entries landing on one document).
 
-The `PKG-016` check (the `.epub` **file extension** should be lowercase) is filename-
-based and is **not** reported here — this entry point only ever sees bytes, never a
-filename. Everything else matches the native CLI/library exactly.
+It is **off by default**: leaving the argument out, or passing `false`/`undefined`,
+produces a byte-identical report, so existing two-argument callers are unaffected. Neither
+family ever affects `status` — a book that passes epubcheck passes epubveri, with or
+without the flag.
+
+### Two differences from the CLI
+
+**`PKG-016` is not reported here.** That check is about the `.epub` **file extension**
+being lowercase, and this entry point only ever sees bytes, never a filename.
+
+**`data` carries `params` only.** The CLI's JSON envelope also puts `element_path`,
+`namespaces`, `advisory_basis` and `violation_kind` there; this binding does not yet
+forward them. That is an omission rather than a decision — the shape is additive and
+nothing about the browser makes those fields harder to produce — so if a web tool needs
+them, please open an issue. Findings, codes, severities, positions and messages are
+identical to the CLI either way.
+
+**Nothing is filtered here.** The CLI hides `usage`-severity findings from its human
+report unless you pass `-u`; this binding is a machine interface and always returns
+every finding, exactly like `--format json`. Filter on `severity` yourself if your UI
+wants the CLI's default view.
 
 ## Try the demo
 

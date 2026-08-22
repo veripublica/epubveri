@@ -162,12 +162,25 @@ exact line the CLI prints, so you can group and order findings however you like
 without your output drifting from ours.
 
 epubveri is pre-1.0, so breaking API changes land as minor bumps (`0.x.0`) and
-are listed in [CHANGELOG.md](../CHANGELOG.md).
+are listed in [CHANGELOG.md](../CHANGELOG.md). **0.10.0 is one of those**: it
+adds a field to `report::Message` and turns `rng::Blame::Text` into a struct
+variant, so any struct literal or `match` over those needs a line. Nothing
+changes for a consumer that only reads a `Report` — which is most of them, and
+is why the CLI, the JSON envelope and the WASM bindings are untouched.
 
 ## In the browser
 
-There is a WASM package — `@veripublica/epubveri-wasm` — returning the same
-envelope shape, so a web tool needs no server and no JVM. See the README.
+There is a WASM package — `@veripublica/epubveri-wasm` — so a web tool needs no
+server and no JVM. It returns one envelope `inputs[i]` object, fully typed
+(a real `.d.ts` ships in the package).
+
+**It is not yet the whole envelope.** Its `data` carries `params` only, so
+`element_path`, `namespaces`, `advisory_basis` and `violation_kind` — everything
+under "what only machines can see" above — reach a CLI consumer and not a
+browser one. If you need them, run the CLI or link the crate; if you need them
+*in the browser*, say so on the issue tracker, because the shape is additive and
+the gap is an omission rather than a decision. See
+[`epubveri-wasm/README.md`](../epubveri-wasm/README.md).
 
 ## If something here is wrong or missing
 

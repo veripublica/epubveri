@@ -183,8 +183,8 @@ between releases.)
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
 official test cases, each one a small EPUB file specifically constructed
-to be valid or to trip exactly one specific rule. Measured on 0.9.18
-(2026-08-14):
+to be valid or to trip exactly one specific rule. Measured on 0.10.0
+(2026-08-22):
 
 - **99.8%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
@@ -335,7 +335,7 @@ programmatically.
 crates.io (`cargo add epubveri`, or in your `Cargo.toml`):
 
 ```toml
-epubveri = "0.8"
+epubveri = "0.10"
 ```
 
 Then:

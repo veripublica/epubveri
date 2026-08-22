@@ -8,7 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.10.0] - 2026-08-22
+
+**A minor bump because the library API breaks, not because the validation
+changed shape.** Two things move for a Rust consumer and nothing at all moves
+for the CLI, the JSON envelope or the WASM bindings:
+
+- `report::Message` gained a `violation_kind` field, so struct literals need
+  updating.
+- `rng::Blame::Text` changed from a tuple variant to a struct variant carrying
+  its containing element.
+
+Everything else here is additive or is a display change. Findings, IDs,
+severities and verdicts are unchanged on all 385 shelf books — the machine
+output is byte-identical before and after the whole day's work.
 
 **The human report is now grouped by severity, most serious first, and
 `--sort document` gives you the old order back** (JSWolf, MobileRead #219).
