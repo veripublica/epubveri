@@ -10,6 +10,74 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Schema violations now carry a machine-readable `violation_kind`**, so a
+consumer can group or dispatch on what kind of fault a finding is without
+parsing the English message. Six values —
+`element_not_allowed`, `incomplete_content`, `missing_attribute`, `stray_text`,
+`attribute_not_allowed`, `invalid_attribute_value` — on `Message` in the library
+and in `data` in the json envelope. `rule` is unchanged.
+
+**These six were not designed; they were recovered.** `rng::Blame` has exactly
+these six states, `push_blame` reads them to pick the right anchor, and
+`describe()` then renders them into a sentence — at which point the discriminant
+was dropped. epubsana was reconstructing it by slicing the leading words of that
+sentence, which re-splits their groups every time a message improves; it moved
+twice in the two weeks before this. So "about six kinds" stops being an
+observation of 385 books and becomes a property of a type: `Blame::kind` is a
+wildcard-free `match`, so a seventh engine state is a compile error rather than a
+silent reclassification.
+
+`ViolationKind::ALL` ships with it. The compile error people expect from an
+exhaustive enum does **not** fire for the two ways this is actually consumed —
+grouping needs `Ord`/`Hash`/`Eq` and dispatch is equality, neither of which is a
+`match` — so `ALL` lets a consumer assert the set it knows about and notice a
+seventh the moment it resolves a new version. The enum is exhaustive now and is
+intended to become `#[non_exhaustive]` at 1.0, which is the one moment adding
+that is not itself a break; `ALL` carries the signal across that line.
+
+**`None` is a statement about the rule, never about the finding.** A rule that
+carries kinds always sets one — the mapping is total, so no path produces a
+kindless schema violation — and every other rule leaves it `None`. Measured over
+the shelf: of 50,594 findings, 39,988 carry a kind, **0 schema violations lack
+one, 0 findings outside the family have one, and 0 kind-carrying findings lack a
+`params[0]`**. All six kinds occur.
+
+**What `params[0]` means, now written down as a contract**, because the group key
+is `(violation_kind, params[0])` and half of it was an unwritten assumption:
+
+- attribute kinds — the attribute name **as qualified for display**, carrying the
+  conventional prefix for the `epub`, `xml`, `xlink` and `opf` namespaces, bare
+  otherwise;
+- element kinds and stray text — the **local name** of the element (for stray
+  text, of its containing element), never prefixed.
+
+The two spellings never meet inside one group, because the kind already
+separates attribute faults from element faults — which is why the asymmetry is
+documented rather than removed. Making it uniform would mean moving the
+attribute spelling, which is exactly the change that moved under epubsana in
+0.9.19.
+
+**And the part a consumer cannot see from the outside: `params[0]` is not a
+string that appears in the document.** The prefix is reconstructed from the
+namespace, so a book binding `xmlns:e="http://www.idpf.org/2007/ops"` and writing
+`e:type` still yields `"epub:type"`. It is an identity token for display and
+grouping and must not be used as a lookup key into the source. There is a test
+whose fixture asserts the produced string is absent from the file.
+
+One limit, inherited rather than introduced: element names are local, so
+`(violation_kind, params[0])` cannot distinguish two namespaces — an SVG `title`
+and an XHTML `title` share a key. Grouping on the message text has the same blind
+spot, so the token does not add it; #84 made the *message* able to explain such a
+collision, but the key still cannot represent it.
+
+Emitted on `ncx.schema_violation` too. It fires on 0 of the 385 shelf books,
+which is the reason to include it rather than a reason not to: nothing here has
+ever been able to see inside that rule.
+
+**Breaking for library consumers**: `Message` gained a field, so struct literals
+need updating. The CLI output is unchanged, and the json addition is additive.
+
+
 **`Blame::Text` now carries its containing element, closing a path that could
 produce a finding with empty `params`** (epubsana, 2026-08-22). The stray-text
 arm recovered the parent with `run.parent().filter(is_element)` and fell back to

@@ -117,6 +117,81 @@ impl Position {
     }
 }
 
+/// What kind of thing a schema violation is, independent of how the message
+/// happens to be worded.
+///
+/// **These six are not a classification invented for consumers — they are the
+/// discriminant the RELAX NG engine already computes.** `rng::Blame` has exactly
+/// these six states; `push_blame` reads them to pick the right anchor and
+/// `Blame::describe` then renders them into an English sentence, at which point
+/// the discriminant used to be dropped. epubsana was reconstructing it by
+/// slicing the leading words of that sentence, which splits or merges its groups
+/// silently whenever a message is improved — twice in the two weeks before this
+/// shipped. So `violation_kind` restores a value we were deleting rather than
+/// adding one we now have to maintain.
+///
+/// The mapping in [`crate::rng::Blame::kind`] **must stay a wildcard-free
+/// `match`**. That is not style: it is the only thing that turns a seventh
+/// engine state into a compile error here rather than a silent
+/// reclassification, and a consumer's [`ALL`](ViolationKind::ALL) test is the
+/// backstop for a property nothing but this note enforces.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ViolationKind {
+    /// The element is not permitted at this position.
+    ElementNotAllowed,
+    /// A required child of the element is absent.
+    IncompleteContent,
+    /// The element is missing a required attribute.
+    MissingAttribute,
+    /// Character data where the content model admits none.
+    StrayText,
+    /// No attribute of this name is permitted at this position.
+    AttributeNotAllowed,
+    /// The attribute name is permitted; its value does not satisfy the datatype.
+    InvalidAttributeValue,
+}
+
+impl ViolationKind {
+    /// Every kind, so a consumer can assert the set it knows about and notice a
+    /// seventh the moment it resolves a new version.
+    ///
+    /// This exists because the compile error people expect from an exhaustive
+    /// enum does not actually fire for the two ways a consumer uses this:
+    /// grouping needs `Ord`/`Hash`/`Eq`, and fixer dispatch is equality, and
+    /// neither is a `match` (epubsana, 2026-08-22). Charging a major version for
+    /// a signal a consumer has to build a deliberate tripwire to receive is a
+    /// bad trade; `ALL` gives them the signal without it, and keeps giving it
+    /// after this enum becomes `#[non_exhaustive]` at 1.0.
+    pub const ALL: &'static [ViolationKind] = &[
+        ViolationKind::ElementNotAllowed,
+        ViolationKind::IncompleteContent,
+        ViolationKind::MissingAttribute,
+        ViolationKind::StrayText,
+        ViolationKind::AttributeNotAllowed,
+        ViolationKind::InvalidAttributeValue,
+    ];
+
+    /// The stable machine spelling, and what the json envelope carries. Fixed
+    /// like a message ID: changing one is a breaking change for a consumer
+    /// grouping on it, not a rewording.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ViolationKind::ElementNotAllowed => "element_not_allowed",
+            ViolationKind::IncompleteContent => "incomplete_content",
+            ViolationKind::MissingAttribute => "missing_attribute",
+            ViolationKind::StrayText => "stray_text",
+            ViolationKind::AttributeNotAllowed => "attribute_not_allowed",
+            ViolationKind::InvalidAttributeValue => "invalid_attribute_value",
+        }
+    }
+}
+
+impl fmt::Display for ViolationKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Message {
     /// epubcheck-compatible message ID (e.g. "RSC-001"). See `ids.rs`. The one
@@ -147,6 +222,50 @@ pub struct Message {
     /// [`push_node_attr`](Report::push_node_attr) — i.e. that had a
     /// `roxmltree` node in hand. Rollout is incremental, like `rule`/`params`.
     pub element_path: Option<crate::xmlext::NodePath>,
+    /// Which of the six [`ViolationKind`]s a schema violation is, for a
+    /// consumer that needs to group or dispatch on the *kind* of fault without
+    /// parsing `text`.
+    ///
+    /// **`None` is a statement about the rule, never about the finding.** A rule
+    /// that carries kinds always sets it — the mapping is a total `match` over
+    /// the engine's six states, so there is no path that produces a kindless
+    /// schema violation — and every other rule leaves it `None`. A consumer
+    /// meeting `None` therefore knows it is looking at a rule outside this
+    /// family, not at a violation whose kind we failed to determine
+    /// (epubsana's requirement, 2026-08-22).
+    ///
+    /// ## What `params[0]` means when this is `Some`
+    ///
+    /// `params[0]` is the name of the finding's subject, and **the spelling
+    /// differs by kind**, deliberately:
+    ///
+    /// - [`AttributeNotAllowed`](ViolationKind::AttributeNotAllowed) and
+    ///   [`InvalidAttributeValue`](ViolationKind::InvalidAttributeValue): the
+    ///   attribute name *as qualified for display*, carrying the conventional
+    ///   prefix for the `epub`, `xml`, `xlink` and `opf` namespaces and bare
+    ///   otherwise.
+    /// - The element kinds and [`StrayText`](ViolationKind::StrayText): the
+    ///   **local name** of the element (for stray text, of its containing
+    ///   element), never prefixed.
+    ///
+    /// The two spellings never meet inside one group key, because the kind
+    /// already separates attribute faults from element faults — which is why
+    /// this is left as it is rather than made uniform. Changing either spelling
+    /// is a release-note event.
+    ///
+    /// **`params[0]` is not a string that appears in the document.** The
+    /// attribute prefix is reconstructed from the namespace rather than read
+    /// from the source (see `rng::qualified_attribute_name`), so a book binding
+    /// `xmlns:e="http://www.idpf.org/2007/ops"` and writing `e:type` still
+    /// yields `"epub:type"`. It is an identity token for display and grouping,
+    /// and **must not be used as a lookup key into the source text**.
+    ///
+    /// One known limit, inherited rather than introduced: element names are
+    /// local, so `(violation_kind, params[0])` cannot distinguish two
+    /// namespaces — an SVG `title` and an XHTML `title` share a key, as do a
+    /// no-namespace `html` and a real one. The message can say so (#84); the
+    /// key cannot represent it.
+    pub violation_kind: Option<ViolationKind>,
 }
 
 impl Message {
@@ -214,6 +333,7 @@ impl Report {
             rule: None,
             params: Vec::new(),
             element_path: None,
+            violation_kind: None,
         });
     }
 
@@ -233,6 +353,7 @@ impl Report {
             rule: None,
             params: Vec::new(),
             element_path: None,
+            violation_kind: None,
         });
     }
 
@@ -255,6 +376,7 @@ impl Report {
             rule: None,
             params: Vec::new(),
             element_path: None,
+            violation_kind: None,
         });
     }
 
@@ -280,6 +402,7 @@ impl Report {
             rule: Some(rule),
             params,
             element_path: None,
+            violation_kind: None,
         });
     }
 
@@ -306,6 +429,7 @@ impl Report {
             rule: Some(rule),
             params,
             element_path: None,
+            violation_kind: None,
         });
     }
 
@@ -334,6 +458,7 @@ impl Report {
             rule: Some(rule),
             params,
             element_path: None,
+            violation_kind: None,
         });
     }
 
@@ -364,6 +489,7 @@ impl Report {
             rule: Some(rule),
             params,
             element_path: Some(element_path),
+            violation_kind: None,
         });
     }
 
@@ -391,6 +517,7 @@ impl Report {
             rule: Some(rule),
             params,
             element_path: Some(crate::xmlext::node_path(node)),
+            violation_kind: None,
         });
     }
 
@@ -445,7 +572,27 @@ impl Report {
             rule: Some(rule),
             params,
             element_path: Some(crate::xmlext::node_path_attr(node, attr)),
+            violation_kind: None,
         });
+    }
+
+    /// Attach a [`ViolationKind`] to the message that was **just pushed**.
+    ///
+    /// Deliberately not a parameter on the three `push_node*` helpers: they have
+    /// well over a hundred call sites between them and all but the schema
+    /// violations would pass `None`, which is a lot of noise to carry a value
+    /// exactly one caller can supply. `push_blame` is that caller, it already
+    /// owns the three-way routing, and it calls this on the line after the push
+    /// — so the pairing is local enough to read in one glance and has nowhere
+    /// to drift to.
+    ///
+    /// A no-op on an empty report rather than a panic: the only way to reach
+    /// that is a caller that pushed nothing, and taking down an embedder over a
+    /// missing diagnostic annotation is the wrong trade.
+    pub(crate) fn attach_violation_kind(&mut self, kind: ViolationKind) {
+        if let Some(m) = self.messages.last_mut() {
+            m.violation_kind = Some(kind);
+        }
     }
 
     fn count(&self, sev: Severity) -> usize {
@@ -552,6 +699,64 @@ impl Report {
 
 #[cfg(test)]
 mod tests {
+    use super::ViolationKind as K;
+
+    /// The six machine spellings are a contract: a consumer groups on them and
+    /// the json envelope carries them, so changing one is a breaking change
+    /// rather than a rewording. Spelled out here so that editing `as_str` has
+    /// to be deliberate.
+    #[test]
+    fn the_kind_spellings_are_fixed() {
+        assert_eq!(K::ElementNotAllowed.as_str(), "element_not_allowed");
+        assert_eq!(K::IncompleteContent.as_str(), "incomplete_content");
+        assert_eq!(K::MissingAttribute.as_str(), "missing_attribute");
+        assert_eq!(K::StrayText.as_str(), "stray_text");
+        assert_eq!(K::AttributeNotAllowed.as_str(), "attribute_not_allowed");
+        assert_eq!(K::InvalidAttributeValue.as_str(), "invalid_attribute_value");
+        assert_eq!(K::StrayText.to_string(), "stray_text");
+    }
+
+    /// `ALL` really lists every kind, once.
+    ///
+    /// **Be honest about what this can and cannot catch.** A `const` array is
+    /// perfectly happy to be short, so no compiler and no test can prove `ALL`
+    /// is complete from `ALL` alone — the list below is hand-written and shares
+    /// the omission it is checking for. What makes the pair work is that adding
+    /// a seventh variant is a **compile error** in `as_str` and in
+    /// `Blame::kind`, and the `match` below is a third site that fails the same
+    /// way; whoever fixes those three arms is standing next to `ALL` each time.
+    /// The real backstop is a consumer's own `ALL` test, which is the reason
+    /// this const exists (epubsana, 2026-08-22).
+    #[test]
+    fn all_lists_every_kind_exactly_once() {
+        let witnesses = [
+            K::ElementNotAllowed,
+            K::IncompleteContent,
+            K::MissingAttribute,
+            K::StrayText,
+            K::AttributeNotAllowed,
+            K::InvalidAttributeValue,
+        ];
+        for w in witnesses {
+            // Wildcard-free: a seventh variant stops this compiling.
+            match w {
+                K::ElementNotAllowed
+                | K::IncompleteContent
+                | K::MissingAttribute
+                | K::StrayText
+                | K::AttributeNotAllowed
+                | K::InvalidAttributeValue => {}
+            }
+            assert!(K::ALL.contains(&w), "{w} is missing from ALL");
+        }
+        assert_eq!(K::ALL.len(), witnesses.len(), "ALL has an extra entry");
+
+        let mut spellings: Vec<_> = K::ALL.iter().map(|k| k.as_str()).collect();
+        spellings.sort_unstable();
+        spellings.dedup();
+        assert_eq!(spellings.len(), K::ALL.len(), "two kinds share a spelling");
+    }
+
     use super::*;
 
     // The migration trap (conventions v0.4 §6, unfold note): the valid/invalid

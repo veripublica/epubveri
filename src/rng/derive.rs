@@ -979,6 +979,28 @@ pub enum Blame<'d, 'i> {
 }
 
 impl<'d, 'i> Blame<'d, 'i> {
+    /// Which of the six [`ViolationKind`](crate::report::ViolationKind)s this
+    /// blame is.
+    ///
+    /// **This `match` must stay wildcard-free.** It is the only thing that turns
+    /// a seventh `Blame`/fault state into a compile error rather than a silent
+    /// reclassification of somebody's findings, and a consumer's
+    /// `ViolationKind::ALL` test is the only backstop if it ever grows a `_`
+    /// arm. The six states and the six kinds are the same six things; the enum
+    /// exists because `describe()` renders this away into English and consumers
+    /// were slicing it back out of the sentence.
+    pub fn kind(&self) -> crate::report::ViolationKind {
+        use crate::report::ViolationKind as K;
+        match self {
+            Blame::Element(_, ElementFault::NotAllowed(_)) => K::ElementNotAllowed,
+            Blame::Element(_, ElementFault::IncompleteContent { .. }) => K::IncompleteContent,
+            Blame::Element(_, ElementFault::MissingAttribute) => K::MissingAttribute,
+            Blame::Text { .. } => K::StrayText,
+            Blame::Attribute(_, _, AttributeFault::NotAllowed) => K::AttributeNotAllowed,
+            Blame::Attribute(_, _, AttributeFault::InvalidValue) => K::InvalidAttributeValue,
+        }
+    }
+
     /// The node whose source position anchors this finding: the element itself,
     /// the offending text run, or the element containing the blamed attribute.
     pub fn node(&self) -> roxmltree::Node<'d, 'i> {

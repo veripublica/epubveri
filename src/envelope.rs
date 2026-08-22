@@ -313,6 +313,7 @@ impl Item<Data> {
                             .map(|p| p.namespaces.clone())
                             .unwrap_or_default(),
                         advisory_basis: basis.map(|b| b.as_str()),
+                        violation_kind: m.violation_kind.map(|k| k.as_str()),
                     }
                 })
             },
@@ -353,6 +354,18 @@ pub struct Data {
     /// why only one of them is temporary.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub advisory_basis: Option<&'static str>,
+    /// Which of the six [`ViolationKind`](crate::report::ViolationKind)s a
+    /// schema violation is, as its stable machine spelling. Present only on
+    /// findings from a rule that carries kinds; absent everywhere else, and
+    /// never absent *within* such a rule — see
+    /// [`Message::violation_kind`](crate::report::Message::violation_kind),
+    /// which also documents what `params[0]` means alongside it.
+    ///
+    /// In `data` for the same reason `advisory_basis` is: the envelope is a
+    /// family-wide contract (FORMATS.md) and this is a fact about our RELAX NG
+    /// engine, which no other tool in the family has.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub violation_kind: Option<&'static str>,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -450,6 +463,7 @@ mod tests {
             rule: Some("opf.spine.duplicate_itemref"),
             params,
             element_path,
+            violation_kind: None,
         }
     }
 

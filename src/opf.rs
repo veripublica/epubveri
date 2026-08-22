@@ -26,6 +26,7 @@ pub(crate) fn push_blame(
     blame: &crate::rng::Blame,
 ) {
     let (text, params) = blame.describe();
+    let kind = blame.kind();
     if let Some(a) = blame.attribute() {
         report.push_node_attr(
             RSC_005,
@@ -58,6 +59,10 @@ pub(crate) fn push_blame(
             params,
         );
     }
+    // One stamp for all three arms, on the line after the push, so the pairing
+    // cannot drift. See `Report::attach_violation_kind` for why the kind is not
+    // a parameter on the push helpers.
+    report.attach_violation_kind(kind);
 }
 
 /// A manifest item whose href is remote and which nothing in the publication
@@ -13772,6 +13777,151 @@ mod tests {
             hit.element_path.as_ref().map(|p| p.path.as_str()),
             Some("/opf:package[1]/opf:spine[1]/@page-progression-direction"),
             "the machine half and the human half must name the same thing"
+        );
+    }
+
+    /// `params[0]` carries the **prefixed** attribute name for the attribute
+    /// kinds, and the prefix is reconstructed from the namespace rather than
+    /// read from the document.
+    ///
+    /// This is the half of the contract that is easiest to get wrong from the
+    /// outside: the book below binds the OPS namespace to `e`, so the string
+    /// `epub:type` appears **nowhere in the file**, and a consumer using
+    /// `params[0]` as a lookup key into the source would find nothing.
+    /// epubsana asked for this to be stated outright rather than left implicit
+    /// (2026-08-22), and a promise that is only in a doc comment is one nobody
+    /// notices breaking.
+    #[test]
+    fn params0_is_the_reconstructed_prefix_not_the_documents_own() {
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+            \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:e=\"http://www.idpf.org/2007/ops\">\
+            <head><title>t</title></head><body><p e:type=\"chapter\">a</p></body></html>";
+        assert!(
+            !ch1.contains("epub:type"),
+            "the fixture must not contain the string the contract produces"
+        );
+        let report = crate::validate_bytes(epub2_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.violation_kind == Some(crate::report::ViolationKind::AttributeNotAllowed))
+            .expect("epub:type is not an EPUB 2 attribute; it must be rejected");
+        assert_eq!(
+            hit.params.first().map(String::as_str),
+            Some("epub:type"),
+            "the attribute kinds carry the conventional prefix, reconstructed \
+             from the namespace"
+        );
+    }
+
+    /// The element kinds carry the **local** name, never a prefix — the other
+    /// half of the same contract, and the reason it is written per kind rather
+    /// than as one rule.
+    ///
+    /// The two spellings never meet inside a consumer's `(kind, params[0])`
+    /// group key, because the kind already separates attribute faults from
+    /// element faults. That is why the asymmetry is documented rather than
+    /// removed: making it uniform would mean changing the attribute side, which
+    /// is a spelling epubsana already got moved under them once (0.9.19).
+    #[test]
+    fn element_kinds_carry_the_local_name() {
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+            \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+            <head><title>t</title></head><body><p>a<nav>x</nav></p></body></html>";
+        let report = crate::validate_bytes(epub2_with_ch1(ch1));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.violation_kind == Some(crate::report::ViolationKind::ElementNotAllowed))
+            .expect("<nav> is HTML5; EPUB 2 must reject it");
+        let p0 = hit.params.first().map(String::as_str);
+        assert_eq!(p0, Some("nav"));
+        assert!(
+            !p0.unwrap().contains(':'),
+            "element kinds are never prefixed; got {p0:?}"
+        );
+    }
+
+    /// `None` is a statement about the **rule**, never about the finding.
+    ///
+    /// Both findings below come from one document: the grammar rejects `<nav>`
+    /// and carries a kind, while the hand-coded broken-reference check is a rule
+    /// outside the family and carries none. A consumer meeting `None` must be
+    /// able to conclude "this rule does not do kinds" rather than "this
+    /// violation's kind is unknown" — which is only true while no kind-carrying
+    /// rule can emit `None`, and the mapping being a total `match` over the
+    /// engine's six states is what makes that structural rather than a habit.
+    #[test]
+    fn none_means_the_rule_carries_no_kind_never_an_undetermined_one() {
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+            \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+            <head><title>t</title></head>\
+            <body><p><a href=\"gone.xhtml\">x</a></p><nav/></body></html>";
+        let report = crate::validate_bytes(epub2_with_ch1(ch1));
+
+        let schema: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.rule == Some("opf.content_document.schema_violation"))
+            .collect();
+        assert!(!schema.is_empty(), "the fixture must produce one");
+        assert!(
+            schema.iter().all(|m| m.violation_kind.is_some()),
+            "a kind-carrying rule must never emit None"
+        );
+
+        let hand_coded: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.rule == Some("opf.content_document.reference_missing_resource"))
+            .collect();
+        assert!(!hand_coded.is_empty(), "the fixture must produce one");
+        assert!(
+            hand_coded.iter().all(|m| m.violation_kind.is_none()),
+            "a rule outside the family must carry no kind"
+        );
+    }
+
+    /// Every finding whose rule carries kinds has one, and no other rule does —
+    /// asserted over a document producing several at once, so a check that
+    /// stopped stamping would not be hidden by a single-finding fixture.
+    #[test]
+    fn the_kind_is_present_exactly_on_the_rules_that_carry_it() {
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+            \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+            <head><title>t</title></head><body>loose<p bogus=\"1\">a</p><nav/></body></html>";
+        let report = crate::validate_bytes(epub2_with_ch1(ch1));
+        let mut kinds: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.rule.is_some_and(|r| r.ends_with("schema_violation")))
+            .map(|m| {
+                m.violation_kind
+                    .expect("every schema violation carries a kind")
+            })
+            .collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+        assert!(
+            kinds.len() >= 3,
+            "the fixture must exercise several kinds; got {kinds:?}"
+        );
+        assert!(
+            report
+                .messages
+                .iter()
+                .filter(|m| !m.rule.is_some_and(|r| r.ends_with("schema_violation")))
+                .all(|m| m.violation_kind.is_none()),
+            "no rule outside the family may carry a kind"
         );
     }
 
