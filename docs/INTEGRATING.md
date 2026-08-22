@@ -174,12 +174,15 @@ There is a WASM package — `@veripublica/epubveri-wasm` — so a web tool needs
 server and no JVM. It returns one envelope `inputs[i]` object, fully typed
 (a real `.d.ts` ships in the package).
 
-**It is not yet the whole envelope.** Its `data` carries `params` only, so
-`element_path`, `namespaces`, `advisory_basis` and `violation_kind` — everything
-under "what only machines can see" above — reach a CLI consumer and not a
-browser one. If you need them, run the CLI or link the crate; if you need them
-*in the browser*, say so on the issue tracker, because the shape is additive and
-the gap is an omission rather than a decision. See
+**As of 0.10.0 it carries the whole `data` slot** — `element_path`, `namespaces`,
+`advisory_basis` and `violation_kind` included. Through 0.9.x it carried `params`
+alone, so everything under "what only machines can see" above reached a CLI
+consumer and never a browser one.
+
+One shape difference remains, and it is the kind that fails quietly:
+**`data.namespaces` arrives as a JavaScript `Map`, not a plain object**, because
+that is how a Rust map crosses the boundary. Use `data.namespaces.get("opf")` —
+`data.namespaces["opf"]` is silently `undefined`. See
 [`epubveri-wasm/README.md`](../epubveri-wasm/README.md).
 
 ## If something here is wrong or missing

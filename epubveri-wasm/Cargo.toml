@@ -38,3 +38,9 @@ serde = { version = "1", features = ["derive"] }
 # number, same `js` feature, same `#[tsify(…)]` attribute, so the move is the
 # import path and this line.
 tsify = { version = "0.5", features = ["js"] }
+
+# Test-only. The binding's shape has to be checked against a real report, and
+# building one means building a real EPUB container - the same zip crate the
+# core uses, with the same no-C-dependency features.
+[dev-dependencies]
+zip = { version = "8.6", default-features = false, features = ["deflate"] }

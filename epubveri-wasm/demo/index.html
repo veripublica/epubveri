@@ -72,8 +72,11 @@
 
       <label class="opt">
         <input type="checkbox" id="advisory" />
-        Advisory checks (opt-in) — also flag unknown CSS property/descriptor names
-        (<code>ADV-*</code>, usage). Off by default; never changes the verdict.
+        Advisory checks (opt-in) — opinions epubcheck has no verdict on, in two
+        families: <code>NEXT-*</code> (a specification requires it and epubcheck
+        has not implemented it yet) and <code>ADV-*</code> (no specification says
+        anything, but the book is still probably wrong). Off by default; neither
+        ever changes the verdict.
       </label>
 
       <p class="status" id="status">Loading validator…</p>
@@ -81,7 +84,14 @@
       <section id="result" hidden>
         <div class="verdict" id="verdict"></div>
         <div class="counts" id="counts"></div>
-        <button type="button" id="download">Download JSON</button>
+        <div class="viewopts">
+          <label for="sort">Order</label>
+          <select id="sort">
+            <option value="severity" selected>Most serious first</option>
+            <option value="document">Document order</option>
+          </select>
+          <button type="button" id="download">Download JSON</button>
+        </div>
         <table id="table" hidden>
           <thead>
             <tr><th>Severity</th><th>ID</th><th>Message</th><th>Location</th></tr>
@@ -116,6 +126,7 @@
       const tableEl = document.getElementById("table");
       const tbodyEl = document.getElementById("tbody");
       const downloadEl = document.getElementById("download");
+      const sortEl = document.getElementById("sort");
 
       let ready = false;
       // The last rendered report + its file name, for the JSON download.
@@ -151,6 +162,13 @@
         if (lastFile) run(lastFile);
       });
 
+      // The order is a display choice, so it re-draws rather than re-validating
+      // — the difference from the advisory toggle above, which changes which
+      // findings exist and so has to run the validator again.
+      sortEl.addEventListener("change", () => {
+        if (lastReport) renderRows(lastReport.items);
+      });
+
       function render(report, name, ms) {
         // `report` is the envelope's inputs[i] shape: { status, summary, items }.
         lastReport = report;
@@ -170,7 +188,27 @@
           return;
         }
         tableEl.hidden = false;
-        for (const it of report.items) {
+        renderRows(report.items);
+      }
+
+      // Severity rank, most serious first — the same order the CLI's
+      // `--sort severity` uses, and the same reasoning: the findings that
+      // decide the verdict belong together and first.
+      const RANK = { fatal: 0, error: 1, warning: 2, info: 3, usage: 4 };
+
+      // Re-draw the table body only. The binding hands findings back in
+      // document order and `Array.prototype.sort` is stable, so ranking by
+      // severity *alone* leaves each group in document order — one pass down
+      // the errors, then one down the rest, each still reading top-to-bottom.
+      // Sorting is a view choice: it never re-validates, and the JSON download
+      // is unaffected, exactly as `--sort` does not reach `--format json`.
+      function renderRows(items) {
+        const rows =
+          sortEl.value === "severity"
+            ? [...items].sort((a, b) => (RANK[a.severity] ?? 9) - (RANK[b.severity] ?? 9))
+            : items;
+        tbodyEl.textContent = "";
+        for (const it of rows) {
           const tr = document.createElement("tr");
           const sev = document.createElement("td");
           // Class is the envelope's lowercase severity (template v2 colours it);

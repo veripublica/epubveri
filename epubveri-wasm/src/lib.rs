@@ -19,6 +19,8 @@
 //! // report.summary.errors, report.items[i].code, report.items[i].severity, ...
 //! ```
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 use tsify::Tsify;
 use wasm_bindgen::prelude::*;
@@ -79,10 +81,44 @@ pub struct Position {
     pub column: u32,
 }
 
-/// Tool-specific item extras.
+/// Tool-specific item extras — the same slot the CLI's `--format json` fills,
+/// with the same contents.
+///
+/// Kept in step with [`epubveri::envelope::Data`] deliberately: a browser
+/// consumer that has to fall back to the CLI for a field is a consumer this
+/// package failed. Through 0.9.x this struct carried `params` alone, so
+/// `element_path`, `namespaces`, `advisory_basis` and `violation_kind` were
+/// reachable from the command line and not from the web. That was an omission
+/// rather than a decision — nothing about the browser makes them harder to
+/// produce — and 0.10.0 closes it.
+///
+/// **Absent means absent**, as in the CLI envelope: every optional field is
+/// omitted rather than emitted as `null`, so a consumer tests for presence.
 #[derive(Serialize, Tsify)]
 pub struct Data {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub params: Vec<String>,
+    /// XPath-style path to the offending node, resolvable with `namespaces`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_path: Option<String>,
+    /// Prefix -> namespace-URI bindings needed to resolve `element_path`.
+    ///
+    /// **This arrives in JavaScript as a `Map`, not a plain object** — that is
+    /// how serde-wasm-bindgen renders a map, and it is the one place this
+    /// binding's shape differs from the CLI's JSON, where the same field is an
+    /// object. So `data.namespaces.get("opf")`, never
+    /// `data.namespaces["opf"]`, which would silently be `undefined`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub namespaces: BTreeMap<String, String>,
+    /// `spec-ahead` | `spec-silent` — what an advisory finding is grounded in.
+    /// Present only on `ADV-*`/`NEXT-*` findings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advisory_basis: Option<String>,
+    /// Which of the six kinds of schema violation this is, when the rule
+    /// carries kinds. `None` says the rule has no kinds, never that the kind
+    /// could not be determined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub violation_kind: Option<String>,
 }
 
 /// Validate raw EPUB bytes and return the typed [`Report`] (an envelope
@@ -93,10 +129,13 @@ pub struct Data {
 /// names behave like `undefined` (permissive).
 ///
 /// `advisory` mirrors the CLI `--advisory` flag: pass `true` to also emit the
-/// opt-in advisory findings epubcheck has no verdict on (unknown CSS
-/// property/descriptor names, `ADV-*`, at usage severity). `undefined`/`false`
-/// leaves them off, and with them off the report is byte-identical — so
-/// existing two-argument callers are unaffected.
+/// opt-in findings epubcheck has no verdict on, in two families, both at
+/// `usage` severity — `NEXT-*` (a published specification requires it and
+/// epubcheck has not implemented it yet, so it becomes an ordinary error once
+/// it does) and `ADV-*` (no specification says anything, but the book is still
+/// probably wrong). `undefined`/`false` leaves them off, and with them off the
+/// report is byte-identical — so existing two-argument callers are unaffected.
+/// Neither family can move `status`.
 ///
 /// `epub_version` mirrors the CLI `-v` flag — pass `"2"`, `"2.0"`, `"3"`,
 /// `"3.0"` to validate against that version whatever the book declares, or
@@ -144,9 +183,24 @@ pub fn validate(
                     column: p.column,
                 }),
                 message: m.text.clone(),
-                data: (!m.params.is_empty()).then(|| Data {
-                    params: m.params.clone(),
-                }),
+                data: {
+                    let basis = epubveri::ids::advisory_basis(m.id);
+                    (!m.params.is_empty()
+                        || m.element_path.is_some()
+                        || basis.is_some()
+                        || m.violation_kind.is_some())
+                    .then(|| Data {
+                        params: m.params.clone(),
+                        element_path: m.element_path.as_ref().map(|p| p.path.clone()),
+                        namespaces: m
+                            .element_path
+                            .as_ref()
+                            .map(|p| p.namespaces.clone())
+                            .unwrap_or_default(),
+                        advisory_basis: basis.map(|b| b.as_str().to_string()),
+                        violation_kind: m.violation_kind.map(|k| k.as_str().to_string()),
+                    })
+                },
             })
             .collect(),
     }
@@ -158,4 +212,142 @@ pub fn validate(
 #[wasm_bindgen]
 pub fn version() -> String {
     epubveri::VERSION.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal EPUB 2 built to exercise every `data` field at once:
+    ///
+    /// - an EPUB 3 attribute on the `<spine>`, so the grammar rejects it —
+    ///   `params`, `element_path`, `namespaces`, `violation_kind`;
+    /// - a container entry the manifest does not list — a `usage` finding,
+    ///   which the CLI's human report hides and this binding must not;
+    /// - a stylesheet declaring a property CSS does not define — an `ADV-*`
+    ///   finding, the only way to reach `advisory_basis`.
+    fn book() -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css" href="s.css" media-type="text/css"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx" page-progression-direction="ltr"><itemref idref="c1"/></spine>
+</package>"#;
+        const NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:12345678-1234-1234-1234-123456789abc"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap><navPoint id="n1" playOrder="1"><navLabel><text>T</text></navLabel><content src="ch1.xhtml"/></navPoint></navMap>
+</ncx>"#;
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title>\
+            <link rel=\"stylesheet\" type=\"text/css\" href=\"s.css\"/></head>\
+            <body><p>x</p></body></html>";
+        // `wobble` is not a CSS property, which is ADV-001.
+        const CSS: &str = "p { wobble: 3px; }\n";
+
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/toc.ncx", NCX),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/s.css", CSS),
+                // Undeclared on purpose: one usage-severity OPF-003.
+                ("OEBPS/stray.txt", "x"),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// **The browser sees everything the CLI's `--format json` does.**
+    ///
+    /// Through 0.9.x this binding's `Data` carried `params` alone, so
+    /// `element_path`, `namespaces`, `advisory_basis` and `violation_kind` were
+    /// reachable from the command line and not from the web — an omission
+    /// nothing reported, because the two shapes were written separately and
+    /// only one of them was ever compared against the envelope.
+    ///
+    /// So this asserts the fields are *populated*, not merely present in the
+    /// type: a `Data` that compiles and forwards `None` forever would satisfy
+    /// a weaker test and would be the same bug.
+    #[test]
+    fn a_findings_data_carries_everything_the_cli_envelope_carries() {
+        let report = validate(&book(), None, None, None);
+        let hit = report
+            .items
+            .iter()
+            .find(|i| i.code == "RSC-005")
+            .expect("an EPUB 2 spine may not carry page-progression-direction");
+        let data = hit.data.as_ref().expect("the finding must carry data");
+
+        assert_eq!(data.params, vec!["page-progression-direction".to_string()]);
+        assert_eq!(
+            data.element_path.as_deref(),
+            Some("/opf:package[1]/opf:spine[1]/@page-progression-direction")
+        );
+        assert_eq!(
+            data.namespaces.get("opf").map(String::as_str),
+            Some("http://www.idpf.org/2007/opf"),
+            "the path is unresolvable without its bindings"
+        );
+        assert_eq!(
+            data.violation_kind.as_deref(),
+            Some("attribute_not_allowed")
+        );
+    }
+
+    /// `advisory_basis` is the one `data` field that needs the flag on, so it
+    /// gets its own case rather than riding on the finding above.
+    #[test]
+    fn an_advisory_finding_carries_its_basis() {
+        let report = validate(&book(), None, Some(true), None);
+        let advisory = report
+            .items
+            .iter()
+            .filter_map(|i| i.data.as_ref().and_then(|d| d.advisory_basis.as_deref()))
+            .next();
+        assert!(
+            matches!(advisory, Some("spec-ahead") | Some("spec-silent")),
+            "with --advisory on, an ADV-*/NEXT-* finding must name its basis; got {advisory:?}"
+        );
+    }
+
+    /// Nothing is filtered here, whatever the CLI's human report does with
+    /// usage findings — this is a machine interface.
+    #[test]
+    fn usage_findings_are_never_hidden_from_the_binding() {
+        let report = validate(&book(), None, None, None);
+        assert!(
+            report.items.iter().any(|i| i.severity == "usage"),
+            "usage findings must reach a browser consumer"
+        );
+    }
 }

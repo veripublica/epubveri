@@ -67,6 +67,7 @@ dependencies = [
  "serde",
  "tsify",
  "wasm-bindgen",
+ "zip",
 ]
 
 [[package]]

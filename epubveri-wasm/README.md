@@ -56,7 +56,13 @@ interface Item {
   location?: string;     // container-relative path, when available
   position?: { line: number; column: number };
   message: string;       // epubveri's own message wording
-  data?: { params: string[] };
+  data?: {
+    params: string[];            // the values interpolated into `message`
+    element_path?: string;       // XPath-style path to the offending node
+    namespaces: Map<string, string>;  // bindings that resolve element_path — a Map, see below
+    advisory_basis?: string;     // "spec-ahead" | "spec-silent", on ADV-*/NEXT-* only
+    violation_kind?: string;     // which of six kinds a schema violation is
+  };
 }
 
 function validate(
@@ -94,12 +100,11 @@ without the flag.
 **`PKG-016` is not reported here.** That check is about the `.epub` **file extension**
 being lowercase, and this entry point only ever sees bytes, never a filename.
 
-**`data` carries `params` only.** The CLI's JSON envelope also puts `element_path`,
-`namespaces`, `advisory_basis` and `violation_kind` there; this binding does not yet
-forward them. That is an omission rather than a decision — the shape is additive and
-nothing about the browser makes those fields harder to produce — so if a web tool needs
-them, please open an issue. Findings, codes, severities, positions and messages are
-identical to the CLI either way.
+**`data.namespaces` is a `Map`, not a plain object.** That is how a Rust map crosses
+into JavaScript here, and it is the one place this binding's shape differs from the
+CLI's JSON, where the same field is an object. Use `data.namespaces.get("opf")`;
+`data.namespaces["opf"]` is silently `undefined`. Everything else in `data` — added in
+0.10.0, having previously been CLI-only — is exactly the CLI's shape.
 
 **Nothing is filtered here.** The CLI hides `usage`-severity findings from its human
 report unless you pass `-u`; this binding is a machine interface and always returns

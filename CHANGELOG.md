@@ -23,6 +23,39 @@ Everything else here is additive or is a display change. Findings, IDs,
 severities and verdicts are unchanged on all 385 shelf books — the machine
 output is byte-identical before and after the whole day's work.
 
+**The WASM binding now returns the whole `data` slot, and the demo grew an
+ordering control.** Through 0.9.x the binding carried its own `Data` struct
+holding `params` alone, so `element_path`, `namespaces`, `advisory_basis` — and,
+the day it was added, `violation_kind` — reached a CLI consumer and never a
+browser one. Two shapes were written separately and only one of them was ever
+compared against the envelope, so nothing reported the drift.
+
+It was an omission rather than a decision: nothing about the browser makes those
+fields harder to produce. `INTEGRATING.md` claimed the package "returns the same
+envelope shape" on the morning of the day this was found, which was the
+strongest argument for closing it rather than documenting it.
+
+One shape difference remains and is now stated in three places rather than
+discovered: **`data.namespaces` arrives as a JavaScript `Map`, not a plain
+object**, because that is how a Rust map crosses the boundary.
+`data.namespaces.get("opf")` works; `data.namespaces["opf"]` is silently
+`undefined`.
+
+Verified end to end in Node against a fixture carrying one of each shape — a
+schema violation with a path and a kind, a usage finding, and an `ADV-001` with
+a basis — rather than by reading the generated `.d.ts`. Three tests in the
+binding assert the fields are *populated*, not merely present in the type: a
+`Data` that compiles and forwards `None` forever would satisfy a weaker test and
+would be the same bug.
+
+The demo page gained an **Order** control mirroring the CLI's `--sort`, with the
+same default and the same reasoning. It re-draws the table rather than
+re-validating — the difference from the advisory checkbox beside it, which
+changes which findings exist — and the downloaded JSON is unaffected, exactly as
+`--sort` does not reach `--format json`. Its advisory label was also three
+families out of date, describing only the unknown-CSS-property check from before
+`ADV-003`, `ADV-004`, `ADV-009` and the whole `NEXT-*` family existed.
+
 **The human report is now grouped by severity, most serious first, and
 `--sort document` gives you the old order back** (JSWolf, MobileRead #219).
 Fatals, then errors, then warnings, then info — so the findings that decide the

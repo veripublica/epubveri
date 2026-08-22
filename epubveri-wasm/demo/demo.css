@@ -216,6 +216,23 @@ button:disabled, select:disabled { opacity: .45; cursor: default; }
   white-space: nowrap;
 }
 
+/* Result-view controls: the ordering select beside the download button. These
+   are *display* choices — changing them re-draws the table and never
+   re-validates, and never touches the downloaded JSON, which mirrors the CLI
+   where --sort reaches the human report and not --format json. */
+.viewopts {
+  display: flex; align-items: center; gap: .5rem;
+  flex-wrap: wrap; margin: 0 0 1rem;
+}
+.viewopts label {
+  font-size: .85rem; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.viewopts select { font-size: .85rem; }
+/* The download button sits at the end of the row, pushed away from the
+   ordering control so a mis-click does not swap a view choice for a file. */
+.viewopts button { margin-left: auto; }
+
 /* Opt-in toggle under the drop zone (e.g. advisory checks). */
 .opt {
   display: flex; align-items: flex-start; gap: .5rem;
