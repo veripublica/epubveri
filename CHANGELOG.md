@@ -10,6 +10,40 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**`META-INF/encryption.xml` is now checked for having any content at all**
+(JSWolf, MobileRead #221). A book whose obfuscated font had been deleted kept a
+childless `<encryption>` element behind; epubcheck reports
+`element "encryption" incomplete` and we reported nothing.
+
+The whole rule is one line of epubcheck's `ocf-encryption-30.rnc` —
+`element encryption { grammar { … }+ }` with `start = xenc_EncryptedData |
+xenc_EncryptedKey`, where the `+` is the cardinality and the `start` is the
+vocabulary. So `<encryption>` now requires one or more `EncryptedData` or
+`EncryptedKey` children **from the XML Encryption namespace**, and rejects any
+other child. Nothing else about xmlenc is validated; the file's scope here stays
+"presence and shape".
+
+**Both halves shipped, not just the one that was reported.** For
+`<encryption><foo/></encryption>` epubcheck emits two findings — the child is
+rejected *and* the element is still incomplete — so implementing only the
+emptiness case would have called that shape complete. That is the
+gap-between-two-checks pattern this project keeps meeting, where the case no
+check owns reports nothing at all. On all three shapes (empty, self-closed,
+foreign child) the ID set and the finding count now match epubcheck exactly.
+
+**The evidence is fixtures, and it had to be: real books say almost nothing
+here.** Only **2 of the 385 shelf books** carry an `encryption.xml`, and both are
+canonical. Two independent negative controls back the rule instead — those two
+books, and W3C `epub-tests`' two font-obfuscation publications — and all four
+produce zero findings from it. The full shelf scan is byte-identical before and
+after: same 50,594 findings. This is an editing accident rather than a producer
+bug, which is exactly the class a shelf of finished books cannot contain and a
+Sigil or calibre user meets.
+
+Positions differ from epubcheck's, as they do for every finding: its SAX locator
+reports the incomplete element at its end tag, ours at the element itself.
+
+
 **An attribute fault is now reported at the attribute, not at the element
 carrying it** (JSWolf, MobileRead #220). `<spine page-progression-direction="ltr"
 toc="ncx">` in an EPUB 2 package drew the right error on the right line at

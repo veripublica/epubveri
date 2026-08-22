@@ -880,6 +880,8 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         return;
     }
 
+    check_encryption_children(doc.root_element(), report);
+
     // Every `Id` attribute (on any element - EncryptedKey/EncryptedData/...)
     // must be unique across the whole document; a value shared by more
     // than one element is reported once *per element* sharing it
@@ -959,6 +961,73 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
     }
 }
 
+/// The content model of `<encryption>`: one or more `EncryptedData` or
+/// `EncryptedKey` children from the XML Encryption namespace, and nothing else.
+///
+/// epubcheck's `ocf-encryption-30.rnc` wraps the whole xmlenc grammar in
+/// `element encryption { grammar { … }+ }` with `start = xenc_EncryptedData |
+/// xenc_EncryptedKey`, which is the entire rule: the `+` is the cardinality and
+/// the `start` is the vocabulary. Nothing else about xmlenc is checked here —
+/// the surrounding function's scope is deliberately "presence and shape", and
+/// this closes the one gap a user actually met.
+///
+/// Reported by JSWolf (MobileRead #221) after deleting an obfuscated font from
+/// a book and leaving its now-childless `encryption.xml` behind — an editing
+/// accident, not a producer bug, which is why a shelf of finished books says
+/// nothing about it: only 2 of 385 carry the file at all and both are canonical.
+///
+/// **Both halves are needed, not just the one that was reported.** A book with
+/// a foreign child draws two findings from epubcheck — the child is rejected
+/// *and* the element is still incomplete — so implementing only the emptiness
+/// case would leave `<encryption><foo/></encryption>` reported as complete. That
+/// is the gap-between-two-checks shape this project keeps meeting: the case no
+/// check owns reports nothing at all.
+fn check_encryption_children(root: roxmltree::Node, report: &mut Report) {
+    const XENC: &str = "http://www.w3.org/2001/04/xmlenc#";
+    const EXPECTED: &str = "expected one of \"enc:EncryptedData\", \"enc:EncryptedKey\"";
+
+    let mut encrypted_items = 0usize;
+    for child in root.children().filter(|n| n.is_element()) {
+        let name = child.tag_name();
+        if name.namespace() == Some(XENC) && matches!(name.name(), "EncryptedData" | "EncryptedKey")
+        {
+            encrypted_items += 1;
+            continue;
+        }
+        // Named with the conventional `enc:` prefix when it is in the xmlenc
+        // namespace, for the same reason `qualified_attribute_name` does it in
+        // the RELAX NG engine: `roxmltree` hands back the local name, and a
+        // bare "EncryptedDataX" sends the reader hunting for something their
+        // file does not literally contain.
+        let shown = if name.namespace() == Some(XENC) {
+            format!("enc:{}", name.name())
+        } else {
+            name.name().to_string()
+        };
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!("element \"{shown}\" is not allowed here; {EXPECTED}"),
+            "META-INF/encryption.xml",
+            child,
+            "ocf.encryption.child_not_allowed",
+            vec![shown.clone()],
+        );
+    }
+
+    if encrypted_items == 0 {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!("element \"encryption\" has incomplete content; {EXPECTED}"),
+            "META-INF/encryption.xml",
+            root,
+            "ocf.encryption.incomplete_content",
+            Vec::new(),
+        );
+    }
+}
+
 /// If `META-INF/signatures.xml` is present, checks its root element name
 /// (RSC-005 if not "signatures") - its actual signature content isn't
 /// validated, same "presence/shape only" scope as `check_encryption`.
@@ -994,6 +1063,111 @@ pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
             doc.root_element(),
             "ocf.signatures.wrong_root_element",
             Vec::new(),
+        );
+    }
+}
+
+#[cfg(test)]
+mod encryption_content_model_tests {
+    use crate::report::Report;
+
+    /// Runs the `<encryption>` content model over `body` and returns the
+    /// `(rule, message)` pairs, in document order.
+    fn findings(body: &str) -> Vec<(&'static str, String)> {
+        let xml = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">{body}</encryption>"#
+        );
+        let doc = crate::ocf::parse_xml(&xml).expect("fixture must parse");
+        let mut report = Report::new();
+        super::check_encryption_children(doc.root_element(), &mut report);
+        report
+            .messages
+            .iter()
+            .map(|m| (m.rule.expect("a rule"), m.text.clone()))
+            .collect()
+    }
+
+    const ENCRYPTED_DATA: &str = r#"
+  <enc:EncryptedData>
+    <enc:CipherData><enc:CipherReference URI="OEBPS/f.otf"/></enc:CipherData>
+  </enc:EncryptedData>"#;
+
+    /// The control, and the half that decides whether this rule may ship at
+    /// all: a real encrypted book must stay silent. Both shelf books that
+    /// carry `encryption.xml` have exactly this shape.
+    #[test]
+    fn a_conforming_encryption_file_is_silent() {
+        assert_eq!(findings(ENCRYPTED_DATA), vec![]);
+    }
+
+    /// JSWolf, MobileRead #221: an `encryption.xml` left behind after its
+    /// obfuscated font was deleted. epubcheck reports
+    /// `element "encryption" incomplete`; we reported nothing at all.
+    #[test]
+    fn an_encryption_element_with_no_encrypted_items_is_incomplete() {
+        let f = findings("\n");
+        assert_eq!(
+            f.iter().map(|(r, _)| *r).collect::<Vec<_>>(),
+            vec!["ocf.encryption.incomplete_content"]
+        );
+        assert!(
+            f[0].1.contains("enc:EncryptedData") && f[0].1.contains("enc:EncryptedKey"),
+            "the message must name what was expected; got {}",
+            f[0].1
+        );
+    }
+
+    /// `EncryptedKey` satisfies the model on its own - the grammar's `start`
+    /// is a choice, not a sequence, so requiring `EncryptedData` would invent
+    /// an error on a key-only file.
+    #[test]
+    fn an_encrypted_key_alone_satisfies_the_model() {
+        assert_eq!(findings("<enc:EncryptedKey/>"), vec![]);
+    }
+
+    /// **Two findings, not one.** A foreign child is rejected *and* leaves the
+    /// element incomplete, which is what epubcheck reports for this shape.
+    /// Implementing only the emptiness half would have called
+    /// `<encryption><foo/></encryption>` complete - the gap-between-two-checks
+    /// shape, where the case no check owns reports nothing.
+    #[test]
+    fn a_foreign_child_is_rejected_and_still_leaves_the_element_incomplete() {
+        // Sorted, because insertion order here is not the order a user sees:
+        // `validate_bytes` re-sorts the whole report into document order, so
+        // pinning the raw order would couple this test to an internal detail.
+        let mut rules: Vec<_> = findings("\n  <somethingElse/>\n")
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect();
+        rules.sort_unstable();
+        assert_eq!(
+            rules,
+            vec![
+                "ocf.encryption.child_not_allowed",
+                "ocf.encryption.incomplete_content",
+            ],
+            "both halves must fire"
+        );
+    }
+
+    /// The namespace is load-bearing: `<EncryptedData>` in no namespace is a
+    /// different element from `xenc:EncryptedData`, and matching on the local
+    /// name alone would accept it. epubcheck's grammar names the namespace,
+    /// so this is parity and not strictness for its own sake.
+    #[test]
+    fn an_unnamespaced_encrypted_data_does_not_satisfy_the_model() {
+        let mut rules: Vec<_> = findings("<EncryptedData xmlns=\"\"/>")
+            .into_iter()
+            .map(|(r, _)| r)
+            .collect();
+        rules.sort_unstable();
+        assert_eq!(
+            rules,
+            vec![
+                "ocf.encryption.child_not_allowed",
+                "ocf.encryption.incomplete_content",
+            ]
         );
     }
 }
