@@ -8,6 +8,53 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**`-u`/`--usage` now decides what *every* format contains, not only the human
+report** (Doitsu, MobileRead #231). 0.10.0 shipped it as a display filter on the
+reasoning that a machine consumer receiving fewer findings than the library
+produced cannot recover what it never got. The Sigil plugin's author reported the
+inconsistency within hours, and measuring settled it: **epubcheck's own `-u`
+gates its JSON too, counts included** — `nUsage` drops to 0 without the flag. A
+command line ported between the two tools was returning different data, and one
+flag meaning two things depending on `--format` is not a contract anyone should
+have to remember.
+
+The filter now runs once, over the report every format is written from, so
+`--format json` and `--format ids` follow the human report exactly. Pass `-u` to
+get everything — which most tools should, so they can filter in their own UI
+without re-running the validator. `--advisory` findings are unaffected, as
+before: that flag is their switch.
+
+**The concern behind the original choice is answered better elsewhere.** The
+*library* never filters, whatever the CLI was given — that is what actually
+protects a consumer like epubsana, three of whose repair rules dispatch on
+findings below error severity, and it has its own test. Recorded as
+veripublica/epubveri#86, now superseded on the CLI half.
+
+Measured: the shelf's json output without `-u` falls from 50,594 findings to
+**45,179**, the difference being exactly the 5,415 usage findings. Verdicts and
+exit codes cannot move — usage severity never counted toward either — and the
+filter is applied after both are decided.
+
+**The json `summary` gained `info` and `usage` counts, and its keys are now
+singular** — `fatal`, `error`, `warning`, `info`, `usage`. Doitsu asked for the
+counts and for the naming in the same post: *"information has no plural and
+usages doesn't make sense"*. They describe what the output contains, as
+epubcheck's do. `fatal`, `info` and `usage` are omitted when zero, like `fatal`
+always was; `error` and `warning` are always present. **This renames published
+keys**, which is why it is a minor bump rather than a patch. The WASM binding
+mirrors the same shape — but never filters, having no flag to filter on.
+
+**Unrelated, and found by a toolchain update rather than by us:** two
+`chunks_exact` calls became clippy errors under Rust 1.98, which landed three
+hours after 0.10.0 was tagged. Both are pre-existing — v0.10.0 fails its own
+clippy gate on that toolchain — and CI has not seen it yet only because
+`ubuntu-latest` still ships an older stable. Rewritten with `as_chunks`, stable
+since 1.88, which is our declared MSRV. Worth knowing that a release can stop
+passing its own gate without anything in the release changing.
+
+
 ## [0.10.0] - 2026-08-22
 
 **An `encryption.xml` pointing at a resource that is no longer in the container

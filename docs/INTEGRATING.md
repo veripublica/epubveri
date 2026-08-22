@@ -27,21 +27,22 @@ in document order, whatever the user typed, so a tool never receives an order
 its user picked.
 
 The JSON envelope is the opposite. It is a documented contract, it is versioned,
-and it is **never filtered** — a machine consumer always receives every finding
-the library produced, at every severity.
+and it carries things the human report has no room for — a stable sub-code per
+finding, a resolvable path to the offending node, the kind of a schema
+violation. If your plugin parses the text, none of that exists for you.
 
-That difference is easy to see:
+**`-u`/`--usage` decides what every format contains**, not only the human
+report: without it, usage-severity findings are absent from `--format json` and
+`--format ids` as well, and the `summary` counts describe what the output holds.
+That matches epubcheck, whose `-u` gates its JSON the same way. **If your tool
+wants everything — and most should, so it can filter in its own UI without
+re-running the validator — pass `-u`.** Findings from `--advisory` are the
+exception: they print whenever that flag is on, since it is their switch.
 
-```sh
-$ epubveri -i book.epub
-ERROR RSC-005: EPUB 2 <spine> is missing the required 'toc' (NCX) attribute [OEBPS/content.opf:8:3]
-— 1 error(s), 0 warning(s): INVALID
-```
-
-The same book in JSON carries **two** findings: the error above, and an
-`OPF-003` at `usage` severity that the human report hid. If your plugin parses
-the text, that finding does not exist for you, and neither does anything else we
-add for machines.
+**The library is the one place that never filters.** `epubveri::validate_bytes`
+returns every finding at every severity regardless of any flag, because a
+consumer dispatching on findings below error severity would otherwise go
+silently dark.
 
 ## What the envelope looks like
 
@@ -57,7 +58,7 @@ One JSON object per run. Trimmed from a real run:
     {
       "path": "book.epub",
       "status": "problems",
-      "summary": { "errors": 1, "warnings": 0 },
+      "summary": { "error": 1, "warning": 0, "usage": 1 },
       "items": [
         {
           "type": "finding",

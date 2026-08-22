@@ -615,6 +615,18 @@ impl Report {
         self.count(Severity::Warning)
     }
 
+    /// Count of `Info`-severity findings — neutral facts about the book.
+    pub fn infos(&self) -> usize {
+        self.count(Severity::Info)
+    }
+
+    /// Count of `Usage`-severity findings — features the book *uses*, with
+    /// nothing wrong. Includes the `ADV-*`/`NEXT-*` families, which are emitted
+    /// at this severity.
+    pub fn usages(&self) -> usize {
+        self.count(Severity::Usage)
+    }
+
     /// Valid = no `error`- or `fatal`-severity findings (conventions v0.4 §6's
     /// verifier threshold). Warnings, info and usage findings are reported but
     /// never make a book invalid.

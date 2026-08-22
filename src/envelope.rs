@@ -158,10 +158,16 @@ impl Input<Summary, Data> {
 /// vocabulary; a transformer supplies its own `S`.
 #[derive(Serialize)]
 pub struct Summary {
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(rename = "fatal", skip_serializing_if = "is_zero")]
     pub fatals: usize,
+    #[serde(rename = "error")]
     pub errors: usize,
+    #[serde(rename = "warning")]
     pub warnings: usize,
+    #[serde(rename = "info", skip_serializing_if = "is_zero")]
+    pub infos: usize,
+    #[serde(rename = "usage", skip_serializing_if = "is_zero")]
+    pub usages: usize,
 }
 
 impl Summary {
@@ -170,6 +176,8 @@ impl Summary {
             fatals: report.fatals(),
             errors: report.errors(),
             warnings: report.warnings(),
+            infos: report.infos(),
+            usages: report.usages(),
         }
     }
 }
@@ -399,6 +407,8 @@ mod tests {
                 fatals: 0,
                 errors: 0,
                 warnings: 0,
+                infos: 0,
+                usages: 0,
             }),
             items: vec![],
         };

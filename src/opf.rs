@@ -2445,13 +2445,17 @@ fn extract_xml_declared_encoding(text: &str) -> Option<String> {
 }
 
 fn decode_utf32(bytes: &[u8], big_endian: bool) -> String {
+    // `as_chunks` rather than `chunks_exact(4)` — see the note on
+    // `css::decode_utf16`; same reasoning, same trailing behaviour.
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter_map(|c| {
             let v = if big_endian {
-                u32::from_be_bytes([c[0], c[1], c[2], c[3]])
+                u32::from_be_bytes(*c)
             } else {
-                u32::from_le_bytes([c[0], c[1], c[2], c[3]])
+                u32::from_le_bytes(*c)
             };
             char::from_u32(v)
         })

@@ -39,13 +39,25 @@ pub struct Report {
 }
 
 /// Small aggregate counts, mirroring the envelope's per-input `summary`
-/// (`fatals` omitted when zero, exactly as the CLI envelope emits it).
+/// exactly — same singular key names, and `fatal`/`info`/`usage` omitted when
+/// zero, as the CLI envelope emits them.
+///
+/// **These counts are never filtered**, unlike the CLI's, where `-u` decides
+/// what the output contains and the counts describe the output. This binding
+/// has no such flag: it is a machine interface and always returns everything,
+/// so its counts always describe the whole report.
 #[derive(Serialize, Tsify)]
 pub struct Summary {
-    #[serde(skip_serializing_if = "is_zero")]
+    #[serde(rename = "fatal", skip_serializing_if = "is_zero")]
     pub fatals: usize,
+    #[serde(rename = "error")]
     pub errors: usize,
+    #[serde(rename = "warning")]
     pub warnings: usize,
+    #[serde(rename = "info", skip_serializing_if = "is_zero")]
+    pub infos: usize,
+    #[serde(rename = "usage", skip_serializing_if = "is_zero")]
+    pub usages: usize,
 }
 
 fn is_zero(n: &usize) -> bool {
@@ -168,6 +180,8 @@ pub fn validate(
             fatals: report.fatals(),
             errors: report.errors(),
             warnings: report.warnings(),
+            infos: report.infos(),
+            usages: report.usages(),
         },
         items: report
             .messages

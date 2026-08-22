@@ -99,11 +99,17 @@ pub(crate) fn byte_exact_charset(bytes: &[u8]) -> Option<String> {
 }
 
 pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
-    let units = bytes.chunks_exact(2).map(|c| {
+    // `as_chunks` rather than `chunks_exact(2)`: it hands back fixed-size
+    // arrays, so the element accesses below are checked at compile time instead
+    // of indexing a slice whose length only the constant argument guarantees.
+    // Same trailing behaviour — a stray odd byte is dropped, which is what a
+    // truncated UTF-16 stream deserves. (clippy::chunks_exact_to_as_chunks,
+    // which arrived with Rust 1.98; `as_chunks` is stable from 1.88, our MSRV.)
+    let units = bytes.as_chunks::<2>().0.iter().map(|c| {
         if big_endian {
-            u16::from_be_bytes([c[0], c[1]])
+            u16::from_be_bytes(*c)
         } else {
-            u16::from_le_bytes([c[0], c[1]])
+            u16::from_le_bytes(*c)
         }
     });
     char::decode_utf16(units)

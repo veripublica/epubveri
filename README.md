@@ -308,8 +308,10 @@ ERROR RSC-005: EPUB 3 requires a navigation document (a manifest item with prope
 — 1 error(s), 0 warning(s): INVALID
 ```
 
-The filter is on the **display only**: `--format json` and `--format ids` are
-never filtered, and neither is the library.
+`-u` decides what **every** format contains — `--format json` and `--format ids`
+included, with the json `summary` counts describing the output — exactly as
+epubcheck's own `-u` does. The library API is the one place that never filters:
+`validate_bytes` always returns everything.
 
 The report is grouped by severity, most serious first, so the findings that
 decide the verdict come together and first; inside each group the file order is

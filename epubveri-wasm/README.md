@@ -26,7 +26,7 @@ import { validate, version } from "@veripublica/epubveri-wasm";
 const bytes = new Uint8Array(await file.arrayBuffer()); // a File / fetched .epub
 const report = validate(bytes, undefined); // second arg: profile or undefined
 
-console.log(report.status, report.summary); // "ok" | "problems", { errors, warnings }
+console.log(report.status, report.summary); // "ok" | "problems", { error, warning, … }
 for (const it of report.items) {
   console.log(`${it.severity} ${it.code}: ${it.message}`, it.location ?? "");
 }
@@ -45,7 +45,7 @@ instead (`wasm-pack build . --target web`), which exposes an async `init()` you
 ```ts
 interface Report {
   status: string;        // "ok" (valid) | "problems" (error/fatal findings remain)
-  summary: { fatals?: number; errors: number; warnings: number };
+  summary: { fatal?: number; error: number; warning: number; info?: number; usage?: number };
   items: Item[];
 }
 interface Item {

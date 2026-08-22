@@ -178,9 +178,16 @@
         const ok = report.status === "ok";
         verdictEl.className = "verdict " + (ok ? "valid" : "invalid");
         verdictEl.textContent = ok ? "✓ VALID" : "✗ INVALID";
+        // Envelope keys are singular and the optional ones are absent rather
+        // than zero, so each is read with a `?? 0` (Doitsu, MobileRead #231:
+        // "information has no plural and usages doesn't make sense").
         const s = report.summary;
-        const fatalHead = s.fatals ? `${s.fatals} fatal, ` : "";
-        countsEl.textContent = `${fatalHead}${s.errors} error(s), ${s.warnings} warning(s), ${report.items.length} finding(s) total`;
+        const parts = [];
+        if (s.fatal) parts.push(`${s.fatal} fatal`);
+        parts.push(`${s.error ?? 0} error`, `${s.warning ?? 0} warning`);
+        if (s.info) parts.push(`${s.info} info`);
+        if (s.usage) parts.push(`${s.usage} usage`);
+        countsEl.textContent = `${parts.join(", ")} — ${report.items.length} findings total`;
 
         tbodyEl.textContent = "";
         if (report.items.length === 0) {

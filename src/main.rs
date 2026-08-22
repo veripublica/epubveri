@@ -55,8 +55,11 @@ OPTIONS:
                            the default vocabulary, a manifest entry no document
                            references). Hidden by default, as in epubcheck.
                            Findings from --advisory print whichever way this is
-                           set - that flag is their switch. The machine formats
-                           (--format json, ids) are never filtered.
+                           set - that flag is their switch. This decides what
+                           EVERY format contains, json and ids included, and the
+                           json summary counts describe the output - as
+                           epubcheck's -u does. The library API is never
+                           filtered.
         --advisory         Also emit opt-in findings epubcheck has no verdict
                            on, at usage severity, in two families:
                              NEXT-*  a published spec requires it and epubcheck
@@ -434,6 +437,36 @@ fn run(
         });
     }
 
+    // **The output view, built once and used by every format.** The verdict and
+    // the exit code were decided above from the *unfiltered* reports, so this
+    // cannot move them — and usage findings never counted toward a verdict
+    // anyway. Filtering here rather than inside each format is what keeps the
+    // flag's meaning single: `-u` includes usage-severity findings in the
+    // output, whichever format is being written.
+    //
+    // Doitsu (MobileRead #231) asked for this after 0.10.0 shipped with the
+    // filter on the human report alone, and he was right: epubcheck's own `-u`
+    // gates its JSON too, counts included, so a command line ported between the
+    // two tools returned different data. The library is a different question
+    // and keeps a different answer — `validate_bytes` never filters, because
+    // epubsana dispatches repairs on findings below error severity.
+    let results: Vec<(&String, Result<epubveri::report::Report, String>)> = results
+        .into_iter()
+        .map(|(path, r)| {
+            (
+                path,
+                r.map(|report| {
+                    if usage {
+                        return report;
+                    }
+                    let mut out = report.clone();
+                    out.messages.retain(|m| shown_to_a_reader(m, usage));
+                    out
+                }),
+            )
+        })
+        .collect();
+
     if format == "json" {
         // One JSON object on stdout; an unreadable input is described *inside*
         // it (status "error"), not on stderr.
@@ -451,7 +484,7 @@ fn run(
         let multi = results.len() > 1;
         for (path, r) in &results {
             match r {
-                Ok(report) => print_report(report, path, format, multi, usage, sort),
+                Ok(report) => print_report(report, path, format, multi, sort),
                 Err(e) => eprintln!("error: {e}"),
             }
         }
@@ -490,14 +523,10 @@ fn print_report(
     path: &str,
     format: &str,
     multi: bool,
-    usage: bool,
     sort: &str,
 ) {
-    // **The machine formats stay complete.** The filter is about a person
-    // reading a terminal; a consumer parsing `json` or `ids` and silently
-    // receiving fewer findings than the library produced is the same class of
-    // harm as suppressing them in the library, which is the line this change
-    // may not cross. They can filter on `severity` themselves.
+    // `report` is already the output view — `run` applied the `-u` filter once,
+    // for every format. Nothing is filtered a second time here.
     if format == "ids" {
         for m in &report.messages {
             println!("{}", m.id);
@@ -518,11 +547,7 @@ fn print_report(
     // contract is the whole report. `render_summary` is the same primitive it
     // uses, so the verdict line is unchanged — and the verdict itself cannot
     // move, since usage findings never counted toward it.
-    let mut shown: Vec<&epubveri::report::Message> = report
-        .messages
-        .iter()
-        .filter(|m| shown_to_a_reader(m, usage))
-        .collect();
+    let mut shown: Vec<&epubveri::report::Message> = report.messages.iter().collect();
     // **A stable sort on severity alone, deliberately.** The library already
     // hands us document order, so sorting by nothing but the severity rank
     // leaves each group internally in document order - one pass down the
@@ -682,6 +707,58 @@ mod tests {
             Cli::Run { sort, .. } => assert_eq!(sort, "severity"),
             other => panic!("expected a run, got {other:?}"),
         }
+    }
+
+    /// `-u` decides what **every** format contains, not only the human report.
+    ///
+    /// 0.10.0 shipped it as a display filter, on the reasoning that a machine
+    /// consumer receiving fewer findings than the library produced cannot
+    /// recover what it never got. Doitsu — who wrote the Sigil plugin — reported
+    /// the inconsistency within hours (MobileRead #231), and measuring settled
+    /// it: **epubcheck's own `-u` gates its JSON too, counts included**
+    /// (`nUsage` drops to 0 without the flag). A command line ported between
+    /// the two tools was returning different data, and one flag meaning two
+    /// things depending on `--format` is not a contract anyone should have to
+    /// remember.
+    ///
+    /// The concern that motivated the original choice is answered elsewhere and
+    /// better: **the library never filters**, whatever flags the CLI was given,
+    /// which is what actually protects a consumer like epubsana that dispatches
+    /// repairs on findings below error severity. That boundary has its own
+    /// test.
+    #[test]
+    fn the_usage_filter_reaches_every_format_and_the_counts_follow() {
+        use epubveri::report::{Report, Severity};
+
+        let mut r = Report::new();
+        r.push(epubveri::ids::CSS_028, Severity::Usage, "a feature note");
+        r.push(epubveri::ids::RSC_005, Severity::Error, "a real problem");
+        r.push(epubveri::ids::RSC_004, Severity::Info, "a neutral fact");
+
+        let view = |usage: bool| -> Report {
+            let mut out = r.clone();
+            out.messages.retain(|m| shown_to_a_reader(m, usage));
+            out
+        };
+
+        // Without -u: the usage finding is gone from the report every format is
+        // written from, and `info` is not — epubcheck's default level keeps it.
+        let hidden = view(false);
+        assert_eq!(
+            hidden.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![epubveri::ids::RSC_005, epubveri::ids::RSC_004]
+        );
+        // The counts describe the output, as epubcheck's nUsage does.
+        assert_eq!(hidden.usages(), 0);
+        assert_eq!(hidden.infos(), 1);
+
+        let shown = view(true);
+        assert_eq!(shown.messages.len(), 3);
+        assert_eq!(shown.usages(), 1);
+
+        // The verdict cannot move either way: usage never counted toward it.
+        assert_eq!(hidden.errors(), shown.errors());
+        assert_eq!(hidden.is_valid(), shown.is_valid());
     }
 
     /// Usage findings are hidden by default — **except the family that shares

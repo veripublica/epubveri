@@ -233,9 +233,9 @@ epubveri --format json -i my-book.epub
 > **Writing a plugin or a tool around epubveri?** Read
 > **[INTEGRATING.md](INTEGRATING.md)** first. Short version: parse
 > `--format json`, never the human output. The JSON is a documented, stable
-> contract and is **never filtered** — it contains the `USAGE` findings the
-> human report hides — while the human text is free to change wording, order
-> and spacing between releases.
+> contract, while the human text is free to change wording, order and spacing
+> between releases. Note that `-u` decides what the JSON contains too, so pass
+> it if your tool wants everything.
 
 **A different order** — group by severity (the default) or walk the book in
 file order:
