@@ -156,6 +156,21 @@ impl Input<Summary, Data> {
 /// Small aggregate counts for one input (tool-owned; a consumer MUST NOT
 /// require it — it is derivable from `items`). epubveri's own `summary`
 /// vocabulary; a transformer supplies its own `S`.
+///
+/// **The keys are the severity vocabulary itself** — `fatal`, `error`,
+/// `warning`, `info`, `usage` — and that is the reason they are singular rather
+/// than a grammatical preference: an item's `severity` holds exactly these
+/// words, so `summary[item.severity]` is a direct lookup. Plural keys would
+/// force every consumer to carry an `error` → `errors` mapping table.
+///
+/// (The prompt was Doitsu's, on MobileRead #231 — "information has no plural
+/// and usages doesn't make sense", which is true of `infos`/`usages` and is a
+/// narrower point than the one above. Recorded so the weaker reason is not
+/// mistaken for the whole of it.)
+///
+/// Counts describe **what the output contains**, not what the validator found:
+/// without `-u` the usage count is 0, as epubcheck's `nUsage` is. The library
+/// is where a complete count lives.
 #[derive(Serialize)]
 pub struct Summary {
     #[serde(rename = "fatal", skip_serializing_if = "is_zero")]
