@@ -128,28 +128,61 @@ That's it. To see all options at any time, run `epubveri --help`.
 A typical run looks like this:
 
 ```
-ERROR RSC-005: EPUB 3 requires a navigation document (a manifest item with properties="nav") [OEBPS/content.opf:2:1]
-USAGE OPF-003: container resource 'OEBPS/nav.xhtml' is not listed in the manifest [OEBPS/content.opf]
+ERROR RSC-005: EPUB 2 <spine> is missing the required 'toc' (NCX) attribute [OEBPS/content.opf:8:3]
 — 1 error(s), 0 warning(s): INVALID
 ```
 
 Reading a line from left to right:
 
-- **`FATAL` / `ERROR` / `WARNING` / `INFO` / `USAGE`** — how serious it is, the
-  same five levels epubcheck uses. Only **errors** and **fatals** make a book
-  invalid; warnings, info and usage notes are advisories that are reported but
-  don't fail the book. (A `FATAL` is a problem that stops epubveri from checking
-  any further, like a file that isn't valid XML.)
+- **`ERROR`** — how serious it is. See the table below.
 - **`RSC-005`** — a short code identifying the kind of problem. These are
   the **same codes epubcheck uses**, so you can look any of them up in
   [epubcheck's message documentation](https://www.w3.org/publishing/epubcheck/docs/messages/)
   and existing tutorials still apply.
 - **the message** — a plain-English description.
-- **`[OEBPS/content.opf:15:5]`** — *where* it is: the file inside the EPUB,
+- **`[OEBPS/content.opf:8:3]`** — *where* it is: the file inside the EPUB,
   then the line and column. (A few kinds of check can't point at an exact
   line and show just the file name — that's normal.)
 
 The last line is the summary and verdict: **VALID** or **INVALID**.
+
+### How serious is it? The five levels
+
+epubveri uses the same five levels epubcheck does. Two of them decide the
+verdict; the rest are things worth knowing that do **not** fail your book.
+
+| Level | Makes the book invalid? | Shown by default? | What it means |
+|---|---|---|---|
+| `FATAL` | **yes** | yes | Something stopped the check partway — a file that isn't valid XML, say. |
+| `ERROR` | **yes** | yes | A real rule is broken. |
+| `WARNING` | no | yes | Allowed, but very likely not what you meant. |
+| `INFO` | no | yes | A neutral fact about the book. |
+| `USAGE` | no | **no — use `-u`** | Names a feature the book *uses*. Nothing is wrong. |
+
+**`USAGE` is hidden unless you ask for it, exactly as in epubcheck.** These
+lines describe correct content — an `@font-face` declaration, a file in the
+container that the manifest doesn't list — and reading them as problems is a
+mistake the tool shouldn't invite. Ask for them with `-u` (or `--usage`) when
+you want the full picture:
+
+```sh
+epubveri -u -i my-book.epub
+```
+
+### The two switches, and what is on by default
+
+This is the part that trips people up, so here it is in one place. epubveri
+has exactly two switches that change *which findings you see* — and **neither
+changes the verdict**:
+
+| | Default | What it adds |
+|---|---|---|
+| `-u`, `--usage` | **off** | The `USAGE` lines described above. |
+| `--advisory` | **off** | Extra opinions epubcheck does not hold, in two families: `NEXT-*` (a specification requires it and epubcheck hasn't implemented it yet) and `ADV-*` (no specification says anything, but the book is still probably wrong). |
+
+Everything else you see is a finding epubcheck would report too. **A book that
+passes epubcheck passes epubveri**, with or without either switch — `--advisory`
+findings never affect `VALID`/`INVALID` or the exit code, by permanent design.
 
 ### The exit code (for scripting)
 
@@ -179,6 +212,13 @@ the shared JSON envelope (one object; the browser demo can save the same file):
 ```sh
 epubveri --format json -i my-book.epub
 ```
+
+> **Writing a plugin or a tool around epubveri?** Read
+> **[INTEGRATING.md](INTEGRATING.md)** first. Short version: parse
+> `--format json`, never the human output. The JSON is a documented, stable
+> contract and is **never filtered** — it contains the `USAGE` findings the
+> human report hides — while the human text is free to change wording, order
+> and spacing between releases.
 
 **Extension profiles** — if your book targets a specific EPUB extension,
 you can additionally enforce its rules (same idea as epubcheck's

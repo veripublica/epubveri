@@ -273,9 +273,15 @@ cargo build --release
 # Just the message-ID codes (useful for scripting):
 ./target/release/epubveri --format ids -i path/to/book.epub
 
-# The shared machine envelope — one JSON object (see the veripublica FORMATS spec):
+# The shared machine envelope — one JSON object (see docs/INTEGRATING.md):
 ./target/release/epubveri --format json -i path/to/book.epub
 ```
+
+**Building a plugin or a tool on epubveri?** Start at
+**[docs/INTEGRATING.md](docs/INTEGRATING.md)** — what to parse, what is stable,
+and the fields (`rule`, `element_path`, `violation_kind`) that exist for
+machines and never appear in the human report. The envelope itself is specified
+in [FORMATS.md](https://github.com/veripublica/conventions/blob/main/FORMATS.md).
 
 The input is always given with `-i`; pass `-i` more than once to validate
 several books in one run (the exit code aggregates). Exit `0` = valid, `1` =
@@ -286,13 +292,24 @@ Example output:
 ```
 $ ./target/release/epubveri -i my-broken-book.epub
 ERROR RSC-005: EPUB 3 requires a navigation document (a manifest item with properties="nav") [OEBPS/content.opf:2:1]
-USAGE OPF-003: container resource 'OEBPS/nav.xhtml' is not listed in the manifest [OEBPS/content.opf]
 — 1 error(s), 0 warning(s): INVALID
 ```
 
-Findings carry epubcheck's five severity levels — `FATAL`, `ERROR`,
-`WARNING`, `INFO`, `USAGE` (lowercase in `--format json`). Only `ERROR` and
-`FATAL` make a book invalid; `WARNING`/`INFO`/`USAGE` are reported but do not.
+Findings carry epubcheck's five severity levels — `FATAL`, `ERROR`, `WARNING`,
+`INFO`, `USAGE` (lowercase in `--format json`). Only `ERROR` and `FATAL` make a
+book invalid. **`USAGE` findings are hidden from this report by default, as they
+are in epubcheck** — they name a feature the book *uses* rather than anything
+wrong with it, so pass `-u` when you want them:
+
+```
+$ ./target/release/epubveri -u -i my-broken-book.epub
+USAGE OPF-003: container resource 'OEBPS/nav.xhtml' is not listed in the manifest [OEBPS/content.opf]
+ERROR RSC-005: EPUB 3 requires a navigation document (a manifest item with properties="nav") [OEBPS/content.opf:2:1]
+— 1 error(s), 0 warning(s): INVALID
+```
+
+The filter is on the **display only**: `--format json` and `--format ids` are
+never filtered, and neither is the library.
 
 The exit code follows Unix convention: `0` if the book is valid, `1` if it
 found at least one error- or fatal-level problem, `2` if the tool could not
@@ -532,8 +549,15 @@ contributions yet — a CLA is required first (see that file for why).
 
 ## Going deeper
 
-This README is deliberately kept beginner-friendly. If you want to
-understand how the validator actually works internally — the module
-layout, the custom RELAX NG and XPath/Schematron engines built for this
-project, how the test/measurement setup works, and how to add a new
-check — see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
+This README is deliberately kept beginner-friendly.
+
+- **Validating a book by hand**, step by step, including which download to
+  pick and what the output means — [`docs/USAGE.md`](./docs/USAGE.md).
+- **Building a plugin or a tool on epubveri** — what to parse, what is stable,
+  and what only machines can see — [`docs/INTEGRATING.md`](./docs/INTEGRATING.md).
+- **How the validator works inside** — the module layout, the custom RELAX NG
+  and XPath/Schematron engines built for this project, how the
+  test/measurement setup works, and how to add a new check —
+  [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
+- **Which of epubcheck's checks are implemented**, generated from its message
+  sources — [`docs/COVERAGE.md`](./docs/COVERAGE.md).
