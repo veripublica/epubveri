@@ -549,8 +549,8 @@ impl Report {
 
     /// Like `push_node`, but the finding is about a specific `attr` of `node`:
     /// the `element_path` ends in an `/@name` step pinning that attribute
-    /// (issue #18) and the `position` points at the attribute itself
-    /// (see [`Position::of_attr`]).
+    /// (issue #18) and the `position` points at the attribute itself — its
+    /// first character, not the `<` of the element carrying it.
     #[allow(clippy::too_many_arguments)]
     pub fn push_node_attr(
         &mut self,

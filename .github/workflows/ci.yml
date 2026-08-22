@@ -34,6 +34,14 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+      # Rustdoc is a gate here for the same reason clippy is: a link to a
+      # private item, a bare URL, or a ``` block that is not the Rust it claims
+      # to be are all silent everywhere else, and they reach published docs.
+      - name: Docs (no broken links)
+        run: cargo doc --workspace --no-deps --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
       - name: Build (workspace)
         run: cargo build --workspace --locked
 

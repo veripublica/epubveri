@@ -10,6 +10,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Nothing ran rustdoc — not the pre-flight, not CI — and six documentation
+defects had shipped because of it.** Two doc links pointed at private items, so
+they rendered as plain text in the published docs rather than as links (one
+written the same day); four bare URLs were not hyperlinks; and one harness
+header's indented shell snippet was being compiled as a Rust doctest, which is
+how rustdoc treats an indented block. All fixed, and
+`RUSTDOCFLAGS="-D warnings" cargo doc` is now a gate in both places.
+
+It is the same class as the `--locked` check added after 0.9.2: a thing that
+fails only where nobody was looking. Worth noting it also compiles every fenced
+block, so a `text` fence is not decoration.
+
 **`-u`/`--usage` now decides what *every* format contains, not only the human
 report** (Doitsu, MobileRead #231). 0.10.0 shipped it as a display filter on the
 reasoning that a machine consumer receiving fewer findings than the library

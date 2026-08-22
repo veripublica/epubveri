@@ -1,4 +1,4 @@
-//! EPUB Previews 1.0 checks (http://idpf.org/epub/previews/).
+//! EPUB Previews 1.0 checks (<http://idpf.org/epub/previews/>).
 
 use std::collections::HashMap;
 

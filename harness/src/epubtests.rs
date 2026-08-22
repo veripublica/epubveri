@@ -33,11 +33,17 @@
 //!
 //! Setup — the clone is not vendored, for the same reason epubcheck's is not
 //! (we do not redistribute someone else's fixtures):
-//!     git clone --depth 1 https://github.com/w3c/epub-tests.git corpus/epub-tests
+//!
+//! ```text
+//! git clone --depth 1 https://github.com/w3c/epub-tests.git corpus/epub-tests
+//! ```
 //!
 //! Usage:
-//!     cargo run --release -p epubveri-harness --bin epubtests
-//!     EPUB_TESTS_DIR=… cargo run --release -p epubveri-harness --bin epubtests
+//!
+//! ```text
+//! cargo run --release -p epubveri-harness --bin epubtests
+//! EPUB_TESTS_DIR=… cargo run --release -p epubveri-harness --bin epubtests
+//! ```
 //!
 //! **Rebuild with `--workspace` after a schema change** — this binary links the
 //! epubveri library and the grammars are embedded at compile time, so a plain

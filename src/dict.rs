@@ -1,4 +1,4 @@
-//! EPUB Dictionaries & Glossaries 1.0 checks (http://idpf.org/epub/dict/).
+//! EPUB Dictionaries & Glossaries 1.0 checks (<http://idpf.org/epub/dict/>).
 //! Content-document-level and Search-Key-Map-document-level rules live
 //! here; package-level (dc:type/collection/manifest) cross-referencing
 //! needs the OPF's own manifest/container context and lives in `opf.rs`.

@@ -406,8 +406,9 @@ impl Ocf {
         self.names.iter().any(|n| n == name)
     }
 
-    /// Read a member's bytes (decompressing as needed), up to
-    /// [`MAX_ENTRY_BYTES`].
+    /// Read a member's bytes (decompressing as needed), up to an internal
+    /// per-entry cap; an entry over it reads as `None` and is reported by
+    /// `check_resource_limits` rather than materialised.
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
         let f = self.archive.by_name(name).ok()?;
         let mut buf = Vec::new();

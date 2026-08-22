@@ -1,4 +1,4 @@
-//! EPUB Indexes 1.0 checks (http://idpf.org/epub/idx/). Package-level
+//! EPUB Indexes 1.0 checks (<http://idpf.org/epub/idx/>). Package-level
 //! `<collection role="index"|"index-group">` structure lives here (needs
 //! only the OPF tree + manifest, no OCF/content access); content-document
 //! detection (`epub:type="index"`) and its content model also live here,

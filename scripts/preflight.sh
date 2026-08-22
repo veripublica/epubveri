@@ -137,6 +137,13 @@ check "cargo clippy --workspace --all-targets -- -D warnings" \
   cargo clippy --workspace --all-targets -- -D warnings
 check "wasm32-unknown-unknown build" \
   cargo build --release -p epubveri-wasm --target wasm32-unknown-unknown
+# Added 2026-08-22: nothing ran rustdoc, here or in CI, so a doc link to a
+# private item or a bare URL failed silently and shipped. Six were found the
+# first time this was run, one of them written the same day. It also compiles
+# every ``` block as a doctest, which is how an indented shell snippet in a
+# harness header got caught pretending to be Rust.
+check "cargo doc (no broken links)" \
+  env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 # ----------------------------------------------------------------- package --
 head_ "Package contents"
