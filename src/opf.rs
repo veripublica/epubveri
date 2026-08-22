@@ -10206,7 +10206,14 @@ fn check_font_obfuscation(
         // "EPUB/obfuscated-font.otf", the full container-relative path).
         let resolved = nfc(&resolve("", uri));
         if !name_index.contains_key(&resolved) {
-            continue; // a missing resource is already reported elsewhere (RSC-001/004)
+            // Genuinely covered now, and it was not when this said so: the
+            // comment here used to claim "a missing resource is already
+            // reported elsewhere (RSC-001/004)", but RSC-004 says a file is
+            // *encrypted*, never that it is missing, and nothing emitted
+            // RSC-001 for it. `ocf::check_encryption` reports RSC-007, as
+            // epubcheck does. Asking a resource's media type when the resource
+            // is absent would add a second, worse-worded finding for one fact.
+            continue;
         }
         let media_type = items
             .values()
@@ -11482,6 +11489,51 @@ mod tests {
         );
     }
 
+    /// A `CipherReference` naming a container entry that is not there is
+    /// **RSC-007 instead of RSC-004**, not as well as it.
+    ///
+    /// JSWolf, MobileRead #223, after deleting an obfuscated font and leaving
+    /// its `encryption.xml` behind. epubcheck reports the missing resource and
+    /// suppresses the "this file is encrypted" note, which is the right way
+    /// round: a reference to nothing is not a file whose content was skipped.
+    ///
+    /// Both halves are asserted because getting one right is easy. Adding
+    /// RSC-007 while leaving RSC-004 in place would pass a presence check and
+    /// tell the reader two things about one fact, the second of them false.
+    #[test]
+    fn a_cipher_reference_to_a_missing_entry_replaces_the_encrypted_note() {
+        const PRESENT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData><enc:CipherData><enc:CipherReference URI="OEBPS/stray.txt"/></enc:CipherData></enc:EncryptedData>
+</encryption>"#;
+        const MISSING: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData><enc:CipherData><enc:CipherReference URI="OEBPS/fonts/gone.otf"/></enc:CipherData></enc:EncryptedData>
+</encryption>"#;
+
+        let rules = |enc: &str| -> Vec<&'static str> {
+            let report =
+                crate::validate_bytes(epub2_with_stray_files_and_encryption(&["stray.txt"], enc));
+            report
+                .messages
+                .iter()
+                .filter_map(|m| m.rule)
+                .filter(|r| r.starts_with("ocf.encryption") || r.starts_with("ocf.resource"))
+                .collect()
+        };
+
+        // The control: a reference that resolves keeps the informational note
+        // and draws nothing else. Without this the test below would pass on a
+        // build that had simply stopped emitting RSC-004 altogether.
+        assert_eq!(rules(PRESENT), vec!["ocf.resource.encrypted_not_checked"]);
+
+        assert_eq!(
+            rules(MISSING),
+            vec!["ocf.encryption.missing_resource"],
+            "a missing target is reported instead of the encrypted note, not alongside it"
+        );
+    }
+
     /// **The library never filters by severity, and this is the guard.**
     ///
     /// 0.9.19 hid usage findings from the *human* report, as epubcheck does.
@@ -11595,6 +11647,18 @@ mod tests {
     /// each, all anchored at the package document and so all sharing a
     /// position. `stray`'s order is the zip entry order.
     fn epub2_with_stray_files(stray: &[&str]) -> Vec<u8> {
+        epub2_with_stray_files_and_encryption_inner(stray, None)
+    }
+
+    /// The same book with a `META-INF/encryption.xml` of the caller's choosing.
+    fn epub2_with_stray_files_and_encryption(stray: &[&str], encryption: &str) -> Vec<u8> {
+        epub2_with_stray_files_and_encryption_inner(stray, Some(encryption))
+    }
+
+    fn epub2_with_stray_files_and_encryption_inner(
+        stray: &[&str],
+        encryption: Option<&str>,
+    ) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -11642,6 +11706,10 @@ mod tests {
             ] {
                 z.start_file(name, o).unwrap();
                 z.write_all(body.as_bytes()).unwrap();
+            }
+            if let Some(enc) = encryption {
+                z.start_file("META-INF/encryption.xml", o).unwrap();
+                z.write_all(enc.as_bytes()).unwrap();
             }
             for f in stray {
                 z.start_file(format!("OEBPS/{f}"), o).unwrap();

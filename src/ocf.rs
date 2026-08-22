@@ -943,11 +943,48 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         }
     }
 
+    // A `CipherReference` names a container entry, and the entry can be gone —
+    // the shape a user meets after deleting an obfuscated font and leaving its
+    // `encryption.xml` behind (JSWolf, MobileRead #223). epubcheck reports
+    // **RSC-007 instead of RSC-004** there: an encrypted resource that is not
+    // in the container is not a file whose content was skipped, it is a
+    // reference to nothing.
+    //
+    // **This gap had a comment claiming it was covered.** The PKG-026 check in
+    // `opf.rs` skips a cipher reference whose target is absent, saying "a
+    // missing resource is already reported elsewhere (RSC-001/004)" — and
+    // nothing did: RSC-004 says a file is *encrypted*, never that it is
+    // missing, and no site emits RSC-001 for this. That is the silent-skip
+    // shape this project keeps meeting, where a case falls between two checks
+    // and reports nothing at all, which is the one failure a user cannot
+    // notice.
+    //
+    // It is also the per-source reference problem again: epubcheck resolves
+    // every registered reference through one path, while resolution here is
+    // written per source — NCX `<content src>`, content-document hrefs,
+    // `epub:textref`, the `<guide>` (added after 0.9.14) — and this source was
+    // never added to the list.
     for n in doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "CipherReference")
     {
         if let Some(uri) = n.attr_no_ns("URI") {
+            // Container-relative, not relative to META-INF — the same base the
+            // PKG-026 check resolves against, confirmed there against real
+            // fixtures whose OPF sits in a subdirectory.
+            let resolved = crate::opf::nfc(&crate::opf::resolve("", uri));
+            if !ocf.names.iter().any(|n| crate::opf::nfc(n) == resolved) {
+                report.push_node(
+                    RSC_007,
+                    Severity::Error,
+                    format!("encrypted resource '{uri}' is not present in the container"),
+                    ENC,
+                    n,
+                    "ocf.encryption.missing_resource",
+                    vec![uri.to_string()],
+                );
+                continue;
+            }
             report.push_full(
                 RSC_004,
                 Severity::Info,

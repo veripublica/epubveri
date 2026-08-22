@@ -10,6 +10,39 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.10.0] - 2026-08-22
 
+**An `encryption.xml` pointing at a resource that is no longer in the container
+is now an error** (JSWolf, MobileRead #223). Delete an obfuscated font, leave its
+`encryption.xml` behind, and epubcheck reports `RSC-007: Referenced resource …
+could not be found in the EPUB`; we reported an `INFO` saying the file was
+encrypted and called the book **VALID**.
+
+**RSC-007 replaces the encrypted note rather than joining it**, which is what
+epubcheck does and is the right way round: a reference to nothing is not a file
+whose content was skipped. The test asserts both halves, because adding the error
+while leaving the note in place would pass a presence check and tell the reader
+two things about one fact, the second of them false.
+
+**The gap had a comment claiming it was covered.** The PKG-026 check skips a
+cipher reference whose target is absent, saying *"a missing resource is already
+reported elsewhere (RSC-001/004)"* — and nothing was: RSC-004 says a file is
+*encrypted*, never that it is missing, and no site emits RSC-001 for this. That
+is the silent-skip shape this project keeps meeting, where the case between two
+checks reports nothing at all, and the documented fix is to verify rather than
+believe the claim. The comment now says what is actually true.
+
+It is also the per-source reference problem again. epubcheck resolves every
+registered reference through one path; resolution here is written per source —
+NCX `<content src>`, content-document hrefs, `epub:textref`, the `<guide>` after
+0.9.14 — and `encryption.xml` was never added to that list. A per-source design
+owes a re-enumeration each time a reference kind appears, and nothing fails
+loudly when one is forgotten.
+
+All five `encryption.xml` shapes now agree with epubcheck on the ID set and the
+count: empty, self-closed, a foreign child, a non-font target, and a missing
+target. The false-positive control is the two real encrypted books on the shelf,
+which keep all ten of their `RSC-004` notes and gain no error; the full shelf
+scan is byte-identical.
+
 **A minor bump because the library API breaks, not because the validation
 changed shape.** Two things move for a Rust consumer and nothing at all moves
 for the CLI, the JSON envelope or the WASM bindings:
