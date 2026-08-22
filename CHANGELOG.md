@@ -10,6 +10,31 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**`Blame::Text` now carries its containing element, closing a path that could
+produce a finding with empty `params`** (epubsana, 2026-08-22). The stray-text
+arm recovered the parent with `run.parent().filter(is_element)` and fell back to
+an unnamed message with **no `params` at all** when that failed. The fallback was
+argued unreachable — the walk only reaches a text run from inside an element —
+and the argument is almost certainly right: 0 of 385 shelf books, 0 of 209
+`epub-tests` publications and 0 corpus scenarios have ever produced it.
+
+It is closed anyway, because "argued unreachable" is not something a written
+promise about `params[0]` may rest on, and this project has been wrong in exactly
+that shape before. The construction site already had the parent in hand, so the
+variant now carries both nodes: the run, which the position and `…/text()[n]`
+path come from (#68), and the parent, which the message and `params[0]` name.
+The recovery is gone rather than guarded, so there is no branch left to fail.
+
+Behaviour is unchanged and measured to be: the full 385-book shelf scan is
+byte-identical, the corpus holds at 606/607 with 0 false positives, and the
+message keeps its exact wording — `stray text is not allowed directly in "body";
+wrap it in an element` — which matters because epubsana selects on that prefix.
+
+**This is a breaking change to the library API**, since `rng::Blame` is public
+and `Text` changed from a tuple variant to a struct variant. Nothing in the CLI,
+the JSON envelope or the WASM bindings moves.
+
+
 **`META-INF/encryption.xml` is now checked for having any content at all**
 (JSWolf, MobileRead #221). A book whose obfuscated font had been deleted kept a
 childless `<encryption>` element behind; epubcheck reports

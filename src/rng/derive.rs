@@ -698,7 +698,7 @@ impl<'a> Env<'a> {
                         // skip, keeping `cur`. Blaming `parent` here was #68 -
                         // every stray run in a document collapsed onto the
                         // parent's single line:column.
-                        blames.push(Blame::Text(n));
+                        blames.push(Blame::Text { parent, run: n });
                     } else {
                         cur = d;
                     }
@@ -952,8 +952,25 @@ fn qualified_attribute_name(a: &roxmltree::Attribute) -> String {
 pub enum Blame<'d, 'i> {
     Element(roxmltree::Node<'d, 'i>, ElementFault),
     /// A run of non-whitespace character data where the model admits none.
-    /// The node is the **text node**, not its parent - see [`Blame::is_text`].
-    Text(roxmltree::Node<'d, 'i>),
+    ///
+    /// Carries **both** nodes on purpose: `run` is the text node, which is what
+    /// the finding's position and `…/text()[n]` path are taken from (#68 — every
+    /// stray run in a document used to collapse onto its parent's single
+    /// line:column), and `parent` is the containing element, which is what the
+    /// message and `params[0]` name, since a text run has no name of its own.
+    ///
+    /// `parent` is a field rather than something [`describe`](Blame::describe)
+    /// recovers with `run.parent()` because that recovery had to cope with a
+    /// non-element parent and produced **empty `params`** on that branch. The
+    /// branch was unreachable — the walk only reaches a run from inside an
+    /// element — but "argued unreachable" is not what a contract promising
+    /// `params[0]` is allowed to rest on (epubsana, 2026-08-22). The construction
+    /// site already had the parent in hand, so carrying it makes the promise
+    /// true by construction instead of by argument.
+    Text {
+        parent: roxmltree::Node<'d, 'i>,
+        run: roxmltree::Node<'d, 'i>,
+    },
     Attribute(
         roxmltree::Node<'d, 'i>,
         roxmltree::Attribute<'d, 'i>,
@@ -966,7 +983,9 @@ impl<'d, 'i> Blame<'d, 'i> {
     /// the offending text run, or the element containing the blamed attribute.
     pub fn node(&self) -> roxmltree::Node<'d, 'i> {
         match self {
-            Blame::Element(n, _) | Blame::Text(n) | Blame::Attribute(n, ..) => *n,
+            Blame::Element(n, _) | Blame::Attribute(n, ..) => *n,
+            // The run, not the parent - the position is the whole point of #68.
+            Blame::Text { run, .. } => *run,
         }
     }
 
@@ -975,14 +994,14 @@ impl<'d, 'i> Blame<'d, 'i> {
     /// containing element. Callers that ignore this silently report the parent,
     /// which is exactly the defect #68 fixed.
     pub fn is_text(&self) -> bool {
-        matches!(self, Blame::Text(_))
+        matches!(self, Blame::Text { .. })
     }
 
     /// The specific attribute this finding pins, when attribute-level.
     pub fn attribute(&self) -> Option<roxmltree::Attribute<'d, 'i>> {
         match self {
             Blame::Attribute(_, a, _) => Some(*a),
-            Blame::Element(..) | Blame::Text(_) => None,
+            Blame::Element(..) | Blame::Text { .. } => None,
         }
     }
 
@@ -1100,22 +1119,16 @@ impl<'d, 'i> Blame<'d, 'i> {
             // The message names the *containing* element even though the
             // finding is anchored at the text run - "stray text directly in
             // body" is what the author needs to hear, and a text node has no
-            // name of its own. A run always has an element parent here (the
-            // walk only reaches it from inside one); the fallback keeps the
-            // message honest rather than printing an empty name.
-            Blame::Text(n) => {
-                let name = n.parent().filter(|p| p.is_element()).map_or_else(
-                    || "the document".to_string(),
-                    |p| format!("\"{}\"", p.tag_name().name()),
-                );
-                let params = n
-                    .parent()
-                    .filter(|p| p.is_element())
-                    .map(|p| vec![p.tag_name().name().to_string()])
-                    .unwrap_or_default();
+            // name of its own. The parent is carried by the variant, so there
+            // is no recovery to fail and no branch that can leave `params`
+            // empty - see [`Blame::Text`].
+            Blame::Text { parent, .. } => {
+                let name = parent.tag_name().name();
                 (
-                    format!("stray text is not allowed directly in {name}; wrap it in an element"),
-                    params,
+                    format!(
+                        "stray text is not allowed directly in \"{name}\"; wrap it in an element"
+                    ),
+                    vec![name.to_string()],
                 )
             }
             Blame::Attribute(_, a, fault) => {

@@ -429,10 +429,9 @@ mod tests {
                 Blame::Element(n, _) => n.tag_name().name().to_string(),
                 // Named for the parent it sits in, since a text run has no
                 // name of its own - "text(in ol)" reads as what it is.
-                Blame::Text(n) => format!(
-                    "text(in {})",
-                    n.parent().map_or("?", |p| p.tag_name().name())
-                ),
+                Blame::Text { parent, .. } => {
+                    format!("text(in {})", parent.tag_name().name())
+                }
                 Blame::Attribute(_, a, _) => format!("@{}", a.name()),
             })
             .collect()
@@ -475,7 +474,10 @@ mod tests {
             (
                 // #68: the blame carries the text run, and the message still
                 // names the parent - the two are different nodes on purpose.
-                Blame::Text(loose),
+                Blame::Text {
+                    parent: ol,
+                    run: loose,
+                },
                 "stray text is not allowed directly in \"ol\"; wrap it in an element",
             ),
             (
