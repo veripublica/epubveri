@@ -20,6 +20,12 @@ between releases**, and they have: recent versions changed a message's wording,
 moved a column to point at an attribute instead of its element, and stopped
 printing `USAGE` lines by default.
 
+Its order is not even fixed *within* a release — `--sort severity` (the default)
+groups most-severe-first and `--sort document` walks the book front to back, so
+the arrangement of the human report is the reader's choice. The JSON is always
+in document order, whatever the user typed, so a tool never receives an order
+its user picked.
+
 The JSON envelope is the opposite. It is a documented contract, it is versioned,
 and it is **never filtered** — a machine consumer always receives every finding
 the library produced, at every severity.

@@ -10,6 +10,49 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**The human report is now grouped by severity, most serious first, and
+`--sort document` gives you the old order back** (JSWolf, MobileRead #219).
+Fatals, then errors, then warnings, then info — so the findings that decide the
+verdict arrive together and first. **Inside each group the file order is
+unchanged**, so each group still reads top-to-bottom: one pass down the errors,
+fix, re-run, then one down the rest.
+
+**This is deliberately not what the reporter asked for, and the thread will be
+told why.** JSWolf asked for *warnings* first. Most-severe-first is the opposite
+arrangement, and the reason is that the set which makes a book invalid is the
+set you act on, which is also what the verdict line counts.
+
+**It is not epubcheck's order either, and that was measured rather than
+assumed.** epubcheck does not sort at all — it emits in the order its checks
+run, so severities cluster as a side effect. On 23 shelf books carrying both
+severities the sequence differs from ours on **10**; where epubcheck prints one
+run of warnings then one run of errors, we alternated, and one book broke into
+34 alternating blocks. Of those 23, epubcheck happens to come out warnings-first
+on 15, errors-first on 3, and interleaved on 5. So there was no existing
+arrangement to preserve.
+
+Three boundaries, each of which is the whole point of the others:
+
+- **`--format json` and `--format ids` are always in document order**, whatever
+  the user typed. A tool must never receive an order its user chose. Verified
+  over all 385 shelf books: the json output is byte-identical with and without
+  the flag.
+- **The library is untouched.** `sort_by_document_order()` remains canonical and
+  `validate_bytes` returns what it always did; this lives in the CLI's rendering.
+- **It is a stable sort on the severity rank alone**, not a recomputed
+  `(severity, file, line, column)` key. The library already hands over document
+  order, so sorting by nothing else preserves it inside each group — and a
+  recomputed key would silently stop agreeing with the library's file ordering
+  the day that changed. The regression test's fixture is deliberately not in
+  file-name order, so a comparator that re-derived the order fails it.
+
+`Severity` is declared most-severe-first, so the rank is the declaration order
+and there is no second table to keep in step with it.
+
+Costs nothing measurable: on the worst book on the shelf (3,140 findings) the
+whole validation is ~1.86 s and the sort is ~1.3 ms of it.
+
+
 **Schema violations now carry a machine-readable `violation_kind`**, so a
 consumer can group or dispatch on what kind of fault a finding is without
 parsing the English message. Six values —

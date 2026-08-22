@@ -39,6 +39,16 @@ OPTIONS:
                            version wins, so a 3.0 book checked as 2.0 reports
                            at length. Default: the version the book declares.
                            (Note: -V, below, prints this tool's version.)
+        --sort <ORDER>     Order the human report: severity (the default) or
+                           document. severity groups the findings most-severe
+                           first — fatal, error, warning, info — so the ones
+                           that decide the verdict are together and first;
+                           within each group the file order is unchanged, so
+                           each group still reads top-to-bottom. document is
+                           one pass in file order, whatever the severities.
+                           **Affects the human report only**: --format json
+                           and --format ids are always in document order, so a
+                           tool never sees an order its user chose.
     -u, --usage            Show usage-severity findings, which name a feature a
                            book uses rather than anything wrong with it (an
                            @font-face declaration, an epub:type value outside
@@ -102,6 +112,8 @@ enum Cli {
         epub_version: Option<String>,
         advisory: bool,
         usage: bool,
+        /// How the **human** report is ordered. Never reaches `json`/`ids`.
+        sort: String,
     },
     /// `-h`/`--help` was requested (short-circuits everything else).
     Help,
@@ -125,6 +137,7 @@ fn parse(args: &[String]) -> Cli {
     let mut format: Option<String> = None;
     let mut profile: Option<String> = None;
     let mut epub_version: Option<String> = None;
+    let mut sort: Option<String> = None;
     let mut advisory = false;
     let mut usage = false;
     let mut help = false;
@@ -162,7 +175,7 @@ fn parse(args: &[String]) -> Cli {
                 "version" => version = true,
                 "advisory" => advisory = true,
                 "usage" => usage = true,
-                "input" | "format" | "profile" | "epub-version" => {
+                "input" | "format" | "profile" | "epub-version" | "sort" => {
                     let value = match attached {
                         Some(v) => v,
                         None => {
@@ -179,6 +192,7 @@ fn parse(args: &[String]) -> Cli {
                     match name {
                         "input" => inputs.push(value),
                         "format" => set_single!(format, "--format", value),
+                        "sort" => set_single!(sort, "--sort", value),
                         "profile" => set_single!(profile, "--profile", value),
                         "epub-version" => match normalize_epub_version(&value) {
                             Some(v) => set_single!(epub_version, "--epub-version", v),
@@ -263,6 +277,11 @@ fn parse(args: &[String]) -> Cli {
     {
         fail!("invalid value '{f}' for --format; supported values: human, json, ids");
     }
+    if let Some(o) = &sort
+        && !["severity", "document"].contains(&o.as_str())
+    {
+        fail!("invalid value '{o}' for --sort; supported values: severity, document");
+    }
     if let Some(p) = &profile
         && !epubveri::PROFILES.contains(&p.as_str())
     {
@@ -293,6 +312,7 @@ fn parse(args: &[String]) -> Cli {
         epub_version,
         advisory,
         usage,
+        sort: sort.unwrap_or_else(|| "severity".to_string()),
     }
 }
 
@@ -319,7 +339,16 @@ fn main() -> ExitCode {
             epub_version,
             advisory,
             usage,
-        } => run(&inputs, &format, profile, epub_version, advisory, usage),
+            sort,
+        } => run(
+            &inputs,
+            &format,
+            profile,
+            epub_version,
+            advisory,
+            usage,
+            &sort,
+        ),
     }
 }
 
@@ -341,6 +370,7 @@ fn run(
     epub_version: Option<String>,
     advisory: bool,
     usage: bool,
+    sort: &str,
 ) -> ExitCode {
     let options = epubveri::Options {
         profile,
@@ -421,7 +451,7 @@ fn run(
         let multi = results.len() > 1;
         for (path, r) in &results {
             match r {
-                Ok(report) => print_report(report, path, format, multi, usage),
+                Ok(report) => print_report(report, path, format, multi, usage, sort),
                 Err(e) => eprintln!("error: {e}"),
             }
         }
@@ -461,6 +491,7 @@ fn print_report(
     format: &str,
     multi: bool,
     usage: bool,
+    sort: &str,
 ) {
     // **The machine formats stay complete.** The filter is about a person
     // reading a terminal; a consumer parsing `json` or `ids` and silently
@@ -487,11 +518,25 @@ fn print_report(
     // contract is the whole report. `render_summary` is the same primitive it
     // uses, so the verdict line is unchanged — and the verdict itself cannot
     // move, since usage findings never counted toward it.
-    for m in report
+    let mut shown: Vec<&epubveri::report::Message> = report
         .messages
         .iter()
         .filter(|m| shown_to_a_reader(m, usage))
-    {
+        .collect();
+    // **A stable sort on severity alone, deliberately.** The library already
+    // hands us document order, so sorting by nothing but the severity rank
+    // leaves each group internally in document order - one pass down the
+    // errors, then one down the warnings, each still reading top-to-bottom.
+    // Recomputing a `(severity, file, line, column)` key would produce the
+    // same answer and would silently stop matching the library's file
+    // ordering the day that changes.
+    //
+    // `Severity` is declared most-severe-first, so `as u8` is the rank; there
+    // is no separate table to keep in step with it.
+    if sort == "severity" {
+        shown.sort_by_key(|m| m.severity as u8);
+    }
+    for m in shown {
         println!("{}", m.render_human());
     }
     println!("{}", report.render_summary());
@@ -500,6 +545,144 @@ fn print_report(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--sort severity` groups most-severe-first **and leaves the order
+    /// inside each group alone**.
+    ///
+    /// That second half is the whole design: the library hands the CLI document
+    /// order, and a *stable* sort on the severity rank alone preserves it
+    /// within each group — so the reader gets one pass down the errors and then
+    /// one down the warnings, each still reading top-to-bottom. A sort that
+    /// recomputed a `(severity, file, line, column)` key would pass a naive
+    /// test and quietly stop agreeing with the library's file ordering the day
+    /// that changed, so the fixture below is deliberately **not** in file-name
+    /// order: `b.xhtml` precedes `a.xhtml`, and a comparator that re-derived
+    /// the order would put them the other way round.
+    #[test]
+    fn severity_sort_groups_by_rank_and_keeps_document_order_inside_each_group() {
+        use epubveri::report::{Position, Report, Severity};
+
+        let mut r = Report::new();
+        let mut add = |sev: Severity, file: &str, line: u32| {
+            r.push_at_pos(
+                epubveri::ids::RSC_005,
+                sev,
+                format!("{file}:{line}"),
+                file,
+                Position { line, column: 1 },
+            );
+        };
+        // Interleaved, in the order the library would emit them.
+        add(Severity::Warning, "b.xhtml", 1);
+        add(Severity::Error, "b.xhtml", 2);
+        add(Severity::Warning, "a.xhtml", 1);
+        add(Severity::Fatal, "a.xhtml", 2);
+        add(Severity::Error, "a.xhtml", 3);
+
+        let ordered = |sort: &str| -> Vec<String> {
+            let mut shown: Vec<&epubveri::report::Message> = r.messages.iter().collect();
+            if sort == "severity" {
+                shown.sort_by_key(|m| m.severity as u8);
+            }
+            shown
+                .iter()
+                .map(|m| format!("{} {}", m.severity, m.text))
+                .collect()
+        };
+
+        assert_eq!(
+            ordered("severity"),
+            vec![
+                "FATAL a.xhtml:2",
+                "ERROR b.xhtml:2",
+                "ERROR a.xhtml:3",
+                "WARNING b.xhtml:1",
+                "WARNING a.xhtml:1",
+            ],
+            "most severe first, and each group in the order it arrived"
+        );
+        assert_eq!(
+            ordered("document"),
+            vec![
+                "WARNING b.xhtml:1",
+                "ERROR b.xhtml:2",
+                "WARNING a.xhtml:1",
+                "FATAL a.xhtml:2",
+                "ERROR a.xhtml:3",
+            ],
+            "document order is what the library handed us, untouched"
+        );
+    }
+
+    /// The order is a **display** choice and must not reach a machine
+    /// consumer: `--format json` and `--format ids` are always document order,
+    /// whatever the user typed.
+    ///
+    /// Asserted on the parse rather than the output because that is where it
+    /// could go wrong — `print_report` returns before the sort for `ids`, and
+    /// the json path never sees `sort` at all. A future edit that threads it
+    /// into either would make a tool's input depend on its user's preference.
+    #[test]
+    fn sort_is_accepted_everywhere_but_only_the_human_format_may_use_it() {
+        let cli = parse(&[
+            "--sort".into(),
+            "document".into(),
+            "--format".into(),
+            "json".into(),
+            "-i".into(),
+            "b.epub".into(),
+        ]);
+        match cli {
+            Cli::Run { sort, format, .. } => {
+                assert_eq!(sort, "document");
+                assert_eq!(format, "json");
+            }
+            other => panic!("expected a run, got {other:?}"),
+        }
+        // The source of truth for "json ignores it" is print_report's shape:
+        // the ids branch returns before the sort, and neither machine branch
+        // reads `sort`.
+        assert!(
+            !include_str!("main.rs")
+                .split("if format == \"ids\"")
+                .nth(1)
+                .unwrap_or("")
+                .split("if multi")
+                .next()
+                .unwrap_or("")
+                .contains("sort"),
+            "the ids branch must not consult --sort"
+        );
+    }
+
+    /// An out-of-set value is refused with the supported values named, like
+    /// `--format` and `--profile`.
+    #[test]
+    fn an_unknown_sort_order_is_a_usage_error() {
+        match parse(&[
+            "--sort".into(),
+            "sideways".into(),
+            "-i".into(),
+            "b.epub".into(),
+        ]) {
+            Cli::Usage(msg) => {
+                assert!(msg.contains("--sort"), "got {msg}");
+                assert!(msg.contains("severity, document"), "got {msg}");
+            }
+            other => panic!("expected a usage error, got {other:?}"),
+        }
+    }
+
+    /// The default is `severity`, and it is the default *in the parse* rather
+    /// than a fallback further down — so every caller of `Cli::Run` sees the
+    /// same answer.
+    #[test]
+    fn the_default_sort_is_severity() {
+        match parse(&["-i".into(), "b.epub".into()]) {
+            Cli::Run { sort, .. } => assert_eq!(sort, "severity"),
+            other => panic!("expected a run, got {other:?}"),
+        }
+    }
 
     /// Usage findings are hidden by default — **except the family that shares
     /// their severity but not their meaning**.

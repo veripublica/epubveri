@@ -184,6 +184,23 @@ Everything else you see is a finding epubcheck would report too. **A book that
 passes epubcheck passes epubveri**, with or without either switch — `--advisory`
 findings never affect `VALID`/`INVALID` or the exit code, by permanent design.
 
+### The order the findings come in
+
+By default the report is **grouped by severity, most serious first** — fatals,
+then errors, then warnings, then info — because that is the order most people
+work in: fix what makes the book invalid, run it again, then look at the rest.
+Inside each group the findings stay in file order, so each group still reads
+top-to-bottom.
+
+If you would rather walk the book once, front to back, whatever the severities:
+
+```sh
+epubveri --sort document -i my-book.epub
+```
+
+Both orders contain exactly the same findings; only the arrangement differs, and
+neither changes the verdict.
+
 ### The exit code (for scripting)
 
 If you're calling epubveri from a script, it also returns a standard exit
@@ -219,6 +236,13 @@ epubveri --format json -i my-book.epub
 > contract and is **never filtered** — it contains the `USAGE` findings the
 > human report hides — while the human text is free to change wording, order
 > and spacing between releases.
+
+**A different order** — group by severity (the default) or walk the book in
+file order:
+
+```sh
+epubveri --sort document -i my-book.epub
+```
 
 **Extension profiles** — if your book targets a specific EPUB extension,
 you can additionally enforce its rules (same idea as epubcheck's

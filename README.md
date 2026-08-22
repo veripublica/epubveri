@@ -311,6 +311,12 @@ ERROR RSC-005: EPUB 3 requires a navigation document (a manifest item with prope
 The filter is on the **display only**: `--format json` and `--format ids` are
 never filtered, and neither is the library.
 
+The report is grouped by severity, most serious first, so the findings that
+decide the verdict come together and first; inside each group the file order is
+unchanged, so each group still reads top-to-bottom. Pass `--sort document` to
+walk the book once, front to back, instead. The machine formats are always in
+document order whatever you pass.
+
 The exit code follows Unix convention: `0` if the book is valid, `1` if it
 found at least one error- or fatal-level problem, `2` if the tool could not
 run or could not read an input at all (a missing or unreadable file). A file
