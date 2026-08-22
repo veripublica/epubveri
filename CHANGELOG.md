@@ -10,6 +10,61 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**An attribute fault is now reported at the attribute, not at the element
+carrying it** (JSWolf, MobileRead #220). `<spine page-progression-direction="ltr"
+toc="ncx">` in an EPUB 2 package drew the right error on the right line at
+column 1, where the reporter expected column 8 — the first character of the
+attribute we had just named in the message.
+
+`element_path` has ended in an `/@name` step since #18; `position` was left
+pointing at the element, so the machine half of a finding named the attribute
+and the human half did not. That is now one answer instead of two.
+
+**Not a parity change, which is worth stating because it looks like one.**
+epubcheck's SAX locator reports an attribute fault at the character *after* the
+start tag's `>` — column 53 for a 52-character line in the reduced case — so its
+column pointed at neither the element nor the attribute, and ours never matched
+it. There was no third position to converge on; there was a more useful one and
+a less useful one.
+
+Measured over the 385-book shelf, old build against new: the finding set is
+identical — same 50,594 findings, same ids, rules, locations and element paths —
+and **11,332 positions move, which is exactly the set of findings whose
+`element_path` ends in `/@attr`, all of them and nothing else**. Every move is
+forward on the same line (median +55 columns, max +179), across 77 books and
+five ids (RSC-005, OPF-088, OPF-086b, RSC-020, OPF-087). The line never changes.
+
+Two consequences for consumers, neither of which changes a verdict:
+
+- **The human report reorders slightly.** `sort_by_document_order()` keys on
+  position, so an attribute fault now sorts after its own element's findings
+  rather than tying with them — 934 of 50,594 lines change place. This is the
+  more accurate document order, and it is the same sort that 0.9.28 made
+  deterministic.
+- **`position` moves for anything that consumes it.** Within the same element
+  and the same line, so a consumer resolving a finding to its element via
+  `element_path` is unaffected; one matching a column exactly is not.
+
+No test covered the old column, which is why the bug survived: the line was
+always right, so a position-exists or line-only assertion would have passed
+throughout. The new test pins the column to the attribute *and* asserts it is no
+longer the element's.
+
+**A by-product worth recording: it halved the number of tied positions.** Two
+attribute faults on one start tag used to share the element's position by
+construction; they now have their own. Across the shelf, findings sharing an
+exact position fell from **3,295 in 1,643 groups to 1,449 in 720**.
+
+Ties are where finding order stops being decided by the sort and starts being
+decided by the order the checks emitted them — the level below the file ordering
+0.9.28 fixed, and equally invisible. Measured rather than assumed: three
+separate-process runs over the 32 books holding every remaining tie are
+byte-identical, and the largest group (eight OPF-003s at one spot) is driven by
+`ocf.names`, a `Vec` in zip entry order. Nothing was wrong, and nothing was
+guarding it either, so there is now a test that pins tie order to zip order and
+fails when the walk is switched to a `HashSet`.
+
+
 **A schema violation whose message contradicted itself now says what actually
 differs** (#84, BeckyDTP). A content document whose root was a bare `<html>`
 with no namespace drew `element "html" is not allowed here; expected "html"` —

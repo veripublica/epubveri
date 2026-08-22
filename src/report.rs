@@ -63,6 +63,27 @@ impl Position {
         }
     }
 
+    /// Position of `attr` itself - the first character of its name - rather
+    /// than of the element carrying it.
+    ///
+    /// The distinction is the whole finding for an attribute fault: a reader
+    /// (or a Sigil/calibre plugin placing a cursor) sent to the element start
+    /// has to hunt along the start tag for the attribute we named, and on a
+    /// long start tag that is the difference between a usable column and a
+    /// decorative one. `element_path` has pinned the attribute since #18; this
+    /// is the human half catching up.
+    ///
+    /// Not a parity change: epubcheck's SAX locator reports attribute faults at
+    /// the character *after* the start tag's `>`, so its column pointed at
+    /// neither the element nor the attribute and ours never matched it.
+    pub(crate) fn of_attr(node: roxmltree::Node, attr: roxmltree::Attribute) -> Position {
+        let p = node.document().text_pos_at(attr.range().start);
+        Position {
+            line: p.row,
+            column: p.col,
+        }
+    }
+
     /// Position of a byte `offset` into raw `text`. For checks that scan
     /// bytes/text directly instead of a parsed `roxmltree::Document`
     /// (e.g. `htm.rs`'s XML-declaration/DOCTYPE checks, which must still
@@ -401,7 +422,8 @@ impl Report {
 
     /// Like `push_node`, but the finding is about a specific `attr` of `node`:
     /// the `element_path` ends in an `/@name` step pinning that attribute
-    /// (issue #18). The `position` still points at the element.
+    /// (issue #18) and the `position` points at the attribute itself
+    /// (see [`Position::of_attr`]).
     #[allow(clippy::too_many_arguments)]
     pub fn push_node_attr(
         &mut self,
@@ -419,7 +441,7 @@ impl Report {
             severity,
             text: text.into(),
             location: Some(location.into()),
-            position: Some(Position::of(node)),
+            position: Some(Position::of_attr(node, attr)),
             rule: Some(rule),
             params,
             element_path: Some(crate::xmlext::node_path_attr(node, attr)),

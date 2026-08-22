@@ -11477,6 +11477,115 @@ mod tests {
         );
     }
 
+    /// Findings that land on the **same position** keep a stable relative
+    /// order, and it is the order of the thing they describe.
+    ///
+    /// The sibling test above pins *file* order, which is what 0.9.28 fixed.
+    /// It cannot see one level down: `sort_by_document_order` keys on
+    /// `(file, line, column)`, so several findings at one position are left to
+    /// the sort's stability, i.e. to the order the checks emitted them. That
+    /// order is a property of every collection a check walks, and nothing
+    /// asserted it — a check switching to a `HashMap` would shuffle these on
+    /// every run, exactly as `items.values()` shuffled whole files, and
+    /// exactly as invisibly.
+    ///
+    /// Ties are real rather than hypothetical: 1,449 findings on the 385-book
+    /// shelf share a position with another, in 720 groups, and the largest is
+    /// eight OPF-003s at one spot. (That is *after* an attribute fault started
+    /// being positioned at its attribute, which halved the count — two faults
+    /// on one start tag used to collide by construction.)
+    ///
+    /// OPF-003 is the shape to pin because it is the at-risk one: many
+    /// findings, one rule, one position, driven by a collection walk. It reads
+    /// `ocf.names`, a `Vec` in zip entry order, so the contract is *zip order*
+    /// — and the fixture writes its entries in a deliberately non-alphabetical
+    /// order so that passing cannot be a coincidence of sorting.
+    #[test]
+    fn findings_at_one_position_keep_a_stable_order() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        // Undeclared, so each draws OPF-003 - all anchored at the package
+        // document, with no position of their own to separate them.
+        const STRAY: [&str; 5] = ["e.txt", "b.txt", "d.txt", "a.txt", "c.txt"];
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#;
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+
+        let build = || {
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/ch1.xhtml", CH1),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                for f in STRAY {
+                    z.start_file(format!("OEBPS/{f}"), o).unwrap();
+                    z.write_all(b"x").unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        };
+
+        let order = || {
+            crate::validate_bytes(build())
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.container.resource_not_in_manifest"))
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+        let expected: Vec<String> = STRAY.iter().map(|f| format!("OEBPS/{f}")).collect();
+
+        // All five share one position, so only their emission order can tell
+        // the runs apart - assert the order itself, not merely that two runs
+        // agree, which a shuffle reproduces 1 time in 120.
+        let first = order();
+        assert_eq!(first.len(), 5, "each stray file must draw one OPF-003");
+        assert_eq!(first, expected, "ties must follow zip entry order");
+        assert_eq!(order(), expected, "and must not shuffle on a second run");
+
+        // The tie is the premise of this test: if positions ever separate
+        // these findings, the sort does the work and the assertion above stops
+        // testing what it claims to.
+        let positions: Vec<_> = crate::validate_bytes(build())
+            .messages
+            .iter()
+            .filter(|m| m.rule == Some("opf.container.resource_not_in_manifest"))
+            .map(|m| (m.location.clone(), m.position.map(|p| (p.line, p.column))))
+            .collect();
+        assert!(
+            positions.windows(2).all(|w| w[0] == w[1]),
+            "the fixture must actually produce a tie; got {positions:?}"
+        );
+    }
+
     /// An EPUB 2 with a caller-supplied package document and stylesheet, one
     /// content document and one font — enough manifest for the guide and CSS
     /// reference checks to have somewhere to point.
@@ -13618,6 +13727,52 @@ mod tests {
             .unwrap();
         assert_eq!(usage.id, crate::ids::OPF_062);
         assert_eq!(usage.severity, crate::report::Severity::Usage);
+    }
+
+    /// An attribute fault is reported at the **attribute**, not at the element
+    /// carrying it (JSWolf, MobileRead #220: "the error is correct, the line is
+    /// correct, the column is wrong").
+    ///
+    /// `element_path` has ended in an `/@name` step since #18; `position` was
+    /// left pointing at the element start, so a reader — or a Sigil/calibre
+    /// plugin placing a cursor — was sent to the `<` of a start tag that on a
+    /// real package document is often a hundred characters wide.
+    ///
+    /// **The negative half is the point.** Asserting only that a position
+    /// exists, or that the line is right, would have passed for the entire
+    /// lifetime of the bug: the line was never wrong. So this pins the column
+    /// to the attribute *and* states what it must no longer be.
+    #[test]
+    fn an_attribute_fault_is_reported_at_the_attribute_not_the_element() {
+        const ATTRS: &str = " page-progression-direction=\"ltr\"";
+        let report = crate::validate_bytes(epub2_spine_case(ATTRS, ""));
+        let hit = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::RSC_005 && m.text.contains("page-progression-direction"))
+            .expect("EPUB 2 has no page-progression-direction; the fault must be reported");
+        let pos = hit.position.expect("a position");
+
+        // Rebuilt from the same pieces the fixture writes, so a change to the
+        // fixture's spine line fails here loudly instead of silently moving the
+        // column this test claims to pin.
+        let spine_line = format!("  <spine toc=\"ncx\"{ATTRS}>");
+        let at_attribute = spine_line.find("page-progression-direction").unwrap() as u32 + 1;
+        let at_element = spine_line.find("<spine").unwrap() as u32 + 1;
+
+        assert_eq!(
+            pos.column, at_attribute,
+            "column must point at the offending attribute"
+        );
+        assert_ne!(
+            pos.column, at_element,
+            "column must no longer point at the element carrying the attribute"
+        );
+        assert_eq!(
+            hit.element_path.as_ref().map(|p| p.path.as_str()),
+            Some("/opf:package[1]/opf:spine[1]/@page-progression-direction"),
+            "the machine half and the human half must name the same thing"
+        );
     }
 
     fn epub2_with_ch1(ch1: &str) -> Vec<u8> {
