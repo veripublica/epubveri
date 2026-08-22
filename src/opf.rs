@@ -11482,6 +11482,51 @@ mod tests {
         );
     }
 
+    /// **The library never filters by severity, and this is the guard.**
+    ///
+    /// 0.9.19 hid usage findings from the *human* report, as epubcheck does.
+    /// That belongs in `render_human`/`print_report` and nowhere else: epubsana
+    /// calls `validate_bytes`, and three of its fixers dispatch on rules that
+    /// fire below error severity — `opf.metadata.empty_element` and
+    /// `opf.manifest_item.non_preferred_media_type` (usage) and
+    /// `opf.guide.duplicate_reference` (warning). They measured what a library
+    /// filter would cost: **41 proposals and 147 findings cleared across 385
+    /// books, against a change in the error count of exactly zero.**
+    ///
+    /// The failure would be silent in both directions — a fixer that finds
+    /// nothing proposes nothing, and no test of theirs can fail — which is why
+    /// the guard has to live here, on our side of the call.
+    ///
+    /// Worth keeping distinct from the ordering question that arrives in the
+    /// same conversation and often the same patch: **reordering what
+    /// `validate_bytes` returns is free, removing from it is not** (epubsana
+    /// measured their plan byte-identical across an 11,334-position reshuffle,
+    /// and their fixers immune to order — but not to absence).
+    #[test]
+    fn the_library_returns_usage_findings_however_the_cli_displays_them() {
+        let report = crate::validate_bytes(epub2_with_stray_files(&["stray.txt"]));
+        let usage: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.severity == crate::report::Severity::Usage)
+            .collect();
+        assert!(
+            !usage.is_empty(),
+            "validate_bytes must return usage findings; hiding them is the CLI's job"
+        );
+        assert!(
+            usage
+                .iter()
+                .any(|m| m.rule == Some("opf.container.resource_not_in_manifest")),
+            "got {:?}",
+            usage.iter().map(|m| m.rule).collect::<Vec<_>>()
+        );
+        // And they are genuinely below the verdict line, which is what makes
+        // hiding them defensible in the first place.
+        assert_eq!(report.errors(), 0);
+        assert!(report.is_valid());
+    }
+
     /// Findings that land on the **same position** keep a stable relative
     /// order, and it is the order of the thing they describe.
     ///
@@ -11507,56 +11552,10 @@ mod tests {
     /// order so that passing cannot be a coincidence of sorting.
     #[test]
     fn findings_at_one_position_keep_a_stable_order() {
-        use std::io::Write;
-        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
-
         // Undeclared, so each draws OPF-003 - all anchored at the package
         // document, with no position of their own to separate them.
         const STRAY: [&str; 5] = ["e.txt", "b.txt", "d.txt", "a.txt", "c.txt"];
-        const CONTAINER: &str = r#"<?xml version="1.0"?>
-<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
-  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
-</container>"#;
-        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
-<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
-    <dc:title>T</dc:title><dc:language>en</dc:language>
-  </metadata>
-  <manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
-  <spine><itemref idref="c1"/></spine>
-</package>"#;
-        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
-            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
-            <body><p>x</p></body></html>";
-
-        let build = || {
-            let mut buf = Vec::new();
-            {
-                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
-                z.start_file(
-                    "mimetype",
-                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
-                )
-                .unwrap();
-                z.write_all(b"application/epub+zip").unwrap();
-                let o = SimpleFileOptions::default();
-                for (name, body) in [
-                    ("META-INF/container.xml", CONTAINER),
-                    ("OEBPS/content.opf", OPF),
-                    ("OEBPS/ch1.xhtml", CH1),
-                ] {
-                    z.start_file(name, o).unwrap();
-                    z.write_all(body.as_bytes()).unwrap();
-                }
-                for f in STRAY {
-                    z.start_file(format!("OEBPS/{f}"), o).unwrap();
-                    z.write_all(b"x").unwrap();
-                }
-                z.finish().unwrap();
-            }
-            buf
-        };
+        let build = || epub2_with_stray_files(&STRAY);
 
         let order = || {
             crate::validate_bytes(build())
@@ -11589,6 +11588,68 @@ mod tests {
             positions.windows(2).all(|w| w[0] == w[1]),
             "the fixture must actually produce a tie; got {positions:?}"
         );
+    }
+
+    /// A minimal, otherwise-valid EPUB 2 carrying `stray` extra container
+    /// entries that the manifest does not declare — one usage-severity OPF-003
+    /// each, all anchored at the package document and so all sharing a
+    /// position. `stray`'s order is the zip entry order.
+    fn epub2_with_stray_files(stray: &[&str]) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+  </manifest>
+  <spine toc="ncx"><itemref idref="c1"/></spine>
+</package>"#;
+        const NCX: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+  <head><meta name="dtb:uid" content="urn:uuid:12345678-1234-1234-1234-123456789abc"/></head>
+  <docTitle><text>T</text></docTitle>
+  <navMap><navPoint id="n1" playOrder="1"><navLabel><text>T</text></navLabel><content src="ch1.xhtml"/></navPoint></navMap>
+</ncx>"#;
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/toc.ncx", NCX),
+                ("OEBPS/ch1.xhtml", CH1),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            for f in stray {
+                z.start_file(format!("OEBPS/{f}"), o).unwrap();
+                z.write_all(b"x").unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
     }
 
     /// An EPUB 2 with a caller-supplied package document and stylesheet, one
