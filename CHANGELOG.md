@@ -8,7 +8,16 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-08-24
+
+**Why 0.12.0 and not 0.11.1.** One public function changed shape:
+`ocf::check_encryption` takes the publication version as a third argument,
+because `encryption.xml`'s content model depends on it. For a pre-1.0 crate
+that is a minor bump, the same rule 0.10.0 was cut under. **Nothing moves for
+anyone using the CLI, the JSON output or the browser build** — except the one
+deliberate change below, where `RSC-004`'s `location` now names the encrypted
+file. Unlike 0.10.0 and 0.11.0, this release *is* about the validator: four
+real gaps close.
 
 **Four gaps reported on MobileRead pages 16-17, all of them findings we missed
 rather than errors we invented** (issues #87-#90). None changes what we say
