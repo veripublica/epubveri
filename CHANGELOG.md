@@ -8,6 +8,96 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**Four gaps reported on MobileRead pages 16-17, all of them findings we missed
+rather than errors we invented** (issues #87-#90). None changes what we say
+about a book epubcheck accepts.
+
+**An empty `<tours>` is now an error** (JSWolf, MobileRead #234; #87). OPF
+2.0.1 makes the `<tour>` child `oneOrMore`, so epubcheck reports RSC-005
+`element "tours" incomplete; missing required element "tour"` and we
+accepted the element with any content at all, including none. `<tours>` was
+added to the grammar in #58 for the opposite reason - we had been rejecting a
+legacy book that used it - and what got added was the element's *existence*
+with the permissive placeholder every other legacy child carries. Its `<guide>`
+sibling three lines above already required a child, for exactly this reason.
+
+**`RSC-004` now names the encrypted file, not `META-INF/encryption.xml`**
+(JSWolf, MobileRead #235; #89). epubcheck reports `font00207.otf` with no
+position; we reported the `<CipherReference>` that mentions it, which put a
+note about a font under `META-INF/` for anything grouping findings by file. The
+finding is a fact about the font, so the location moves and the position goes
+with it - there is nothing inside a binary to point at, and an `element_path`
+is resolved against the file `location` names. The message, severity, `rule`
+and `params` are unchanged. **`location` is part of the JSON envelope**, so
+this is visible to tooling; nothing in epubsana consumes RSC-004 (checked).
+The RSC-007 sibling deliberately keeps `encryption.xml` and its position: a
+reference to nothing has no target file to name.
+
+**`encryption.xml`'s encrypted items are checked, and the rule depends on the
+version** (Doitsu, MobileRead #233; #88). An `<enc:EncryptedData>` with no
+`<enc:CipherData>` drew nothing: the check asked only which children
+`<encryption>` had, and the RSC-004 pass then found no `CipherReference` to
+walk and stayed silent too - two checks with the case between them reporting
+nothing at all. What the requirement is, though, **inverts between versions**,
+so a single rule would have been a false positive on half of all books. Every
+cell below was measured against epubcheck 5.3.0 with one book per shape:
+
+| inside `EncryptedData` | EPUB 2 | EPUB 3 |
+|---|---|---|
+| nothing | missing `enc:EncryptionMethod` | missing `enc:CipherData` |
+| `EncryptionMethod` only | *accepted* | missing `enc:CipherData` |
+| `CipherData` only | `CipherData` must follow the method | *accepted* |
+| empty `CipherData` | expected `CipherReference`/`CipherValue` | same |
+
+`EncryptedKey` takes the same model. Ordering turned out **not** to be
+version-specific - both grammars are sequences, so a `CipherData` before the
+`EncryptionMethod` is an error at 3.0 too, and the first draft of this had put
+that rule in the EPUB 2 arm and left 3.0 silent. Probing the case is what found
+it; the assumption read fine. Where no rootfile parses, the version is unknown
+and only the version-independent rules run rather than guessing one.
+
+**An EPUB 2 `<package>` no longer accepts any attribute** (JSWolf, MobileRead
+#236; #90). `OPF20.package-element` is a closed list of three - `version`,
+`unique-identifier`, optional `id` - and we granted a wildcard, so the reported
+`xml:lang` and every EPUB 3 attribute passed silently. The requiredness of
+`unique-identifier` and the value of `version` stay where they were, in
+hand-coded checks, so this adds the list and nothing else. The EPUB 3 grammar
+is untouched and asserted so in a test: `prefix` and `xml:lang` are valid on a
+3.0 package, and closing both would have traded a legacy gap for a false
+positive on the majority of modern books.
+
+Measured on all 312 EPUB 2 books of the 385-book shelf before shipping: **310
+carry nothing beyond those three, 2 carry `prefix`** (Calibre's, which
+epubcheck rejects for the same reason), and **none carries `xml:lang`** - so
+the shelf could not have found the reported case and the grammar is the
+evidence. Both new findings match epubcheck exactly, book by book.
+
+KevinH argued in the same thread that epubcheck oversteps here, since XML makes
+`xml:lang` available on every element and `dc:language` describes the book
+while `xml:lang` describes the package document - a different fact. That is
+probably right and is not ours to act on: a book that fails epubcheck has to
+fail here too, or a user gating on epubcheck cannot tell our judgement from our
+bug. Disagreeing with a rule is grounds for taking it upstream, not for staying
+silent about it.
+
+### For epubsana
+
+`opf.package.schema_violation` gains a population. The new `<package>`
+attribute findings carry the `attribute "x" is not allowed here` wording your
+`fix.epub3_attr_in_epub2_package` site matches on, so that fixer will start
+seeing `prefix` and `xml:lang` on EPUB 2 packages where it previously saw
+nothing - 2 books on the shared 385-book shelf. No message wording moved; the
+population did.
+
+Three new rule slugs, all one message shape each: `ocf.encryption.item_incomplete`,
+`ocf.encryption.item_out_of_order`, `ocf.encryption.cipher_data_incomplete`.
+
+Instruments: corpus 606/607 with 0 false positives, `epub-tests` verdict set
+byte-identical, hostile clean, and the shelf per-book diff **2 books changed,
+both `+1 RSC-005`, both correct**.
+
 ## [0.11.0] - 2026-08-22
 
 **A minor bump because the JSON output changes for consumers, not because the

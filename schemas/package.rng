@@ -211,7 +211,20 @@
       </element>
       <element name="bindings"><ref name="looseContent"/></element>
       <element name="collection"><ref name="looseContent"/></element>
-      <element name="tours"><ref name="looseContent"/></element>
+      <!-- must have at least one <tour> (JSWolf, MobileRead #234; issue #87).
+           `opf20.rng`'s `OPF20.tours-content` is `oneOrMore tour-element`, so
+           an empty <tours></tours> is an error there and was accepted here.
+           #58 added the element's *existence* and stopped; a permissive
+           placeholder in a grammar is not local to the element it is on, and
+           this is the second time that has cost a finding (see `mapEl`). The
+           child is `anyElement` rather than `tour` by name for the same
+           reason `guide` above uses it: the cardinality is the finding, and
+           naming the child would duplicate a violation the surrounding
+           grammar already reports. -->
+      <element name="tours">
+        <ref name="anyAttributes"/>
+        <oneOrMore><ref name="anyElement"/></oneOrMore>
+      </element>
       <ref name="foreignElement"/>
     </choice>
   </define>
@@ -235,10 +248,27 @@
   <!--                                                               -->
   <!-- `spine@toc` is required by opf20 too, but stays out of here:   -->
   <!-- a hand-coded check already reports it, and both would double.  -->
+  <!-- `<package>`'s attribute list is CLOSED here (JSWolf, MobileRead     -->
+  <!-- #236; issue #90). `OPF20.package-element` is exactly `version`,      -->
+  <!-- `unique-identifier` and an optional `id`, and we granted             -->
+  <!-- `anyAttributes` - so an EPUB 3 attribute in a 2.0 package, and the   -->
+  <!-- reported `xml:lang`, both passed silently.                          -->
+  <!--                                                                     -->
+  <!-- Two of epubcheck's three constraints stay OUT of the grammar to      -->
+  <!-- avoid doubling a hand-coded check: `unique-identifier` is optional   -->
+  <!-- here because its requiredness is reported in `opf.rs`, and           -->
+  <!-- `version`'s value is checked there too. What this adds is the list.  -->
+  <!--                                                                     -->
+  <!-- Measured before shipping, on all 312 EPUB 2 books of the 385-book    -->
+  <!-- shelf: 310 carry nothing beyond these three, 2 carry `prefix` (an    -->
+  <!-- EPUB 3 attribute, which epubcheck rejects for the same reason), and  -->
+  <!-- NONE carries `xml:lang` - so the shelf cannot vouch for the reported -->
+  <!-- case and the grammar is the evidence.                                -->
   <define name="packageEl-epub2">
     <element name="package">
-      <ref name="anyAttributes"/>
       <attribute name="version"><data type="string"/></attribute>
+      <optional><attribute name="unique-identifier"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
       <interleave>
         <element name="metadata"><ref name="metadataContent-epub2"/></element>
         <element name="manifest">

@@ -11504,15 +11504,20 @@ mod tests {
     /// Both halves are asserted because getting one right is easy. Adding
     /// RSC-007 while leaving RSC-004 in place would pass a presence check and
     /// tell the reader two things about one fact, the second of them false.
+    ///
+    /// The fixtures carry an `<enc:EncryptionMethod>` because these are EPUB 2
+    /// books and OPF 2.0.1 requires it (issue #88). Without it the block is now
+    /// itself an error, and this test - which is about RSC-007 vs RSC-004 -
+    /// would have been quietly measuring the new rule instead.
     #[test]
     fn a_cipher_reference_to_a_missing_entry_replaces_the_encrypted_note() {
         const PRESENT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
-  <enc:EncryptedData><enc:CipherData><enc:CipherReference URI="OEBPS/stray.txt"/></enc:CipherData></enc:EncryptedData>
+  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/stray.txt"/></enc:CipherData></enc:EncryptedData>
 </encryption>"#;
         const MISSING: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
-  <enc:EncryptedData><enc:CipherData><enc:CipherReference URI="OEBPS/fonts/gone.otf"/></enc:CipherData></enc:EncryptedData>
+  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/fonts/gone.otf"/></enc:CipherData></enc:EncryptedData>
 </encryption>"#;
 
         let rules = |enc: &str| -> Vec<&'static str> {
@@ -11535,6 +11540,53 @@ mod tests {
             rules(MISSING),
             vec!["ocf.encryption.missing_resource"],
             "a missing target is reported instead of the encrypted note, not alongside it"
+        );
+    }
+
+    /// RSC-004 is located at the **encrypted file**, not at the
+    /// `encryption.xml` that mentions it (JSWolf, MobileRead #235; issue #89).
+    ///
+    /// epubcheck reports `font00207.otf Line:-1 Col:-1`; we reported
+    /// `META-INF/encryption.xml 5 7`, i.e. where the *statement* is rather
+    /// than what it is about. Anything grouping findings by file put a note
+    /// about a font under `META-INF/`.
+    ///
+    /// The RSC-007 sibling is asserted in the same test because the two
+    /// branches sit three lines apart and the obvious over-correction is to
+    /// move both: a reference to nothing has no target file to name, so it
+    /// correctly stays on `encryption.xml` **with** its position.
+    #[test]
+    fn the_encrypted_note_is_located_at_the_encrypted_file() {
+        const PRESENT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/stray.txt"/></enc:CipherData></enc:EncryptedData>
+</encryption>"#;
+        const MISSING: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/fonts/gone.otf"/></enc:CipherData></enc:EncryptedData>
+</encryption>"#;
+
+        let one = |enc: &str, rule: &str| {
+            let report =
+                crate::validate_bytes(epub2_with_stray_files_and_encryption(&["stray.txt"], enc));
+            report
+                .messages
+                .iter()
+                .find(|m| m.rule == Some(rule))
+                .map(|m| (m.location.clone(), m.position.is_some()))
+                .unwrap_or_else(|| panic!("expected a {rule} finding"))
+        };
+
+        assert_eq!(
+            one(PRESENT, "ocf.resource.encrypted_not_checked"),
+            (Some("OEBPS/stray.txt".to_string()), false),
+            "the note is about the encrypted file, and carries no position - \
+             there is nothing inside a binary to point at"
+        );
+        assert_eq!(
+            one(MISSING, "ocf.encryption.missing_resource"),
+            (Some("META-INF/encryption.xml".to_string()), true),
+            "a reference to nothing keeps encryption.xml and its position"
         );
     }
 

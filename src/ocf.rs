@@ -844,7 +844,7 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
 /// RSC-004 (INFO) — its content is not validated. Also checks the file's
 /// own content model: root element name, `Id`-attribute uniqueness, and
 /// (IDPF compression extension) `Compression` attribute validity.
-pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
+pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>) {
     const ENC: &str = "META-INF/encryption.xml";
     if !ocf.has(ENC) {
         return;
@@ -881,7 +881,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
         return;
     }
 
-    check_encryption_children(doc.root_element(), report);
+    check_encryption_children(doc.root_element(), report, epub3);
 
     // Every `Id` attribute (on any element - EncryptedKey/EncryptedData/...)
     // must be unique across the whole document; a value shared by more
@@ -986,12 +986,24 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
                 );
                 continue;
             }
-            report.push_full(
+            // Located at the *encrypted file*, not at `encryption.xml`
+            // (JSWolf, MobileRead #235; issue #87's sibling #89). The finding
+            // is a fact about the font, not about the document that mentions
+            // it, and epubcheck locates it that way - `font00207.otf` with no
+            // position, since there is nothing inside a binary to point at.
+            // We had been reporting where the *statement* is, which put a note
+            // about a font under `META-INF/` for anything grouping by file.
+            //
+            // Deliberately positionless, so `element_path` goes with it: a
+            // path is resolved against the document named by `location`, and
+            // once that is the font, a path into `encryption.xml` would name a
+            // node the reader cannot find. The RSC-007 branch above keeps both
+            // - a reference to nothing has no target file to name.
+            report.push_at_rule(
                 RSC_004,
                 Severity::Info,
                 format!("File \"{uri}\" is encrypted; its content will not be checked"),
-                ENC,
-                Position::of(n),
+                resolved.clone(),
                 "ocf.resource.encrypted_not_checked",
                 vec![uri.to_string()],
             );
@@ -1020,7 +1032,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report) {
 /// case would leave `<encryption><foo/></encryption>` reported as complete. That
 /// is the gap-between-two-checks shape this project keeps meeting: the case no
 /// check owns reports nothing at all.
-fn check_encryption_children(root: roxmltree::Node, report: &mut Report) {
+fn check_encryption_children(root: roxmltree::Node, report: &mut Report, epub3: Option<bool>) {
     const XENC: &str = "http://www.w3.org/2001/04/xmlenc#";
     const EXPECTED: &str = "expected one of \"enc:EncryptedData\", \"enc:EncryptedKey\"";
 
@@ -1030,6 +1042,7 @@ fn check_encryption_children(root: roxmltree::Node, report: &mut Report) {
         if name.namespace() == Some(XENC) && matches!(name.name(), "EncryptedData" | "EncryptedKey")
         {
             encrypted_items += 1;
+            check_encrypted_item(child, report, epub3);
             continue;
         }
         // Named with the conventional `enc:` prefix when it is in the xmlenc
@@ -1061,6 +1074,127 @@ fn check_encryption_children(root: roxmltree::Node, report: &mut Report) {
             "META-INF/encryption.xml",
             root,
             "ocf.encryption.incomplete_content",
+            Vec::new(),
+        );
+    }
+}
+
+/// The content model *inside* one `EncryptedData`/`EncryptedKey`, which is
+/// where the version split lives (Doitsu, MobileRead #233; issue #88).
+///
+/// `check_encryption_children` above asks only which children `<encryption>`
+/// has; nothing looked inside them, so an `<enc:EncryptedData>` with no
+/// `<enc:CipherData>` — the exact file that was reported — was accepted, and
+/// the RSC-004/RSC-007 pass then found no `CipherReference` to walk and stayed
+/// silent too. Two checks, and the case between them reported nothing at all.
+///
+/// **The requirement inverts between versions**, which a single rule would get
+/// wrong for half of all books. Measured against epubcheck 5.3.0, one book per
+/// shape, rather than read off the spec:
+///
+/// | inside `EncryptedData` | EPUB 2 | EPUB 3 |
+/// |---|---|---|
+/// | nothing | missing `enc:EncryptionMethod` | missing `enc:CipherData` |
+/// | `EncryptionMethod` only | *silent* | missing `enc:CipherData` |
+/// | `CipherData` only | `CipherData` "not allowed yet" | *silent* |
+/// | empty `CipherData` | expected `CipherReference`/`CipherValue` | same |
+///
+/// which is `schema/20/rng/xenc-schema.rng` (method required, cipher optional)
+/// against `schema/30/mod/security/xenc-schema.rnc` (method optional, cipher
+/// required). The EPUB 2 arm is a *sequence*, so a `CipherData` preceding the
+/// method is reported even when both are present.
+///
+/// `epub3 == None` means no rootfile parsed and the version is genuinely
+/// unknown. Only the version-independent rule runs then: guessing would invent
+/// an error on a book already being reported for something worse.
+fn check_encrypted_item(item: roxmltree::Node, report: &mut Report, epub3: Option<bool>) {
+    const XENC: &str = "http://www.w3.org/2001/04/xmlenc#";
+    let shown = format!("enc:{}", item.tag_name().name());
+
+    let child = |local: &str| {
+        item.children().find(|n| {
+            n.is_element() && n.tag_name().namespace() == Some(XENC) && n.tag_name().name() == local
+        })
+    };
+    let index = |local: &str| {
+        item.children()
+            .filter(|n| n.is_element())
+            .position(|n| n.tag_name().namespace() == Some(XENC) && n.tag_name().name() == local)
+    };
+
+    let method = child("EncryptionMethod");
+    let cipher = child("CipherData");
+
+    // Which element this version requires, or `None` when the version is
+    // unknown and neither may be asserted. Written as one lookup and one
+    // report rather than an arm each: the two branches differ only in the
+    // element they name, and a second copy of the `push_node` is where the
+    // two would drift apart.
+    let required = match epub3 {
+        Some(true) if cipher.is_none() => Some("enc:CipherData"),
+        Some(false) if method.is_none() => Some("enc:EncryptionMethod"),
+        _ => None,
+    };
+    if let Some(required) = required {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!(
+                "element \"{shown}\" has incomplete content; \
+                 missing required element \"{required}\""
+            ),
+            "META-INF/encryption.xml",
+            item,
+            "ocf.encryption.item_incomplete",
+            vec![shown.clone(), required.to_string()],
+        );
+    }
+
+    // **Order is version-independent, and assuming otherwise was a mistake
+    // caught by probing the case rather than by reasoning about it.** Both
+    // `EncryptedType` definitions are sequences, not interleaves, so a
+    // `CipherData` before the `EncryptionMethod` is an error at 3.0 too - and
+    // the first version of this check sat inside the EPUB 2 arm, which left
+    // 3.0 silent on a file epubcheck reports.
+    //
+    // epubcheck words the two versions differently ("not allowed yet" plus a
+    // second error at 2.0, "not allowed here" alone at 3.0) and we report one
+    // finding either way. Lower than epubcheck at 2.0, never higher: the same
+    // cascade-suppression shape already documented for RSC-005.
+    if let (Some(m), Some(c)) = (index("EncryptionMethod"), index("CipherData"))
+        && c < m
+    {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "element \"enc:CipherData\" must follow \"enc:EncryptionMethod\"",
+            "META-INF/encryption.xml",
+            cipher.expect("indexed above"),
+            "ocf.encryption.item_out_of_order",
+            vec![
+                "enc:CipherData".to_string(),
+                "enc:EncryptionMethod".to_string(),
+            ],
+        );
+    }
+
+    // Also version-independent: `CipherData` is
+    // `(CipherValue | CipherReference)` in both grammars.
+    if let Some(c) = cipher
+        && !c.children().any(|n| {
+            n.is_element()
+                && n.tag_name().namespace() == Some(XENC)
+                && matches!(n.tag_name().name(), "CipherValue" | "CipherReference")
+        })
+    {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "element \"enc:CipherData\" has incomplete content; \
+             expected element \"enc:CipherReference\" or \"enc:CipherValue\"",
+            "META-INF/encryption.xml",
+            c,
+            "ocf.encryption.cipher_data_incomplete",
             Vec::new(),
         );
     }
@@ -1110,20 +1244,27 @@ mod encryption_content_model_tests {
     use crate::report::Report;
 
     /// Runs the `<encryption>` content model over `body` and returns the
-    /// `(rule, message)` pairs, in document order.
-    fn findings(body: &str) -> Vec<(&'static str, String)> {
+    /// `(rule, message)` pairs, in document order. `epub3` is the publication
+    /// version, which the content model inside an `EncryptedData` depends on
+    /// (issue #88); the callers that predate it pass `None`, the version this
+    /// file's own root-level rules do not vary with.
+    fn findings_v(body: &str, epub3: Option<bool>) -> Vec<(&'static str, String)> {
         let xml = format!(
             r#"<?xml version="1.0" encoding="utf-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">{body}</encryption>"#
         );
         let doc = crate::ocf::parse_xml(&xml).expect("fixture must parse");
         let mut report = Report::new();
-        super::check_encryption_children(doc.root_element(), &mut report);
+        super::check_encryption_children(doc.root_element(), &mut report, epub3);
         report
             .messages
             .iter()
             .map(|m| (m.rule.expect("a rule"), m.text.clone()))
             .collect()
+    }
+
+    fn findings(body: &str) -> Vec<(&'static str, String)> {
+        findings_v(body, None)
     }
 
     const ENCRYPTED_DATA: &str = r#"
@@ -1137,6 +1278,98 @@ mod encryption_content_model_tests {
     #[test]
     fn a_conforming_encryption_file_is_silent() {
         assert_eq!(findings(ENCRYPTED_DATA), vec![]);
+    }
+
+    /// Doitsu, MobileRead #233 (issue #88): the content model *inside* an
+    /// `EncryptedData`. Every cell below was measured against epubcheck 5.3.0
+    /// with one book per shape, not read off the spec, because the
+    /// requirement **inverts between versions** and a rule written from either
+    /// grammar alone is a false positive on the other half of the world.
+    ///
+    /// The `None` row is the case where no rootfile parsed: only the shared
+    /// rule may fire, since guessing a version would invent an error on a book
+    /// already being reported for something worse.
+    #[test]
+    fn an_encrypted_item_content_model_depends_on_the_version() {
+        const EMPTY: &str = "<enc:EncryptedData></enc:EncryptedData>";
+        const METHOD_ONLY: &str = "<enc:EncryptedData><enc:EncryptionMethod \
+             Algorithm=\"http://www.idpf.org/2008/embedding\"/></enc:EncryptedData>";
+        const CIPHER_ONLY: &str = "<enc:EncryptedData><enc:CipherData>\
+             <enc:CipherReference URI=\"OEBPS/f.otf\"/></enc:CipherData></enc:EncryptedData>";
+
+        let rules = |body: &str, epub3: Option<bool>| -> Vec<&'static str> {
+            findings_v(body, epub3)
+                .into_iter()
+                .map(|(r, _)| r)
+                .collect()
+        };
+
+        // EPUB 3 wants the cipher; the method is optional.
+        assert_eq!(
+            rules(EMPTY, Some(true)),
+            vec!["ocf.encryption.item_incomplete"]
+        );
+        assert_eq!(
+            rules(METHOD_ONLY, Some(true)),
+            vec!["ocf.encryption.item_incomplete"]
+        );
+        assert_eq!(rules(CIPHER_ONLY, Some(true)), Vec::<&str>::new());
+
+        // EPUB 2 wants the method; the cipher is optional. Exactly reversed.
+        assert_eq!(
+            rules(EMPTY, Some(false)),
+            vec!["ocf.encryption.item_incomplete"]
+        );
+        assert_eq!(rules(METHOD_ONLY, Some(false)), Vec::<&str>::new());
+        assert_eq!(
+            rules(CIPHER_ONLY, Some(false)),
+            vec!["ocf.encryption.item_incomplete"]
+        );
+
+        // Unknown version: neither requirement is asserted.
+        for body in [EMPTY, METHOD_ONLY, CIPHER_ONLY] {
+            assert_eq!(rules(body, None), Vec::<&str>::new(), "body {body}");
+        }
+
+        // `EncryptedKey` takes the same model - measured, and it is the half
+        // an implementation written from the reported case alone would miss.
+        assert_eq!(
+            rules("<enc:EncryptedKey></enc:EncryptedKey>", Some(true)),
+            vec!["ocf.encryption.item_incomplete"]
+        );
+    }
+
+    /// The two rules that do **not** vary with the version, which is the part
+    /// the first draft of this check got wrong: it put the ordering rule
+    /// inside the EPUB 2 arm on the assumption that only OPF 2.0.1's grammar
+    /// is a sequence. Both are, so EPUB 3 was left silent on a file epubcheck
+    /// reports. Probing the case is what found it - the assumption read fine.
+    #[test]
+    fn cipher_data_shape_and_ordering_do_not_vary_with_the_version() {
+        const SWAPPED: &str = "<enc:EncryptedData><enc:CipherData>\
+             <enc:CipherReference URI=\"OEBPS/f.otf\"/></enc:CipherData>\
+             <enc:EncryptionMethod Algorithm=\"http://www.idpf.org/2008/embedding\"/>\
+             </enc:EncryptedData>";
+        const EMPTY_CIPHER: &str = "<enc:EncryptedData>\
+             <enc:EncryptionMethod Algorithm=\"http://www.idpf.org/2008/embedding\"/>\
+             <enc:CipherData></enc:CipherData></enc:EncryptedData>";
+
+        for v in [Some(true), Some(false), None] {
+            let swapped: Vec<_> = findings_v(SWAPPED, v).into_iter().map(|(r, _)| r).collect();
+            assert!(
+                swapped.contains(&"ocf.encryption.item_out_of_order"),
+                "a CipherData before the EncryptionMethod is an error at every version ({v:?})"
+            );
+            let empty: Vec<_> = findings_v(EMPTY_CIPHER, v)
+                .into_iter()
+                .map(|(r, _)| r)
+                .collect();
+            assert_eq!(
+                empty,
+                vec!["ocf.encryption.cipher_data_incomplete"],
+                "an empty CipherData needs a CipherReference or CipherValue ({v:?})"
+            );
+        }
     }
 
     /// JSWolf, MobileRead #221: an `encryption.xml` left behind after its

@@ -125,9 +125,25 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
         Some(c) => c,
         None => return report,
     };
-    ocf::check_encryption(&mut container, &mut report);
     ocf::check_signatures(&mut container, &mut report);
     let opf_paths = ocf::find_rootfiles(&mut container, &mut report);
+    // `encryption.xml`'s content model is version-dependent, so the rootfiles
+    // have to be found first (issue #88). Measured against epubcheck 5.3.0, one
+    // book per shape: an empty `<enc:EncryptedData>` is "missing required
+    // element enc:EncryptionMethod" at 2.0 and "... enc:CipherData" at 3.0,
+    // because `schema/20/rng/xenc-schema.rng` requires the method and makes the
+    // cipher optional while `schema/30/mod/security/xenc-schema.rnc` does the
+    // reverse. Moving this call is free: push order does not survive
+    // `sort_by_document_order` below.
+    //
+    // `None` when no rootfile parsed - the version is genuinely unknown then,
+    // and the check applies only the rules both versions share rather than
+    // guessing one and inventing an error under uncertainty.
+    let epub3 = opf_paths
+        .first()
+        .and_then(|p| peek_opf_version(&mut container, p))
+        .map(|v| v.starts_with('3'));
+    ocf::check_encryption(&mut container, &mut report, epub3);
     // Usually a single rootfile; a multi-rendition package (e.g. EDUPUB
     // with a reflowable + fixed-layout rendition) legitimately declares
     // more than one, each validated as its own, independent OPF.

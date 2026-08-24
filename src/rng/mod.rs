@@ -882,6 +882,95 @@ mod tests {
         assert!(!validate_xml(&package_grammar(), &bogus).unwrap());
     }
 
+    /// JSWolf, MobileRead #236 (issue #90): an EPUB 2 `<package>` carrying
+    /// `xml:lang`. `OPF20.package-element` is a closed list of three -
+    /// `version`, `unique-identifier`, optional `id` - and we granted
+    /// `anyAttributes`, so the reported attribute and every EPUB 3 one passed.
+    ///
+    /// The EPUB 3 arm is asserted in the same test because the two grammars
+    /// sit in one file and the obvious over-correction is to close both:
+    /// `prefix` and `xml:lang` are perfectly valid on a 3.0 package, and a
+    /// change that made *those* errors would be a false positive on the
+    /// majority of modern books rather than a gap closed on legacy ones.
+    ///
+    /// KevinH argued in the same thread that epubcheck oversteps here, since
+    /// XML makes `xml:lang` available on every element - probably right, and
+    /// not ours to act on: a book that fails epubcheck has to fail here too,
+    /// or a user gating on epubcheck cannot tell our judgement from our bug.
+    #[test]
+    fn epub2_package_attributes_are_a_closed_list() {
+        let pkg = |attrs: &str| {
+            MIN_OPF
+                .replace("version=\"3.0\"", &format!("version=\"2.0\"{attrs}"))
+                .replace(
+                    "<item id=\"nav\" href=\"nav.xhtml\" \
+                     media-type=\"application/xhtml+xml\" properties=\"nav\"/>",
+                    "<item id=\"nav\" href=\"nav.xhtml\" \
+                     media-type=\"application/xhtml+xml\"/>",
+                )
+        };
+        assert!(
+            validate_xml(&package_grammar_epub2(), &pkg("")).unwrap(),
+            "the control: an untouched EPUB 2 package is still valid"
+        );
+        assert!(
+            validate_xml(&package_grammar_epub2(), &pkg(" id=\"pkg\"")).unwrap(),
+            "`id` is the one optional extra opf20.rng allows"
+        );
+        for attrs in [
+            " xml:lang=\"en-US\"",
+            " prefix=\"calibre: https://calibre-ebook.com\"",
+            " dir=\"ltr\"",
+        ] {
+            assert!(
+                !validate_xml(&package_grammar_epub2(), &pkg(attrs)).unwrap(),
+                "opf20.rng allows only version/unique-identifier/id ({attrs})"
+            );
+            // The EPUB 3 arm must NOT move: these are valid on a 3.0 package,
+            // and closing both grammars would trade a legacy gap for a false
+            // positive on the majority of modern books.
+            let three = MIN_OPF.replace("version=\"3.0\"", &format!("version=\"3.0\"{attrs}"));
+            assert!(
+                validate_xml(&package_grammar(), &three).unwrap(),
+                "EPUB 3 still allows {attrs}"
+            );
+        }
+    }
+
+    /// JSWolf, MobileRead #234 (issue #87): `<tours></tours>` with no `<tour>`
+    /// inside. `opf20.rng` makes the child `oneOrMore`, so epubcheck reports
+    /// RSC-005 "element \"tours\" incomplete; missing required element
+    /// \"tour\"" and we accepted it - #58 added the element and left its
+    /// content model as the permissive placeholder every other legacy child
+    /// got.
+    ///
+    /// The whitespace case is the one that actually reproduces the report: the
+    /// book had a newline between the tags, so a model that only rejected
+    /// `<tours/>` would have stayed silent on it.
+    #[test]
+    fn empty_tours_is_rejected() {
+        let tours = |body: &str| {
+            MIN_OPF.replace(
+                "<spine><itemref idref=\"nav\"/></spine>",
+                &format!("<spine><itemref idref=\"nav\"/></spine><tours>{body}</tours>"),
+            )
+        };
+        for body in ["", "\n  ", " "] {
+            assert!(
+                !validate_xml(&package_grammar(), &tours(body)).unwrap(),
+                "an empty <tours> is missing its required <tour> (body {body:?})"
+            );
+        }
+        assert!(
+            validate_xml(
+                &package_grammar(),
+                &tours("<tour id=\"t\" title=\"T\"><site title=\"s\" href=\"a.xhtml\"/></tour>")
+            )
+            .unwrap(),
+            "a <tours> carrying a <tour> is still valid"
+        );
+    }
+
     /// MathML 3 Presentation content models. The arity rules are the point:
     /// `mfrac` takes exactly two children, `msubsup` exactly three, and rows
     /// and cells exist only inside their container.
