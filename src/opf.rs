@@ -4976,6 +4976,46 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                             || is_deprecated_content_document_type(mt)
                                     }
                             };
+                            // OPF-042 is EPUB 2 ONLY, and it is asked
+                            // *before* the fallback question rather than as
+                            // one outcome of it (#91).
+                            // `OPFChecker30.checkSpineItem` overrides the base
+                            // method and never emits it, so at 3.0 an image
+                            // spine item is OPF-043/OPF-044 like any other
+                            // non-content type - we used to answer OPF-042,
+                            // an id epubcheck cannot produce there.
+                            // `OPFChecker`:414 asks it first and as an `if` /
+                            // `else if`, so a fallback does NOT suppress it:
+                            // the 12 fallback-carrying images in the IDPF
+                            // `haruko-jpeg` sample each draw one, and we drew
+                            // none. The set is `isBlessedStyleType` |
+                            // `isDeprecatedBlessedStyleType` |
+                            // `isBlessedImageType(_, VERSION_2)`, which is
+                            // wider than "an image" in one direction - CSS is
+                            // in it - and narrower in another: it is six exact
+                            // types, not the `image/` prefix we matched on.
+                            // (`image/webp` is in the predicate for VERSION_3
+                            // only, and VERSION_3 never reaches this code.)
+                            const EPUB2_NON_SPINE_TYPES: &[&str] = &[
+                                "text/css",
+                                "text/x-oeb1-css",
+                                "image/gif",
+                                "image/png",
+                                "image/jpeg",
+                                "image/svg+xml",
+                            ];
+                            if !is_epub3 && EPUB2_NON_SPINE_TYPES.contains(&mt.as_str()) {
+                                report.push_at_pos(
+                                    OPF_042,
+                                    Severity::Error,
+                                    format!(
+                                        "spine item idref \x27{idref}\x27 has media-type \x27{mt}\x27, which a spine item may not carry"
+                                    ),
+                                    opf_path,
+                                    Position::of(ir),
+                                );
+                                continue;
+                            }
                             let mut covered = is_core(mt);
                             let mut cur = idref;
                             let mut hops = 0;
@@ -4991,18 +5031,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 hops += 1;
                             }
                             if !covered {
-                                if mt.starts_with("image/") {
-                                    // A real fixture confirms an image is
-                                    // its own dedicated (error-level)
-                                    // case, not the generic warning.
-                                    report.push_at_pos(
-                                        OPF_042,
-                                        Severity::Error,
-                                        format!("spine item idref '{idref}' is an image, not a Content Document"),
-                                        opf_path,
-                                        Position::of(ir),
-                                    );
-                                } else if fallback_map.contains_key(idref) {
+                                if fallback_map.contains_key(idref) {
                                     // A fallback chain exists but no hop reaches
                                     // a content document - epubcheck's OPF-044,
                                     // distinct from OPF-043 (no fallback at all).
@@ -18556,5 +18585,198 @@ mod tests {
         // The control that gating the *report* would have broken.
         let img = r#"<p><img src="gone.png" alt="a"/></p>"#;
         assert_eq!(missing("2.0", img), 1, "EPUB 2 lost the rest of RSC-007");
+    }
+
+    /// A book whose spine carries a second item of `mt`, optionally falling
+    /// back to the XHTML chapter. Built here rather than with
+    /// `epub_declaring` because the fallback attribute is the whole point of
+    /// #91: epubcheck asks the OPF-042 question *before* the fallback one, so
+    /// a fallback must not change the answer.
+    fn epub_with_spine_item(ver: &str, mt: &str, fallback: bool) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let is3 = ver.starts_with('3');
+        let (modified, ncx_item, toc_attr, nav_prop) = if is3 {
+            (
+                "<meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>",
+                String::new(),
+                "",
+                " properties=\"nav\"",
+            )
+        } else {
+            (
+                "",
+                "<item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>"
+                    .to_string(),
+                " toc=\"ncx\"",
+                "",
+            )
+        };
+        let fb = if fallback { " fallback=\"c\"" } else { "" };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    {modified}
+  </metadata>
+  <manifest>
+    <item id="c" href="c.xhtml" media-type="application/xhtml+xml"{nav_prop}/>{ncx_item}
+    <item id="x" href="x.bin" media-type="{mt}"{fb}/>
+  </manifest>
+  <spine{toc_attr}><itemref idref="c"/><itemref idref="x"/></spine>
+</package>"#
+        );
+        let nav = if is3 {
+            "<nav xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:type=\"toc\">\
+             <ol><li><a href=\"c.xhtml\">c</a></li></ol></nav>"
+        } else {
+            "<p>x</p>"
+        };
+        let ch = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+             <body>{nav}</body></html>"
+        );
+        const NCX: &str = "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+             version=\"2005-1\"><head><meta name=\"dtb:uid\" \
+             content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+             <navLabel><text>T</text></navLabel><content src=\"c.xhtml\"/></navPoint></navMap></ncx>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/c.xhtml", ch.as_str()),
+                ("OEBPS/toc.ncx", NCX),
+                ("OEBPS/x.bin", "x"),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// #91. OPF-042 is EPUB 2 only, it is asked before the fallback question,
+    /// and its media-type set is six exact types rather than "an image".
+    ///
+    /// Every row was measured against epubcheck 5.3.0 one book at a time -
+    /// the shelf has 0 of 405 books with an image or style media type in the
+    /// spine, so it can vouch for none of this.
+    #[test]
+    fn opf_042_is_epub2_only_and_precedes_the_fallback_question() {
+        let ids = |ver: &str, mt: &str, fallback: bool| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_spine_item(ver, mt, fallback))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| {
+                    matches!(
+                        *id,
+                        crate::ids::OPF_042 | crate::ids::OPF_043 | crate::ids::OPF_044
+                    )
+                })
+                .collect()
+        };
+
+        // EPUB 2: the fallback does not suppress it. This is the shape of the
+        // IDPF `haruko-jpeg` sample, where we reported none of its 12.
+        assert_eq!(ids("2.0", "image/jpeg", true), vec![crate::ids::OPF_042]);
+        assert_eq!(ids("2.0", "image/jpeg", false), vec![crate::ids::OPF_042]);
+        // ...and CSS is in the set, which "an image" was never going to cover.
+        assert_eq!(ids("2.0", "text/css", true), vec![crate::ids::OPF_042]);
+        assert_eq!(
+            ids("2.0", "text/x-oeb1-css", false),
+            vec![crate::ids::OPF_042]
+        );
+
+        // EPUB 3: `OPFChecker30.checkSpineItem` overrides the base and never
+        // emits OPF-042, so the same item is an ordinary non-content type.
+        assert_eq!(ids("3.0", "image/jpeg", false), vec![crate::ids::OPF_043]);
+        // The same bytes as the EPUB 2 row above, and the opposite answer:
+        // at 3.0 a satisfied fallback clears the item entirely, at 2.0 the
+        // media type is reported whatever the fallback says. Both halves
+        // measured against epubcheck 5.3.0, one book each.
+        assert!(ids("3.0", "image/jpeg", true).is_empty());
+
+        // The set is six exact types, not the `image/` prefix: `image/webp` is
+        // in epubcheck's predicate for VERSION_3 only, and VERSION_3 cannot
+        // reach the call site at all.
+        assert_eq!(ids("2.0", "image/webp", false), vec![crate::ids::OPF_043]);
+
+        // Controls, so a change that simply stopped answering would fail:
+        // DTBook is a first-class EPUB 2 content type, and XHTML is one in
+        // both versions.
+        assert!(ids("2.0", "application/x-dtbook+xml", false).is_empty());
+        assert!(ids("3.0", "application/xhtml+xml", false).is_empty());
+    }
+
+    /// #92. A subtree in a namespace the grammar does not declare is one
+    /// excursion, not one fault per element.
+    ///
+    /// Every count here was measured against epubcheck 5.3.0 on the same
+    /// bytes. This is invisible to the corpus and to the shelf: no real EPUB 2
+    /// book carries MathML, and it took re-declaring an EPUB 3 book as EPUB 2
+    /// (`harness/src/downgrade.rs`) to produce one.
+    #[test]
+    fn an_undeclared_namespace_subtree_is_reported_once() {
+        let schema_errors = |ver: &str, body: &str| -> usize {
+            crate::validate_bytes(epub_with_body(ver, body))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.schema_violation"))
+                .count()
+        };
+        // The leading <p> satisfies <body>'s own content model, so every count
+        // below is the excursion alone rather than the excursion plus an
+        // "element body has incomplete content". epubcheck reports that pair
+        // the same way.
+        let schema_errors = |ver: &str, body: &str| schema_errors(ver, &format!("<p>x</p>{body}"));
+
+        // Nine MathML elements, one finding. Before this, each descendant was
+        // scored against the parent's block model and reported: one real book
+        // gave 243 483 findings against epubcheck's 10 475.
+        let mathml = r#"<math xmlns="http://www.w3.org/1998/Math/MathML"><mrow><mfrac><mi>a</mi><mi>b</mi></mfrac><msup><mi>c</mi><mn>2</mn></msup></mrow></math>"#;
+        assert_eq!(schema_errors("2.0", mathml), 1);
+        // The control that makes the count meaningful: EPUB 3 declares MathML,
+        // so the same markup is valid there and the rule must not fire at all.
+        assert_eq!(schema_errors("3.0", mathml), 0);
+
+        // Any namespace, not just MathML — the rule is about declaration.
+        let foreign = r#"<x:foo xmlns:x="urn:example:x"><x:bar/><x:baz><x:qux/></x:baz></x:foo>"#;
+        assert_eq!(schema_errors("2.0", foreign), 1);
+        assert_eq!(schema_errors("3.0", foreign), 1);
+
+        // A misplaced element the grammar *does* declare keeps its own model,
+        // so its legal children stay unreported. Unchanged by #92, asserted
+        // here because it is the boundary the namespace test draws.
+        assert_eq!(schema_errors("2.0", "<li><p>a</p><span>b</span></li>"), 1);
+
+        // #24's branch must survive: `<center>` has no model in the grammar,
+        // but it is in the XHTML namespace, which the grammar declares plenty
+        // of elements in - so the subtree is still walked and the obsolete
+        // `<font>` and `<s>` inside it are still named. Collapsing on "no
+        // model" rather than on "no namespace" would silence these two.
+        assert_eq!(
+            schema_errors("2.0", r#"<center><font size="2">a</font><s>b</s></center>"#),
+            3
+        );
     }
 }

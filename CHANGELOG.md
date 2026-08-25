@@ -10,11 +10,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.12.1] - 2026-08-26
 
-**Ten EPUB 3 rules were firing on EPUB 2 books.** All ten are checks epubcheck
-runs only for EPUB 3, and every one of them is now gated on the package
-version. No book epubcheck accepts changes verdict, and the real shelf of 405
-books is byte-identical before and after: the affected markup —
-`epub:type`, `epub:trigger`, `epub:switch`, DPUB-ARIA roles, HTML5 microdata,
+**Ten EPUB 3 rules were firing on EPUB 2 books**, and chasing them turned up
+two further version defects (#91, #92, at the end of this entry). All ten are
+checks epubcheck runs only for EPUB 3, and every one is now gated on the
+package version. No book epubcheck accepts changes verdict, and the real
+shelf of 405 books is byte-identical before and after: the affected markup
+— `epub:type`, `epub:trigger`, `epub:switch`, DPUB-ARIA roles, HTML5 microdata,
 MathML, viewport metadata, `<script src>` — does not appear in an EPUB 2 book
 produced by any normal tool.
 
@@ -53,11 +54,50 @@ re-declares the shelf's 70 EPUB 3 books as EPUB 2, changing nothing but the
 Seven IDs came back that only we reported, where the same comparison over the
 real 385-book shelf returns none. Auditing the neighbourhood those seven landed
 in found three more that the run could not see, because no book on the shelf
-carries the markup at all.
+carries the markup at all. Agreement across those 70 books goes from
+**49/70 to 70/70** — no ID reported by either tool alone, and no remaining row
+where our count exceeds epubcheck's.
 
 The books it produces are massively invalid on purpose; that is not a problem,
 because the question is agreement with epubcheck rather than validity, and
 epubcheck is handed the same bytes.
+
+**`OPF-042` is EPUB 2 only, and we had it backwards in both directions**
+(#91). `OPFChecker30.checkSpineItem` overrides the base method and never emits
+it, so the check belongs to the EPUB 2 path alone — where it is asked on the
+media type *first*, as an `if`/`else if` ahead of the fallback question.
+
+- **EPUB 2: we reported none of them.** Ours was nested inside the
+  fallback-chain branch, so a spine item with a fallback never reached it. The
+  IDPF `haruko-jpeg` sample has twelve `image/jpeg` spine items, each with an
+  XHTML fallback: epubcheck reports thirteen findings and we reported zero.
+- **The set is six exact media types, not "an image".** `isBlessedStyleType` |
+  `isDeprecatedBlessedStyleType` | `isBlessedImageType(_, VERSION_2)` — so
+  `text/css` and `text/x-oeb1-css` are in it, and `image/webp` is not (it is in
+  the predicate for EPUB 3, which cannot reach the call site).
+- **EPUB 3: we reported an ID epubcheck cannot produce there.** A fallback-less
+  image spine item drew OPF-042 from us and OPF-043 from epubcheck. Same
+  severity, so no verdict moved, but the wrong ID on a book someone may be
+  diffing against epubcheck.
+
+The message changes with the condition, since "is an image, not a Content
+Document" stopped being true once CSS entered the set.
+
+**A subtree in an undeclared namespace is one finding, not one per element**
+(#92). MathML in an EPUB 2 document is the case: `schema/20` never includes a
+MathML grammar, so every descendant was scored against the enclosing block
+model and reported individually. One real book re-declared as EPUB 2 produced
+**243 483 findings from us against epubcheck's 10 475** — the only shape
+anywhere in which our RSC-005 count exceeded epubcheck's, which normally cannot
+happen because of our cascade suppression. On a nine-element MathML tree we
+reported eight where epubcheck reports one, and its message says what it is
+doing in its own words: `elements from namespace "…" are not allowed`.
+
+The test is the **namespace**, not the missing element model, and that
+distinction is load-bearing: an obsolete `<center>` also has no model in the
+grammar, but it is in the XHTML namespace, so its subtree is still walked and
+the `<font>` and `<s>` buried inside it are still named. Collapsing on "no
+model" would have silenced those and undone what #24 fixed.
 
 ## [0.12.0] - 2026-08-24
 

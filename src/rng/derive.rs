@@ -167,6 +167,37 @@ impl<'a> Env<'a> {
         found
     }
 
+    /// Whether the grammar declares any element *by name* in `ns`.
+    ///
+    /// `AnyName`/`AnyNameExcept` deliberately do not count. Those are the
+    /// opaque-foreign-content escape hatch (`schemas/xhtml.rng`'s
+    /// `foreignContent`), not a declaration; counting them would make every
+    /// namespace "declared" and this predicate always true.
+    fn namespace_is_declared(&self, ns: &str) -> bool {
+        if self.elem_pool.borrow().is_none() {
+            let mut pool = Vec::new();
+            self.collect_elements(&self.start.clone(), &mut pool, &mut HashSet::new());
+            *self.elem_pool.borrow_mut() = Some(pool);
+        }
+        fn names_ns(nc: &NameClass, ns: &str) -> bool {
+            match nc {
+                NameClass::Name { ns: n, .. } | NameClass::NsName { ns: n } => n == ns,
+                NameClass::NsNameExcept { ns: n, .. } => n == ns,
+                NameClass::Choice(a, b) => names_ns(a, ns) || names_ns(b, ns),
+                NameClass::AnyName | NameClass::AnyNameExcept(_) => false,
+            }
+        }
+        self.elem_pool
+            .borrow()
+            .as_ref()
+            .expect("just populated")
+            .iter()
+            .any(|p| match &**p {
+                Pattern::Element(nc, _) => names_ns(nc, ns),
+                _ => false,
+            })
+    }
+
     fn collect_elements(&self, p: &Pat, out: &mut Vec<Pat>, visited: &mut HashSet<usize>) {
         match &**p {
             Pattern::Element(_, content) => {
@@ -673,7 +704,29 @@ impl<'a> Env<'a> {
                             let _ = self.child_deriv(&model, n, blames);
                         }
                         None => {
-                            let _ = self.children_deriv(&cur, n, blames, true);
+                            // A subtree in a namespace the grammar does not
+                            // declare at all is ONE excursion, not one fault
+                            // per element (#92). MathML in an EPUB 2 document
+                            // is the case that found this: `schema/20` never
+                            // includes a MathML grammar, so every descendant
+                            // was scored against the parent's block model and
+                            // reported. One real book re-declared as EPUB 2
+                            // drew 243 483 findings from us against epubcheck's
+                            // 10 475 - the only shape anywhere where our
+                            // RSC-005 count exceeds its.
+                            //
+                            // epubcheck says the same thing in one message,
+                            // "elements from namespace X are not allowed", and
+                            // stops descending.
+                            //
+                            // The namespace test is what keeps #24 working.
+                            // An obsolete `<center>` is in the XHTML namespace,
+                            // which the grammar declares plenty of elements in,
+                            // so its subtree is still walked and the `<font>`
+                            // buried inside it still reported.
+                            if self.namespace_is_declared(ns) {
+                                let _ = self.children_deriv(&cur, n, blames, true);
+                            }
                         }
                     }
                     continue;
