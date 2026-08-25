@@ -569,3 +569,5 @@ This README is deliberately kept beginner-friendly.
   [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 - **Which of epubcheck's checks are implemented**, generated from its message
   sources — [`docs/COVERAGE.md`](./docs/COVERAGE.md).
+- **What epubveri costs to run** against epubcheck — time, CPU, memory and
+  install size, measured on 385 real books — [`docs/BENCHMARK.md`](./docs/BENCHMARK.md).
