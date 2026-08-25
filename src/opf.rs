@@ -5087,7 +5087,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             {
                                 let t = String::from_utf8_lossy(&b).into_owned();
                                 if let Ok(d) = parse_xml(&t) {
-                                    if mt == "application/xhtml+xml" {
+                                    // The whole viewport family is EPUB 3
+                                    // only - HTM-046, HTM-048, HTM-060a and
+                                    // HTM-060b all come from `OPSHandler30`
+                                    // and nowhere else, and fixed layout is
+                                    // itself a rendition property EPUB 2 has
+                                    // no concept of. Without this an EPUB 2
+                                    // book drew HTM-060b for a missing
+                                    // viewport meta it was never asked for.
+                                    if is_epub3 && mt == "application/xhtml+xml" {
                                         if is_fixed_layout {
                                             crate::layout::check_xhtml_viewport(&d, path, report);
                                         } else {
@@ -5095,7 +5103,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                                 &d, path, report,
                                             );
                                         }
-                                    } else if mt == "image/svg+xml" && is_fixed_layout {
+                                    } else if is_epub3 && mt == "image/svg+xml" && is_fixed_layout {
                                         crate::layout::check_svg_viewbox(&d, path, report);
                                     }
                                     // EPUB 3.4 (#1651): a roll spine must
@@ -6357,9 +6365,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // misuse (only a/object are exercised by the real fixture; the
         // rest of this table is the well-known HTML5 microdata spec rule,
         // included for the same family of elements rather than guessed).
+        // EPUB 3 only: HTML5 microdata is `schema/30/mod/html5/microdata.rnc`
+        // plus a rule in `epub-xhtml-30.sch`. XHTML 1.1 has no `itemprop`, so
+        // on an EPUB 2 book the attribute is already an RSC-005 from the
+        // grammar and this rule only doubles it.
         for n in d
             .descendants()
-            .filter(|n| n.is_element() && n.has_attr_no_ns("itemprop"))
+            .filter(|n| is_epub3 && n.is_element() && n.has_attr_no_ns("itemprop"))
         {
             let (required_attr, tag) = match n.tag_name().name() {
                 t @ ("a" | "area" | "link") => ("href", t),
@@ -6413,7 +6425,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
         // epub:trigger is deprecated; its ref/ev:observer attributes must
         // each resolve to a real id in the same document.
-        {
+        //
+        // EPUB 3 only: `epub-trigger.rnc` and the deprecation rule are under
+        // `schema/30`; `schema/20` has no epub:trigger. Gated on the block
+        // rather than the filter so the id index is not built either - and so
+        // the two dangling-id-reference findings inside move with it.
+        if is_epub3 {
             let ids: HashSet<&str> = d.descendants().filter_map(|n| n.attr_no_ns("id")).collect();
             for n in d.descendants().filter(|n| {
                 n.is_element()
@@ -6467,10 +6484,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // actually evidenced). `doc-endnote`/`doc-biblioentry` are
         // deprecated regardless of host element (the real fixture fires
         // on both a `<li>` and a `<div>` carrying the same role).
+        //
+        // EPUB 3 only: the DPUB-ARIA vocabulary lives entirely under
+        // `schema/30` (`aria.rnc`, `epub-xhtml-30.sch`); `schema/20` has no
+        // ARIA at all, and epubcheck rejects `role` outright on EPUB 2.
         const DEPRECATED_ARIA_ROLES: &[&str] = &["doc-endnote", "doc-biblioentry"];
         for n in d
             .descendants()
-            .filter(|n| n.is_element() && n.has_attr_no_ns("role"))
+            .filter(|n| is_epub3 && n.is_element() && n.has_attr_no_ns("role"))
         {
             let role = attr_no_ns_node(n, "role").expect("filtered on has_attr_no_ns above");
             for token in role.value().split_whitespace() {
@@ -6492,9 +6513,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // epub:type default-vocabulary / deprecated / HTML-usage taxonomies.
         // The vocabulary itself lives in `ssv`; custom-prefixed tokens
         // (containing ':') are always exempt.
+        //
+        // EPUB 3 only: every one of these routes through epubcheck's
+        // `VocabUtil`, whose only callers are `OPFHandler30`, `OPSHandler30`
+        // and `OverlayHandler`. On an EPUB 2 book the `epub:type` attribute
+        // is itself rejected by the grammar and epubcheck says nothing about
+        // its value.
         for n in d
             .descendants()
-            .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
+            .filter(|n| is_epub3 && n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
         {
             let type_attr =
                 attr_ns_node(n, EPUB_NS, "type").expect("filtered on the same attribute above");
@@ -6615,8 +6642,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // Real corpus finding: several "valid" fixtures have no `alttext`
         // attribute but do have a `<semantics><annotation-xml ...>` child,
         // which counts as an alternative just as much as `alttext` would.
+        // EPUB 3 only: epubcheck emits ACC-009 from `OPSHandler30` alone, and
+        // OPS 2.0.1 has no MathML at all - `schema/20` never includes a MathML
+        // grammar, so an EPUB 2 `<math>` is already an unknown element.
         for n in d.descendants().filter(|n| {
-            n.is_element()
+            is_epub3
+                && n.is_element()
                 && n.tag_name().name() == "math"
                 && n.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
         }) {
@@ -6663,9 +6694,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // already enforces on it. Namespace-checked: SVG has its own,
         // unrelated native <switch> element (conditional rendering), which
         // a local-name-only match would misidentify as epub:switch.
+        //
+        // EPUB 3 only: `epub-switch.rnc` and the deprecation rule in
+        // `epub-xhtml-30.sch` exist only under `schema/30`, and `schema/20`
+        // has no epub:switch at all - so on an EPUB 2 book epubcheck reports
+        // nothing here while the element is separately an unknown-element
+        // error. Found by re-declaring the shelf's EPUB 3 books as EPUB 2.
         const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
         for n in d.descendants().filter(|n| {
-            n.is_element()
+            is_epub3
+                && n.is_element()
                 && n.tag_name().name() == "switch"
                 && n.tag_name().namespace() == Some(EPUB_NS)
         }) {
@@ -7504,6 +7542,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     node.attr_no_ns(attr)
                 };
                 if let Some(v) = value {
+                    // EPUB 3 only, and the gate has to sit here rather than
+                    // in `is_resource_reference`: that predicate decides only
+                    // whether the target enters `resource_refs` (OPF-097's
+                    // "is this referenced"), while the existence check that
+                    // produces RSC-007 runs further down this same loop
+                    // regardless. epubcheck's EPUB 2 `OPSHandler` registers
+                    // references for a/area, img, object, link and iframe
+                    // only - plus SVG's own `<script>`, which is a different
+                    // element - so an HTML `<script src>` pointing at a
+                    // missing file draws nothing there. Gating RSC-007
+                    // itself would instead silence it for EPUB 2 entirely,
+                    // which is a rule the format really has.
+                    if !is_epub3 && attr == "src" && node.tag_name().name() == "script" {
+                        continue;
+                    }
                     if !is_external(v) && is_resource_reference(node, attr) {
                         resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
                     }
@@ -18369,5 +18422,139 @@ mod tests {
             1,
             "the control: a real one still resolves"
         );
+    }
+
+    /// Every rule below is one epubcheck runs only for EPUB 3, and every one
+    /// of them used to fire on an EPUB 2 book too.
+    ///
+    /// Found by re-declaring the shelf's 70 EPUB 3 books as EPUB 2 (JSWolf's
+    /// technique, `harness/src/downgrade.rs`) and diffing against epubcheck:
+    /// seven IDs came back that only we reported. Auditing the neighbourhood
+    /// they landed in found three more the run could not see, because no book
+    /// on the shelf carries the markup.
+    ///
+    /// The shelf cannot protect any of this - its EPUB 2 books are Calibre
+    /// output and Project Gutenberg trade titles, which contain none of these
+    /// constructs. These tests are the whole protection.
+    fn rules_by_version(body: &str, rule: &str) -> (usize, usize) {
+        let count = |ver: &str| {
+            crate::validate_bytes(epub_with_body(ver, body))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some(rule))
+                .count()
+        };
+        (count("3.0"), count("2.0"))
+    }
+
+    #[test]
+    fn epub3_only_content_document_rules_are_silent_on_epub2() {
+        // (markup, rule, how many the EPUB 3 side must report)
+        //
+        // The EPUB 3 count is asserted exactly rather than as "more than
+        // none": three of these rules walk every matching element, so a
+        // presence assertion would survive a duplicate report.
+        let cases: &[(&str, &str, usize)] = &[
+            (
+                r#"<p epub:type="notarealterm" xmlns:epub="http://www.idpf.org/2007/ops">x</p>"#,
+                "opf.content_document.epub_type_not_default_vocab",
+                1,
+            ),
+            (
+                r#"<p epub:type="rearnote" xmlns:epub="http://www.idpf.org/2007/ops">x</p>"#,
+                "opf.content_document.deprecated_epub_type",
+                1,
+            ),
+            (
+                r#"<p epub:type="list-item" xmlns:epub="http://www.idpf.org/2007/ops">x</p>"#,
+                "opf.content_document.epub_type_not_allowed_in_html",
+                1,
+            ),
+            (
+                r#"<math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math>"#,
+                "htm.mathml.no_alternative_text",
+                1,
+            ),
+            (
+                r#"<epub:trigger xmlns:epub="http://www.idpf.org/2007/ops" ref="a" ev:observer="b" xmlns:ev="http://www.w3.org/2001/xml-events"/>"#,
+                "opf.content_document.deprecated_epub_trigger",
+                1,
+            ),
+            (
+                r#"<epub:switch xmlns:epub="http://www.idpf.org/2007/ops"><epub:default>x</epub:default></epub:switch>"#,
+                "opf.content_document.deprecated_epub_switch",
+                1,
+            ),
+            (
+                r#"<li role="doc-endnote">x</li>"#,
+                "opf.content_document.deprecated_aria_role",
+                1,
+            ),
+            (
+                r#"<p itemscope="itemscope"><time itemprop="d">x</time></p>"#,
+                "opf.content_document.microdata_missing_attribute",
+                1,
+            ),
+        ];
+        for (body, rule, expected3) in cases {
+            let (three, two) = rules_by_version(body, rule);
+            assert_eq!(
+                three, *expected3,
+                "EPUB 3 side of {rule} changed - the control, not the fix"
+            );
+            assert_eq!(two, 0, "{rule} still fires on an EPUB 2 book");
+        }
+    }
+
+    /// HTM-060b and its three viewport siblings all come from epubcheck's
+    /// `OPSHandler30`, and fixed layout is a rendition property EPUB 2 has no
+    /// concept of. A reflowable EPUB 3 document with no viewport meta draws
+    /// the usage message; the identical EPUB 2 document must not.
+    #[test]
+    fn the_viewport_family_is_silent_on_epub2() {
+        // HTM-060b fires on the *presence* of a viewport meta in reflowable
+        // content, not its absence. `check_reflowable_viewport` scans the
+        // whole document, so the meta being in `<body>` here rather than
+        // `<head>` is irrelevant to what is under test.
+        let doc = r#"<meta name="viewport" content="width=1200"/><p>x</p>"#;
+        let count = |ver: &str| {
+            crate::validate_bytes(epub_with_body(ver, doc))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::HTM_060B)
+                .count()
+        };
+        assert_eq!(count("3.0"), 1, "the control: EPUB 3 still asks");
+        assert_eq!(count("2.0"), 0, "HTM-060b still fires on an EPUB 2 book");
+    }
+
+    /// RSC-007 through a `<script src>`, which is the one member of this
+    /// class fixed at the *collection* site rather than the reporting one.
+    ///
+    /// epubcheck's EPUB 2 `OPSHandler` registers references for a/area, img,
+    /// object, link and iframe only, so a script pointing at a missing file
+    /// draws nothing there. The rest of RSC-007 must survive on EPUB 2 - the
+    /// second half of this test is the one that matters, since gating the
+    /// report instead of the collection would pass the first half alone.
+    #[test]
+    fn script_src_is_a_resource_reference_in_epub3_only() {
+        let missing = |ver: &str, body: &str| {
+            crate::validate_bytes(epub_with_body(ver, body))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.reference_missing_resource"))
+                .count()
+        };
+        let script = r#"<p>x</p><script src="gone.js"/>"#;
+        assert_eq!(missing("3.0", script), 1, "the control: EPUB 3 still asks");
+        assert_eq!(
+            missing("2.0", script),
+            0,
+            "script@src still collected at 2.0"
+        );
+
+        // The control that gating the *report* would have broken.
+        let img = r#"<p><img src="gone.png" alt="a"/></p>"#;
+        assert_eq!(missing("2.0", img), 1, "EPUB 2 lost the rest of RSC-007");
     }
 }

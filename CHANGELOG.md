@@ -8,6 +8,57 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.12.1] - 2026-08-26
+
+**Ten EPUB 3 rules were firing on EPUB 2 books.** All ten are checks epubcheck
+runs only for EPUB 3, and every one of them is now gated on the package
+version. No book epubcheck accepts changes verdict, and the real shelf of 405
+books is byte-identical before and after: the affected markup —
+`epub:type`, `epub:trigger`, `epub:switch`, DPUB-ARIA roles, HTML5 microdata,
+MathML, viewport metadata, `<script src>` — does not appear in an EPUB 2 book
+produced by any normal tool.
+
+**Who this is for, then.** Anyone converting an EPUB 3 to an EPUB 2 and
+validating the result: Sigil, Calibre, and any pipeline that downgrades. Those
+books carry HTML5-era markup inside an EPUB 2 container, which is exactly the
+combination that reached these rules.
+
+- **`OPF-088`, `OPF-086b`, `OPF-087`** — the whole `epub:type` vocabulary
+  family. epubcheck routes all three through `VocabUtil`, whose only callers
+  are `OPFHandler30`, `OPSHandler30` and `OverlayHandler`.
+- **`RSC-017`** on `epub:trigger`, `epub:switch`, and deprecated DPUB-ARIA
+  roles — all three rules live only under `schema/30`; `schema/20` has no
+  epub:trigger, no epub:switch and no ARIA at all.
+- **`RSC-005`** on HTML5 microdata. XHTML 1.1 has no `itemprop`, so on an
+  EPUB 2 book the attribute is already an error from the grammar and this
+  rule only doubled it.
+- **`ACC-009`** on MathML with no alternative text. OPS 2.0.1 contains no
+  MathML; `schema/20` never includes a MathML grammar.
+- **`HTM-060b`** and its three viewport siblings (`HTM-046`, `HTM-048`,
+  `HTM-060a`), which all come from `OPSHandler30` and nowhere else. Fixed
+  layout is a rendition property EPUB 2 has no concept of.
+- **`RSC-007`** through a `<script src>`. This one is fixed at the *collection*
+  site rather than the reporting one, and the distinction matters: RSC-007 is
+  not version-specific — `ResourceReferencesChecker` runs for both — but
+  epubcheck's EPUB 2 `OPSHandler` registers references for a/area, img,
+  object, link and iframe only, so a script pointing at a missing file draws
+  nothing there. Gating the report instead would have silenced RSC-007 for
+  EPUB 2 entirely, which is a rule the format really has.
+
+**How they were found, because the method is the interesting part.** JSWolf,
+on MobileRead: *"changing an ePub3 to ePub2 is pretty good at finding errors in
+epubveri"*. The new `downgrade` harness binary makes that systematic — it
+re-declares the shelf's 70 EPUB 3 books as EPUB 2, changing nothing but the
+`version` attribute, and `compare` then diffs the result against epubcheck.
+Seven IDs came back that only we reported, where the same comparison over the
+real 385-book shelf returns none. Auditing the neighbourhood those seven landed
+in found three more that the run could not see, because no book on the shelf
+carries the markup at all.
+
+The books it produces are massively invalid on purpose; that is not a problem,
+because the question is agreement with epubcheck rather than validity, and
+epubcheck is handed the same bytes.
+
 ## [0.12.0] - 2026-08-24
 
 **Why 0.12.0 and not 0.11.1.** One public function changed shape:
