@@ -37,8 +37,8 @@
 //! one side only.
 //!
 //! Usage:
-//!     … --bin downgrade -- --out <dir> ~/Documents/Projects/ebook-shelf
-//!     … --bin compare -- <dir>
+//!     … --bin downgrade -- --out DIR ~/Documents/Projects/ebook-shelf
+//!     … --bin compare -- DIR
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
