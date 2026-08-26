@@ -3992,7 +3992,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     Position::of(item),
                 );
             }
-            if href.trim_start().starts_with("data:") {
+            // EPUB 3 only (#95): `OPFHandler30` owns this one too, and an
+            // EPUB 2 package with a `data:` manifest href draws nothing from
+            // epubcheck at all - measured, so there is no id to substitute
+            // the way the hyperlink site above gets RSC-010.
+            if is_epub3 && href.trim_start().starts_with("data:") {
                 report.push_node_attr(
                     RSC_029,
                     Severity::Error,
@@ -6104,6 +6108,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if is_epub3 {
                 crate::svg::check_vocabulary(svg_root, &path, report);
                 crate::svg::check_attribute_vocabulary(svg_root, &path, report);
+            } else {
+                // The mirror image of the paragraph above, and the reason
+                // it is an `else` (#93): EPUB 2 gets `SVG_20_NVDL`, which
+                // IS normative, so the SVG 1.1 grammar produces RSC-005
+                // errors there. We had been silent on all of it. This
+                // closes the required-attribute slice of that gap.
+                crate::svg::check_required_attributes(svg_root, &path, report);
             }
             crate::svg::check_epub_attributes(svg_root, &path, report);
             // `check_ids` is standalone-SVG-only: a real fixture confirms
@@ -7795,15 +7806,36 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")));
                 if let Some(href) = href {
                     if href.trim_start().starts_with("data:") {
-                        report.push_node(
-                            RSC_029,
-                            Severity::Error,
-                            "a hyperlink href must not be a data URL",
-                            path.clone(),
-                            node,
-                            "opf.content_document.hyperlink_data_url",
-                            Vec::new(),
-                        );
+                        // The condition is version-neutral, the id is not
+                        // (#95). RSC-029 comes from
+                        // `OPSHandler30.processHyperlink`, an override the
+                        // EPUB 2 handler does not have; there the same link
+                        // falls through to `ResourceReferencesChecker`:231,
+                        // whose hyperlink arm reports RSC-010 for a target
+                        // that is not a blessed content type. Measured one
+                        // book per version. Gating RSC-029 alone would have
+                        // traded a wrong id for silence.
+                        if is_epub3 {
+                            report.push_node(
+                                RSC_029,
+                                Severity::Error,
+                                "a hyperlink href must not be a data URL",
+                                path.clone(),
+                                node,
+                                "opf.content_document.hyperlink_data_url",
+                                Vec::new(),
+                            );
+                        } else {
+                            report.push_node(
+                                RSC_010,
+                                Severity::Error,
+                                "a hyperlink target must be a content document, and a data URL is not one",
+                                path.clone(),
+                                node,
+                                "opf.content_document.hyperlink_non_content_target",
+                                Vec::new(),
+                            );
+                        }
                     } else if href.trim_start().starts_with('#') {
                         // A fragment-only href is an internal link into the
                         // document's own content; `is_external` (below)
@@ -8067,7 +8099,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // CSS-015: an alternate-stylesheet link must have a
                 // non-empty title (missing and present-but-empty are each
                 // their own finding).
-                if is_alt_stylesheet {
+                // EPUB 3 only (#95): `CSS_015` has exactly one call site in
+                // epubcheck, `OPSHandler30`:1113, so it cannot reach an EPUB 2
+                // book. Measured: a title-less `<link rel="alternate
+                // stylesheet">` draws nothing there and CSS-015 from us.
+                if is_epub3 && is_alt_stylesheet {
                     match node.attr_no_ns("title") {
                         None => {
                             report.push_node(
@@ -18778,5 +18814,148 @@ mod tests {
             schema_errors("2.0", r#"<center><font size="2">a</font><s>b</s></center>"#),
             3
         );
+    }
+
+    /// #95. Three more sites where a rule epubcheck runs only for EPUB 3 was
+    /// reaching EPUB 2 books. Each row was probed against epubcheck 5.3.0.
+    ///
+    /// The interesting one is the hyperlink: unlike the ten gates in 0.12.1,
+    /// the *condition* is version-neutral and only the id is not. epubcheck's
+    /// EPUB 2 handler has no `processHyperlink` override, so a `data:` link
+    /// falls through to `ResourceReferencesChecker`, which reports RSC-010.
+    /// Gating RSC-029 alone would have traded a wrong id for silence.
+    #[test]
+    fn three_more_epub3_only_sites_are_gated() {
+        let ids = |ver: &str, body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_body(ver, body))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| {
+                    matches!(
+                        *id,
+                        crate::ids::CSS_015 | crate::ids::RSC_029 | crate::ids::RSC_010
+                    )
+                })
+                .collect()
+        };
+
+        // CSS-015 has one call site in epubcheck, `OPSHandler30`:1113. The
+        // `<link>` sits in `<body>` here because `epub_with_body` owns the
+        // head; the scan is document-wide, so placement is not what is under
+        // test.
+        let alt = r#"<p>x</p><link rel="alternate stylesheet" href="s.css" type="text/css"/>"#;
+        assert_eq!(ids("3.0", alt), vec![crate::ids::CSS_015]);
+        assert!(ids("2.0", alt).is_empty());
+
+        // Same condition, different id per version.
+        let data_link = r#"<p><a href="data:text/plain,hi">x</a></p>"#;
+        assert_eq!(ids("3.0", data_link), vec![crate::ids::RSC_029]);
+        assert_eq!(ids("2.0", data_link), vec![crate::ids::RSC_010]);
+    }
+
+    /// #95, the manifest half: a `data:` URL as a manifest item href is
+    /// `OPFHandler30`'s question. An EPUB 2 package carrying one draws nothing
+    /// at all from epubcheck - measured - so unlike the hyperlink there is no
+    /// id to substitute.
+    #[test]
+    fn a_data_url_manifest_href_is_epub3_only() {
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let count = |opf: &str| {
+            crate::validate_bytes(epub_with_opf(Some(opf), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.manifest_item.data_url_href"))
+                .count()
+        };
+        let epub3 = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="d" href="data:text/plain,hi" media-type="text/plain"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        let epub2 = epub3
+            .replace(r#"version="3.0""#, r#"version="2.0""#)
+            .replace(
+                r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#,
+                "",
+            )
+            .replace(r#" properties="nav""#, "");
+        assert_eq!(count(epub3), 1, "the control: EPUB 3 still asks");
+        assert_eq!(count(&epub2), 0);
+    }
+
+    /// #93, the required-attribute slice. EPUB 2 validates inline SVG against
+    /// SVG 1.1 *normatively* (`schema/20/rng/content.rng` includes the SVG
+    /// modules); EPUB 3 runs the strict grammar informatively and says nothing
+    /// about inline SVG at all. We had been silent on both.
+    ///
+    /// The whole table is asserted, both directions, because the rule is
+    /// closed and enumerable - which is why this slice was safe to take while
+    /// the rest of #93 was not. Each row was confirmed against epubcheck
+    /// 5.3.0 on its own book, including the two negatives.
+    #[test]
+    fn svg_required_attributes_are_epub2_only() {
+        let n = |ver: &str, svg: &str| {
+            let body = format!(
+                r#"<p>x</p><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">{svg}</svg>"#
+            );
+            crate::validate_bytes(epub_with_body(ver, &body))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.svg_missing_required_attribute"))
+                .count()
+        };
+
+        for svg in [
+            "<rect/>",
+            r#"<rect width="1"/>"#,
+            "<circle/>",
+            "<ellipse/>",
+            r#"<ellipse rx="1"/>"#,
+            "<path/>",
+            "<polyline/>",
+            "<polygon/>",
+            r#"<image xlink:href="x.png"/>"#,
+            "<g><rect/></g>",
+        ] {
+            assert_eq!(n("2.0", svg), 1, "EPUB 2 should report once for {svg}");
+            assert_eq!(n("3.0", svg), 0, "EPUB 3 must stay silent for {svg}");
+        }
+
+        // The two negatives, which are what stop this being "every SVG
+        // element needs attributes": `line` requires none in SVG 1.1, and a
+        // complete shape is silent. epubcheck agrees on both.
+        assert_eq!(n("2.0", "<line/>"), 0);
+        assert_eq!(n("2.0", r#"<rect width="1" height="1"/>"#), 0);
+
+        // One finding per element listing everything absent, not one per
+        // attribute - epubcheck reports `"height" and "width"` as one message.
+        let msg = crate::validate_bytes(epub_with_body(
+            "2.0",
+            r#"<p>x</p><svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#,
+        ));
+        let hit = msg
+            .messages
+            .iter()
+            .find(|m| m.rule == Some("opf.content_document.svg_missing_required_attribute"))
+            .expect("expected the rect finding");
+        assert_eq!(hit.id, crate::ids::RSC_005);
+        assert!(
+            hit.text.contains("\"height\" and \"width\""),
+            "{}",
+            hit.text
+        );
+        assert_eq!(hit.params, vec!["height".to_string(), "width".to_string()]);
     }
 }

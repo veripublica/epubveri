@@ -840,6 +840,84 @@ pub(crate) fn check_foreign_object(
     }
 }
 
+/// SVG 1.1 required attributes, enforced for **EPUB 2 only**.
+///
+/// `schema/20/rng/content.rng` includes the SVG 1.1 modules directly, so
+/// inline SVG in an EPUB 2 content document is validated against them
+/// *normatively* - epubcheck reports RSC-005 errors. EPUB 3 is the opposite
+/// (see the caller's comment): the strict grammar runs informatively there
+/// and inline SVG draws nothing, which is why this runs on one version only.
+///
+/// The table is the whole of what `svg-shape.rng` and `svg-image.rng` require:
+/// every `<attribute>` outside an `<optional>` in the eight `attlist.*`
+/// defines, each of which has exactly one define (no `combine="interleave"`
+/// contributor elsewhere - checked, because a partial read of an interleaved
+/// attlist is how this project has been wrong before).
+///
+/// Every row was then confirmed against epubcheck 5.3.0 one book at a time,
+/// including the two negatives: `<line/>` requires nothing, and a complete
+/// `<rect width height/>` is silent. Eleven books, eleven agreements.
+///
+/// This is a slice of #93, not its closure: epubcheck validates the entire
+/// SVG 1.1 grammar there - vocabulary, content models, attribute lists,
+/// datatypes - and this covers required attributes alone. The slice was
+/// chosen because it is closed and enumerable, so it cannot invent a finding
+/// epubcheck does not also make.
+const SVG_REQUIRED_ATTRS: &[(&str, &[&str])] = &[
+    ("circle", &["r"]),
+    ("ellipse", &["rx", "ry"]),
+    ("image", &["height", "width"]),
+    ("path", &["d"]),
+    ("polygon", &["points"]),
+    ("polyline", &["points"]),
+    ("rect", &["height", "width"]),
+];
+
+pub(crate) fn check_required_attributes(
+    svg_root: roxmltree::Node,
+    path: &str,
+    report: &mut Report,
+) {
+    for n in svg_root
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+    {
+        let Ok(i) = SVG_REQUIRED_ATTRS.binary_search_by_key(&n.tag_name().name(), |(e, _)| e)
+        else {
+            continue;
+        };
+        // One finding per element listing everything absent, not one per
+        // attribute: epubcheck reports `missing required attributes "height"
+        // and "width"` as a single message, and a per-attribute split would
+        // double the count on the commonest case.
+        let missing: Vec<&str> = SVG_REQUIRED_ATTRS[i]
+            .1
+            .iter()
+            .copied()
+            .filter(|a| !n.has_attr_no_ns(a))
+            .collect();
+        if missing.is_empty() {
+            continue;
+        }
+        let name = n.tag_name().name();
+        let list = missing
+            .iter()
+            .map(|a| format!("\"{a}\""))
+            .collect::<Vec<_>>()
+            .join(" and ");
+        let plural = if missing.len() > 1 { "s" } else { "" };
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!("SVG element \"{name}\" has no required attribute{plural} {list}"),
+            path,
+            n,
+            "opf.content_document.svg_missing_required_attribute",
+            missing.iter().map(|a| (*a).to_string()).collect(),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

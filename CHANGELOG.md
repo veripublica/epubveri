@@ -8,6 +8,51 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.12.2] - 2026-08-26
+
+Four more version-scope defects, all found by auditing the neighbourhood of
+0.12.1's ten rather than by any book reporting them. As with 0.12.1, no book
+epubcheck accepts changes verdict and the 405-book shelf is byte-identical.
+
+**Three more EPUB 3 rules were reaching EPUB 2 books** (#95).
+
+- **`CSS-015`** on a title-less `<link rel="alternate stylesheet">`. epubcheck
+  has exactly one call site for it, `OPSHandler30`:1113, so an EPUB 2 book
+  cannot earn it.
+- **`RSC-029`** on a `data:` URL as a manifest item href — `OPFHandler30`'s
+  question, and epubcheck says nothing at all about it at EPUB 2.
+- **`RSC-029`** on a `data:` hyperlink, which is the interesting one: **the
+  condition is version-neutral and only the ID is not.** epubcheck's EPUB 2
+  handler has no `processHyperlink` override, so the same link falls through
+  to `ResourceReferencesChecker`, whose hyperlink arm reports **`RSC-010`**.
+  Gating RSC-029 alone would have traded a wrong ID for silence, so the EPUB 2
+  arm now reports RSC-010 for it.
+
+Three further candidates from the same audit were probed and left alone
+because both tools already agree: OPF-014, RSC-006 and RSC-033.
+
+**Inline SVG is now checked for SVG 1.1's required attributes in EPUB 2**
+(#93, in part). `schema/20/rng/content.rng` includes the SVG 1.1 modules
+directly, so inline SVG in an EPUB 2 content document is validated against
+them **normatively** — epubcheck reports RSC-005 errors and we reported
+nothing at all. EPUB 3 is the mirror image, and we already matched it: there
+the strict grammar runs informatively and inline SVG draws nothing.
+
+The table is every `<attribute>` outside an `<optional>` in the eight
+`attlist.*` defines of `svg-shape.rng` and `svg-image.rng` — `path@d`,
+`rect@width/height`, `circle@r`, `ellipse@rx/ry`, `polyline@points`,
+`polygon@points`, `image@width/height` — and `line`, which requires none.
+Each row was then confirmed against epubcheck 5.3.0 on its own book, the two
+negatives included.
+
+This is a slice of the gap, not its closure: epubcheck validates the whole
+SVG 1.1 grammar there — vocabulary, content models, attribute lists,
+datatypes. The slice was taken because it is closed and enumerable, so it
+cannot invent a finding epubcheck does not also make. **246 of the shelf's
+325 EPUB 2 books carry inline SVG and not one of them gained a finding**,
+which is what the rest of that grammar would have to clear before it is worth
+attempting.
+
 ## [0.12.1] - 2026-08-26
 
 **Ten EPUB 3 rules were firing on EPUB 2 books**, and chasing them turned up
