@@ -32,9 +32,55 @@
 //!     … --bin versions -- --all      # also list the ids judged neutral
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
+
+/// The `<package>` version of an `.epub`, or `None` if it cannot be read.
+fn package_version(path: &Path) -> Option<String> {
+    let f = std::fs::File::open(path).ok()?;
+    let mut z = zip::ZipArchive::new(f).ok()?;
+    let mut c = String::new();
+    z.by_name("META-INF/container.xml")
+        .ok()?
+        .read_to_string(&mut c)
+        .ok()?;
+    let opf = Regex::new(r#"(?s)full-path\s*=\s*["\x27]([^"\x27]+)["\x27]"#)
+        .unwrap()
+        .captures(&c)?[1]
+        .to_string();
+    let mut o = String::new();
+    z.by_name(&opf).ok()?.read_to_string(&mut o).ok()?;
+    let tag = Regex::new(r"(?s)<package\b[^>]*>").unwrap().find(&o)?;
+    Some(
+        Regex::new(r#"(?s)\bversion\s*=\s*["\x27]([^"\x27]+)["\x27]"#)
+            .unwrap()
+            .captures(tag.as_str())?[1]
+            .to_string(),
+    )
+}
+
+/// Every `.epub` under `root`.
+fn epubs(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "epub") {
+                out.push(p);
+            }
+        }
+    }
+    out.sort();
+    out
+}
 
 fn read(p: &Path) -> String {
     std::fs::read_to_string(p).unwrap_or_default()
@@ -276,8 +322,85 @@ fn main() {
             neutral.len()
         );
     }
+    // --- the empirical half: do we actually emit any of them on EPUB 2? ---
+    //
+    // The static list says which ids epubcheck cannot reach for an EPUB 2
+    // book. Whether *we* can is a question about our own gating, and the
+    // honest way to ask it is to run over EPUB 2 books rather than to guess
+    // from the source - a line-window heuristic was tried for this once and
+    // produced false readings in both directions.
+    //
+    // Absence here is weak evidence and must be reported as such: a rule can
+    // be ungated and simply never tripped by the books to hand. A *hit* is
+    // strong: it is a live divergence, already happening.
+    if let Some(i) = std::env::args().position(|a| a == "--epub2") {
+        let Some(dir) = std::env::args().nth(i + 1) else {
+            eprintln!("--epub2 needs a directory");
+            std::process::exit(2);
+        };
+        let want: BTreeSet<&str> = only3.iter().map(|(id, _)| id.as_str()).collect();
+        let books = epubs(Path::new(&dir));
+        let mut checked = 0usize;
+        // Proof the sweep ran. A zero-hit result is indistinguishable from a
+        // sweep that read nothing at all - the vacuous-measurement shape this
+        // project has been bitten by twice - so the total is printed beside
+        // the answer and the reader can see the denominator was not empty.
+        let mut seen = 0usize;
+        // How *wide* the sweep was, not just how deep. 80,000 findings drawn
+        // from three ids would be a shallow sweep wearing a large number; the
+        // distinct count is what says the books exercised a real spread of
+        // rules and therefore had a real chance of tripping an ungated one.
+        let mut distinct: BTreeSet<&'static str> = BTreeSet::new();
+        let mut hits: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for b in &books {
+            match package_version(b).as_deref() {
+                Some(v) if v.starts_with('2') => {}
+                _ => continue,
+            }
+            checked += 1;
+            let Ok(rep) = epubveri::validate_path(b) else {
+                continue;
+            };
+            seen += rep.messages.len();
+            for m in &rep.messages {
+                distinct.insert(m.id);
+                if want.contains(m.id) {
+                    let name = b.file_name().unwrap().to_string_lossy().to_string();
+                    let e = hits.entry(m.id.to_string()).or_default();
+                    if !e.contains(&name) {
+                        e.push(name);
+                    }
+                }
+            }
+        }
+        println!(
+            "\n--- emitted on an EPUB 2 book? ({checked} EPUB 2 books of {} under {dir}) ---",
+            books.len()
+        );
+        println!(
+            "  {seen} findings read, spanning {} distinct ids - a zero-hit result\n  means nothing unless both of these are large",
+            distinct.len()
+        );
+        if hits.is_empty() {
+            println!("  none of the {} EPUB-3-only ids appeared.", only3.len());
+            println!(
+                "  Weak evidence, deliberately stated as such: these books may simply\n  \
+                 never trip an ungated rule. A hit would have been strong; silence is not."
+            );
+        } else {
+            for (id, books) in &hits {
+                println!(
+                    "  {id:9}  {} book(s)   e.g. {}",
+                    books.len(),
+                    books[0].chars().take(46).collect::<String>()
+                );
+            }
+            println!("\n  These are LIVE: epubcheck cannot emit them for these books and we do.");
+        }
+    }
+
     println!(
         "\nEvery row above is a candidate, not a finding. Settle each the way the\n\
-         previous fifteen were settled: one book, both tools, one difference."
+         previous sixteen were settled: one book, both tools, one difference."
     );
 }
