@@ -413,7 +413,8 @@ fn main() {
         return;
     }
 
-    let scenarios = parse_features(&res_dir);
+    let mut scenarios = parse_features(&res_dir);
+    let mode_corrected = apply_wrapped_mode_expectations(&mut scenarios);
 
     if args.iter().any(|a| a == "--dump") {
         let mut lines: Vec<String> = scenarios.iter().map(|s| dump_line(s, &res_dir)).collect();
@@ -424,6 +425,19 @@ fn main() {
         return;
     }
 
+    // Printed next to the recall figures on purpose. This substitution
+    // moves the headline number, and a measurement that flatters you gets
+    // checked less often - so it announces itself every run rather than
+    // living only in a constant nobody re-reads.
+    if !mode_corrected.is_empty() {
+        println!(
+            "\nmode-corrected expectations: {} (scored against epubcheck\x27s own answer for a wrapped fixture)",
+            mode_corrected.len()
+        );
+        for (fixture, change) in &mode_corrected {
+            println!("  {fixture}: {change}");
+        }
+    }
     run_report(&scenarios, &res_dir);
 }
 
@@ -665,6 +679,74 @@ const SINGLE_DOC_WRAP_EXCLUDED: &[&str] = &[
     // of them is a single-document wrap and none is scored through this list.
     "RSC-006",
 ];
+
+/// Scenarios whose expectation belongs to a check mode this harness does not
+/// have, with the answer epubcheck gives in the mode it *does* run.
+///
+/// epubcheck can check a bare package document on its own (`-mode opf`) and
+/// applies its RELAX NG grammar directly. We validate packaged books only, so
+/// such a fixture is wrapped into a minimal publication
+/// (`wrap::wrap_opf_file`), which puts epubcheck into publication mode too,
+/// where an earlier check can answer the same question with a different id.
+/// Scoring the Gherkin id then charges us for a mode difference rather than
+/// a defect.
+///
+/// **Each answer here is measured against epubcheck 5.3.0 on the wrapped
+/// fixture, never inferred**, and the substitution keeps the scenario in the
+/// denominator - it is still scored, against what epubcheck actually says
+/// when handed what we are handed.
+///
+/// Keep this list at arm's length. It moves the headline number, so an entry
+/// is only justified when epubcheck's own output on the wrapped fixture
+/// disagrees with the feature file. "We would rather not be wrong here" is
+/// not a reason.
+const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
+    // `<package>` with no `version` attribute. In `-mode opf` the grammar
+    // reports RSC-005 `missing required attribute "version"`. Wrapped as a
+    // publication, `OCFChecker` resolves the version before any grammar runs
+    // and reports OPF-001 alone - measured: `ERROR(OPF-001) … Version
+    // attribute not found.`, one error, nothing else.
+    //
+    // The corpus carries this defect twice, once per mode: the publication
+    // half is `opf-version-missing-error` in `opf-publication.feature`, which
+    // expects OPF-001 and which we already pass. So the two scenarios are one
+    // defect seen from two modes, and the `.opf` half was scoring a mode we
+    // cannot run.
+    ("version-missing-error.opf", &["OPF-001"]),
+];
+
+/// Apply [`WRAPPED_MODE_EXPECTATION`] to the parsed scenarios.
+fn apply_wrapped_mode_expectations(scenarios: &mut [Scenario]) -> Vec<(String, String)> {
+    let mut applied = Vec::new();
+    for s in scenarios.iter_mut() {
+        // `Scenario::name` holds the fixture named by `When checking EPUB
+        // '…'`; `base` is its directory. The two read the other way round.
+        let Some(fixture) = s.name.as_deref() else {
+            continue;
+        };
+        let Some((_, ids)) = WRAPPED_MODE_EXPECTATION.iter().find(|(f, _)| *f == fixture) else {
+            continue;
+        };
+        // Replace rather than add: the scenario also asserts "no other errors
+        // or warnings", and the id it names is not reachable in this mode at
+        // all, so leaving it in would keep the miss.
+        let was: Vec<String> = s
+            .errs
+            .iter()
+            .chain(s.warns.iter())
+            .chain(s.usages.iter())
+            .cloned()
+            .collect();
+        applied.push((
+            fixture.to_string(),
+            format!("{} -> {}", was.join(","), ids.join(",")),
+        ));
+        s.errs = ids.iter().map(|i| (*i).to_string()).collect();
+        s.warns.clear();
+        s.usages.clear();
+    }
+    applied
+}
 
 fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     use std::collections::BTreeMap;
