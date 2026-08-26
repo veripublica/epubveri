@@ -392,8 +392,18 @@ pub struct Ocf {
 
 impl Ocf {
     /// Whether this container path is declared encrypted.
+    ///
+    /// Normalized on both sides. The set is built from `encryption.xml`'s
+    /// `URI` attributes and asked with the name the zip's central directory
+    /// carries, and those two are not required to agree byte for byte: a
+    /// container written on macOS can hold a *decomposed* filename while the
+    /// document that names it writes the *precomposed* one. Comparing raw
+    /// would have failed open — the resource would simply have been parsed as
+    /// its declared type again, which is the bug this set exists to stop, and
+    /// it would have failed only for non-ASCII names, so nothing on the shelf
+    /// or in the corpus would have shown it.
     pub fn is_encrypted(&self, name: &str) -> bool {
-        self.encrypted.contains(name)
+        self.encrypted.contains(&crate::opf::nfc(name))
     }
 
     /// Read an entry **only if its bytes are meant to be examined**.
@@ -1025,28 +1035,23 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
                 );
                 continue;
             }
-            // Located at the *encrypted file*, not at `encryption.xml`
-            // (JSWolf, MobileRead #235; issue #87's sibling #89). The finding
-            // is a fact about the font, not about the document that mentions
-            // it, and epubcheck locates it that way - `font00207.otf` with no
-            // position, since there is nothing inside a binary to point at.
-            // We had been reporting where the *statement* is, which put a note
-            // about a font under `META-INF/` for anything grouping by file.
+            // The set is the whole of this pass's output now. **RSC-004
+            // itself moved to the manifest** (`opf::check_encrypted_resources`)
+            // because that is where epubcheck reports it: from
+            // `PublicationResourceChecker`, which `OPFChecker` constructs once
+            // per manifest item. A file that is encrypted but *undeclared*
+            // therefore draws OPF-003 from epubcheck and nothing else — no
+            // checker ever runs over it, so there is nothing that "will not be
+            // checked" — while reporting from here invented the message for
+            // exactly those files. One of epubcheck's own fixtures
+            // (`ocf-encryption-compression-attributes-invalid-error`) is that
+            // shape.
             //
-            // Deliberately positionless, so `element_path` goes with it: a
-            // path is resolved against the document named by `location`, and
-            // once that is the font, a path into `encryption.xml` would name a
-            // node the reader cannot find. The RSC-007 branch above keeps both
-            // - a reference to nothing has no target file to name.
+            // The set still has to be built here rather than there: `read_content`
+            // has to decline these entries during every pass, and one of the
+            // renditions of a multi-rendition book may not declare a file the
+            // other does.
             encrypted.insert(resolved.clone());
-            report.push_at_rule(
-                RSC_004,
-                Severity::Info,
-                format!("File \"{uri}\" is encrypted; its content will not be checked"),
-                resolved.clone(),
-                "ocf.resource.encrypted_not_checked",
-                vec![uri.to_string()],
-            );
         }
     }
     // Hand the set to the container so the content passes can skip these

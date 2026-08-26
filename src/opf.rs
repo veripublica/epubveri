@@ -9555,6 +9555,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
     }
 
+    check_encrypted_resources(ocf, &manifest_order, report);
     check_font_obfuscation(ocf, &items, &name_index, report);
     check_image_signatures(ocf, &items, &name_index, report);
     check_html_declared_as_xhtml(&doc, is_oeb12, is_epub3, opf_path, report);
@@ -10446,6 +10447,52 @@ fn check_exempt_font_usage(
 /// (which runs before the OPF is even parsed) already reports every
 /// encrypted resource as RSC-004; this is additive, and needs the
 /// manifest's id -> (path, media-type) map, so it can only run here.
+/// `RSC-004`: this resource is encrypted, so its content is not validated.
+///
+/// **Scoped to the manifest, and that scope is the whole check.** epubcheck
+/// reports it from `PublicationResourceChecker.checkResourceCanBeDecrypted`,
+/// and `OPFChecker` constructs one of those per manifest item — so a file
+/// that is encrypted but *undeclared* draws OPF-003 and nothing else. There
+/// is nothing that "will not be checked" about it, because no checker was
+/// ever going to run over it. Reporting this from `encryption.xml` instead,
+/// as we did, invented the message for exactly those files;
+/// `ocf-encryption-compression-attributes-invalid-error` is epubcheck's own
+/// fixture of that shape, and comparing against it is how this was found.
+///
+/// **No algorithm test, deliberately.** epubcheck asks `canDecrypt()`, which
+/// sounds like a question about the cipher and is not one: every filter it
+/// has returns `false`, the IDPF and Adobe font-mangling ones included, each
+/// with a `TODO` where the de-obfuscation would go. So "encrypted" and
+/// "cannot be decrypted" are one condition there, and the obfuscation
+/// algorithm matters only to PKG-026 below.
+///
+/// Per rendition, matching the same structure: a multi-rendition book whose
+/// two manifests both declare an encrypted file draws this twice from
+/// epubcheck, once from each item loop.
+fn check_encrypted_resources(ocf: &Ocf, manifest_order: &[(String, String)], report: &mut Report) {
+    for (path, _) in manifest_order {
+        if !ocf.is_encrypted(path) {
+            continue;
+        }
+        // Located at the encrypted file, not at `encryption.xml` (JSWolf,
+        // MobileRead #235; issue #87's sibling #89) — the finding is a fact
+        // about the resource, not about the document that mentions it, and
+        // epubcheck locates it the same way, positionless because there is
+        // nothing inside a binary to point at. Deliberately positionless so
+        // `element_path` goes with it: a path is resolved against the file
+        // named by `location`, and a path into `encryption.xml` would name a
+        // node the reader cannot find there.
+        report.push_at_rule(
+            RSC_004,
+            Severity::Info,
+            format!("File \"{path}\" is encrypted; its content will not be checked"),
+            path.clone(),
+            "ocf.resource.encrypted_not_checked",
+            vec![path.clone()],
+        );
+    }
+}
+
 fn check_font_obfuscation(
     ocf: &mut Ocf,
     items: &HashMap<String, (String, String)>,
@@ -11780,11 +11827,17 @@ mod tests {
     /// books and OPF 2.0.1 requires it (issue #88). Without it the block is now
     /// itself an error, and this test - which is about RSC-007 vs RSC-004 -
     /// would have been quietly measuring the new rule instead.
+    ///
+    /// The present target is `ch1.xhtml`, a **manifest item**, and that is
+    /// load-bearing rather than incidental: RSC-004 is reported per manifest
+    /// item, so pointing this at the container's stray file - as it did while
+    /// the note came from `encryption.xml` - now asserts the opposite of the
+    /// rule. See `an_encrypted_file_outside_the_manifest_draws_no_note`.
     #[test]
     fn a_cipher_reference_to_a_missing_entry_replaces_the_encrypted_note() {
         const PRESENT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
-  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/stray.txt"/></enc:CipherData></enc:EncryptedData>
+  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/ch1.xhtml"/></enc:CipherData></enc:EncryptedData>
 </encryption>"#;
         const MISSING: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
@@ -11814,6 +11867,54 @@ mod tests {
         );
     }
 
+    /// An encrypted file that no manifest declares draws **no** RSC-004.
+    ///
+    /// epubcheck reports the note from `PublicationResourceChecker`, one of
+    /// which `OPFChecker` builds per manifest item, so an undeclared file gets
+    /// OPF-003 and nothing else: no checker was ever going to read it, so
+    /// there is nothing whose content "will not be checked". We reported it
+    /// from `encryption.xml`, which meant every undeclared encrypted file drew
+    /// a note epubcheck does not give — found by running `compare` over
+    /// epubcheck's own fixtures, where
+    /// `ocf-encryption-compression-attributes-invalid-error` is exactly this
+    /// shape.
+    ///
+    /// The control is the point. A build that had simply stopped emitting
+    /// RSC-004 would satisfy the first assertion, and the two tests above
+    /// would not catch it either now that both name a declared file.
+    #[test]
+    fn an_encrypted_file_outside_the_manifest_draws_no_note() {
+        let enc = |uri: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="{uri}"/></enc:CipherData></enc:EncryptedData>
+</encryption>"#
+            )
+        };
+        let notes = |uri: &str| -> usize {
+            crate::validate_bytes(epub2_with_stray_files_and_encryption(
+                &["stray.txt"],
+                &enc(uri),
+            ))
+            .messages
+            .iter()
+            .filter(|m| m.rule == Some("ocf.resource.encrypted_not_checked"))
+            .count()
+        };
+
+        assert_eq!(
+            notes("OEBPS/stray.txt"),
+            0,
+            "the file is in the container but in no manifest, so nothing was going to read it"
+        );
+        assert_eq!(
+            notes("OEBPS/ch1.xhtml"),
+            1,
+            "the same declaration over a manifest item still reports"
+        );
+    }
+
     /// RSC-004 is located at the **encrypted file**, not at the
     /// `encryption.xml` that mentions it (JSWolf, MobileRead #235; issue #89).
     ///
@@ -11830,7 +11931,7 @@ mod tests {
     fn the_encrypted_note_is_located_at_the_encrypted_file() {
         const PRESENT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
-  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/stray.txt"/></enc:CipherData></enc:EncryptedData>
+  <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/><enc:CipherData><enc:CipherReference URI="OEBPS/ch1.xhtml"/></enc:CipherData></enc:EncryptedData>
 </encryption>"#;
         const MISSING: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
@@ -11850,7 +11951,7 @@ mod tests {
 
         assert_eq!(
             one(PRESENT, "ocf.resource.encrypted_not_checked"),
-            (Some("OEBPS/stray.txt".to_string()), false),
+            (Some("OEBPS/ch1.xhtml".to_string()), false),
             "the note is about the encrypted file, and carries no position - \
              there is nothing inside a binary to point at"
         );

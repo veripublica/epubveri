@@ -72,6 +72,32 @@ it came from: a fixture comment reading "Section with no heading OK in FXL",
 which is about headings and not about counting. epubcheck's
 `processSectioning` gates on `isLinear` and the EDUPUB profile and nothing
 else.
+
+**`RSC-004` is reported per manifest item, not per `<CipherReference>`** (#105).
+Same instrument as the three above, and the fourth fixture it turned up.
+
+The note says a file's content will not be checked. epubcheck reports it from
+the checker it builds for each manifest item, so a file that is encrypted but
+declared in **no** manifest draws `OPF-003` and nothing else — no checker was
+ever going to read it, so there is nothing to say this about. We reported it
+from `encryption.xml`, which added the note for exactly those files.
+
+`canDecrypt()` reads like a question about the cipher and is not one: every
+encryption filter epubcheck has returns `false`, the two font-mangling ones
+included, so "encrypted" and "cannot be decrypted" are one condition and no
+algorithm test is needed.
+
+Two existing tests had encoded the old scope and failed on the fix — their
+control named a file deliberately kept out of the manifest, which under the
+correct rule asserts the opposite of it.
+
+Also fixed: `is_encrypted` compared `encryption.xml`'s `URI` values against the
+raw name from the zip's central directory without normalizing. Those need not
+agree byte for byte — a container written on macOS can hold a decomposed
+filename where the document naming it writes the precomposed one — and the
+comparison failed **open**, so the resource would have been parsed as its
+declared type after all. Non-ASCII names only, so nothing on the shelf or in
+the corpus could have shown it.
 ## [0.12.3] - 2026-08-27
 
 Eight changes. The first three come from Doitsu's report on MobileRead #248,
