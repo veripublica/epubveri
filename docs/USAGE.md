@@ -45,6 +45,11 @@ and download the one archive that matches your computer:
 | **Linux** (Intel/AMD — most PCs and servers) | `epubveri-x86_64-unknown-linux-musl.tar.gz` |
 | **Linux on ARM** (Raspberry Pi, ARM servers) | `epubveri-aarch64-unknown-linux-musl.tar.gz` |
 
+> **Ignore the two "Source code" entries at the bottom of that page.** GitHub
+> adds them to every release automatically; they contain the program's source
+> text, not the program, and nothing in them will run. The file you want is
+> one of the eight named above, and its name starts with `epubveri-`.
+
 > **Not sure which Mac you have?** Click the Apple menu → **About This Mac**.
 > If the chip says "Apple", pick Apple Silicon; if it says "Intel", pick
 > Intel.
