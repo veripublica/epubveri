@@ -37,6 +37,8 @@ use std::path::{Path, PathBuf};
 
 use regex::Regex;
 
+mod redeclare;
+
 /// The `<package>` version of an `.epub`, or `None` if it cannot be read.
 fn package_version(path: &Path) -> Option<String> {
     let f = std::fs::File::open(path).ok()?;
@@ -169,6 +171,135 @@ fn overrides_without_super(body: &str, method: &str) -> bool {
 struct Site {
     class: String,
     method: Option<String>,
+}
+
+/// `--paired <dumpdir>`: the version gate, tested against books that
+/// actually trip the rules.
+///
+/// **Why this exists when `--epub2` already sweeps.** That sweep reports
+/// which EPUB-3-only ids we emit on EPUB 2 books, and its answer is weak for
+/// a reason it prints itself: across 603 books only 20-38 distinct ids ever
+/// fired, so four fifths of our rules were never woken and their silence
+/// means nothing. epubcheck's own corpus is the opposite — every fixture
+/// exists to trip exactly one rule.
+///
+/// So each book is run twice, and **the EPUB 3 run is a positive control**:
+///
+/// - `gated` — the id fires at 3.0 and is silent at 2.0. Demonstrated, not
+///   assumed.
+/// - `LEAK` — it fires at both. epubcheck cannot emit it for an EPUB 2 book
+///   and we do: a candidate, to be settled by a probe like the sixteen before
+///   it.
+/// - `inconclusive` — it does not fire at 3.0 either, so the run proves
+///   nothing about the gate. **Reported separately and never counted as a
+///   pass**, because a book that never reached the check is exactly what
+///   makes a zero look like a clean bill.
+fn paired(only3: &[(String, Vec<String>)], dir: &Path) {
+    let want: BTreeSet<&str> = only3.iter().map(|(id, _)| id.as_str()).collect();
+    let manifest = read(&dir.join("manifest.tsv"));
+    if manifest.is_empty() {
+        eprintln!(
+            "no manifest.tsv in {} — run `corpus --dump-books` first",
+            dir.display()
+        );
+        std::process::exit(2);
+    }
+
+    let mut gated: BTreeMap<String, usize> = BTreeMap::new();
+    let mut leak: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut incon: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let (mut pairs, mut books) = (0usize, 0usize);
+
+    for line in manifest.lines().skip(1) {
+        let col: Vec<&str> = line.split('\t').collect();
+        if col.len() < 7 {
+            continue;
+        }
+        let expected: BTreeSet<String> = [col[3], col[4], col[5]]
+            .iter()
+            .flat_map(|f| f.split(',').filter(|s| !s.is_empty()))
+            .map(|s| s.replacen('_', "-", 1))
+            .collect();
+        let mine: Vec<&String> = expected
+            .iter()
+            .filter(|e| want.contains(e.as_str()))
+            .collect();
+        if mine.is_empty() {
+            continue;
+        }
+        let src = dir.join(col[0]);
+        let tmp = std::env::temp_dir().join(format!("epubveri-paired-{}.epub", col[0]));
+        match crate::redeclare::rewrite_book(&src, &tmp) {
+            Ok(true) => {}
+            // Already EPUB 2, or unreadable: there is no pair to make.
+            _ => continue,
+        }
+        books += 1;
+        let ids = |p: &Path| -> BTreeSet<String> {
+            epubveri::validate_path(p)
+                .map(|r| {
+                    r.messages
+                        .iter()
+                        .map(|m| m.id.replacen('_', "-", 1))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let (at3, at2) = (ids(&src), ids(&tmp));
+        let _ = std::fs::remove_file(&tmp);
+
+        for id in mine {
+            pairs += 1;
+            let name = col[0].to_string();
+            if !at3.contains(id) {
+                incon.entry(id.clone()).or_default().push(name);
+            } else if at2.contains(id) {
+                leak.entry(id.clone()).or_default().push(name);
+            } else {
+                *gated.entry(id.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    println!("\n--- paired version check over {} ---", dir.display());
+    println!("  {books} book(s) re-declared, {pairs} (book, id) pairs examined");
+    if pairs == 0 {
+        eprintln!(
+            "  no pairs — the manifest matched none of the {} ids",
+            want.len()
+        );
+        std::process::exit(1);
+    }
+    println!(
+        "  gated: {} ids ({} pairs)   LEAK: {} ids   inconclusive: {} ids",
+        gated.len(),
+        gated.values().sum::<usize>(),
+        leak.len(),
+        incon.len()
+    );
+    if !leak.is_empty() {
+        println!("\n  LEAK — fires at 3.0 AND at 2.0, where epubcheck cannot:");
+        for (id, b) in &leak {
+            println!("    {id:9} {} book(s)  e.g. {}", b.len(), b[0]);
+        }
+    }
+    if !incon.is_empty() {
+        println!("\n  inconclusive — never fired at 3.0 either, so the pair proves nothing:");
+        for (id, b) in &incon {
+            println!("    {id:9} {} book(s)  e.g. {}", b.len(), b[0]);
+        }
+    }
+    let untouched: Vec<&str> = want
+        .iter()
+        .filter(|i| !gated.contains_key(**i) && !leak.contains_key(**i) && !incon.contains_key(**i))
+        .copied()
+        .collect();
+    println!(
+        "\n  {} of the {} ids have no fixture in this corpus at all: {}",
+        untouched.len(),
+        want.len(),
+        untouched.join(" ")
+    );
 }
 
 fn main() {
@@ -333,6 +464,14 @@ fn main() {
     // Absence here is weak evidence and must be reported as such: a rule can
     // be ungated and simply never tripped by the books to hand. A *hit* is
     // strong: it is a live divergence, already happening.
+    if let Some(i) = std::env::args().position(|a| a == "--paired") {
+        let Some(d) = std::env::args().nth(i + 1) else {
+            eprintln!("--paired needs the directory written by `corpus --dump-books`");
+            std::process::exit(2);
+        };
+        paired(&only3, Path::new(&d));
+    }
+
     if let Some(i) = std::env::args().position(|a| a == "--epub2") {
         let Some(dir) = std::env::args().nth(i + 1) else {
             eprintln!("--epub2 needs a directory");

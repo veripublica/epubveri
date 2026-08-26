@@ -416,6 +416,15 @@ fn main() {
     let mut scenarios = parse_features(&res_dir);
     let mode_corrected = apply_wrapped_mode_expectations(&mut scenarios);
 
+    if let Some(i) = args.iter().position(|a| a == "--dump-books") {
+        let out = args.get(i + 1).map(PathBuf::from).unwrap_or_else(|| {
+            eprintln!("--dump-books needs a directory");
+            std::process::exit(2);
+        });
+        dump(&scenarios, &res_dir, &out);
+        return;
+    }
+
     if args.iter().any(|a| a == "--dump") {
         let mut lines: Vec<String> = scenarios.iter().map(|s| dump_line(s, &res_dir)).collect();
         lines.sort();
@@ -746,6 +755,108 @@ fn apply_wrapped_mode_expectations(scenarios: &mut [Scenario]) -> Vec<(String, S
         s.usages.clear();
     }
     applied
+}
+
+/// `--dump <dir>`: materialise every corpus scenario's book into one
+/// directory, with a manifest describing what each one is for.
+///
+/// **The manifest is the point, not the zips.** A directory of books with no
+/// record of which scenario produced them, or what that scenario expects, is
+/// just a pile of files; the TSV is what lets a later pass ask "did this book
+/// still report what it is supposed to". It carries the feature file, the
+/// fixture name, the expected ids at each severity, and whether the book is a
+/// single-document wrap (whose extras are our wrapper's, not findings).
+///
+/// Two things this unlocks beyond the job it was written for:
+///
+/// - **A second oracle over epubcheck's own fixtures.** `corpus` scores us
+///   against expectations written in Gherkin; pointing `compare` at this
+///   directory scores us against what epubcheck *does when run*. Those are
+///   different questions and they have disagreed before — see #96, where the
+///   feature file says RSC-005 and running epubcheck says OPF-001.
+/// - **Paired version testing.** Re-declare these as EPUB 2 with `downgrade`
+///   and the 3.0 run becomes a positive control: a rule that fires at 3.0 and
+///   is silent at 2.0 is *demonstrably* gated, where silence alone proves
+///   only that nothing asked.
+fn dump(scenarios: &[Scenario], res_dir: &Path, out: &Path) {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::io::Write as _;
+    std::fs::create_dir_all(out).expect("create --dump dir");
+    let mut manifest =
+        String::from("file\tfeature\tfixture\terrs\twarns\tusages\tclean\tsingle_doc_wrap\n");
+    let mut used: BTreeSet<String> = BTreeSet::new();
+    let (mut written, mut skipped) = (0usize, 0usize);
+    let mut skip_reasons: BTreeMap<&'static str, u32> = BTreeMap::new();
+
+    for s in scenarios {
+        let Some(fixture) = s.name.as_deref() else {
+            continue;
+        };
+        let (path, is_temp) = match resolve(s, res_dir) {
+            Resolved::Skip(reason) => {
+                skipped += 1;
+                *skip_reasons.entry(reason).or_insert(0) += 1;
+                continue;
+            }
+            Resolved::Path { path, is_temp, .. } => (path, is_temp),
+        };
+        let single = matches!(
+            resolve(s, res_dir),
+            Resolved::Path {
+                single_doc_wrap: true,
+                ..
+            }
+        );
+        // Names collide across feature files, and the manifest is keyed on
+        // the file name, so a duplicate would silently overwrite a book and
+        // mislabel it.
+        let stem = fixture.trim_end_matches(".epub").replace('/', "_");
+        let mut name = format!("{stem}.epub");
+        let mut n = 2;
+        while !used.insert(name.clone()) {
+            name = format!("{stem}-{n}.epub");
+            n += 1;
+        }
+        if std::fs::copy(&path, out.join(&name)).is_ok() {
+            written += 1;
+            let rel = s.file.strip_prefix(res_dir).unwrap_or(&s.file);
+            let join = |v: &BTreeSet<String>| v.iter().cloned().collect::<Vec<_>>().join(",");
+            manifest.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                name,
+                rel.display(),
+                fixture,
+                join(&s.errs),
+                join(&s.warns),
+                join(&s.usages),
+                s.clean,
+                single
+            ));
+        }
+        if is_temp {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+
+    let mf = out.join("manifest.tsv");
+    std::fs::File::create(&mf)
+        .and_then(|mut f| f.write_all(manifest.as_bytes()))
+        .expect("write manifest");
+
+    println!("wrote {written} book(s) to {}", out.display());
+    println!("manifest: {}", mf.display());
+    let reasons: Vec<String> = skip_reasons
+        .iter()
+        .map(|(r, n)| format!("{r}={n}"))
+        .collect();
+    println!("skipped {skipped}  {}", reasons.join("  "));
+    // A dump of nothing is indistinguishable from a dump that ran and found
+    // nothing to do, and this project has been caught by that shape more than
+    // once today alone. Refuse to be quietly empty.
+    if written == 0 {
+        eprintln!("\nnothing was written — the corpus resolved no scenario to a book");
+        std::process::exit(1);
+    }
 }
 
 fn run_report(scenarios: &[Scenario], res_dir: &Path) {
