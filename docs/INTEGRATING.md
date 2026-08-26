@@ -147,6 +147,53 @@ several `-i` inputs the exit code is the worst across them.
 permanent design, so you can offer it as a display option without worrying that
 it will start failing your users' books. See [USAGE.md](USAGE.md#the-two-switches-and-what-is-on-by-default).
 
+## If you download the binary
+
+Each `v*` tag publishes eight archives, named after the Rust target triple:
+
+```
+epubveri-x86_64-unknown-linux-gnu.tar.gz    epubveri-x86_64-apple-darwin.tar.gz
+epubveri-x86_64-unknown-linux-musl.tar.gz   epubveri-aarch64-apple-darwin.tar.gz
+epubveri-aarch64-unknown-linux-gnu.tar.gz   epubveri-x86_64-pc-windows-msvc.zip
+epubveri-aarch64-unknown-linux-musl.tar.gz  epubveri-aarch64-pc-windows-msvc.zip
+```
+
+**These names are stable and will not be renamed.** If a target is ever added
+it will be added alongside these, not substituted for one of them. Each archive
+contains a single directory of the same name, holding the executable
+(`epubveri`, or `epubveri.exe` on Windows) plus `LICENSE`,
+`LICENSE-COMMERCIAL.md` and `README.md`.
+
+The `musl` builds are static and run on any Linux distribution, with no glibc
+version to match. If you are picking one target per platform automatically,
+they are the safer Linux choice.
+
+**Resolve the version through `releases/latest`**, not the first element of
+`releases`. The list endpoint includes prereleases and drafts in publication
+order; `releases/latest` excludes them, which is almost certainly what you
+want. Do not assume a tag parses as three integers either — that is true today
+and is not a promise.
+
+## How often to update, and whether to update at all
+
+**A validator is not an ordinary dependency, and following every release is
+usually the wrong default.** New checks mean a book that was clean yesterday
+can be flagged today without the author changing anything. That is the tool
+working correctly, and it is still a bad surprise if it arrives unannounced in
+the middle of someone's work.
+
+So, in rough order of preference:
+
+- **Pin a version** and move deliberately when you have a reason to.
+- If you do update automatically, **check every few days at most** — a week is
+  a perfectly reasonable interval. Releases here are frequent and most of them
+  will not matter to your users.
+- **Show which epubveri version produced a report.** When someone asks why a
+  finding appeared, that single string answers it, and it costs you one line.
+- Treat a *new* finding on an unchanged book as expected behaviour rather than
+  as a bug — but if it looks wrong, please report it. A false positive is the
+  report this project wants most.
+
 ## Or link the library directly
 
 If your tool is Rust, skip the process boundary:
