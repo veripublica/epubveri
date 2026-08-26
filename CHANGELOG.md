@@ -8,10 +8,15 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.12.3] - 2026-08-27
 
-All three items come from Doitsu's report on MobileRead #248, and the first
-one is the report itself — reproduced, and deliberate.
+Eight changes. The first three come from Doitsu's report on MobileRead #248,
+and the first of those is the report itself — reproduced, and deliberate. The
+next three came from a new audit binary and from sizing an open issue,
+rather than from anyone hitting them, and one of those is a false positive we
+had been shipping all along. The last two are documentation, and one of them
+is a promise made publicly before it was published — the wrong order, and the
+reason this release is cut today rather than tomorrow.
 
 **A `<script src>` target stays exempt from the fallback requirement**
 (#97). Doitsu found that epubcheck reports `RSC-032` for a `.js` declared
@@ -88,6 +93,33 @@ an EPUB 2 one; the EPUB 3 half was silent until the vocabulary diff went
 looking. Both halves are measured against epubcheck one book per row, the two
 negatives (`line`, which requires nothing, and a complete shape) included.
 
+
+**The download surface is documented and promised** (`docs/INTEGRATING.md`).
+That file specified the JSON envelope and the exit codes and said nothing
+about the other half of the contract — the release archives a plugin actually
+downloads. Reading the Sigil plugin's source showed it matching asset
+filenames by exact string equality, which made those names an undocumented
+interface. They are now written down: eight archives named after the Rust
+target triple, stable, added to but never renamed. Two corrections go with
+them, stated generically rather than to anyone in particular — resolve through
+`releases/latest` rather than the first element of `releases`, which includes
+prereleases and drafts, and do not assume a tag parses as three integers.
+
+A second section says **how often to update, and whether to update at all.** A
+validator is not an ordinary dependency: new checks mean a book that was clean
+yesterday is flagged today with nothing changed by its author. That is correct
+behaviour and still a bad surprise unannounced. Pin a version, check no more
+often than every few days, and show which epubveri version produced a report.
+
+**The download steps now warn about GitHub's "Source code" archives**
+(`docs/USAGE.md`). GitHub adds two of them to every release automatically;
+they contain source text rather than the program and nothing in them will run.
+`USAGE.md` already named the right file per platform, which helps, but never
+said what those extra entries were. Prompted by KevinH on MobileRead,
+explaining why Sigil keeps plugin distribution off GitHub — most of his users
+are not GitHub users and cannot tell a release zip from a source zip. That is
+a failure mode of the release page rather than of anyone's choice, and it
+applied to us too.
 ## [0.12.2] - 2026-08-26
 
 Four more version-scope defects, all found by auditing the neighbourhood of
