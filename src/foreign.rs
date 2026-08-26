@@ -11,7 +11,7 @@
 //! the picture's own "always works" raster fallback), and a `<picture>
 //! <source>` is exempt only when it declares a `type` attribute.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ids::{MED_003, MED_007, RSC_032};
 use crate::report::{Position, Report, Severity};
@@ -136,18 +136,48 @@ fn data_url_media_type(href: &str) -> Option<&str> {
 /// `data:` URL can never have a manifest `fallback` chain, so it never
 /// reaches a Core Media Type through one - only an intrinsic mechanism,
 /// e.g. a `<picture><source type=...>`, can rescue a foreign one).
-fn resolve_ref(
-    dir: &str,
-    href: &str,
-    status: &HashMap<String, ResourceStatus>,
-) -> Option<(Category, bool)> {
+/// The two facts every fallback question needs about a reference's target,
+/// carried together because they are always asked together.
+///
+/// `status` says what the manifest declared and whether a `fallback` chain
+/// reaches a Core Media Type. `restricted_remote` says whether `opf.rs`
+/// already reported RSC-006 for the reference, in which case epubcheck threw
+/// `CheckAbortException` and asked nothing further — see `resolve_ref`.
+pub(crate) struct Refs<'a> {
+    pub status: &'a HashMap<String, ResourceStatus>,
+    pub restricted_remote: &'a HashSet<String>,
+}
+
+fn resolve_ref(dir: &str, href: &str, refs: &Refs<'_>) -> Option<(Category, bool)> {
     let h = href.trim();
+    // **A reference epubcheck aborted asks no further questions, and this is
+    // that abort.** `ResourceReferencesChecker.checkReference` runs the remote
+    // check first and `checkRemoteReference` ends RSC-006 with
+    // `throw new CheckAbortException()`, so `checkFallbacks` — the only place
+    // RSC-032 is reported — never runs for that reference. We reported both,
+    // which is a second error about one defect and points the reader at the
+    // wrong half of it: the fix is to stop referencing the resource remotely,
+    // not to give it a fallback.
+    //
+    // The set is the *restricted* remote references, not every remote one, and
+    // the difference is the whole subtlety. EPUB 3 allows a remote reference
+    // from `<audio>`/`<video>`, from a font, and from a spine item; those do
+    // not abort, so epubcheck does ask them for a fallback and so must we —
+    // and it can fire, since `video/mp4` is remote-legal and not a Core Media
+    // Type. `opf.rs` already draws exactly that line to decide RSC-006, so this
+    // reads its answer rather than restating the rule.
+    if refs
+        .restricted_remote
+        .contains(&crate::opf::strip_url_fragment(h))
+    {
+        return None;
+    }
     if h.starts_with("data:") {
         let mt = data_url_media_type(h).unwrap_or("text/plain");
         return Some((classify(mt), false));
     }
     let key = lookup_key(dir, h)?;
-    let st = status.get(&key)?;
+    let st = refs.status.get(&key)?;
     Some((st.category, st.reaches_core_via_fallback))
 }
 
@@ -243,13 +273,13 @@ const PLAIN_RESOURCE_ATTRS: &[(&str, &str)] =
 fn check_single(
     href: &str,
     dir: &str,
-    status: &HashMap<String, ResourceStatus>,
+    refs: &Refs<'_>,
     elname: &str,
     path: &str,
     node: roxmltree::Node,
     report: &mut Report,
 ) {
-    let Some((category, reaches_core)) = resolve_ref(dir, href, status) else {
+    let Some((category, reaches_core)) = resolve_ref(dir, href, refs) else {
         return;
     };
     if category == Category::Foreign && !reaches_core {
@@ -308,7 +338,7 @@ fn is_audio_ref(dir: &str, href: &str, status: &HashMap<String, ResourceStatus>)
 fn check_candidate_group(
     hrefs: &[&str],
     dir: &str,
-    status: &HashMap<String, ResourceStatus>,
+    refs: &Refs<'_>,
     elname: &str,
     path: &str,
     node: roxmltree::Node,
@@ -317,7 +347,7 @@ fn check_candidate_group(
     let mut any_known = false;
     let mut any_ok = false;
     for href in hrefs {
-        let Some((category, reaches_core)) = resolve_ref(dir, href, status) else {
+        let Some((category, reaches_core)) = resolve_ref(dir, href, refs) else {
             continue;
         };
         any_known = true;
@@ -326,7 +356,7 @@ fn check_candidate_group(
             Category::Foreign => {
                 // Either its own fallback chain rescues it, or the `<video>`
                 // position exemption covers it — see the doc comment above.
-                if reaches_core || (elname == "video" && !is_audio_ref(dir, href, status)) {
+                if reaches_core || (elname == "video" && !is_audio_ref(dir, href, refs.status)) {
                     any_ok = true;
                 }
             }
@@ -370,7 +400,7 @@ fn img_candidates(node: roxmltree::Node) -> Vec<String> {
 fn check_audio_video(
     node: roxmltree::Node,
     dir: &str,
-    status: &HashMap<String, ResourceStatus>,
+    refs: &Refs<'_>,
     path: &str,
     report: &mut Report,
 ) {
@@ -378,7 +408,7 @@ fn check_audio_video(
     if name == "video"
         && let Some(poster) = node.attr_no_ns("poster")
     {
-        check_single(poster, dir, status, "video poster", path, node, report);
+        check_single(poster, dir, refs, "video poster", path, node, report);
     }
     let mut candidates: Vec<&str> = Vec::new();
     if let Some(src) = node.attr_no_ns("src") {
@@ -394,7 +424,7 @@ fn check_audio_video(
         }
     }
     if !candidates.is_empty() {
-        check_candidate_group(&candidates, dir, status, name, path, node, report);
+        check_candidate_group(&candidates, dir, refs, name, path, node, report);
     }
 }
 
@@ -408,7 +438,7 @@ fn check_audio_video(
 fn check_picture(
     node: roxmltree::Node,
     dir: &str,
-    status: &HashMap<String, ResourceStatus>,
+    refs: &Refs<'_>,
     path: &str,
     report: &mut Report,
 ) {
@@ -426,8 +456,7 @@ fn check_picture(
                     let Some(u) = candidate.split_whitespace().next() else {
                         continue;
                     };
-                    if resolve_ref(dir, u, status).is_some_and(|(cat, _)| cat == Category::Foreign)
-                    {
+                    if resolve_ref(dir, u, refs).is_some_and(|(cat, _)| cat == Category::Foreign) {
                         any_foreign = true;
                     }
                 }
@@ -443,7 +472,7 @@ fn check_picture(
             }
             "img" => {
                 for href in img_candidates(child) {
-                    if resolve_ref(dir, &href, status)
+                    if resolve_ref(dir, &href, refs)
                         .is_some_and(|(cat, _)| cat == Category::Foreign)
                     {
                         report.push_at_pos(
@@ -470,7 +499,7 @@ pub(crate) fn check_content_doc(
     d: &roxmltree::Document,
     path: &str,
     dir: &str,
-    status: &HashMap<String, ResourceStatus>,
+    refs: &Refs<'_>,
     report: &mut Report,
 ) {
     const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
@@ -479,11 +508,11 @@ pub(crate) fn check_content_doc(
         match name {
             "link" | "track" => continue,
             "picture" => {
-                check_picture(node, dir, status, path, report);
+                check_picture(node, dir, refs, path, report);
                 continue;
             }
             "audio" | "video" => {
-                check_audio_video(node, dir, status, path, report);
+                check_audio_video(node, dir, refs, path, report);
                 continue;
             }
             _ => {}
@@ -497,11 +526,11 @@ pub(crate) fn check_content_doc(
         }
         if name == "img" {
             for href in img_candidates(node) {
-                check_single(&href, dir, status, "img", path, node, report);
+                check_single(&href, dir, refs, "img", path, node, report);
             }
         } else if let Some((_, attr)) = PLAIN_RESOURCE_ATTRS.iter().find(|(e, _)| *e == name) {
             if let Some(href) = node.attr_no_ns(attr) {
-                check_single(href, dir, status, name, path, node, report);
+                check_single(href, dir, refs, name, path, node, report);
             }
         } else if name == "object" {
             // `<object>` was simply never added to this list, which is the
@@ -517,13 +546,13 @@ pub(crate) fn check_content_doc(
             if let Some(data) = node.attr_no_ns("data")
                 && !has_palpable_content(node)
             {
-                check_single(data, dir, status, "object", path, node, report);
+                check_single(data, dir, refs, "object", path, node, report);
             }
         } else if name == "math"
             && node.tag_name().namespace() == Some(MATHML_NS)
             && let Some(altimg) = node.attr_no_ns("altimg")
         {
-            check_single(altimg, dir, status, "math altimg", path, node, report);
+            check_single(altimg, dir, refs, "math altimg", path, node, report);
         }
     }
 }
@@ -566,7 +595,16 @@ mod tests {
             );
             let d = roxmltree::Document::parse(&doc).unwrap();
             let mut report = Report::default();
-            check_content_doc(&d, "ch.xhtml", "", &status, &mut report);
+            check_content_doc(
+                &d,
+                "ch.xhtml",
+                "",
+                &Refs {
+                    status: &status,
+                    restricted_remote: &HashSet::new(),
+                },
+                &mut report,
+            );
             report.messages.iter().filter(|m| m.id == RSC_032).count()
         };
 
@@ -579,6 +617,79 @@ mod tests {
             findings(r#"<embed src="mod.wasm" type="application/wasm"/>"#),
             1,
             "the same resource from <embed> is not exempt - the test has teeth"
+        );
+    }
+
+    /// A reference epubcheck aborted asks no further questions.
+    ///
+    /// `resources-remote-iframe-error`, found by running `compare` over
+    /// epubcheck's own fixtures. `ResourceReferencesChecker.checkReference`
+    /// does the remote check first, and `checkRemoteReference` ends RSC-006
+    /// with `throw new CheckAbortException()`, so `checkFallbacks` — the sole
+    /// RSC-032 site — never runs for that reference. We reported both: two
+    /// errors for one defect, the second of them aimed at the wrong half. A
+    /// remote `<iframe>` is not fixed by giving its target a fallback.
+    ///
+    /// **The negative half is the whole test**, because the naive fix — skip
+    /// every remote reference — passes the first assertion and is wrong. EPUB
+    /// 3 lets `<audio>`/`<video>`, fonts and spine items be remote, so those
+    /// references do not abort, epubcheck does ask them for a fallback, and it
+    /// can still fire — `audio/x-wav` is remote-legal and is not a Core Media
+    /// Type. `opf.rs` already draws that line to decide RSC-006, which is why
+    /// the answer is read from its set rather than restated here.
+    ///
+    /// `<video>` was the first choice for that half and is the wrong one: it
+    /// exempts what it references by *position* (w3c/epubcheck#1662), so it
+    /// reports nothing whatever the set says and would have made the
+    /// assertion vacuous in the direction that looks like a pass.
+    #[test]
+    fn a_restricted_remote_reference_is_not_also_asked_for_a_fallback() {
+        let mut items = HashMap::new();
+        items.insert(
+            "v".to_string(),
+            (
+                "https://example.org/clip.wav".to_string(),
+                "audio/x-wav".to_string(),
+            ),
+        );
+        let status = build_resource_status(&items, &HashMap::new());
+        assert!(!status["https://example.org/clip.wav"].reaches_core_via_fallback);
+
+        let findings = |body: &str, restricted: &HashSet<String>| {
+            let doc = format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
+            );
+            let d = roxmltree::Document::parse(&doc).unwrap();
+            let mut report = Report::default();
+            check_content_doc(
+                &d,
+                "ch.xhtml",
+                "",
+                &Refs {
+                    status: &status,
+                    restricted_remote: restricted,
+                },
+                &mut report,
+            );
+            report.messages.iter().filter(|m| m.id == RSC_032).count()
+        };
+        let iframe = r#"<iframe src="https://example.org/clip.wav"></iframe>"#;
+        let audio =
+            r#"<audio><source src="https://example.org/clip.wav" type="audio/x-wav"/></audio>"#;
+        let restricted: HashSet<String> = ["https://example.org/clip.wav".to_string()]
+            .into_iter()
+            .collect();
+
+        assert_eq!(
+            findings(iframe, &restricted),
+            0,
+            "RSC-006 already reported this reference, and epubcheck aborts it there"
+        );
+        assert_eq!(
+            findings(audio, &HashSet::new()),
+            1,
+            "an <audio> may be remote, so the reference is not aborted and the \
+             fallback question is still asked - audio/x-wav is not a Core Media Type"
         );
     }
 
@@ -627,7 +738,16 @@ mod tests {
             );
             let d = roxmltree::Document::parse(&doc).unwrap();
             let mut report = Report::default();
-            check_content_doc(&d, "ch.xhtml", "", &status, &mut report);
+            check_content_doc(
+                &d,
+                "ch.xhtml",
+                "",
+                &Refs {
+                    status: &status,
+                    restricted_remote: &HashSet::new(),
+                },
+                &mut report,
+            );
             report.messages.iter().filter(|m| m.id == RSC_032).count()
         };
 
@@ -683,7 +803,16 @@ mod tests {
             );
             let d = roxmltree::Document::parse(&doc).unwrap();
             let mut report = Report::default();
-            check_content_doc(&d, "ch.xhtml", "", &status, &mut report);
+            check_content_doc(
+                &d,
+                "ch.xhtml",
+                "",
+                &Refs {
+                    status: &status,
+                    restricted_remote: &HashSet::new(),
+                },
+                &mut report,
+            );
             report.messages.iter().filter(|m| m.id == RSC_032).count()
         };
 

@@ -98,6 +98,33 @@ filename where the document naming it writes the precomposed one — and the
 comparison failed **open**, so the resource would have been parsed as its
 declared type after all. Non-ASCII names only, so nothing on the shelf or in
 the corpus could have shown it.
+
+**A reference epubcheck aborted asks no further questions** (#106). A remote
+`<iframe>` drew `RSC-006` *and* `RSC-032`, where epubcheck reports the first
+and stops: `checkRemoteReference` ends its `RSC-006` with
+`throw new CheckAbortException()`, so the fallback question is never put to a
+reference that may not be remote in the first place. Two errors for one
+defect, the second aimed at the wrong half — a remote `<iframe>` is not fixed
+by giving its target a fallback.
+
+Skipping every remote reference would have been wrong: EPUB 3 permits a remote
+`<audio>`/`<video>`, font or spine item, those do not abort, and the fallback
+question can still fire there — `audio/x-wav` is remote-legal and is not a
+Core Media Type. The suppression therefore reads the set `opf.rs` already
+computes to decide `RSC-006` rather than restating the rule.
+
+**`embed@src` and `input@src` join that set** (#107), where epubcheck has had
+them all along as `GENERIC` references, subject to `object@data`'s rule: a
+remote target is allowed only when the manifest declares it audio, video or a
+font. Missing them cost twice over — no `RSC-006` where epubcheck gives one,
+and `RSC-032` in its place — and the two defects were each other's cover.
+
+**No `CSS-028` for an empty `@font-face` block** (#108). epubcheck emits that
+note from its *declaration* handler, so it gives one per declaration where we
+give one per rule; `COVERAGE.md` documents the difference and our count is
+always the lower of the two. With no declarations its count is zero and ours
+was one, which is not a granularity difference but a note about an embedded
+font where there is no font.
 ## [0.12.3] - 2026-08-27
 
 Eight changes. The first three come from Doitsu's report on MobileRead #248,

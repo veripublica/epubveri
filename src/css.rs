@@ -1029,15 +1029,31 @@ fn check_font_face_spanned(
     // `@font-face` it sees, so a reader comparing the two outputs isn't
     // left wondering which tool missed an embedded font. Anchored at the
     // `@font-face` keyword; nothing about the rule is wrong.
-    report.push_full(
-        CSS_028,
-        Severity::Usage,
-        "@font-face declaration",
-        css_path,
-        origin.position(css, name_span.start),
-        "css.font_face.declared",
-        Vec::new(),
-    );
+    //
+    // **An empty block gets none**, and that is the one place our granularity
+    // difference changes sign. epubcheck reports CSS-028 from its *declaration*
+    // handler, inside `if (inFontFace)`, so it gives one per declaration and we
+    // give one per rule - a difference documented in `COVERAGE.md`, where our
+    // count is always the lower of the two. With no declarations at all its
+    // count is zero and ours was one, which is a false positive rather than a
+    // granularity difference; `content-css-font-face-empty-error` is
+    // epubcheck's own fixture of it, and there the whole stylesheet is
+    // `@font-face {\n}`.
+    //
+    // Reported before the emptiness test rather than after it, which is why
+    // this hid: the early `return` below is what makes the block empty *and*
+    // makes it look handled.
+    if !is_effectively_empty_spanned(block_values) {
+        report.push_full(
+            CSS_028,
+            Severity::Usage,
+            "@font-face declaration",
+            css_path,
+            origin.position(css, name_span.start),
+            "css.font_face.declared",
+            Vec::new(),
+        );
+    }
     if is_effectively_empty_spanned(block_values) {
         // An empty block has no token to point at, so anchor CSS-019 at the
         // `@font-face` keyword itself.
@@ -1880,6 +1896,34 @@ mod tests {
         idx.insert("OEBPS/font.woff".to_string(), "OEBPS/font.woff".to_string());
         let css = "@font-face { font-family: X; src: url(font.woff); } body { color: red; }";
         assert_eq!(run(css, &idx), vec![CSS_028]);
+    }
+
+    /// An **empty** `@font-face` draws CSS-019 and no CSS-028.
+    ///
+    /// epubcheck's own `content-css-font-face-empty-error` fixture, whose
+    /// entire stylesheet is `@font-face {\n}` — found by running `compare`
+    /// over its test corpus.
+    ///
+    /// This is the one place our granularity difference changes sign, which
+    /// is why it survived. epubcheck reports CSS-028 from its *declaration*
+    /// handler, so it gives one per declaration where we give one per rule,
+    /// and `COVERAGE.md` records that our count is always the lower of the
+    /// two. With no declarations its count is zero and ours was one: not a
+    /// granularity difference at all, but a note about a font where there is
+    /// no font.
+    ///
+    /// The second assertion is the guard. Suppressing CSS-028 whenever
+    /// CSS-019 fires, or simply moving the call, would satisfy the first and
+    /// silence every real `@font-face` in the corpus.
+    #[test]
+    fn an_empty_font_face_draws_no_css_028() {
+        let idx = empty_index();
+        assert_eq!(run("@font-face {\n}", &idx), vec![CSS_019]);
+        assert_eq!(
+            run("@font-face {\n}\n@font-face { font-family: A; }", &idx),
+            vec![CSS_019, CSS_028],
+            "the empty rule is silent and its non-empty neighbour is not"
+        );
     }
 
     /// One note per declaration, not one per stylesheet.

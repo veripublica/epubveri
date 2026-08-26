@@ -384,7 +384,7 @@ pub(crate) fn is_file_url(href: &str) -> bool {
 /// while its manifest item declares the bare URL (`https://x/y`);
 /// confirmed via a real corpus fixture where the two would otherwise fail
 /// to match and produce a false RSC-008.
-fn strip_url_fragment(url: &str) -> String {
+pub(crate) fn strip_url_fragment(url: &str) -> String {
     url.split('#').next().unwrap_or(url).to_string()
 }
 
@@ -6851,8 +6851,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
         let dir = parent_dir(&path);
 
-        crate::foreign::check_content_doc(&d, &path, &dir, &resource_status, report);
-
         // OPF-013 (warning): an explicit `type` attribute on `<object>`/
         // `<embed>`/a `<picture><source>` doesn't match the resource's own
         // manifest-declared media-type - real epubcheck IDs this as an
@@ -7843,6 +7841,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             let restricted = match tag {
                                 "img" | "iframe" => true,
                                 "script" if attr == "src" => true,
+                                // `embed@src` and `input@src` are GENERIC
+                                // references in epubcheck, exactly like
+                                // `object@data`, so they carry its rule: a
+                                // remote target is allowed only when the
+                                // manifest declares it audio, video or a font.
+                                // Both were missing, and the omission cost
+                                // twice over — no RSC-006 where epubcheck
+                                // gives one, and RSC-032 in its place, since
+                                // the fallback question is only skipped for a
+                                // reference this set names. Probed one book
+                                // each against 5.3.0.
+                                "embed" | "input" if attr == "src" => !remote_manifest
+                                    .get(&bare)
+                                    .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt)),
                                 "link" if attr == "href" => {
                                     node.attr_no_ns("rel").is_some_and(|r| {
                                         r.split_whitespace()
@@ -8409,6 +8421,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         if !is_epub3 {
             restricted_remote_refs.extend(remote_refs.iter().cloned());
         }
+
+        // RSC-032, and it runs **here** rather than where the rest of this
+        // document's element checks do, because it needs the finished
+        // `restricted_remote_refs`. epubcheck reports RSC-006 and then throws
+        // `CheckAbortException`, so the fallback question is never asked of a
+        // reference that may not be remote in the first place; asking it
+        // anyway is a second error about one defect, pointing at the wrong
+        // half of it. The set is only complete at this point in the walk —
+        // `@import` targets and the EPUB 2 widening above both add to it —
+        // so moving the call is the fix rather than reading it early.
+        crate::foreign::check_content_doc(
+            &d,
+            &path,
+            &dir,
+            &crate::foreign::Refs {
+                status: &resource_status,
+                restricted_remote: &restricted_remote_refs,
+            },
+            report,
+        );
 
         // RSC-008: a remote resource referenced from this content
         // document isn't declared as its own manifest item at all
@@ -14064,6 +14096,70 @@ mod tests {
     /// The same book with the package document swapped out, for checks that
     /// are about the OPF itself. `OEBPS/meta.xml` is always present, so an
     /// OPF can point a metadata `<link>` at a real resource.
+    /// A remote `<embed src>` or `<input src>` is RSC-006, not RSC-032.
+    ///
+    /// Both were missing from the restricted-remote set, and the omission cost
+    /// twice over: no RSC-006 where epubcheck gives one, and RSC-032 in its
+    /// place — because the fallback question is skipped only for references
+    /// that set names, so the two defects were each other's cover. Probed one
+    /// book each against 5.3.0, which reports RSC-006 for both.
+    ///
+    /// The third case is the one that keeps this honest. epubcheck treats
+    /// `embed`/`input` as GENERIC references, exactly like `object@data`, and
+    /// GENERIC *does* allow a remote target when the manifest declares it
+    /// audio, video or a font — so a blanket "remote embed is restricted"
+    /// would pass the first two assertions and invent an error on the third.
+    #[test]
+    fn a_remote_embed_or_input_is_a_restricted_reference() {
+        let ids = |body: &str, media_type: &str| -> Vec<String> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" properties="remote-resources"/>
+    <item id="r" href="https://example.org/x.bin" media-type="{media_type}"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            let report = crate::validate_bytes(epub_with_opf(Some(&opf), &ch1));
+            let mut ids: Vec<String> = report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_006 || m.id == crate::ids::RSC_032)
+                .map(|m| m.id.to_string())
+                .collect();
+            ids.sort();
+            ids.dedup();
+            ids
+        };
+
+        const EMBED: &str =
+            r#"<embed src="https://example.org/x.bin" type="application/octet-stream"/>"#;
+        const INPUT: &str =
+            r#"<p><input type="image" alt="a" src="https://example.org/x.bin"/></p>"#;
+
+        assert_eq!(ids(EMBED, "application/octet-stream"), vec!["RSC-006"]);
+        assert_eq!(ids(INPUT, "application/octet-stream"), vec!["RSC-006"]);
+        assert_eq!(
+            ids(EMBED, "audio/mpeg"),
+            Vec::<String>::new(),
+            "a GENERIC reference may be remote when the manifest declares it audio, \
+             video or a font - so neither message is right here"
+        );
+    }
+
     fn epub_with_opf(opf: Option<&str>, ch1: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
