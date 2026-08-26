@@ -612,6 +612,14 @@ fn is_resource_reference(node: roxmltree::Node, attr: &str) -> bool {
         ("img", "src") | ("video", "poster") | ("object", "data") => true,
         ("audio" | "video" | "source" | "track" | "embed" | "iframe", "src") => true,
         ("script", "src") => true,
+        // `input@src`, whatever the `type` is - epubcheck registers it in
+        // `startInput` with no gate on the type at all. Missing it made
+        // OPF-097 claim that a resource an `<input type="image">` points at
+        // is referenced by nothing, which is a false positive on ordinary
+        // HTML5. Found while chasing the RSC-032 report that produced
+        // `foreign.rs`\x27s `PLAIN_RESOURCE_ATTRS`; the two lists answer
+        // different questions about the same markup and drifted apart.
+        ("input", "src") => true,
         // Only a stylesheet link consumes its target; `<link rel="next">`
         // and friends are navigation, not resources.
         ("link", "href") => node.attr_no_ns("rel").is_some_and(|r| {
@@ -4025,14 +4033,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // EPUB 3 only (issue #9: a legacy .otf font wrongly flagged in an
             // EPUB 2 book that epubcheck reports clean).
             if is_epub3 && crate::cmt::is_non_preferred_core_media_type(mt) {
+                // Naming the replacement was Doitsu's request (MobileRead
+                // #248): epubcheck says which type to use instead, and
+                // "non-preferred" on its own leaves the reader to guess.
+                // `params` stays additive - [0] is still the declared type,
+                // and the preferred one is appended.
+                let preferred = crate::cmt::preferred_media_type(mt, href);
+                let mut params = vec![mt.to_string()];
+                let text = match preferred {
+                    Some(p) => {
+                        params.push(p.to_string());
+                        format!(
+                            "media-type '{mt}' is a non-preferred (but valid) Core Media Type; '{p}' is preferred"
+                        )
+                    }
+                    None => {
+                        format!("media-type '{mt}' is a non-preferred (but valid) Core Media Type")
+                    }
+                };
                 report.push_full(
                     OPF_090,
                     Severity::Usage,
-                    format!("media-type '{mt}' is a non-preferred (but valid) Core Media Type"),
+                    text,
                     opf_path,
                     Position::of(item),
                     "opf.manifest_item.non_preferred_media_type",
-                    vec![mt.to_string()],
+                    params,
                 );
             }
             if mt == "text/x-oeb1-css" {
@@ -18957,5 +18983,56 @@ mod tests {
             hit.text
         );
         assert_eq!(hit.params, vec!["height".to_string(), "width".to_string()]);
+    }
+
+    /// `input@src` is a resource reference, so OPF-097 must not call its
+    /// target unreferenced (MobileRead #248, found while chasing Doitsu's
+    /// RSC-032 report). We claimed an image an `<input type="image">` points
+    /// at was referenced by nothing — a false positive on ordinary HTML5,
+    /// and epubcheck is silent on the same book.
+    ///
+    /// The two lists that answer questions about this markup had drifted:
+    /// `foreign.rs`'s walk knew about `input` and `is_resource_reference`
+    /// did not.
+    #[test]
+    fn input_src_counts_as_referencing_its_target() {
+        assert!(is_resource_reference_for_test("input", "src"));
+        // The control: an attribute that names no resource, so a change that
+        // simply answered `true` everywhere would fail here.
+        assert!(!is_resource_reference_for_test("a", "href"));
+    }
+
+    /// OPF-090 names the preferred media type, as epubcheck does. Requested
+    /// by Doitsu (MobileRead #248): "non-preferred" alone tells the reader
+    /// they have a problem and not what to do about it.
+    ///
+    /// Every row of `cmt::preferred_media_type` is asserted, including both
+    /// oddities carried over from `OPFChecker30.getPreferredMediaType`:
+    /// `application/font-sfnt` resolves by file extension and names both
+    /// when it is neither, and `text/javascript` prefers
+    /// `application/javascript` — the opposite of what WHATWG settled on
+    /// later, but what epubcheck says.
+    #[test]
+    fn opf_090_names_the_preferred_media_type() {
+        use crate::cmt::preferred_media_type as p;
+        assert_eq!(p("application/vnd.ms-opentype", "f.otf"), Some("font/otf"));
+        assert_eq!(p("application/font-woff", "f.woff"), Some("font/woff"));
+        assert_eq!(p("application/x-font-ttf", "f.ttf"), Some("font/ttf"));
+        assert_eq!(p("text/javascript", "f.js"), Some("application/javascript"));
+        assert_eq!(
+            p("application/ecmascript", "f.js"),
+            Some("application/javascript")
+        );
+        assert_eq!(p("application/font-sfnt", "f.ttf"), Some("font/ttf"));
+        assert_eq!(p("application/font-sfnt", "f.otf"), Some("font/otf"));
+        assert_eq!(p("application/font-sfnt", "f.bin"), Some("font/(ttf|otf)"));
+        // A preferred type has no replacement to suggest.
+        assert_eq!(p("font/otf", "f.otf"), None);
+
+        // Every non-preferred type has a row, so the message can never say
+        // "non-preferred" without saying what to use instead.
+        for mt in crate::cmt::NON_PREFERRED {
+            assert!(p(mt, "f.bin").is_some(), "{mt} has no preferred spelling");
+        }
     }
 }

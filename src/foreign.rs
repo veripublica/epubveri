@@ -208,6 +208,38 @@ fn has_palpable_content(n: roxmltree::Node) -> bool {
     })
 }
 
+/// Elements whose one attribute points at a publication resource with no
+/// intrinsic fallback of its own, so the resource must be a Core Media Type
+/// or carry a manifest `fallback`.
+///
+/// **This list is the whole reason RSC-032 keeps being missed, so it is now
+/// written down against its source.** epubcheck asks the fallback question of
+/// every reference it registered as IMAGE, AUDIO, VIDEO or GENERIC
+/// (`ResourceReferencesChecker.checkFallbacks`), and the GENERIC registrations
+/// in `OPSHandler30` are exactly `startInput`, `startEmbed`, `checkScript`,
+/// `checkIFrame` and `endObject`. Three of those are plain and live here;
+/// `endObject` needs the palpable-content exemption and is handled below, as
+/// are `img` (srcset candidates) and the media elements.
+///
+/// **`checkScript` is deliberately absent, and must stay absent.** EPUB 3.4
+/// exempts a resource referenced from `<script src>` from the fallback
+/// requirement (the spec editor's w3c/epubcheck#1654, accepted), so epubcheck
+/// still reports RSC-032 there and we do not. That is the permissive
+/// direction, which this project ships without a flag, and it is pinned by
+/// `tests::script_src_is_exempt_from_the_fallback_requirement`. Doitsu
+/// reported the resulting difference from MobileRead #248; the test caught an
+/// attempt to "fix" it within the hour, which is exactly what it was written
+/// for.
+///
+/// `iframe` and `input` were genuinely missing, and neither failed loudly.
+/// `input` was worse than absent: it was gated on `type="image"`, while
+/// epubcheck registers `input@src` whatever the type is. Before adding a
+/// reference kind anywhere, check it against this list and against `opf.rs`\x27s
+/// `is_resource_reference`, which asks a different question about the same
+/// markup and had drifted from it.
+const PLAIN_RESOURCE_ATTRS: &[(&str, &str)] =
+    &[("embed", "src"), ("iframe", "src"), ("input", "src")];
+
 fn check_single(
     href: &str,
     dir: &str,
@@ -467,9 +499,9 @@ pub(crate) fn check_content_doc(
             for href in img_candidates(node) {
                 check_single(&href, dir, status, "img", path, node, report);
             }
-        } else if name == "embed" {
-            if let Some(src) = node.attr_no_ns("src") {
-                check_single(src, dir, status, "embed", path, node, report);
+        } else if let Some((_, attr)) = PLAIN_RESOURCE_ATTRS.iter().find(|(e, _)| *e == name) {
+            if let Some(href) = node.attr_no_ns(attr) {
+                check_single(href, dir, status, name, path, node, report);
             }
         } else if name == "object" {
             // `<object>` was simply never added to this list, which is the
@@ -486,10 +518,6 @@ pub(crate) fn check_content_doc(
                 && !has_palpable_content(node)
             {
                 check_single(data, dir, status, "object", path, node, report);
-            }
-        } else if name == "input" && node.attr_no_ns("type") == Some("image") {
-            if let Some(src) = node.attr_no_ns("src") {
-                check_single(src, dir, status, "input", path, node, report);
             }
         } else if name == "math"
             && node.tag_name().namespace() == Some(MATHML_NS)
@@ -626,6 +654,53 @@ mod tests {
             ),
             1,
             "the exemption is the <video> element's alone"
+        );
+    }
+
+    /// `iframe@src` and `input@src` are publication-resource references and
+    /// owe a fallback, and neither was being asked (MobileRead #248 — Doitsu
+    /// reported the `<script>` difference, and chasing it found these two).
+    ///
+    /// `input` was worse than absent: it was gated on `type="image"`, while
+    /// epubcheck's `startInput` registers `input@src` whatever the type is.
+    ///
+    /// Measured against epubcheck 5.3.0, one book per row. `<script>` is the
+    /// deliberate exception and has its own test above; it is repeated here as
+    /// the negative, so that widening this walk again fails loudly.
+    #[test]
+    fn iframe_and_input_owe_a_fallback_and_script_does_not() {
+        let mut items = HashMap::new();
+        items.insert(
+            "w".to_string(),
+            ("x.bin".to_string(), "application/octet-stream".to_string()),
+        );
+        let status = build_resource_status(&items, &HashMap::new());
+        assert!(!status["x.bin"].reaches_core_via_fallback);
+
+        let findings = |body: &str| {
+            let doc = format!(
+                r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
+            );
+            let d = roxmltree::Document::parse(&doc).unwrap();
+            let mut report = Report::default();
+            check_content_doc(&d, "ch.xhtml", "", &status, &mut report);
+            report.messages.iter().filter(|m| m.id == RSC_032).count()
+        };
+
+        for body in [
+            r#"<iframe src="x.bin"></iframe>"#,
+            r#"<input type="image" src="x.bin" alt="a"/>"#,
+            // Not an image input, and epubcheck asks all the same.
+            r#"<input type="text" src="x.bin"/>"#,
+            r#"<embed src="x.bin"/>"#,
+        ] {
+            assert_eq!(findings(body), 1, "expected RSC-032 for {body}");
+        }
+
+        assert_eq!(
+            findings(r#"<script src="x.bin"></script>"#),
+            0,
+            "EPUB 3.4 exempts a <script src> target (w3c/epubcheck#1654)"
         );
     }
 }

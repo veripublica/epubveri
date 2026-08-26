@@ -51,7 +51,7 @@ const PREFERRED: &[&str] = &[
 /// types), that one is used only by `foreign-exempt-font-valid` - a real
 /// corpus fixture that expects it to be treated as a *foreign* (non-CMT)
 /// font, not a non-preferred Core Media Type.
-const NON_PREFERRED: &[&str] = &[
+pub(crate) const NON_PREFERRED: &[&str] = &[
     "application/font-sfnt",
     "application/font-woff",
     "application/x-font-ttf",
@@ -98,6 +98,41 @@ pub(crate) fn is_audio_video_or_font(mt: &str) -> bool {
         || base.starts_with("application/font-")
         || base.starts_with("application/x-font-")
         || base == "application/vnd.ms-opentype"
+}
+
+/// The preferred spelling of a non-preferred Core Media Type, for OPF-090.
+///
+/// Requested by Doitsu on MobileRead: epubcheck names the replacement
+/// (`It is encouraged to use MIME media type "font/otf" instead of
+/// "application/vnd.ms-opentype"`) and we only said the type was
+/// non-preferred, which tells the reader they have a problem and not what to
+/// do about it.
+///
+/// Ported from `OPFChecker30.getPreferredMediaType`, including its two
+/// oddities, because the point is to say what epubcheck says:
+///
+/// - `application/font-sfnt` is ambiguous and resolved by the file
+///   extension, falling back to naming both when it is neither.
+/// - `text/javascript` prefers `application/javascript`, which is the
+///   opposite of what WHATWG settled on later. epubcheck's table is the
+///   authority here, not current practice.
+///
+/// Every entry in [`NON_PREFERRED`] has a row, and nothing else does.
+pub(crate) fn preferred_media_type(mt: &str, href: &str) -> Option<&'static str> {
+    match base_media_type(mt) {
+        "application/font-sfnt" => Some(if href.ends_with(".ttf") {
+            "font/ttf"
+        } else if href.ends_with(".otf") {
+            "font/otf"
+        } else {
+            "font/(ttf|otf)"
+        }),
+        "application/vnd.ms-opentype" => Some("font/otf"),
+        "application/font-woff" => Some("font/woff"),
+        "application/x-font-ttf" => Some("font/ttf"),
+        "text/javascript" | "application/ecmascript" => Some("application/javascript"),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

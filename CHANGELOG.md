@@ -8,6 +8,45 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+All three items come from Doitsu's report on MobileRead #248, and the first
+one is the report itself — reproduced, and deliberate.
+
+**A `<script src>` target stays exempt from the fallback requirement**
+(#97). Doitsu found that epubcheck reports `RSC-032` for a `.js` declared
+`text/x-javascript` and we do not. EPUB 3.4 exempts resources referenced from
+`<script src>` — the spec editor's [w3c/epubcheck#1654][1654], `accepted` —
+and epubcheck has not implemented it yet. This is the permissive direction,
+which this project ships without a flag, so nothing changes. The reason is
+now written next to the list someone would edit, because widening that list
+is exactly what happened while investigating the report; the test guarding
+the exemption caught it within the hour.
+
+[1654]: https://github.com/w3c/epubcheck/issues/1654
+
+**`iframe@src` and `input@src` are now asked for a fallback, and `input@src`
+counts as referencing its target** (#98). Asking which *other* references we
+never posed the fallback question to found three real defects. `iframe@src`
+was missing outright. `input@src` was gated on `type="image"`, while
+epubcheck's `startInput` registers it whatever the type is. And a third,
+worse than either and reported by nobody: `is_resource_reference` did not
+know about `input@src` either, so an ordinary `<input type="image"
+src="cover.png">` drew `OPF-097` claiming nothing referenced `cover.png`.
+That one was a false positive on valid HTML5.
+
+Two hand-maintained lists answering different questions about the same markup
+had drifted apart. The element list is now a table documented against its
+source — the GENERIC registrations in epubcheck's `OPSHandler30` — with
+`script`'s deliberate absence recorded in the same place.
+
+**`OPF-090` now names the preferred media type** (#99), also Doitsu's
+suggestion: `media-type 'application/vnd.ms-opentype' is a non-preferred (but
+valid) Core Media Type; 'font/otf' is preferred`. All six non-preferred types
+have a row, verified against epubcheck one book at a time, including the
+extension-dependent `application/font-sfnt`. `params[0]` is unchanged and the
+preferred spelling is appended, so consumers indexing it are unaffected.
+
 ## [0.12.2] - 2026-08-26
 
 Four more version-scope defects, all found by auditing the neighbourhood of
