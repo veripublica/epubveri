@@ -4061,7 +4061,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     params,
                 );
             }
-            if mt == "text/x-oeb1-css" {
+            // EPUB 2 only, and found by `--bin versions` rather than by anyone
+            // hitting it. `OPF_037` has one call site in epubcheck,
+            // `OPFChecker.checkItem`, and `OPFChecker30` overrides that method
+            // *without* calling `super` - so the EPUB 3 path never reaches it.
+            // Measured both ways on one book each: at 2.0 both tools report
+            // it, at 3.0 epubcheck is silent and we were not.
+            //
+            // The override-without-`super` shape is the same one that made
+            // OPF-042 version-scoped (#91). It is invisible to a grep for
+            // call sites, which is why three hand audits walked past this.
+            if !is_epub3 && mt == "text/x-oeb1-css" {
                 report.push_at_pos(
                     OPF_037,
                     Severity::Warning,
@@ -19034,5 +19044,34 @@ mod tests {
         for mt in crate::cmt::NON_PREFERRED {
             assert!(p(mt, "f.bin").is_some(), "{mt} has no preferred spelling");
         }
+    }
+
+    /// OPF-037 is EPUB 2 only, and this one was found by `--bin versions`
+    /// rather than by a user or by any of the three hand audits that walked
+    /// past it.
+    ///
+    /// epubcheck emits it from `OPFChecker.checkItem` alone, and
+    /// `OPFChecker30` overrides that method **without calling `super`** — so
+    /// the EPUB 3 path never reaches it. That shape is invisible to a grep
+    /// for call sites, which is exactly why a mechanical check was worth
+    /// building: it is the same shape that made OPF-042 version-scoped (#91).
+    ///
+    /// Measured one book per version against epubcheck 5.3.0: at 2.0 both
+    /// tools report it, at 3.0 epubcheck is silent.
+    #[test]
+    fn opf_037_is_epub2_only() {
+        let n = |ver: &str, mt: &str| {
+            crate::validate_bytes(epub_with_spine_item(ver, mt, true))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_037)
+                .count()
+        };
+        assert_eq!(n("2.0", "text/x-oeb1-css"), 1);
+        assert_eq!(n("3.0", "text/x-oeb1-css"), 0);
+        // The control: a media type that is not the deprecated OEB 1.x one
+        // draws nothing at either version, so a change that simply stopped
+        // answering would fail here.
+        assert_eq!(n("2.0", "text/css"), 0);
     }
 }

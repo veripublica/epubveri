@@ -33,6 +33,12 @@ path = "src/compare.rs"
 name = "epubtests"
 path = "src/epubtests.rs"
 
+# Cross-checks the version scope of every id we emit against epubcheck's own
+# call sites. Candidates only; each still needs a probe.
+[[bin]]
+name = "versions"
+path = "src/versions.rs"
+
 # JSWolf's technique, made systematic: re-declare the shelf's EPUB 3 books as
 # EPUB 2 so their HTML5-era markup meets the EPUB 2 rules. Transforms only —
 # `compare` owns the oracle half.

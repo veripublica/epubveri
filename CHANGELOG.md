@@ -47,6 +47,23 @@ have a row, verified against epubcheck one book at a time, including the
 extension-dependent `application/font-sfnt`. `params[0]` is unchanged and the
 preferred spelling is appended, so consumers indexing it are unaffected.
 
+
+**`OPF-037` no longer fires on EPUB 3 books** (#100). The deprecated
+`text/x-oeb1-css` media type draws a warning from epubcheck on an EPUB 2 book
+and nothing on an EPUB 3 one; we warned on both.
+
+Worth the paragraph because of *how* it was found. `OPF_037` has one call site
+in epubcheck, `OPFChecker.checkItem`, in a base class rather than a `*30` one
+— so every "grep the call sites" pass classifies it as version-neutral, which
+is what three separate audits did this week. What actually scopes it is one
+level up: `OPFChecker30` overrides `checkItem` **without calling `super`**, so
+the EPUB 3 path never runs the base method. Same shape as OPF-042.
+
+That is now checked mechanically rather than remembered. A new harness binary
+reads epubcheck's own call sites for every ID we emit and reports the two
+version-scoped classes, including the override-without-`super` one. It found
+this on its first run.
+
 ## [0.12.2] - 2026-08-26
 
 Four more version-scope defects, all found by auditing the neighbourhood of
