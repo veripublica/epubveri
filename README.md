@@ -183,14 +183,23 @@ between releases.)
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
 official test cases, each one a small EPUB file specifically constructed
-to be valid or to trip exactly one specific rule. Measured on 0.10.0
-(2026-08-22):
+to be valid or to trip exactly one specific rule. Measured on 0.12.2
+(2026-08-26):
 
-- **99.8%** of the test suite's "this should be flagged" cases are
+- **100%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
-  would report (606 of 607).
+  would report (607 of 607).
 - **100%** of the test suite's "this is perfectly valid" cases are
   correctly left alone — no false alarms on any of the 355.
+
+One of those 607 deserves its footnote. epubcheck can also check a bare
+package document on its own, and the suite has a scenario written for
+that mode; epubveri takes a packaged `.epub` file only, so the harness
+wraps such a fixture into a minimal book. Handed the same wrapped book,
+epubcheck reports the same code epubveri does, and the suite scores that
+same defect separately in its packaged-book form as well. So that
+scenario is scored against epubcheck's own answer for what it was
+actually given, and the run prints the substitution every time.
 
 These are the numbers epubveri's own release pre-flight prints, and they
 cover epubcheck's corpus only. That corpus is built from synthetic
@@ -199,13 +208,13 @@ compare on a real book.
 
 That is measured separately, by running both tools over a private shelf
 of commercially published EPUBs and diffing them by message ID. On
-**385 books (2026-08-21): 383 agreed on the reported message-ID set
+**405 books (2026-08-26): 403 agreed on the reported message-ID set
 exactly, and there was no message ID epubveri reported that epubcheck
 did not.** The two books that differed are both accounted for — one is
 an artefact of epubcheck's own error recovery, and the other is a
 documented, deliberate divergence about a stray semicolon in CSS. Where
 the two tools report the *same* ID a different number of times, epubveri
-is always the lower of the two — across all 152 such rows, without
+is always the lower of the two — across all 157 such rows, without
 exception.
 
 Both halves matter and neither substitutes for the other: the corpus

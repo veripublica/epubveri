@@ -53,6 +53,28 @@ cannot invent a finding epubcheck does not also make. **246 of the shelf's
 which is what the rest of that grammar would have to clear before it is worth
 attempting.
 
+**The corpus figure is now 607/607, and nothing in the validator changed to
+make it so** (#96). The last remaining "miss" was a check-mode artefact.
+epubcheck's suite carries the missing-`<package>`-`version` case twice, once
+per mode: `-mode opf` expects RSC-005 from the grammar, and the packaged-book
+scenario expects **OPF-001** — the one we already passed. We take a packaged
+`.epub` only, so the harness wraps the bare `.opf` into a minimal book, which
+puts epubcheck into packaged-book mode too; handed that same book it reports
+OPF-001 alone, measured.
+
+So the scenario is now scored against epubcheck's own answer for what it was
+actually given. The denominator is unchanged at 607 and the substitution
+prints itself above the recall figures on every run, because a measurement
+that flatters you gets checked less often.
+
+The other route to 607/607 was refused: emitting RSC-005 beside OPF-001 would
+have done it, and the packaged-book scenario forbids exactly that in its own
+words. Inventing a finding to move a metric is the one thing this measurement
+must never do.
+
+What the number no longer records: epubveri has no standalone
+package-document mode. That is a scope difference, not a missed check.
+
 ## [0.12.1] - 2026-08-26
 
 **Ten EPUB 3 rules were firing on EPUB 2 books**, and chasing them turned up
