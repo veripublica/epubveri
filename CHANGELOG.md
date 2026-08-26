@@ -48,7 +48,7 @@ different question, and the corpus harness structurally cannot see this
 class — its "no other errors" half compares at warning-and-above, and all
 three of these are usage-level.
 
-**`srcset` on a `<picture>`'s `<source>` is now read** (#93's neighbourhood).
+**`srcset` on a `<picture>`'s `<source>` is now read** (#102).
 It was wrong in both directions at once, which is how it survived: the
 candidate was not counted as *referencing* its target, so `OPF-097` called a
 used image unreferenced on five of epubcheck's fixtures, and it was not
@@ -58,14 +58,14 @@ the source-set parser splits on commas, and a base64 `data:` URL contains
 them, so its body became a phantom candidate. That had been true for `<img
 srcset>` all along and had never fired for want of a fixture.
 
-**A `<link>` target in `META-INF/container.xml` counts as declared.** A
+**A `<link>` target in `META-INF/container.xml` counts as declared** (#103). A
 multiple-rendition publication declares its mapping document there rather
 than in any package manifest, so the file sits at the container root
 belonging to no rendition — and `OPF-003` called every one of them an
 undeclared container resource. Six of epubcheck's `renditions-mapping-*`
 fixtures showed it.
 
-**`NAV-004` counts sections in fixed-layout content too.** Exempting them was
+**`NAV-004` counts sections in fixed-layout content too** (#104). Exempting them was
 a false positive on `edupub-fxl-valid`, a fixture whose name says valid.
 The exemption is real but belongs to the sectioning-and-headings check, where
 it came from: a fixture comment reading "Section with no heading OK in FXL",
