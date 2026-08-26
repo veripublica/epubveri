@@ -385,6 +385,40 @@ pub struct Ocf {
     /// Entries [`Ocf::read`] refused for exceeding [`MAX_ENTRY_BYTES`],
     /// drained by [`check_resource_limits`] at the end of the run.
     oversized: Vec<String>,
+    /// Container paths named by a `<CipherReference>` in
+    /// `META-INF/encryption.xml`, filled in by [`check_encryption`].
+    encrypted: std::collections::HashSet<String>,
+}
+
+impl Ocf {
+    /// Whether this container path is declared encrypted.
+    pub fn is_encrypted(&self, name: &str) -> bool {
+        self.encrypted.contains(name)
+    }
+
+    /// Read an entry **only if its bytes are meant to be examined**.
+    ///
+    /// An obfuscated or encrypted resource is ciphertext: parsing it as
+    /// XHTML, CSS or a PNG produces findings about the encryption, not about
+    /// the book. epubcheck says so and means it — `RSC-004: its content will
+    /// not be checked` — and we said the same thing and then checked anyway.
+    ///
+    /// Reported by Doitsu on MobileRead with an obfuscation test book: 15
+    /// findings, including **ten fatals**, on five encrypted files. The fatals
+    /// were the worst of it, because a fatal drops the rest of that document's
+    /// findings, so the false positives were also hiding real ones.
+    ///
+    /// The rule is about *content*, not about the resource: an encrypted font
+    /// is still subject to OPF-097, PKG-026 and the rest, exactly as in
+    /// epubcheck's own output for that book. So this is a separate method
+    /// rather than a filter inside [`Ocf::read`] — the encryption checks
+    /// themselves have to read these entries.
+    pub(crate) fn read_content(&mut self, name: &str) -> Option<Vec<u8>> {
+        if self.is_encrypted(name) {
+            return None;
+        }
+        self.read(name)
+    }
 }
 
 /// The most bytes [`Ocf::read`] will materialise for one container entry.
@@ -702,6 +736,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         archive,
         names,
         oversized: Vec::new(),
+        encrypted: std::collections::HashSet::new(),
     };
 
     if ocf.has("mimetype")
@@ -850,6 +885,10 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
         return;
     }
     let Some(bytes) = ocf.read(ENC) else { return };
+    // Collected locally and handed to `ocf` at the end: the walk below
+    // borrows a document parsed out of these bytes, so `ocf` cannot be
+    // mutated while it is alive.
+    let mut encrypted: std::collections::HashSet<String> = std::collections::HashSet::new();
     let text = String::from_utf8_lossy(&bytes).into_owned();
     let doc = match parse_xml(&text) {
         Ok(d) => d,
@@ -999,6 +1038,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
             // once that is the font, a path into `encryption.xml` would name a
             // node the reader cannot find. The RSC-007 branch above keeps both
             // - a reference to nothing has no target file to name.
+            encrypted.insert(resolved.clone());
             report.push_at_rule(
                 RSC_004,
                 Severity::Info,
@@ -1009,6 +1049,11 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
             );
         }
     }
+    // Hand the set to the container so the content passes can skip these
+    // entries. Every early `return` above happens before any
+    // `<CipherReference>` was read, so there is nothing to lose on those
+    // paths.
+    ocf.encrypted = encrypted;
 }
 
 /// The content model of `<encryption>`: one or more `EncryptedData` or

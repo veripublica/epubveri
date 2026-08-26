@@ -8,6 +8,70 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**Encrypted resources are no longer parsed as their declared type** (#101).
+Reported by Doitsu on MobileRead with an obfuscation test book and both
+tools' output beside it.
+
+An obfuscated or encrypted resource's bytes are ciphertext. Both tools say
+`RSC-004: its content will not be checked`; epubcheck means it, and we said it
+and then parsed the file anyway. That produced **fifteen findings epubcheck
+does not make** — ten fatal `RSC-016` on three encrypted XHTML documents,
+three `CSS-008` on an encrypted stylesheet, and `OPF-029` plus `PKG-021` on an
+encrypted PNG.
+
+The ten fatals were the worst part rather than merely the loudest: a fatal
+drops the rest of that document's findings, so the false positives were also
+hiding whatever was genuinely there.
+
+`Ocf` now records the paths named by a `<CipherReference>` and offers
+`read_content`, which declines them. Fifteen of the twenty read sites in
+`opf.rs` take a manifest resource's content and use it; the other five are
+structural — `container.xml`, the package documents, `encryption.xml` — and
+still read normally.
+
+**The filter is deliberately not inside `read`.** The rule is about content,
+not about the resource: an encrypted font remains subject to `OPF-097`,
+`PKG-026` and everything else, exactly as in epubcheck's output for the same
+book, and the encryption checks themselves have to read these entries.
+
+On the reported book the two tools now agree exactly, with nothing on either
+side that the other lacks.
+
+
+Three more, all found the same way and none of them reported by anyone:
+by pointing `compare` at **epubcheck's own test fixtures** for the first
+time. That corpus is scored by the corpus harness against expectations
+written in Gherkin; running the two tools over the same books asks a
+different question, and the corpus harness structurally cannot see this
+class — its "no other errors" half compares at warning-and-above, and all
+three of these are usage-level.
+
+**`srcset` on a `<picture>`'s `<source>` is now read** (#93's neighbourhood).
+It was wrong in both directions at once, which is how it survived: the
+candidate was not counted as *referencing* its target, so `OPF-097` called a
+used image unreferenced on five of epubcheck's fixtures, and it was not
+checked against the manifest either, so `RSC-008` stayed silent where
+epubcheck reports it. Widening the walk then exposed an older bug underneath:
+the source-set parser splits on commas, and a base64 `data:` URL contains
+them, so its body became a phantom candidate. That had been true for `<img
+srcset>` all along and had never fired for want of a fixture.
+
+**A `<link>` target in `META-INF/container.xml` counts as declared.** A
+multiple-rendition publication declares its mapping document there rather
+than in any package manifest, so the file sits at the container root
+belonging to no rendition — and `OPF-003` called every one of them an
+undeclared container resource. Six of epubcheck's `renditions-mapping-*`
+fixtures showed it.
+
+**`NAV-004` counts sections in fixed-layout content too.** Exempting them was
+a false positive on `edupub-fxl-valid`, a fixture whose name says valid.
+The exemption is real but belongs to the sectioning-and-headings check, where
+it came from: a fixture comment reading "Section with no heading OK in FXL",
+which is about headings and not about counting. epubcheck's
+`processSectioning` gates on `isLinear` and the EDUPUB profile and nothing
+else.
 ## [0.12.3] - 2026-08-27
 
 Eight changes. The first three come from Doitsu's report on MobileRead #248,

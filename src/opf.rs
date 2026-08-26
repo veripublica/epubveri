@@ -658,7 +658,7 @@ fn target_id_kinds(
     is_epub3: bool,
 ) -> Option<IdMap> {
     let orig = name_index.get(target_nfc)?;
-    let bytes = ocf.read(orig)?;
+    let bytes = ocf.read_content(orig)?;
     // The shift is irrelevant here: this reads an id map out of the DOM and
     // never reports a position.
     let (text, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&bytes), is_epub3);
@@ -1964,7 +1964,7 @@ fn read_stylesheet_classes(
     let Some(orig) = name_index.get(&nfc(&resolved)).cloned() else {
         return HashSet::new();
     };
-    let Some(b) = ocf.read(&orig) else {
+    let Some(b) = ocf.read_content(&orig) else {
         return HashSet::new();
     };
     let text = crate::css::decode_bytes(&b);
@@ -2814,6 +2814,44 @@ fn container_rootfiles_silently(ocf: &mut Ocf) -> Vec<String> {
         .map(|p| nfc(p.trim()))
         .filter(|p| !p.is_empty())
         .collect()
+}
+
+/// Every resource declared by `META-INF/container.xml` itself, through its
+/// own `<links>` section.
+///
+/// A multiple-rendition publication declares its **mapping document** here
+/// rather than in any package manifest — `<link rel="mapping"
+/// href="mapping.xhtml"/>` — so the file sits at the container root belonging
+/// to no rendition. OPF-003 built its "declared" set from the manifests and
+/// their metadata links only, and therefore called every mapping document an
+/// undeclared container resource. Six of epubcheck's own `renditions-mapping-*`
+/// fixtures showed it, and epubcheck reports OPF-003 on none of them.
+///
+/// Hrefs here resolve against the container root, not against a package
+/// directory, because that is where `container.xml` sits. Silent, for the
+/// same reason as `container_rootfiles_silently`: `ocf::find_rootfiles`
+/// already reports on this file and a second pass would duplicate it.
+fn container_link_targets_silently(ocf: &mut Ocf) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let Some(bytes) = ocf.read("META-INF/container.xml") else {
+        return out;
+    };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let Ok(doc) = crate::ocf::parse_xml(&text) else {
+        return out;
+    };
+    for n in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "link")
+    {
+        if let Some(href) = n.attr_no_ns("href") {
+            let href = strip_url_fragment(href.trim()).to_string();
+            if !href.is_empty() && !is_external(&href) {
+                out.insert(nfc(&resolve("", &href)));
+            }
+        }
+    }
+    out
 }
 
 /// Everything a package document declares: its manifest item hrefs and, on
@@ -5152,7 +5190,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             }
                             fixed_layout_docs.insert(nfc(path), is_fixed_layout);
                             if let Some(orig) = name_index.get(&nfc(path)).cloned()
-                                && let Some(b) = ocf.read(&orig)
+                                && let Some(b) = ocf.read_content(&orig)
                             {
                                 let t = String::from_utf8_lossy(&b).into_owned();
                                 if let Ok(d) = parse_xml(&t) {
@@ -5254,7 +5292,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             Position::of(sp),
                         );
                     } else if let Some(orig) = name_index.get(&nfc(ncx_path)).cloned()
-                        && let Some(b) = ocf.read(&orig)
+                        && let Some(b) = ocf.read_content(&orig)
                     {
                         let ncx_text = String::from_utf8_lossy(&b).into_owned();
                         // Only NCX-001/NCX-004 need the package identifier -
@@ -5488,6 +5526,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             for rf in std::iter::once(nfc(opf_path)).chain(rootfiles.iter().cloned()) {
                 declared.extend(declared_resources_of(ocf, &rf));
             }
+            declared.extend(container_link_targets_silently(ocf));
         }
         let structural: HashSet<String> = std::iter::once(nfc(opf_path))
             .chain(rootfiles.iter().cloned())
@@ -5674,7 +5713,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
         };
-        let Some(b) = ocf.read(&orig) else { continue };
+        let Some(b) = ocf.read_content(&orig) else {
+            continue;
+        };
         // BOM-aware decode: a UTF-16-encoded content document read as
         // plain UTF-8 turns into byte-level garbage that fails to parse
         // as XML at all, silently skipping every check below - not just
@@ -5966,10 +6007,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let is_non_linear = non_linear_paths.iter().any(|(p, _)| p == &doc_key);
             if !is_fxl && !is_non_linear {
                 crate::edupub::check_sectioning_and_headings(&d, &path, report);
-                // NAV-004: epubcheck counts SECTIONS on linear content docs.
-                if !is_nav {
-                    nav_completeness.add_sections(&d);
-                }
+            }
+            // **The fixed-layout exemption belongs to the sectioning check
+            // above and not to this count**, and applying it here was a false
+            // positive on `edupub-fxl-valid` — a fixture whose name says
+            // valid and where epubcheck reports nothing.
+            //
+            // epubcheck's `processSectioning` gates on `isLinear` and the
+            // EDUPUB profile, and on nothing else: a fixed-layout document
+            // still contributes its SECTIONS. Skipping it left the count at
+            // zero against one toc link, so NAV-004's
+            // `sections.size() != tocLinks.size()` fired on a book where
+            // epubcheck sees 1 == 1.
+            //
+            // The exemption itself is real - it came from a fixture whose own
+            // comment reads "Section with no heading OK in FXL" - but that is
+            // about headings, not about counting. One condition, two rules,
+            // and it was only ever measured against one of them.
+            if !is_non_linear && !is_nav {
+                nav_completeness.add_sections(&d);
             }
         }
 
@@ -7208,6 +7264,82 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // RSC-009: a non-SVG image referenced via a URL fragment - image
         // fragments only make sense for SVG targets. RSC-008: an <img
         // srcset> candidate not declared in the manifest at all.
+        // `srcset`, on `<img>` and on the `<source>` of a `<picture>`.
+        //
+        // This is its own walk rather than a branch inside the `<img>`/
+        // `<image>` loop above: that loop matches those two names and
+        // `continue`s on everything else, so a `<source>` never reached it —
+        // the first attempt at this fix compiled, was dead code, and changed
+        // nothing. epubcheck routes both elements to the same `checkImage`,
+        // which reads `src` and `srcset` together (`OPSHandler30`:393).
+        //
+        // Missing `<source>` cost in both directions at once, which is how it
+        // survived: the candidate was not counted as *referencing* its target,
+        // so OPF-097 called a used image unreferenced on five of epubcheck's
+        // own fixtures, and it was not checked against the manifest either, so
+        // RSC-008 stayed silent where epubcheck reports it. One book measured
+        // per direction.
+        for n in d.descendants().filter(|n| {
+            n.is_element()
+                && (n.tag_name().name() == "img"
+                    || (n.tag_name().name() == "source"
+                        && n.parent()
+                            .is_some_and(|p| p.is_element() && p.tag_name().name() == "picture")))
+        }) {
+            if let Some(srcset_attr) = attr_no_ns_node(n, "srcset") {
+                // **A `data:` URL contains commas, and this splits on them.**
+                // The base64 body of `data:image/…;base64,/9j/4AAQ…` becomes
+                // its own "candidate" and gets reported as a missing manifest
+                // entry. That was true for `<img srcset>` long before
+                // `<source>` was added here; no fixture had a data URL in a
+                // srcset, so it had never fired. Widening the walk to
+                // `<picture>` sources found it immediately, on
+                // `data-url-in-html-img-foreign-intrinsic-fallback-valid` —
+                // a scenario whose name ends in `-valid` and where epubcheck
+                // reports nothing at all.
+                //
+                // Skipping the whole attribute is right rather than merely
+                // convenient: a `data:` URL is not a container resource, so
+                // it can be neither a manifest item nor a reference to one,
+                // and there is nothing for either check to say about it.
+                // epubcheck parses source sets properly
+                // (`SourceSet.parse`); we do not, and until we do this is the
+                // honest boundary.
+                if srcset_attr.value().contains("data:") {
+                    continue;
+                }
+                for candidate in srcset_attr.value().split(',') {
+                    let url = candidate.split_whitespace().next().unwrap_or("");
+                    if url.is_empty() || is_external(url) {
+                        continue;
+                    }
+                    let resolved = nfc(&resolve(&dir, url));
+                    // The reference list and the manifest check are two
+                    // questions about the same markup, and keeping them in one
+                    // place is the whole point - they drifted apart for
+                    // `<object>`, for `input@src`, and here.
+                    resource_refs.insert(resolved.clone());
+                    // Real corpus finding: the srcset candidate file
+                    // genuinely exists in the container - the defect
+                    // is that it's missing its own manifest item, so
+                    // this must check manifest declaration (`items`),
+                    // not container file existence (`name_index`).
+                    if !items.values().any(|(ip, _)| nfc(ip) == resolved) {
+                        report.push_node_attr(
+                            RSC_008,
+                            Severity::Error,
+                            format!("srcset candidate '{url}' is not declared in the manifest"),
+                            path.clone(),
+                            n,
+                            srcset_attr,
+                            "opf.content_document.srcset_not_in_manifest",
+                            vec![url.to_string()],
+                        );
+                    }
+                }
+            }
+        }
+
         for n in d.descendants().filter(|n| n.is_element()) {
             let (src_attr, tag) = match n.tag_name().name() {
                 "img" => ("src", "img"),
@@ -7240,34 +7372,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         path.clone(),
                         Position::of(n),
                     );
-                }
-            }
-            if tag == "img"
-                && let Some(srcset_attr) = attr_no_ns_node(n, "srcset")
-            {
-                for candidate in srcset_attr.value().split(',') {
-                    let url = candidate.split_whitespace().next().unwrap_or("");
-                    if url.is_empty() || is_external(url) {
-                        continue;
-                    }
-                    let resolved = nfc(&resolve(&dir, url));
-                    // Real corpus finding: the srcset candidate file
-                    // genuinely exists in the container - the defect
-                    // is that it's missing its own manifest item, so
-                    // this must check manifest declaration (`items`),
-                    // not container file existence (`name_index`).
-                    if !items.values().any(|(ip, _)| nfc(ip) == resolved) {
-                        report.push_node_attr(
-                            RSC_008,
-                            Severity::Error,
-                            format!("srcset candidate '{url}' is not declared in the manifest"),
-                            path.clone(),
-                            n,
-                            srcset_attr,
-                            "opf.content_document.srcset_not_in_manifest",
-                            vec![url.to_string()],
-                        );
-                    }
                 }
             }
         }
@@ -8057,7 +8161,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             {
                 let resolved = resolve(&dir, href);
                 if let Some(orig) = name_index.get(&nfc(&resolved)).cloned()
-                    && let Some(b) = ocf.read(&orig)
+                    && let Some(b) = ocf.read_content(&orig)
                 {
                     let css_text = crate::css::decode_bytes(&b);
                     let sheet = styloria::Parser::parse_stylesheet(&css_text);
@@ -8573,7 +8677,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Some(orig) = name_index.get(doc_path).cloned() else {
             continue;
         };
-        let Some(b) = ocf.read(&orig) else { continue };
+        let Some(b) = ocf.read_content(&orig) else {
+            continue;
+        };
         let text = String::from_utf8_lossy(&b).into_owned();
         let Ok(d) = parse_xml(&text) else { continue };
         let dir = parent_dir(doc_path);
@@ -8594,7 +8700,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Some(orig) = name_index.get(doc_path).cloned() else {
             continue;
         };
-        let Some(b) = ocf.read(&orig) else { continue };
+        let Some(b) = ocf.read_content(&orig) else {
+            continue;
+        };
         let text = String::from_utf8_lossy(&b).into_owned();
         let Ok(d) = parse_xml(&text) else { continue };
         let declared_prefixes =
@@ -8919,7 +9027,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
         };
-        let Some(b) = ocf.read(&orig) else { continue };
+        let Some(b) = ocf.read_content(&orig) else {
+            continue;
+        };
         let css_text = crate::css::decode_bytes(&b);
         let dir = parent_dir(&path);
         crate::css::check(
@@ -9114,7 +9224,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let Some(orig) = name_index.get(&nfc(path)) else {
                 continue;
             };
-            let Some(b) = ocf.read(orig) else { continue };
+            let Some(b) = ocf.read_content(orig) else {
+                continue;
+            };
             resource_refs.extend(extract(&String::from_utf8_lossy(&b), &parent_dir(path)));
         }
         // A media-overlay attribute consumes its SMIL, and the SMIL's own
@@ -9201,7 +9313,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
         };
-        let Some(b) = ocf.read(&orig) else { continue };
+        let Some(b) = ocf.read_content(&orig) else {
+            continue;
+        };
         let smil_text = String::from_utf8_lossy(&b).into_owned();
         let dir = parent_dir(&path);
         let overlay_path = nfc(&path);
@@ -9361,7 +9475,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let Some(orig) = name_index.get(content_doc_path).cloned() else {
                 continue;
             };
-            let Some(b) = ocf.read(&orig) else { continue };
+            let Some(b) = ocf.read_content(&orig) else {
+                continue;
+            };
             // DOM-order only, no positions reported - shift irrelevant.
             let (t, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&b), is_epub3);
             let Ok(d) = parse_xml(&t) else { continue };
@@ -9552,7 +9668,9 @@ fn check_dictionaries(
         let Some(orig) = name_index.get(&nfc(path)).cloned() else {
             continue;
         };
-        let Some(b) = ocf.read(&orig) else { continue };
+        let Some(b) = ocf.read_content(&orig) else {
+            continue;
+        };
         let text = String::from_utf8_lossy(&b).into_owned();
         let Ok(d) = parse_xml(&text) else { continue };
         let skm_dir = parent_dir(path);
@@ -10065,7 +10183,7 @@ fn check_external_identifiers(
         let Some(orig) = name_index.get(&nfc(path)).cloned() else {
             continue;
         };
-        let Some(bytes) = ocf.read(&orig) else {
+        let Some(bytes) = ocf.read_content(&orig) else {
             continue;
         };
         let text = crate::css::decode_bytes(&bytes);
@@ -10107,7 +10225,7 @@ fn check_image_signatures(
         let Some(orig) = name_index.get(&nfc(path)).cloned() else {
             continue;
         };
-        let Some(bytes) = ocf.read(&orig) else {
+        let Some(bytes) = ocf.read_content(&orig) else {
             continue;
         };
         // Mirror epubcheck's `BitmapChecker` branch order (#45):
@@ -19087,5 +19205,386 @@ mod tests {
         // draws nothing at either version, so a change that simply stopped
         // answering would fail here.
         assert_eq!(n("2.0", "text/css"), 0);
+    }
+
+    /// `srcset` on a `<picture>`'s `<source>` is an image reference, and
+    /// missing it was wrong in both directions at once.
+    ///
+    /// Found by pointing `compare` at epubcheck's own fixtures for the first
+    /// time — five of them tripped it. The corpus harness could not see it:
+    /// it scores expected ids and, for the "no other errors" half, compares
+    /// only at warning-and-above, so a stray `OPF-097` usage note is
+    /// structurally invisible there.
+    ///
+    /// `alt.png` exists so the srcset has something to reference that nothing
+    /// else does. A first version pointed the srcset at the same file as the
+    /// `<img>`, which meant the img's own reference satisfied OPF-097 and the
+    /// assertion passed with the fix reverted — a control that cannot fail is
+    /// not a control.
+    ///
+    /// Both directions measured against epubcheck 5.3.0, one book each.
+    #[test]
+    fn picture_source_srcset_is_a_reference_and_wants_a_manifest_entry() {
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="i" href="wide.png" media-type="image/png"/>
+    <item id="a" href="alt.png" media-type="image/png"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        let ids = |body: &str| -> Vec<&'static str> {
+            let doc = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            crate::validate_bytes(epub_with_opf(Some(OPF), &doc))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| matches!(*id, crate::ids::OPF_097 | crate::ids::RSC_008))
+                .collect()
+        };
+        // Every case keeps both declared images reachable except through the
+        // one path under test, so OPF-097 is silent unless that path is
+        // broken.
+        const BOTH: &str = r#"<img src="wide.png" alt="a"/><img src="alt.png" alt="b"/>"#;
+
+        // Declared, and reachable only through the source set.
+        assert!(
+            ids(r#"<p><picture><source srcset="alt.png"/><img src="wide.png" alt="a"/></picture></p>"#)
+                .is_empty(),
+            "a srcset candidate that is declared and used owes nothing"
+        );
+        // Used but never declared: RSC-008, which we did not report for
+        // `<source>` at all.
+        assert_eq!(
+            ids(&format!(
+                r#"<p><picture><source srcset="other.png"/>{BOTH}</picture></p>"#
+            )),
+            vec![crate::ids::RSC_008]
+        );
+        // The `<img srcset>` half already worked; asserted so a refactor
+        // cannot quietly drop it while fixing the `<source>` one.
+        assert_eq!(
+            ids(
+                r#"<p><img src="wide.png" srcset="other.png 2x" alt="a"/><img src="alt.png" alt="b"/></p>"#
+            ),
+            vec![crate::ids::RSC_008]
+        );
+        // A `data:` URL in a source set contains commas, and a naive split
+        // on them turns its base64 body into a phantom candidate. epubcheck
+        // reports nothing at all on its own
+        // `data-url-in-html-img-foreign-intrinsic-fallback-valid` fixture,
+        // which is where this surfaced.
+        assert!(
+            ids(&format!(
+                r#"<p>{BOTH}<picture><source srcset="data:image/png;base64,iVBORw0KGgo="/></picture></p>"#
+            ))
+            .is_empty(),
+            "a data: URL is not a container resource"
+        );
+
+        // A `<source>` outside a `<picture>` is audio or video, not an image
+        // source set — epubcheck routes those elsewhere.
+        assert!(
+            ids(&format!(
+                r#"<p>{BOTH}<video><source srcset="other.png"/></video></p>"#
+            ))
+            .is_empty(),
+            "only a picture's source carries an image srcset"
+        );
+    }
+
+    /// A multiple-rendition publication declares its mapping document in
+    /// `META-INF/container.xml`, not in any package manifest — so the file
+    /// sits at the container root belonging to no rendition, and OPF-003
+    /// called every one of them undeclared.
+    ///
+    /// Six of epubcheck's own `renditions-mapping-*` fixtures showed it and
+    /// epubcheck reports OPF-003 on none of them. Found by pointing `compare`
+    /// at epubcheck's fixtures; the corpus harness could not, because OPF-003
+    /// is usage-level and its "no other errors" half compares at
+    /// warning-and-above.
+    #[test]
+    fn a_container_link_target_counts_as_declared() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let build = |links: &str| -> Vec<u8> {
+            let container = format!(
+                r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles>{links}
+</container>"#
+            );
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>
+  <spine><itemref idref="nav"/></spine>
+</package>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                <head><title>T</title></head><body><nav epub:type=\"toc\"><ol><li>\
+                <a href=\"nav.xhtml\">n</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o =
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+                for (name, body) in [
+                    ("META-INF/container.xml", container.as_str()),
+                    ("EPUB/package.opf", OPF),
+                    ("EPUB/nav.xhtml", NAV),
+                    ("mapping.xhtml", NAV),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        };
+        let opf_003 = |links: &str| {
+            crate::validate_bytes(build(links))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.container.resource_not_in_manifest"))
+                .count()
+        };
+
+        const LINKS: &str = "\n  <links><link href=\"mapping.xhtml\" rel=\"mapping\" \
+             media-type=\"application/xhtml+xml\"/></links>";
+        assert_eq!(opf_003(LINKS), 0, "a container <link> target is declared");
+        // The control: without the declaration the same file is undeclared,
+        // so this test fails if the check ever stops running at all.
+        assert_eq!(opf_003(""), 1, "an undeclared root file is still reported");
+    }
+
+    /// NAV-004 counts SECTIONS in fixed-layout content too. Exempting them
+    /// was a false positive on `edupub-fxl-valid` — a fixture whose name says
+    /// valid and where epubcheck reports nothing but its own informational
+    /// OPF-064.
+    ///
+    /// The exemption is real, but it belongs to the sectioning-and-headings
+    /// check: it came from a fixture whose comment reads "Section with no
+    /// heading OK in FXL", which is about headings and not about counting.
+    /// epubcheck's `processSectioning` gates on `isLinear` and the EDUPUB
+    /// profile and on nothing else. One condition, two rules, measured
+    /// against only one of them.
+    #[test]
+    fn nav_004_counts_sections_in_fixed_layout_too() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let build = |itemref_props: &str, toc: &str| -> Vec<u8> {
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" xmlns:rendition="http://www.idpf.org/2013/rendition" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language><dc:type>edupub</dc:type>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="rendition:layout">pre-paginated</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"{itemref_props}/></spine>
+</package>"#
+            );
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                <head><title>C</title><meta name=\"viewport\" content=\"width=100, height=100\"/></head>\
+                <body><section><h1>H</h1><p>x</p></section></body></html>";
+            let nav = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>T</title></head><body><nav epub:type=\"toc\"><ol>{toc}</ol></nav></body></html>"
+            );
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o =
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+                for (name, data) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/ch1.xhtml", CH1),
+                    ("OEBPS/nav.xhtml", nav.as_str()),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(data.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        };
+        let nav_004 = |props: &str, toc: &str| {
+            crate::validate_bytes(build(props, toc))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::NAV_004)
+                .count()
+        };
+        const ONE: &str = r#"<li><a href="ch1.xhtml">c</a></li>"#;
+        const TWO: &str =
+            r#"<li><a href="ch1.xhtml">c</a></li><li><a href="ch1.xhtml#s">d</a></li>"#;
+
+        // One section in a fixed-layout document, one toc link: 1 == 1.
+        assert_eq!(
+            nav_004("", ONE),
+            0,
+            "fixed layout still contributes SECTIONS"
+        );
+        // The control that makes the first line mean something: with the
+        // count running, a genuine mismatch must still be reported. Without
+        // it, both cases would read zero and the test would pass with the
+        // fix reverted.
+        assert_eq!(
+            nav_004("", TWO),
+            1,
+            "1 section against 2 toc links is NAV-004"
+        );
+    }
+
+    /// An encrypted resource's bytes are ciphertext, so nothing may parse
+    /// them as their declared type. We said `RSC-004: its content will not be
+    /// checked` and then checked anyway.
+    ///
+    /// Reported by Doitsu on MobileRead with an obfuscation test book, and he
+    /// sent both tools' output beside it — the artefact this project asks for
+    /// by name. Fifteen findings on five encrypted files, **ten of them
+    /// fatal**, where epubcheck reports none of the fifteen. The fatals were
+    /// the worst part: a fatal drops the rest of that document's findings, so
+    /// the false positives were also hiding whatever was really there.
+    ///
+    /// The rule is about *content*, not the resource. An encrypted font is
+    /// still subject to OPF-097 and PKG-026 — epubcheck reports both on that
+    /// same book, and so do we.
+    #[test]
+    fn an_encrypted_resource_is_never_parsed_as_its_declared_type() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        // Deliberately not well-formed XML and not valid CSS: this is what
+        // ciphertext looks like to a parser.
+        const CIPHER: &str = "\u{fffd}\u{1}&5 not xml at all & <<";
+        let build = |encrypt: bool| -> Vec<u8> {
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+            const ENC: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:enc="http://www.w3.org/2001/04/xmlenc#">
+  <enc:EncryptedData>
+    <enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
+    <enc:CipherData><enc:CipherReference URI="OEBPS/ch1.xhtml"/></enc:CipherData>
+  </enc:EncryptedData>
+</encryption>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                <head><title>T</title></head><body><nav epub:type=\"toc\"><ol><li>\
+                <a href=\"ch1.xhtml\">c</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o =
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+                let mut files: Vec<(&str, &str)> = vec![
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", OPF),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", CIPHER),
+                ];
+                if encrypt {
+                    files.push(("META-INF/encryption.xml", ENC));
+                }
+                for (name, data) in files {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(data.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        };
+        let ids = |encrypt: bool| -> Vec<&'static str> {
+            let mut v: Vec<&'static str> = crate::validate_bytes(build(encrypt))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+
+        // Declared encrypted: the note, and nothing derived from the bytes.
+        //
+        // PKG-026 belongs there and is not collateral: obfuscating a
+        // non-font really is an error, epubcheck reports it on Doitsu's book
+        // too, and it is a fact about the manifest media type rather than
+        // about the ciphertext. The rule being fixed is only ever about
+        // *reading* the bytes.
+        assert_eq!(ids(true), vec![crate::ids::PKG_026, crate::ids::RSC_004]);
+        // The control, and the reason the line above means anything: the
+        // identical bytes without the declaration are unparseable and must
+        // still be reported. Without this, a change that stopped reading
+        // content documents altogether would pass.
+        assert!(
+            ids(false).contains(&crate::ids::RSC_016),
+            "the same bytes undeclared are still a fatal parse error"
+        );
     }
 }
