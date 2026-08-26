@@ -27,7 +27,30 @@ const XLINK_NS: &str = "http://www.w3.org/1999/xlink";
 
 /// Real SVG 1.1 element vocabulary. A false negative here is far safer
 /// than a false positive, since `RSC-025` findings are usage-level (Info).
+/// **Eleven names were missing until 2026-08-27, and their absence was a
+/// false positive rather than a gap.** They were found by extracting the
+/// element declarations from `schema/20/rng/svg/*.rng` and diffing against
+/// this list, while sizing the EPUB 2 half of #93. `altGlyph`,
+/// `color-profile` and the `font-face-*` family are ordinary SVG 1.1, and
+/// epubcheck is silent on all of them - measured one book each - while we
+/// were reporting RSC-025. No book on the shelf uses any of them, which is
+/// why `compare` never saw it.
+///
+/// `feDropShadow` below is SVG 2 rather than 1.1 and is kept deliberately:
+/// epubcheck accepts it too, so removing it would start a divergence rather
+/// than end one.
 pub(crate) const SVG_ELEMENTS: &[&str] = &[
+    "altGlyph",
+    "altGlyphDef",
+    "altGlyphItem",
+    "animateColor",
+    "color-profile",
+    "definition-src",
+    "font-face-format",
+    "font-face-name",
+    "font-face-src",
+    "font-face-uri",
+    "glyphRef",
     "svg",
     "g",
     "defs",
@@ -876,8 +899,24 @@ const SVG_REQUIRED_ATTRS: &[(&str, &[&str])] = &[
 pub(crate) fn check_required_attributes(
     svg_root: roxmltree::Node,
     path: &str,
+    is_epub3: bool,
     report: &mut Report,
 ) {
+    // The same question, asked at both versions with different force -
+    // epubcheck runs the SVG 1.1 grammar normatively for EPUB 2 and
+    // informatively for EPUB 3, so the id and severity differ while the
+    // condition does not. Measured on one book per version: `<rect/>` draws
+    // `RSC-005` at 2.0 and `RSC-025 Informative parsing error: …` at 3.0.
+    //
+    // Running it at 3.0 was missed when this check was added, because the
+    // gap that prompted it was an EPUB 2 one. The rule slug is deliberately
+    // the same at both versions: it is one finding whose normativity moves,
+    // and `severity` already carries that.
+    let (id, severity) = if is_epub3 {
+        (RSC_025, Severity::Usage)
+    } else {
+        (RSC_005, Severity::Error)
+    };
     for n in svg_root
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
@@ -907,8 +946,8 @@ pub(crate) fn check_required_attributes(
             .join(" and ");
         let plural = if missing.len() > 1 { "s" } else { "" };
         report.push_node(
-            RSC_005,
-            Severity::Error,
+            id,
+            severity,
             format!("SVG element \"{name}\" has no required attribute{plural} {list}"),
             path,
             n,
@@ -920,6 +959,50 @@ pub(crate) fn check_required_attributes(
 
 #[cfg(test)]
 mod tests {
+
+    /// Eleven ordinary SVG 1.1 element names were missing from
+    /// [`SVG_ELEMENTS`], so we reported `RSC-025` for markup epubcheck
+    /// accepts — a false positive, at usage level, that had been there all
+    /// along.
+    ///
+    /// Nothing found it because no book on the shelf uses SVG fonts,
+    /// `altGlyph` or a colour profile, so `compare` never had a chance. It
+    /// surfaced only from extracting the element declarations out of
+    /// `schema/20/rng/svg/*.rng` and diffing them against this list while
+    /// sizing the EPUB 2 half of #93 — and the diff was done *before* turning
+    /// the list into an error, which is the only reason it did not ship as
+    /// eleven wrong errors instead of eleven wrong usage notes.
+    ///
+    /// Each was confirmed silent in epubcheck 5.3.0 on its own book.
+    #[test]
+    fn the_svg_vocabulary_covers_all_of_svg_1_1() {
+        for name in [
+            "altGlyph",
+            "altGlyphDef",
+            "altGlyphItem",
+            "animateColor",
+            "color-profile",
+            "definition-src",
+            "font-face-format",
+            "font-face-name",
+            "font-face-src",
+            "font-face-uri",
+            "glyphRef",
+        ] {
+            assert!(
+                is_recognized_element(name),
+                "{name} is SVG 1.1 and epubcheck accepts it"
+            );
+        }
+        // The control: the check still has teeth. A name that is in no
+        // version of SVG must still be recognised as unknown, or this test
+        // would pass against a predicate that answers `true` for everything.
+        assert!(!is_recognized_element("notanelement"));
+        assert!(!is_recognized_element("recct"));
+        // Kept deliberately though it is SVG 2 rather than 1.1: epubcheck
+        // accepts it too, so dropping it would start a divergence.
+        assert!(is_recognized_element("feDropShadow"));
+    }
     use super::*;
     use crate::report::Report;
 

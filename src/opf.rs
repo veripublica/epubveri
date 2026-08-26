@@ -6144,14 +6144,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if is_epub3 {
                 crate::svg::check_vocabulary(svg_root, &path, report);
                 crate::svg::check_attribute_vocabulary(svg_root, &path, report);
-            } else {
-                // The mirror image of the paragraph above, and the reason
-                // it is an `else` (#93): EPUB 2 gets `SVG_20_NVDL`, which
-                // IS normative, so the SVG 1.1 grammar produces RSC-005
-                // errors there. We had been silent on all of it. This
-                // closes the required-attribute slice of that gap.
-                crate::svg::check_required_attributes(svg_root, &path, report);
             }
+            // Required attributes are asked at BOTH versions, which is why
+            // this sits outside the branch above (#93). epubcheck runs the
+            // SVG 1.1 grammar normatively for EPUB 2 and informatively for
+            // EPUB 3, so the same missing `width` is RSC-005 there and
+            // RSC-025 usage here. Only the first half shipped originally.
+            crate::svg::check_required_attributes(svg_root, &path, is_epub3, report);
             crate::svg::check_epub_attributes(svg_root, &path, report);
             // `check_ids` is standalone-SVG-only: a real fixture confirms
             // `id="1"` on an SVG root is fine when the SVG is embedded
@@ -18931,18 +18930,23 @@ mod tests {
         assert_eq!(count(&epub2), 0);
     }
 
-    /// #93, the required-attribute slice. EPUB 2 validates inline SVG against
-    /// SVG 1.1 *normatively* (`schema/20/rng/content.rng` includes the SVG
-    /// modules); EPUB 3 runs the strict grammar informatively and says nothing
-    /// about inline SVG at all. We had been silent on both.
+    /// #93, the required-attribute slice — asked at **both** versions, with
+    /// different force.
     ///
-    /// The whole table is asserted, both directions, because the rule is
-    /// closed and enumerable - which is why this slice was safe to take while
-    /// the rest of #93 was not. Each row was confirmed against epubcheck
-    /// 5.3.0 on its own book, including the two negatives.
+    /// epubcheck runs the SVG 1.1 grammar normatively for EPUB 2 and
+    /// informatively for EPUB 3, so the identical missing `width` is an
+    /// `RSC-005` error there and an `RSC-025` usage note here. Only the EPUB 2
+    /// half shipped when this was first written, because the gap that prompted
+    /// it was an EPUB 2 one; the EPUB 3 half was a silent gap until the SVG
+    /// vocabulary diff went looking.
+    ///
+    /// The whole table is asserted, both versions, because the rule is closed
+    /// and enumerable — which is why this slice was safe to take while the
+    /// rest of #93 was not. Each row was confirmed against epubcheck 5.3.0 on
+    /// its own book, including the two negatives.
     #[test]
-    fn svg_required_attributes_are_epub2_only() {
-        let n = |ver: &str, svg: &str| {
+    fn svg_required_attributes_are_checked_at_both_versions() {
+        let hits = |ver: &str, svg: &str| -> Vec<&'static str> {
             let body = format!(
                 r#"<p>x</p><svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">{svg}</svg>"#
             );
@@ -18950,7 +18954,8 @@ mod tests {
                 .messages
                 .iter()
                 .filter(|m| m.rule == Some("opf.content_document.svg_missing_required_attribute"))
-                .count()
+                .map(|m| m.id)
+                .collect()
         };
 
         for svg in [
@@ -18965,18 +18970,28 @@ mod tests {
             r#"<image xlink:href="x.png"/>"#,
             "<g><rect/></g>",
         ] {
-            assert_eq!(n("2.0", svg), 1, "EPUB 2 should report once for {svg}");
-            assert_eq!(n("3.0", svg), 0, "EPUB 3 must stay silent for {svg}");
+            assert_eq!(
+                hits("2.0", svg),
+                vec![crate::ids::RSC_005],
+                "EPUB 2 wants a normative error for {svg}"
+            );
+            assert_eq!(
+                hits("3.0", svg),
+                vec![crate::ids::RSC_025],
+                "EPUB 3 wants an informative usage note for {svg}"
+            );
         }
 
         // The two negatives, which are what stop this being "every SVG
         // element needs attributes": `line` requires none in SVG 1.1, and a
-        // complete shape is silent. epubcheck agrees on both.
-        assert_eq!(n("2.0", "<line/>"), 0);
-        assert_eq!(n("2.0", r#"<rect width="1" height="1"/>"#), 0);
+        // complete shape is silent. epubcheck agrees at both versions.
+        for ver in ["2.0", "3.0"] {
+            assert!(hits(ver, "<line/>").is_empty());
+            assert!(hits(ver, r#"<rect width="1" height="1"/>"#).is_empty());
+        }
 
         // One finding per element listing everything absent, not one per
-        // attribute - epubcheck reports `"height" and "width"` as one message.
+        // attribute — epubcheck reports `"height" and "width"` as one message.
         let msg = crate::validate_bytes(epub_with_body(
             "2.0",
             r#"<p>x</p><svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#,
@@ -18986,7 +19001,6 @@ mod tests {
             .iter()
             .find(|m| m.rule == Some("opf.content_document.svg_missing_required_attribute"))
             .expect("expected the rect finding");
-        assert_eq!(hit.id, crate::ids::RSC_005);
         assert!(
             hit.text.contains("\"height\" and \"width\""),
             "{}",

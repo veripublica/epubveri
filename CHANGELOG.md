@@ -64,6 +64,30 @@ reads epubcheck's own call sites for every ID we emit and reports the two
 version-scoped classes, including the override-without-`super` one. It found
 this on its first run.
 
+
+**Eleven ordinary SVG 1.1 element names were missing from our vocabulary, and
+their absence was a false positive** (#93). `altGlyph`, `altGlyphDef`,
+`altGlyphItem`, `animateColor`, `color-profile`, `definition-src`, the four
+`font-face-*` names and `glyphRef` are all plain SVG 1.1; epubcheck accepts
+every one of them and we were reporting `RSC-025`. Usage level, so no verdict
+moved, but wrong findings on valid markup all the same.
+
+Nothing could have found it from a book: no title on the 405-book shelf uses
+SVG fonts, `altGlyph` or a colour profile, so `compare` never had the chance.
+It came out of extracting the element declarations from
+`schema/20/rng/svg/*.rng` and diffing them against our list — **and the diff
+was done before turning that list into an EPUB 2 error, which is the only
+reason this shipped as eleven wrong usage notes rather than eleven wrong
+errors.**
+
+**SVG required attributes are now checked at both versions** (#93). epubcheck
+runs the SVG 1.1 grammar normatively for EPUB 2 and informatively for EPUB 3,
+so the identical missing `width` is `RSC-005` there and `RSC-025` usage here.
+Only the EPUB 2 half shipped in 0.12.2, because the gap that prompted it was
+an EPUB 2 one; the EPUB 3 half was silent until the vocabulary diff went
+looking. Both halves are measured against epubcheck one book per row, the two
+negatives (`line`, which requires nothing, and a complete shape) included.
+
 ## [0.12.2] - 2026-08-26
 
 Four more version-scope defects, all found by auditing the neighbourhood of
