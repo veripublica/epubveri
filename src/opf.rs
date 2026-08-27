@@ -529,6 +529,59 @@ fn missing_fragment_id(items: &HashMap<String, (String, String)>, resolved: &str
     }
 }
 
+/// The two conditions on which epubcheck **aborts** a hyperlink reference,
+/// and the id it reports while doing so.
+///
+/// `ResourceReferencesChecker.checkReferenceType`'s `case HYPERLINK` ends both
+/// branches with `throw new CheckAbortException()`, so nothing further is
+/// asked of that reference — in particular `checkFragment`, the only RSC-012
+/// site. We reported RSC-012 *and* RSC-011 for
+/// `<a href="not-in-spine.xhtml#nope">`, where epubcheck reports RSC-011
+/// alone. Measured with one book per shape against 5.3.0 rather than inferred:
+/// the same fragment inside the *same* document draws RSC-012 from both tools,
+/// so the rule is the abort and not the fragment.
+///
+/// **One predicate, two callers, deliberately.** The reporting loop needs to
+/// know which of the two fired and the fragment check only needs to know that
+/// one did; writing the conditions twice is how they would drift, and this
+/// pair has already drifted once — the loop's own comment records RSC-010
+/// having been implemented on the two toc paths only.
+fn hyperlink_abort(
+    target: &str,
+    items: &HashMap<String, (String, String)>,
+    fallback_map: &HashMap<String, String>,
+    spine_order: &HashMap<String, usize>,
+) -> Option<&'static str> {
+    if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == *target)
+        && !is_content_document_type(mt)
+        && !is_deprecated_content_document_type(mt)
+        && !fallback_reaches_content_document(id, items, fallback_map)
+    {
+        return Some(RSC_010);
+    }
+    // **RSC-011 has no media-type gate of its own in epubcheck**, and the one
+    // we had was a workaround for the missing abort above. `case HYPERLINK`
+    // tests the blessed-type predicates, throws if they fail, and otherwise
+    // asks only `!targetResource.isInSpine()`. A hyperlink to an image looks
+    // gated because RSC-010 fires *first* and ends the reference — which is
+    // exactly what `nav-links-to-non-content-document-type-error` shows, and
+    // it still passes with the gate gone.
+    //
+    // Restricting it to XHTML and SVG was therefore wrong for the deprecated
+    // type: `text/html` is deprecated-blessed, so RSC-010 does not fire, and
+    // epubcheck reports RSC-011. We reported RSC-014 about the fragment
+    // instead — a false positive and a false negative from one gate. Probed
+    // one book per shape against 5.3.0.
+    //
+    // `items` rather than `name_index`: a reference to something the manifest
+    // never declared is aborted earlier still, by
+    // `checkUndeclaredReference`'s RSC-007/RSC-008.
+    if items.values().any(|(p, _)| nfc(p) == *target) && !spine_order.contains_key(target) {
+        return Some(RSC_011);
+    }
+    None
+}
+
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
 /// A reference that carries an expectation about its target's [`IdKind`],
@@ -7091,6 +7144,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if target_nfc == nfc(opf_path) {
                     continue;
                 }
+                // epubcheck never asks about the fragment of a hyperlink it
+                // has already aborted — see `hyperlink_abort`. Reporting both
+                // gives two errors for one defect, and the second names the
+                // wrong repair: a link into a document that is not in the
+                // spine is not fixed by adding the missing id.
+                if hyperlink_abort(&target_nfc, &items, &fallback_map, &spine_order).is_some() {
+                    continue;
+                }
                 if !frag_id_cache.contains_key(&target_nfc) {
                     let ids = if target_nfc == nfc(&path) {
                         // The document being walked - already parsed.
@@ -8634,58 +8695,42 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // "in the spine" - confirmed via a real corpus fixture.
             continue;
         }
-        // "In the spine" is only a meaningful expectation for a genuine
-        // Content Document - a hyperlink to e.g. an image (confirmed via a
-        // real corpus fixture, `nav-links-to-non-content-document-type-
-        // error`, which expects only RSC-010 for that link, not this too)
-        // was being wrongly flagged here as well, since this check
-        // previously only looked at container file existence, not type.
-        let is_content_doc = items.values().any(|(p, mt)| {
-            nfc(p) == *target && (mt == "application/xhtml+xml" || mt == "image/svg+xml")
-        });
-        // RSC-010: the target is a manifest item that is not a Content
-        // Document and has no fallback that reaches one (#78). epubcheck
-        // runs this for *every* hyperlink (`ResourceReferencesChecker`:220,
-        // `case HYPERLINK`), and reports it *instead of* RSC-011 - it
-        // aborts the reference's checks right after, which is why the
-        // `continue` below is part of the parity and not a shortcut. We had
-        // it on the two toc paths only (the NCX `<content src>` and the nav
-        // toc link), so an ordinary `<a href="styles.css">` drew nothing.
+        // RSC-010 and RSC-011 both come from `hyperlink_abort`, which is also
+        // what the fragment check consults so that the two cannot drift.
+        // epubcheck reports either one *instead of* everything else about the
+        // reference — `case HYPERLINK` ends both branches by throwing — so the
+        // exclusivity here is parity, not a shortcut. RSC-010 used to live on
+        // the two toc paths only (the NCX `<content src>` and the nav toc
+        // link), so an ordinary `<a href="styles.css">` drew nothing (#78).
         //
-        // The deprecated types are exempt here as they are there, and this
-        // is not version-gated: epubcheck's hyperlink branch tests both
-        // predicates without asking the version.
-        if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == *target)
-            && !is_content_document_type(mt)
-            && !is_deprecated_content_document_type(mt)
-            && !fallback_reaches_content_document(id, &items, &fallback_map)
-        {
-            report.push_full_path(
-                RSC_010,
-                Severity::Error,
-                format!("'{target}' is hyperlinked but is not a Content Document"),
-                source.file.clone(),
-                source.position,
-                source.element_path.clone(),
-                "opf.content_document.hyperlink_not_content_document",
-                vec![target.clone()],
-            );
-            continue;
-        }
-        if is_content_doc && !spine_order.contains_key(target) && name_index.contains_key(target) {
-            // Anchor at the source `<a>` (its file + line:column + element
-            // path), not the OPF package root, matching where epubcheck points
-            // (#22).
-            report.push_full_path(
-                RSC_011,
-                Severity::Error,
-                format!("'{target}' is hyperlinked but not listed in the spine"),
-                source.file.clone(),
-                source.position,
-                source.element_path.clone(),
-                "opf.spine.hyperlinked_not_in_spine",
-                vec![target.clone()],
-            );
+        // Anchored at the source `<a>` (file + line:column + element path),
+        // not the OPF package root, matching where epubcheck points (#22).
+        match hyperlink_abort(target, &items, &fallback_map, &spine_order) {
+            Some(id) if id == RSC_010 => {
+                report.push_full_path(
+                    RSC_010,
+                    Severity::Error,
+                    format!("'{target}' is hyperlinked but is not a Content Document"),
+                    source.file.clone(),
+                    source.position,
+                    source.element_path.clone(),
+                    "opf.content_document.hyperlink_not_content_document",
+                    vec![target.clone()],
+                );
+            }
+            Some(_) => {
+                report.push_full_path(
+                    RSC_011,
+                    Severity::Error,
+                    format!("'{target}' is hyperlinked but not listed in the spine"),
+                    source.file.clone(),
+                    source.position,
+                    source.element_path.clone(),
+                    "opf.spine.hyperlinked_not_in_spine",
+                    vec![target.clone()],
+                );
+            }
+            None => {}
         }
     }
     // Reachability is purely "does any <a> hyperlink resolve to this
@@ -10956,6 +11001,15 @@ mod tests {
     /// version of this test asserted RSC-014 there and failed. Its references
     /// are simply never collected, and epubcheck agrees, so the shape is a
     /// distraction rather than a rule.
+    ///
+    /// **And the target has to be in the spine**, which this fixture did not
+    /// do until `hyperlink_abort` was written. A hyperlink to a manifest item
+    /// outside the reading order is ended by RSC-011 before the fragment is
+    /// ever looked at, so the old fixture was measuring the abort and calling
+    /// it a fragment rule. Both shapes were then probed against 5.3.0: out of
+    /// the spine it is RSC-011 for either media type, in the spine it is
+    /// RSC-012 for XHTML and RSC-014 for `text/html`. The rule this test is
+    /// named for survives; its fixture did not pose it.
     #[test]
     fn a_missing_fragment_in_a_text_html_target_is_rsc_014() {
         // `meta.xml` is written by the builder and declared here as
@@ -10975,7 +11029,7 @@ mod tests {
     <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
     <item id="tgt" href="meta.xml" media-type="{mt}"/>
   </manifest>
-  <spine><itemref idref="ch1"/></spine>
+  <spine><itemref idref="ch1"/><itemref idref="tgt"/></spine>
 </package>"#
             )
         };
@@ -11270,6 +11324,93 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// A hyperlink epubcheck aborts asks nothing about its fragment.
+    ///
+    /// `ResourceReferencesChecker.checkReferenceType`'s `case HYPERLINK` ends
+    /// both of its branches with `throw new CheckAbortException()`, so
+    /// `checkFragment` — the only RSC-012 site — never runs for that
+    /// reference. We reported RSC-012 *and* RSC-011 for a link into a document
+    /// outside the reading order: two errors for one defect, the second naming
+    /// a repair that would not help, since adding the missing id does not put
+    /// the document in the spine.
+    ///
+    /// The whole rule was settled by probe rather than by reading, one book
+    /// per shape against 5.3.0, and the three answers are the three
+    /// assertions below. The first is the control: the *same* fragment inside
+    /// a document that is in the spine draws RSC-012 from both tools, so what
+    /// changes the answer is the abort and not the fragment.
+    ///
+    /// The third assertion is the one that found a second defect.
+    /// `text/html` is deprecated-blessed, so RSC-010 does not fire and
+    /// epubcheck reports RSC-011 — while we reported RSC-014 about the
+    /// fragment and no RSC-011 at all. Our RSC-011 carried a media-type gate
+    /// epubcheck has no equivalent of; it looked right only because RSC-010
+    /// aborts the image case first. One wrong gate, a false positive and a
+    /// false negative.
+    ///
+    /// Population on the 405-book shelf: **zero**. No book there reports
+    /// RSC-011 at all, so this is fixture and probe evidence only.
+    #[test]
+    fn a_hyperlink_that_aborts_is_not_asked_about_its_fragment() {
+        let ids = |mt: &str, in_spine: bool| -> Vec<&'static str> {
+            let spine = if in_spine {
+                r#"<itemref idref="ch1"/><itemref idref="tgt"/>"#
+            } else {
+                r#"<itemref idref="ch1"/>"#
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="tgt" href="meta.xml" media-type="{mt}"/>
+  </manifest>
+  <spine>{spine}</spine>
+</package>"#
+            );
+            let ch1 = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                       <head><title>t</title></head>\
+                       <body><p><a href=\"meta.xml#nope\">x</a></p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(&opf), ch1))
+                .messages
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m.id,
+                        crate::ids::RSC_010
+                            | crate::ids::RSC_011
+                            | crate::ids::RSC_012
+                            | crate::ids::RSC_014
+                    )
+                })
+                .map(|m| m.id)
+                .collect()
+        };
+
+        assert_eq!(
+            ids("application/xhtml+xml", true),
+            vec![crate::ids::RSC_012],
+            "in the spine, the fragment question is asked - the control"
+        );
+        assert_eq!(
+            ids("application/xhtml+xml", false),
+            vec![crate::ids::RSC_011],
+            "out of the spine, epubcheck aborts at RSC-011 and asks nothing more"
+        );
+        assert_eq!(
+            ids("text/html", false),
+            vec![crate::ids::RSC_011],
+            "deprecated-blessed is still aborted at RSC-011: RSC-011 has no media-type \
+             gate of its own, it only looks gated because RSC-010 fires first"
+        );
     }
 
     /// A content-document `<link>` is a reference only when its `rel` names a

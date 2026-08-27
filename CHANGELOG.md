@@ -10,6 +10,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**A hyperlink epubcheck aborts is asked nothing about its fragment** (#114).
+`RSC-012` was reported alongside `RSC-011`, where epubcheck reports the second
+alone — `case HYPERLINK` throws after either of its two findings, so the
+fragment is never looked at. Two errors for one defect, and the second names a
+repair that would not help: adding the missing id does not put the document in
+the spine. Same family as #106.
+
+Probing that turned up a second defect in the opposite direction. Our
+`RSC-011` was gated on the target being XHTML or SVG; epubcheck has no such
+gate, and the gate only looked right because a hyperlink to an image is
+aborted by `RSC-010` first. For `text/html` — deprecated-blessed, so `RSC-010`
+does not fire — epubcheck reports `RSC-011` and we reported `RSC-014` about
+the fragment and no `RSC-011` at all. One wrong gate, a false positive and a
+false negative together.
+
+Both conditions now live in one predicate that the reporting loop and the
+fragment check share, since writing them twice is how they would drift — and
+this pair had drifted once already.
+
 **Only a stylesheet `<link>` is a reference** (#113). `rel="prev"`,
 `rel="next"` and an RDFa or microdata `<link property href>` with no `rel`
 drew `RSC-007` when their target was missing; epubcheck registers a
