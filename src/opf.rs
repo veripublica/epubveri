@@ -5508,24 +5508,42 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     // --- EPUB 3 navigation document ---
     // epubcheck enforces this via its package Schematron and reports RSC-005.
+    //
+    // **Anchored at `<manifest>`, not at the package root** (JSWolf,
+    // MobileRead #254). Both of these come from one Schematron rule —
+    // "Exactly one manifest item must declare the nav property" — whose
+    // context is `opf:manifest`, so epubcheck points at that element; we
+    // pointed at `<package>`, which on a real book is line 2 while the
+    // manifest is thirty lines further down. Nothing about the finding was
+    // wrong, only where it said to look, and an editor that jumps to the
+    // reported position sent the author to the wrong end of the file.
+    // Measured on two books, one per branch: (13,12) and (11,12), both the
+    // `<manifest>` line. The column still differs by our own convention —
+    // we point at the start of a tag and epubcheck at the end of it — which
+    // is consistent with every other finding we anchor on an element.
+    let manifest_node = pkg
+        .children()
+        .find(|n| n.is_element() && n.tag_name().name() == "manifest")
+        .unwrap_or(pkg);
     if is_epub3 && !nav_present {
         report.push_node(
             RSC_005,
             Severity::Error,
             "EPUB 3 requires a navigation document (a manifest item with properties=\"nav\")",
             opf_path,
-            pkg,
+            manifest_node,
             "opf.package.missing_nav_document",
             Vec::new(),
         );
     }
     if nav_count > 1 {
+        // Same Schematron rule as the branch above, so the same anchor.
         report.push_node(
             RSC_005,
             Severity::Error,
             "only one manifest item may declare the \"nav\" property",
             opf_path,
-            pkg,
+            manifest_node,
             "opf.manifest.multiple_nav_documents",
             Vec::new(),
         );
@@ -11385,6 +11403,74 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// The nav-document findings are anchored at `<manifest>`, not at the
+    /// package root.
+    ///
+    /// JSWolf, MobileRead #254. Both come from one Schematron rule — "Exactly
+    /// one manifest item must declare the nav property" — whose context is
+    /// `opf:manifest`, so epubcheck points there. We pointed at `<package>`,
+    /// which is line 2 of every package document while the manifest is
+    /// wherever the author put it; on his book that was line 15 against our
+    /// line 2, and an editor that jumps to the reported position sent him to
+    /// the wrong end of the file.
+    ///
+    /// Nothing about either finding was wrong, only where it said to look —
+    /// which is why this is asserted on the **line**, and why the fixture puts
+    /// blank lines above the manifest so that a package-root anchor cannot
+    /// pass by coincidence.
+    ///
+    /// The column is deliberately not asserted: we point at the start of a tag
+    /// and epubcheck at the end of it, consistently, everywhere.
+    #[test]
+    fn the_nav_findings_point_at_the_manifest() {
+        let line_of = |manifest: &str, rule: &str| -> Option<u32> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+
+
+
+{manifest}
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                               <head><title>t</title></head><body><p>x</p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH1))
+                .messages
+                .iter()
+                .find(|m| m.rule == Some(rule))
+                .and_then(|m| m.position.map(|p| p.line))
+        };
+
+        // `<manifest>` is on line 11 in both fixtures: eight lines of package
+        // and metadata, then three blank ones.
+        const NO_NAV: &str = r#"  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>"#;
+        const TWO_NAVS: &str = r#"  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="n1" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="n2" href="meta.xml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>"#;
+
+        assert_eq!(
+            line_of(NO_NAV, "opf.package.missing_nav_document"),
+            Some(11),
+            "the missing-nav finding names the manifest, not line 2"
+        );
+        assert_eq!(
+            line_of(TWO_NAVS, "opf.manifest.multiple_nav_documents"),
+            Some(11),
+            "and so does its sibling, from the same rule"
+        );
     }
 
     /// OPF-097 applies to a **remote** manifest item too.

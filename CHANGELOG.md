@@ -110,6 +110,16 @@ Two of epubcheck's own fixtures show both on one item.
 Only 3 of the 405 shelf books declare a remote manifest item at all, so the
 unchanged shelf diff says little here — the fixtures are the evidence.
 
+**The nav-document errors now point at `<manifest>`** (#122), which is where
+epubcheck points and where the missing property belongs. Reported by JSWolf on
+MobileRead in the same post as #120: we named line 2 — the package root, on
+every book — where epubcheck named line 15. Nothing about the finding was
+wrong, only where it said to look, which matters to anyone using an editor
+that jumps to the position.
+
+The column still differs by our own convention: we point at the start of a tag
+and epubcheck at the end of it, consistently, everywhere.
+
 **A misspelt `<guide>` child is an error again** (#120). Reported by JSWolf on
 MobileRead: `<guide><referen/>…</guide>` validated here and draws `element
 "referen" not allowed anywhere; expected element "reference"` from epubcheck.
