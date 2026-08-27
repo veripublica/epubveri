@@ -188,29 +188,28 @@ to be valid or to trip exactly one specific rule. Measured on 0.12.5
 
 - **100%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
-  would report (595 of 595).
+  would report (603 of 603).
 - **100%** of the test suite's "this is perfectly valid" cases are
   correctly left alone — no false alarms on any of the 355.
 
-**Where 595 comes from, since the suite has 607.** epubcheck can check loose
+**Where 603 comes from, since the suite has 607.** epubcheck can check loose
 files on their own; epubveri takes a packaged `.epub` file only, so the test
-harness wraps such a fixture into a minimal book — and for some fixtures that
-wrap changes *epubcheck's own* answer, because they were written for a mode we
-do not have.
+harness wraps such a fixture into a minimal book. **Four** fixtures are written
+for that loose-file mode in a way the wrap cannot reproduce — they are about a
+badly-named file, and a wrap's container does not hold one — so handed the
+harness's book epubcheck reports nothing either, the question cannot be posed,
+and the scenario is skipped. **One** more is scored against the different code
+epubcheck gives once the file is inside a container.
 
-**Twelve** are then unaskable: handed the harness's book, epubcheck reports
-nothing where the fixture expects a finding, so the suite cannot pose its
-question and the scenario is skipped. Two causes so far — the wrapped document
-ends up outside the book's reading order, where certain rules do not apply, or
-a badly-named file is simply not in the container to be named. **One** more is
-scored against the different code epubcheck gives once the file is inside a
-container.
+The count and the reason print on every run.
 
-The count and the reason print on every run. Those twelve had previously been
-counted as passes, which credited epubveri with findings epubcheck does not
-make on the same input. Expect the number to keep moving as this is worked
-through; what will not move is that it is stated rather than quietly
-re-baselined.
+That number has moved in both directions, and saying which way is the point.
+It was 607 while twelve scenarios were being counted as passes they had not
+earned — the harness's own wrap was preventing epubcheck from asking, and we
+were credited anyway. Stating that took it to 595. Then eight of the twelve
+turned out to be the harness's fault rather than the suite's: the wrap was
+leaving the document out of the book's reading order, where those particular
+rules do not apply. Fixing the wrap put them back, and all eight pass.
 
 These are the numbers epubveri's own release pre-flight prints, and they
 cover epubcheck's corpus only. That corpus is built from synthetic

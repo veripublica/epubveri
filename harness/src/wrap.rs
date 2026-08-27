@@ -336,8 +336,12 @@ pub fn wrap_single_doc(
     // wrap exercise the content-model check against ALL of them at once,
     // not just the one under test, so they're demoted to an inert media
     // type (the target itself keeps its real one).
+    let mut target_id: Option<String> = None;
     for (i, fn_) in siblings.iter().enumerate() {
         let mt = sibling_media_type(fn_, target_name);
+        if fn_ == target_name && matches!(mt, "application/xhtml+xml" | "image/svg+xml") {
+            target_id = Some(format!("f{i}"));
+        }
         manifest_items.push(format!(
             "<item id=\"f{i}\" href=\"{fn_}\" media-type=\"{mt}\"/>"
         ));
@@ -385,6 +389,22 @@ pub fn wrap_single_doc(
     } else {
         "    <meta property=\"dcterms:modified\">2026-01-01T00:00:00Z</meta>\n"
     };
+    // **The target goes in the spine** (#111). It used to be a manifest item
+    // and nothing more, on the reasoning that keeping it out of the reading
+    // order isolates the content-model check. It does — and it also puts the
+    // document outside the reading order, where some of epubcheck's rules do
+    // not apply at all, so a fixture written for one of those could not pose
+    // its question. Twelve did not: the EDUPUB structure and semantics
+    // Schematron is selected only for an item that is neither fixed-layout nor
+    // non-linear, and `OPFItem` marks anything with `spinePosition < 0` as
+    // non-linear.
+    //
+    // Only a content document can be listed, so a target of any other type
+    // (an image, a stylesheet) leaves the spine as it was.
+    let spine_items = match &target_id {
+        Some(id) => format!("<itemref idref=\"_nav\"/><itemref idref=\"{id}\"/>"),
+        None => "<itemref idref=\"_nav\"/>".to_string(),
+    };
     let opf = format!(
         "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
          <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"{version}\" unique-identifier=\"id\">\n\
@@ -395,7 +415,7 @@ pub fn wrap_single_doc(
          {edupub_meta}{idx_meta}\
          \x20 </metadata>\n\
          \x20 <manifest>\n    {}\n  </manifest>\n\
-         \x20 <spine{toc_attr}><itemref idref=\"_nav\"/></spine>\n\
+         \x20 <spine{toc_attr}>{spine_items}</spine>\n\
          </package>\n",
         manifest_items.join("\n    "),
     );

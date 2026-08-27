@@ -727,10 +727,21 @@ const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
 /// Fixtures whose expected finding **epubcheck itself does not make** once the
 /// harness wraps them into a publication.
 ///
-/// Two causes so far, both of the same shape — the fixture was written for a
-/// mode we do not have, and the wrap changes epubcheck's own answer:
-/// the document ends up outside the spine, or the badly-named file is not in
-/// the container at all.
+/// One cause now, and it is the irreducible one: the fixture is written for
+/// **single-file mode**, which this project does not have. `OPFChecker`
+/// checks a manifest href as a filename only when there is no container —
+/// its own comment says *"it is checked by the container checker in
+/// full-publication mode"* — and a wrap's container does not hold the
+/// badly-named file at all, so there is no name to check.
+///
+/// **The other cause is gone, and its removal is the point.** Eight EDUPUB
+/// fixtures were listed here because the wrap left the target outside the
+/// spine, where those rules do not apply. That was the harness's doing, not
+/// the fixture's, and `wrap_single_doc` now puts the target in the reading
+/// order: all eight are asked and answered, and the scored denominator went
+/// 595 → 603. Prefer fixing the wrap to lengthening this list — an entry here
+/// is a question the suite cannot ask, and every one of those is a question
+/// nobody is answering.
 ///
 /// The EDUPUB structure and semantics Schematron is selected in
 /// `OPSChecker.validatorMap` only for an item that is neither `FIXED_LAYOUT`
@@ -750,24 +761,15 @@ const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
 /// same input, the fourth time an instrument here has been caught flattering
 /// us.
 ///
-/// **It is a class, not a handful of cases, and it will grow.** Every entry so
-/// far is a fixture written for a mode we do not have, wrapped into a
-/// publication where epubcheck's own answer is different. Expect more as the
-/// `compare`-over-fixtures triage continues, and report the count rather than
-/// quietly re-baselining: `README.md` states the whole suite's size, how many
-/// scenarios the wrap can pose, and that all of those pass. The honest fix is to the *wrapper*, not to this list: put
+/// Report the count rather than quietly re-baselining: `README.md` states the
+/// whole suite's size, how many scenarios the wrap can pose, and that all of
+/// those pass. The number has moved in both directions — 607 → 599 → 595 as
+/// this class was found, then 595 → 603 once the wrapper was fixed — and
+/// saying which way and why is the whole discipline. The honest fix is to the *wrapper*, not to this list: put
 /// the target in the spine and the question becomes askable again. That is a
 /// change to every one of the 981 books and is deliberately not being made at
 /// the end of a day.
 const UNREACHABLE_IN_WRAP: &[&str] = &[
-    "edupub-body-explicit-section-no-heading-error.xhtml",
-    "edupub-heading-img-no-alt-error.xhtml",
-    "edupub-heading-missing-error.xhtml",
-    "edupub-titles-aria-label-matches-heading-error.xhtml",
-    "edupub-titles-explicit-body-error.xhtml",
-    "edupub-titles-invalid-missing-error.xhtml",
-    "edupub-titles-subtitle-header-error.xhtml",
-    "edupub-untitled-heading-level-error.xhtml",
     // The filename rules, which epubcheck applies to *container entries* in
     // full-publication mode and to the declared href only in single-file
     // `-mode opf` — its own comment in `OPFChecker` says so. The harness wraps
