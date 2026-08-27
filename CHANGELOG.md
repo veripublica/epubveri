@@ -8,6 +8,21 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**A stylesheet an SVG content document links now counts as referenced**
+(#112). `OPF-097` called it unreferenced on two of epubcheck's own `*-valid`
+fixtures, where epubcheck reports nothing at all — an SVG linking its CSS
+through `<?xml-stylesheet?>` or through `@import` inside `<style>`.
+
+Two places already walked exactly those forms and neither registered the
+reference: one asks only whether the href is remote or a `file:` URL and then
+drops it, the other reads the stylesheet for class names and runs for
+media-overlay SVGs only. Neither was wrong about its own question — the
+reference belonged to a third list that neither had joined. `<link
+rel="stylesheet">` is registered with them, though no fixture covers it, since
+it is the same walk asking the same question.
+
 ## [0.12.4] - 2026-08-27
 
 **Encrypted resources are no longer parsed as their declared type** (#101).

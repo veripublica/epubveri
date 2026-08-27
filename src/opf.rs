@@ -8761,6 +8761,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         };
         let text = String::from_utf8_lossy(&b).into_owned();
         let Ok(d) = parse_xml(&text) else { continue };
+        let dir = parent_dir(doc_path);
         let declared_prefixes =
             attr_ns_node(d.root_element(), "http://www.idpf.org/2007/ops", "prefix")
                 .map(|p| {
@@ -8919,6 +8920,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         vec![href.clone()],
                     );
                 }
+                // **Register the reference, not just judge its scheme.**
+                // This walk asked only "is it remote, is it `file:`" and then
+                // dropped the href, so a stylesheet an SVG links was declared
+                // in the manifest and referenced by nothing as far as OPF-097
+                // could tell. Two of epubcheck's own `*-valid` fixtures say so
+                // — `mediaoverlays-active-class-svg-stylesheet-import-valid`
+                // and its `xml-pi` sibling, where epubcheck reports nothing at
+                // all and we reported OPF-097.
+                //
+                // `collect_svg_class_names` reads these same three forms and
+                // also keeps only what it came for, and it runs for overlay
+                // SVGs alone — so neither site registered the reference.
+                //
+                // The per-source shape again: epubcheck resolves every
+                // registered reference through one path, so a reference kind is
+                // covered the day it is registered, while here every source has
+                // to remember to join each list. Before adding a reference kind,
+                // ask which lists it must join.
+                if !is_external(&href) {
+                    resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&href).trim())));
+                }
             }
         }
         for n in d.descendants().filter(|n| n.is_element()) {
@@ -8952,6 +8974,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             vec![import_url.clone()],
                         );
                     }
+                    // See the note on the PI branch above: the reference is
+                    // registered here, not only classified.
+                    if !is_external(&import_url) {
+                        resource_refs
+                            .insert(nfc(&resolve(&dir, strip_url_fragment(&import_url).trim())));
+                    }
                 }
             }
             if n.tag_name().name() == "link"
@@ -8982,6 +9010,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         "opf.content_document.file_url_stylesheet_link",
                         vec![href.to_string()],
                     );
+                }
+                // See the note on the PI branch above.
+                if !is_external(href) {
+                    resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(href).trim())));
                 }
             }
         }
@@ -11201,6 +11233,124 @@ mod tests {
                 ("OEBPS/content.opf", OPF),
                 ("OEBPS/ch1.xhtml", ch1.as_str()),
                 ("OEBPS/nav.xhtml", nav.as_str()),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// A stylesheet an SVG content document links **is** a reference.
+    ///
+    /// epubcheck's own `mediaoverlays-active-class-svg-stylesheet-import-valid`
+    /// and `…-xml-pi-valid`, found by running `compare` over its fixtures.
+    /// Both are named valid, epubcheck reports nothing at all on either, and we
+    /// reported OPF-097: the stylesheet was declared in the manifest and, as
+    /// far as the reference set could tell, used by nobody.
+    ///
+    /// Two places in this file walk exactly these three linking forms and
+    /// neither registered the reference. One asks only whether the href is
+    /// remote or a `file:` URL and then drops it; the other,
+    /// `collect_svg_class_names`, reads the stylesheet for class names alone
+    /// and runs for overlay SVGs only. Nothing was wrong with either — the
+    /// reference simply belonged to a third list neither had joined.
+    ///
+    /// **The control is the point.** An SVG that links nothing must still draw
+    /// OPF-097, or a fix that stopped asking the question at all would pass.
+    #[test]
+    fn a_stylesheet_linked_from_an_svg_counts_as_referenced() {
+        let ids = |svg_body: &str| -> Vec<String> {
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="s" href="ch1.svg" media-type="image/svg+xml"/>
+    <item id="css" href="styles.css" media-type="text/css"/>
+  </manifest>
+  <spine><itemref idref="s"/></spine>
+</package>"#;
+            let svg = format!(r#"<?xml version="1.0" encoding="UTF-8"?>{svg_body}"#);
+            let nav = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>n</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.svg">c</a></li></ol></nav></body></html>"#;
+            crate::validate_bytes(epub_svg_with_stylesheet(OPF, &svg, nav))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_097)
+                .map(|m| m.text.clone())
+                .collect()
+        };
+
+        const PI: &str = r#"<?xml-stylesheet type="text/css" href="styles.css"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>t</title>
+<rect x="1" y="1" width="2" height="2"/></svg>"#;
+        const IMPORT: &str = r#"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>t</title>
+<style type="text/css">@import url(styles.css);</style>
+<rect x="1" y="1" width="2" height="2"/></svg>"#;
+        const LINK: &str = r#"
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:h="http://www.w3.org/1999/xhtml" viewBox="0 0 10 10">
+<title>t</title><h:link rel="stylesheet" href="styles.css"/>
+<rect x="1" y="1" width="2" height="2"/></svg>"#;
+        const NOTHING: &str = r#"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>t</title>
+<rect x="1" y="1" width="2" height="2"/></svg>"#;
+
+        for (name, body) in [
+            ("xml-stylesheet PI", PI),
+            ("@import", IMPORT),
+            ("link", LINK),
+        ] {
+            assert!(
+                ids(body).is_empty(),
+                "{name}: the stylesheet is referenced, so OPF-097 must not fire - got {:?}",
+                ids(body)
+            );
+        }
+        assert_eq!(
+            ids(NOTHING).len(),
+            1,
+            "an SVG that links nothing leaves the stylesheet unreferenced, so the \
+             question is still being asked"
+        );
+    }
+
+    /// A three-file EPUB 3 whose single spine item is an SVG, with a
+    /// stylesheet in the manifest for the reference question to be about.
+    fn epub_svg_with_stylesheet(opf: &str, svg: &str, nav: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf),
+                ("OEBPS/ch1.svg", svg),
+                ("OEBPS/nav.xhtml", nav),
+                ("OEBPS/styles.css", "rect { fill: red; }"),
             ] {
                 zip.start_file(name, deflated).unwrap();
                 zip.write_all(data.as_bytes()).unwrap();
