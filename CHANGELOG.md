@@ -138,6 +138,35 @@ did the reverse of both, and in most books the two cancelled out.
 The same reading finishes yesterday's fixed-layout fix: the EDUPUB structure
 and semantics rules are selected only for an item that is neither fixed-layout
 nor non-linear, which is where that exemption actually lives.
+
+**Every release archive now carries a checksum and a signed build
+attestation.** A ninth asset, `SHA256SUMS.txt`, covers all eight archives in
+`sha256sum` format, and each archive gets a GitHub build-provenance
+attestation verifiable with
+`gh attestation verify <archive> --repo veripublica/epubveri`.
+
+The two answer different questions and `docs/INTEGRATING.md` says so plainly:
+the checksum proves the download is intact and needs no tooling, but it sits
+beside the archives, so it cannot prove much about provenance on its own; the
+attestation is signed by GitHub's OIDC identity for this repository and
+workflow, and names the commit that produced the file.
+
+**Why now.** The npm package has carried SLSA provenance since 0.7.8 and the
+binaries had nothing — the wrong way round, since the binary is the artefact
+people actually run. It is also the artefact a Sigil or calibre plugin
+downloads on the user's behalf, where the usual reassurance for a small tool
+("unzip it and read the source") does not apply at all. Prompted by KevinH's
+explanation on MobileRead of why Sigil's plugin ecosystem needs no verification
+system: his reason is that plugins are short, pure Python and carry no
+binaries. That is true of them and not of ours, which is our gap to close
+rather than Sigil's.
+
+Also in the release workflow: it now **asserts that all eight archives are
+present** before writing anything. The build jobs upload with
+`if-no-files-found: ignore`, so a packaging step that quietly produced nothing
+still reported success and `needs: build` did not catch it — the v0.5.10
+failure from the other direction, a release published with fewer binaries than
+it claims, which looks exactly like a finished release.
 ## [0.12.3] - 2026-08-27
 
 Eight changes. The first three come from Doitsu's report on MobileRead #248,

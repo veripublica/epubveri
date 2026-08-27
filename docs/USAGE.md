@@ -49,6 +49,11 @@ and download the one archive that matches your computer:
 > adds them to every release automatically; they contain the program's source
 > text, not the program, and nothing in them will run. The file you want is
 > one of the eight named above, and its name starts with `epubveri-`.
+>
+> There is also a small `SHA256SUMS.txt`. You do not need it to run epubveri —
+> it is there so anyone who wants to can check their download is intact and
+> unaltered. `docs/INTEGRATING.md` explains how, and what it does and does not
+> prove.
 
 > **Not sure which Mac you have?** Click the Apple menu → **About This Mac**.
 > If the chip says "Apple", pick Apple Silicon; if it says "Intel", pick

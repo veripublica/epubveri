@@ -168,6 +168,43 @@ The `musl` builds are static and run on any Linux distribution, with no glibc
 version to match. If you are picking one target per platform automatically,
 they are the safer Linux choice.
 
+### Checking that you got what we built
+
+Every release since 0.12.4 carries a ninth asset, `SHA256SUMS.txt`, listing all
+eight archives in `sha256sum` format:
+
+```
+sha256sum -c SHA256SUMS.txt --ignore-missing     # Linux
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing # macOS
+```
+
+`--ignore-missing` is what lets you check the one archive you downloaded
+instead of all eight.
+
+**Be clear about what that does and does not prove.** It proves the download
+completed and that you fetched the file you meant to. It does not, on its own,
+prove much about provenance: the checksum file sits next to the archives, so
+whoever could replace one could replace the other. It is the offline,
+no-tooling half.
+
+The other half is a **signed build attestation**, recorded for every archive
+from the same release onward:
+
+```
+gh attestation verify epubveri-x86_64-apple-darwin.tar.gz --repo veripublica/epubveri
+```
+
+That checks a signature made by GitHub's own OIDC identity for this repository
+and workflow, so it says *which commit and which workflow produced this file* —
+which a checksum published beside the file cannot. It needs the `gh` CLI and a
+network connection.
+
+**Why this exists, in one sentence, because it is worth knowing if you are
+writing a plugin:** the usual reassurance for a small tool is "unzip it and
+read the source", and that is exactly what does not work when the thing being
+downloaded is a compiled binary. If your plugin fetches our binary on a user's
+behalf, they never see it — so verify it for them.
+
 **Resolve the version through `releases/latest`**, not the first element of
 `releases`. The list endpoint includes prereleases and drafts in publication
 order; `releases/latest` excludes them, which is almost certainly what you

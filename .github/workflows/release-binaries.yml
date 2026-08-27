@@ -113,6 +113,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Both are for the provenance attestation below: `id-token` to get the
+      # OIDC token it signs with, `attestations` to record the result.
+      id-token: write
+      attestations: write
     steps:
       - name: Check out
         uses: actions/checkout@v5
@@ -126,6 +130,57 @@ jobs:
 
       - name: List what will be attached
         run: ls -l dist
+
+      # **Assert the count before anything is written.** `if-no-files-found:
+      # ignore` on the build jobs means a packaging step that silently produced
+      # nothing still uploads a (empty) artifact and still reports success, so
+      # `needs: build` does not catch it. That is the v0.5.10 failure mode from
+      # the other direction: a release published with fewer binaries than it
+      # claims, which looks exactly like a released release. Eight targets, six
+      # tarballs and two zips.
+      - name: Check every target produced an archive
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          n=$(ls -1 epubveri-*.tar.gz epubveri-*.zip 2>/dev/null | wc -l | tr -d ' ')
+          if [ "$n" -ne 8 ]; then
+            echo "expected 8 archives, found $n:" >&2
+            ls -l >&2
+            exit 1
+          fi
+
+      # A published checksum is what turns "I downloaded something" into "I
+      # downloaded what this build produced". It is the plain, offline half of
+      # that — `sha256sum -c SHA256SUMS.txt` needs no tooling and no network.
+      #
+      # Its limit is worth being honest about, and `docs/INTEGRATING.md` says
+      # so: the file sits next to the archives, so anyone able to replace one
+      # could replace the other. The attestation below is the half that does
+      # not have that weakness.
+      - name: Write SHA256SUMS.txt
+        shell: bash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          sha256sum epubveri-*.tar.gz epubveri-*.zip > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      # Signed build provenance: which commit, which workflow, which runner
+      # produced each archive, verifiable with `gh attestation verify`. The npm
+      # package has carried SLSA provenance since 0.7.8 and the binaries had
+      # nothing, which is the wrong way round — the binary is the artefact
+      # people run, and the one a Sigil or calibre plugin downloads on their
+      # behalf without them ever seeing it.
+      #
+      # Only the archives are subjects. Attesting SHA256SUMS.txt would add a
+      # signature over a list of hashes rather than over the things themselves.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/epubveri-*.tar.gz
+            dist/epubveri-*.zip
 
       # Populate the GitHub Release body from this version's CHANGELOG.md
       # section, so the release notes never have to be filled in by hand
