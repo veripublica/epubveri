@@ -101,6 +101,25 @@ The exemption sits after the URL handling rather than before it, because
 epubcheck parses the URL before it reads `rel`: a malformed URL is still
 reported on a link of any kind, and only the existence question goes unasked.
 
+**A misspelt `<guide>` child is an error again** (#120). Reported by JSWolf on
+MobileRead: `<guide><referen/>…</guide>` validated here and draws `element
+"referen" not allowed anywhere; expected element "reference"` from epubcheck.
+Our grammar had the child as *any* element, so any name passed. Both of
+epubcheck's grammars name it, so the fix holds at either version.
+
+The comment that justified the anonymous child said naming it "would duplicate
+a violation the surrounding grammar already reports". Nothing reported it —
+the silent-skip shape, where a case falls between two checks and produces no
+output at all. Measured after the fix: one finding, not two.
+
+Fixing it exposed two more beside it, since `<tours>` carried the same
+comment: its child is named `tour`, and a `<tour>` holds `<site>` elements. A
+well-formed `<tours><tour title="t"/></tours>` had been silent here and drew
+`element "tour" incomplete; missing required element "site"` from epubcheck.
+
+305 of the 405 shelf books carry a `<guide>` and the per-book diff is
+unchanged, so nothing was invented on real books.
+
 **A stylesheet an SVG content document links now counts as referenced**
 (#112). `OPF-097` called it unreferenced on two of epubcheck's own `*-valid`
 fixtures, where epubcheck reports nothing at all — an SVG linking its CSS

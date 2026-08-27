@@ -205,9 +205,25 @@
     <choice>
       <element name="guide">
         <!-- must have at least one <reference> (confirmed via a real
-             fixture, an empty <guide></guide>) -->
+             fixture, an empty <guide></guide>), and the child is named.
+
+             **The child used to be `anyElement`, and that was a false
+             negative** (JSWolf, MobileRead #254): `<guide><referen/>…</guide>`
+             validated here and draws `element "referen" not allowed anywhere;
+             expected element "reference"` from epubcheck. Both grammars name
+             it - `OPF20.guide-content` is `oneOrMore reference-element` and
+             `package-30.rnc` has `opf.guide = element guide { opf.reference+ }`
+             - so this is right at either version.
+
+             The comment that justified `anyElement` said naming the child
+             "would duplicate a violation the surrounding grammar already
+             reports". Nothing did. That is the same shape as the silent-skip
+             family: one check defers to another that does not cover the case,
+             and the gap reports nothing at all. -->
         <ref name="anyAttributes"/>
-        <oneOrMore><ref name="anyElement"/></oneOrMore>
+        <oneOrMore>
+          <element name="reference"><ref name="looseContent"/></element>
+        </oneOrMore>
       </element>
       <element name="bindings"><ref name="looseContent"/></element>
       <element name="collection"><ref name="looseContent"/></element>
@@ -223,7 +239,21 @@
            grammar already reports. -->
       <element name="tours">
         <ref name="anyAttributes"/>
-        <oneOrMore><ref name="anyElement"/></oneOrMore>
+        <oneOrMore>
+          <!-- and a <tour> holds <site> elements, `OPF20.tour-content`. Found
+               by the same probe as the child-name fix above: with the name
+               corrected, a *well-formed* `<tours><tour title="t"/></tours>`
+               still drew `element "tour" incomplete; missing required element
+               "site"` from epubcheck and nothing from us. One tightening
+               exposing the next is the pattern here - close the neighbourhood,
+               not the case. -->
+          <element name="tour">
+            <ref name="anyAttributes"/>
+            <oneOrMore>
+              <element name="site"><ref name="looseContent"/></element>
+            </oneOrMore>
+          </element>
+        </oneOrMore>
       </element>
       <ref name="foreignElement"/>
     </choice>

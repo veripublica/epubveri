@@ -11353,6 +11353,100 @@ mod tests {
         buf
     }
 
+    /// A `<guide>` child must be named `reference`, and a `<tours>` child
+    /// `tour`.
+    ///
+    /// JSWolf, MobileRead #254: `<guide><referen/>…</guide>` validated here
+    /// and draws `element "referen" not allowed anywhere; expected element
+    /// "reference"` from epubcheck. Both grammars name the child —
+    /// `OPF20.guide-content` is `oneOrMore reference-element`, and
+    /// `package-30.rnc` has `opf.guide = element guide { opf.reference+ }` —
+    /// so the rule is the same at either version, which is why this asserts
+    /// both.
+    ///
+    /// **The comment that justified the anonymous child is the lesson.** It
+    /// said naming it "would duplicate a violation the surrounding grammar
+    /// already reports". Nothing reported it. Same shape as the silent-skip
+    /// family: one check defers to another that does not cover the case, and
+    /// the gap says nothing at all — the one failure a user cannot notice.
+    /// Measured after the fix: exactly one finding, not two.
+    ///
+    /// 305 of the 405 shelf books carry a `<guide>` and the per-book diff is
+    /// unchanged, so the tightening invents nothing on real books.
+    #[test]
+    fn a_guide_child_must_be_a_reference() {
+        let ids = |version: &str, guide: &str| -> Vec<String> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+  {guide}
+</package>"#
+            );
+            const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                               <head><title>t</title></head><body><p>x</p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH1))
+                .messages
+                .iter()
+                .filter(|m| {
+                    m.text.contains("referen") || m.text.contains("tour") || m.text.contains("site")
+                })
+                .map(|m| m.text.clone())
+                .collect()
+        };
+
+        const BAD: &str =
+            r#"<guide><referen/><reference type="start" title="S" href="ch1.xhtml"/></guide>"#;
+        const OK: &str = r#"<guide><reference type="start" title="S" href="ch1.xhtml"/></guide>"#;
+
+        for version in ["2.0", "3.0"] {
+            assert_eq!(
+                ids(version, BAD).len(),
+                1,
+                "{version}: one finding, not none and not two - got {:?}",
+                ids(version, BAD)
+            );
+            assert!(
+                ids(version, OK).is_empty(),
+                "{version}: a well-formed guide is silent - got {:?}",
+                ids(version, OK)
+            );
+        }
+        // `<tours>` carries the same rule and its own second one: the child
+        // is named `tour`, and a `<tour>` holds `<site>` elements
+        // (`OPF20.tour-content`). Both counts are epubcheck's, probed — the
+        // misspelt child draws *two* findings from each tool, the name and the
+        // now-unsatisfied cardinality, and a well-formed `<tour>` with no
+        // `<site>` draws one. Fixing the name is what exposed the second rule.
+        assert_eq!(
+            ids("2.0", "<tours><tourr title=\"t\"/></tours>").len(),
+            2,
+            "the misspelt child and the cardinality it leaves unsatisfied"
+        );
+        assert_eq!(
+            ids("2.0", "<tours><tour title=\"t\"/></tours>").len(),
+            1,
+            "a tour with no site"
+        );
+        assert!(
+            ids(
+                "2.0",
+                "<tours><tour title=\"t\"><site title=\"s\" href=\"ch1.xhtml\"/></tour></tours>"
+            )
+            .is_empty(),
+            "a complete tour is silent"
+        );
+    }
+
     /// Five shapes of "one defect, two messages", found together while
     /// triaging the `.opf`-wrapped candidates and fixed together because they
     /// are the same mistake: a second check kept asking a question epubcheck
