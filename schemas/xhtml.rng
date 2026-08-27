@@ -95,8 +95,49 @@
         <!-- `common.elem.metadata |= template.elem` (web-components.rnc) -->
         <ref name="templateEl"/>
         <!-- the deprecated EPUB3 trigger element (still epubcheck-valid,
-             with a deprecation warning) -->
-        <element name="epub:trigger"><ref name="globalAttrsCore"/></element>
+             with a deprecation warning).
+
+             **Its own attributes, not the global set.** `globalAttrsCore`
+             holds neither `action` nor `ref`, so epubcheck's own
+             `trigger-deprecated-warning` fixture — where it reports the
+             deprecation and nothing else — drew two `attribute … is not
+             allowed here` errors from us. Found by `compare` over that
+             corpus; same family as Doitsu's #161, where a trigger drew five
+             findings against epubcheck's one.
+
+             Modelled on `epub-trigger.rnc`: `action` and `ref` are required,
+             as are `ev:event` and `ev:observer`; the other three `ev:*` are
+             optional and the content is empty. The enumerations are taken
+             too, since the element is a closed, deprecated vocabulary that
+             nothing new will extend. -->
+        <element name="epub:trigger">
+          <optional><attribute name="id"><data type="ID"/></attribute></optional>
+          <attribute name="action">
+            <choice>
+              <value>show</value><value>hide</value><value>play</value>
+              <value>pause</value><value>resume</value><value>mute</value>
+              <value>unmute</value>
+            </choice>
+          </attribute>
+          <attribute name="ref"><data type="IDREF"/></attribute>
+          <attribute name="ev:event"><data type="NMTOKEN"/></attribute>
+          <attribute name="ev:observer"><data type="IDREF"/></attribute>
+          <optional>
+            <attribute name="ev:defaultAction">
+              <choice><value>cancel</value><value>perform</value></choice>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="ev:phase">
+              <choice><value>capture</value><value>default</value></choice>
+            </attribute>
+          </optional>
+          <optional>
+            <attribute name="ev:propagate">
+              <choice><value>stop</value><value>continue</value></choice>
+            </attribute>
+          </optional>
+        </element>
       </choice>
     </zeroOrMore>
   </define>

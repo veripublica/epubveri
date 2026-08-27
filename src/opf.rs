@@ -9363,17 +9363,41 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // package, because `properties` is not an OPS 2.0.1 attribute -
         // but that is a fact about the edit, not about the finding, and it
         // is epubsana's guard to hold rather than ours to suppress.
-        if css_has_remote
-            && !item_properties
-                .get(&nfc(&path))
-                .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"))
-        {
+        let declares_remote = item_properties
+            .get(&nfc(&path))
+            .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"));
+        if css_has_remote && !declares_remote {
             report.push_at_rule(
                 OPF_014,
                 Severity::Error,
                 "stylesheet uses a remote resource but doesn't declare the \"remote-resources\" property",
                 path.clone(),
                 "opf.content_document.property_used_undeclared",
+                vec!["remote-resources".to_string()],
+            );
+        }
+        // **The other direction, which was missing.** `CSSHandler` asks both
+        // questions of a standalone stylesheet and we asked only the first, so
+        // a `text/css` item declaring `remote-resources` it never uses drew
+        // OPF-014's absence and nothing else. `fonts-embedded` is epubcheck's
+        // own fixture: its stylesheet declares the property and embeds a local
+        // `font.woff`.
+        //
+        // `Mode.FILE` there means a *standalone* stylesheet, which this loop
+        // is — CSS inlined in a `<style>` element is deliberately exempt,
+        // since the property belongs to the document's own manifest item and
+        // is answered by the content-document branch instead.
+        //
+        // Probed in all three combinations, one book each: remote URL with no
+        // property is OPF-014, local URL with the property is OPF-018, and
+        // remote URL with the property is clean from both tools.
+        if declares_remote && !css_has_remote {
+            report.push_at_rule(
+                OPF_018,
+                Severity::Warning,
+                "stylesheet declares the \"remote-resources\" property but uses no remote resource",
+                path.clone(),
+                "opf.content_document.property_declared_unused",
                 vec!["remote-resources".to_string()],
             );
         }
@@ -10627,6 +10651,39 @@ fn check_exempt_font_usage(
     let (items, name_index) = (res.items, res.name_index);
     for u in crate::css::font_face_src_urls_spanned(css) {
         if is_external(&u.node) {
+            // **A remote font still has a media type, and that question is
+            // still asked.** epubcheck's `CSSHandler` resolves the `src` URL,
+            // looks up `context.getMimeType(fontURL)`, and reports CSS-007
+            // when the type is not a blessed font type — none of which cares
+            // whether the URL is remote. `resources-remote-font-in-css-valid`
+            // is its own fixture: a remote font declared
+            // `application/vnd.dafont`, on which it reports CSS-007 and we
+            // reported nothing.
+            //
+            // Everything *else* in this loop is about a container path, so it
+            // stays skipped: a remote font cannot leak the container root and
+            // is not "missing from the publication". The manifest entry is
+            // matched on the href exactly as written, since a remote item has
+            // no resolved path to compare.
+            if let Some((_, mt)) = items.values().find(|(ip, _)| ip.trim() == u.node.trim())
+                && !crate::cmt::is_core_media_type(mt)
+                && !crate::cmt::is_exempt_video(mt)
+                && (is_epub3 || !blessed_font_type_epub2(mt))
+            {
+                report.push_full(
+                    CSS_007,
+                    Severity::Info,
+                    format!(
+                        "font '{}' has media type '{mt}', which is not a Core Media Type; \
+                         fonts need no fallback, but reading systems need not support it",
+                        u.node
+                    ),
+                    path,
+                    origin.position(css, u.span.start),
+                    "css.font_face.non_core_media_type",
+                    vec![u.node.clone(), mt.clone()],
+                );
+            }
             continue;
         }
         // RSC-026, same rule as every other url() - `@font-face src` is
@@ -11403,6 +11460,155 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// `<epub:trigger>` has its own attributes, not the global set.
+    ///
+    /// Found on epubcheck's own `trigger-deprecated-warning` fixture, where
+    /// it reports the deprecation and nothing else and we added two
+    /// `attribute … is not allowed here` errors. `globalAttrsCore` holds
+    /// neither `action` nor `ref`, and the element had nothing else.
+    ///
+    /// Same family as Doitsu's #161, where a trigger drew five findings
+    /// against epubcheck's one — that fix covered the element's *placement*
+    /// and left its attribute list alone.
+    ///
+    /// Modelled on `epub-trigger.rnc` and probed in four shapes, one book
+    /// each: complete is clean from both tools, a missing `action` and a
+    /// missing `ev:event` each draw one RSC-005 from each. **The enumerations
+    /// are taken too**, which is safe here in a way it would not be for a
+    /// living vocabulary: the element is deprecated and closed, so no new
+    /// value can appear.
+    ///
+    /// A known count difference is left alone and recorded rather than
+    /// papered over: an *invalid* `action` value draws one finding from
+    /// epubcheck and two from us — the value error, plus a spurious "missing
+    /// a required attribute" from the derivative engine's blame selection.
+    /// It survives whether the attributes are written as an interleave or a
+    /// plain group, so it is the engine's behaviour and not this model's; the
+    /// book is already invalid either way, and both tools name the real
+    /// defect. See #123.
+    #[test]
+    fn epub_trigger_takes_action_and_ref() {
+        let ids = |trigger: &str| -> Vec<&'static str> {
+            let ch1 = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"
+      xmlns:ev="http://www.w3.org/2001/xml-events">
+<head><title>t</title>{trigger}</head>
+<body><p id="test">x</p></body></html>"#
+            );
+            crate::validate_bytes(epub_with_ch1(&ch1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .map(|m| m.id)
+                .collect()
+        };
+
+        assert!(
+            ids(r#"<epub:trigger ev:observer="test" ev:event="click" action="pause" ref="test"/>"#)
+                .is_empty(),
+            "a complete trigger is accepted - this is the fixture's shape"
+        );
+        assert_eq!(
+            ids(r#"<epub:trigger ev:observer="test" ev:event="click" ref="test"/>"#).len(),
+            1,
+            "action is required, as it is in epub-trigger.rnc"
+        );
+        assert_eq!(
+            ids(r#"<epub:trigger ev:observer="test" action="pause" ref="test"/>"#).len(),
+            1,
+            "and so is ev:event"
+        );
+    }
+
+    /// A standalone stylesheet is asked **both** property questions, and a
+    /// remote font still has a media type.
+    ///
+    /// Two gaps from the same corner, both found on the gap side of the
+    /// `compare` diff — the ids only epubcheck reports.
+    ///
+    /// `CSSHandler` asks a standalone stylesheet whether it *uses* a remote
+    /// resource it did not declare (`OPF-014`) and whether it *declared* one
+    /// it does not use (`OPF-018`). We asked only the first, so
+    /// `fonts-embedded` — whose stylesheet declares the property and embeds a
+    /// local font — drew nothing. Probed in all three combinations, one book
+    /// each, and the third is the control that keeps the pair from becoming a
+    /// contradiction: a remote URL *with* the property is clean from both
+    /// tools.
+    ///
+    /// **The shelf is silent on this and the silence is worthless: 0 of its
+    /// 405 books declare `remote-resources` on a CSS item.** The probes are
+    /// the whole evidence.
+    ///
+    /// The `CSS-007` half is the same shape one level down. Our `@font-face`
+    /// walk skipped every external URL outright, so a remote font's media
+    /// type was never examined; epubcheck asks it of the manifest entry
+    /// whether or not the URL is remote, which its own
+    /// `resources-remote-font-in-css-valid` fixture shows. Everything else in
+    /// that loop is about a container path and stays skipped — a remote font
+    /// cannot leak the container root and is not missing from the
+    /// publication.
+    #[test]
+    fn a_stylesheet_is_asked_both_property_questions() {
+        let ids = |props: &str, url: &str, font_mt: &str| -> Vec<&'static str> {
+            let p = if props.is_empty() {
+                String::new()
+            } else {
+                format!(r#" properties="{props}""#)
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="s" href="Styles/s.css" media-type="text/css"{p}/>
+    <item id="f" href="{url}" media-type="{font_mt}"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let css = format!("@font-face {{ font-family: X; src: url({url}); }}");
+            crate::validate_bytes(epub_with_opf_and_css(&opf, &css))
+                .messages
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m.id,
+                        crate::ids::OPF_014 | crate::ids::OPF_018 | crate::ids::CSS_007
+                    )
+                })
+                .map(|m| m.id)
+                .collect()
+        };
+
+        const REMOTE: &str = "https://example.org/f.woff";
+        assert_eq!(
+            ids("", REMOTE, "font/woff"),
+            vec![crate::ids::OPF_014],
+            "uses a remote resource without declaring the property"
+        );
+        assert_eq!(
+            ids("remote-resources", "Fonts/f.woff", "font/woff"),
+            vec![crate::ids::OPF_018],
+            "declares the property and uses no remote resource"
+        );
+        assert!(
+            ids("remote-resources", REMOTE, "font/woff").is_empty(),
+            "declared and used - the control that keeps the pair consistent"
+        );
+        assert_eq!(
+            ids("remote-resources", REMOTE, "application/vnd.dafont"),
+            vec![crate::ids::CSS_007],
+            "a remote font's media type is still examined"
+        );
     }
 
     /// The nav-document findings are anchored at `<manifest>`, not at the

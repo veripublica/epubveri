@@ -101,6 +101,23 @@ The exemption sits after the URL handling rather than before it, because
 epubcheck parses the URL before it reads `rel`: a malformed URL is still
 reported on a link of any kind, and only the existence question goes unasked.
 
+**`<epub:trigger>` keeps its own attributes** (#124). Our grammar gave it the
+global attribute set, which holds neither `action` nor `ref`, so epubcheck's
+own `trigger-deprecated-warning` fixture — where it reports the deprecation
+and nothing else — drew two `attribute … is not allowed here` errors from us.
+Modelled on epubcheck's `epub-trigger.rnc` and probed in four shapes.
+
+**A standalone stylesheet is asked both property questions** (#124).
+`CSS-014`'s mirror, `OPF-018` — declared `remote-resources` that the
+stylesheet never uses — was missing, so a stylesheet declaring the property
+over a local font drew nothing. 0 of the 405 shelf books declare that property
+on a CSS item, so the probes are the whole evidence here rather than the
+unchanged shelf.
+
+**A remote font still has a media type** (#124). The `@font-face` walk skipped
+every external URL outright, so `CSS-007` never examined one; epubcheck asks
+the question of the manifest entry whether or not the URL is remote.
+
 **`OPF-097` now reaches a remote manifest item** (#121). In epubcheck it is
 one check over every manifest item, and the `RSC-006` branch beside it is
 additional rather than an alternative; ours ran the remote branch and stopped,
