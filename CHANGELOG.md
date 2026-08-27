@@ -139,6 +139,15 @@ The same reading finishes yesterday's fixed-layout fix: the EDUPUB structure
 and semantics rules are selected only for an item that is neither fixed-layout
 nor non-linear, which is where that exemption actually lives.
 
+**The corpus recall denominator drops 607 → 599, and that is an instrument
+fix rather than a loss** (#111). The harness wraps a loose fixture into a
+minimal book, and for eight EDUPUB scenarios that wrap puts the document
+outside the spine — where epubcheck applies those rules only to documents
+inside it. Handed the harness's own book, epubcheck reports nothing there
+either, so the suite cannot pose its question and those eight had been scored
+as hits. They are now skipped, with the reason and the count printed on every
+run. The README's published figure moves with it, and says why.
+
 **Every release archive now carries a checksum and a signed build
 attestation.** A ninth asset, `SHA256SUMS.txt`, covers all eight archives in
 `sha256sum` format, and each archive gets a GitHub build-provenance

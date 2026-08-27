@@ -183,23 +183,36 @@ between releases.)
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
 official test cases, each one a small EPUB file specifically constructed
-to be valid or to trip exactly one specific rule. Measured on 0.12.2
-(2026-08-26):
+to be valid or to trip exactly one specific rule. Measured on 0.12.4
+(2026-08-27):
 
 - **100%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
-  would report (607 of 607).
+  would report (599 of 599).
 - **100%** of the test suite's "this is perfectly valid" cases are
   correctly left alone — no false alarms on any of the 355.
 
-One of those 607 deserves its footnote. epubcheck can also check a bare
-package document on its own, and the suite has a scenario written for
-that mode; epubveri takes a packaged `.epub` file only, so the harness
-wraps such a fixture into a minimal book. Handed the same wrapped book,
-epubcheck reports the same code epubveri does, and the suite scores that
-same defect separately in its packaged-book form as well. So that
-scenario is scored against epubcheck's own answer for what it was
-actually given, and the run prints the substitution every time.
+**That denominator was 607 in 0.12.3 and it went down, not up.** Nine
+scenarios are now scored differently, and both corrections are worth
+stating because a shrinking denominator is exactly the kind of thing a
+project can be tempted to shrink quietly.
+
+epubveri takes a packaged `.epub` file only, while epubcheck can also
+check loose files on their own, so the harness wraps such a fixture into
+a minimal book. That wrap changes epubcheck's own answer twice over:
+
+- For one scenario — a bare package document — epubcheck reports a
+  different code once the file is inside a container. It is scored
+  against that answer, and the same defect is scored separately in its
+  packaged-book form anyway.
+- For eight EDUPUB scenarios, the wrap places the document outside the
+  book's reading order, and epubcheck applies those particular rules only
+  to documents inside it. Handed the harness's own book, epubcheck
+  reports nothing there either — so the suite cannot ask its question,
+  and the eight had been counted as passes. They are now skipped.
+
+Both counts are printed on every run, so the number above cannot quietly
+drift from what the suite actually asked.
 
 These are the numbers epubveri's own release pre-flight prints, and they
 cover epubcheck's corpus only. That corpus is built from synthetic
