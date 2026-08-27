@@ -7936,6 +7936,36 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             vec![v.to_string()],
                         );
                     }
+                    // A content-document `<link>` is a reference **only when
+                    // its `rel` names a stylesheet**, in both versions:
+                    // `OPSHandler.checkLink` registers one exactly then, and
+                    // `OPSHandler30` adds nothing to that (`processLink` reads
+                    // the `class` attribute for CSS-005 and registers no
+                    // reference at all). So `rel="prev"`, `rel="next"`, and an
+                    // RDFa or microdata `<link property href>` with no `rel`
+                    // are not references, and a missing target is not a
+                    // finding. epubcheck's own `rdfa-valid` fixture carries all
+                    // three shapes and it reports nothing on any of them; we
+                    // reported three RSC-007.
+                    //
+                    // **Placed here, after the remote and RSC-020 handling,
+                    // deliberately.** `checkLink` calls `checkURL` before it
+                    // looks at `rel`, so a malformed URL is still reported on a
+                    // link of any kind; it is only the existence question that
+                    // is not asked. Skipping earlier would have silenced that
+                    // too — the same two-levers mistake as the `<script src>`
+                    // gate a few lines above, which `is_resource_reference`
+                    // could not fix because that predicate decides only what
+                    // enters `resource_refs`.
+                    if attr == "href"
+                        && node.tag_name().name() == "link"
+                        && !node.attr_no_ns("rel").is_some_and(|r| {
+                            r.split_whitespace()
+                                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                        })
+                    {
+                        continue;
+                    }
                     let resolved = nfc(&resolve(&dir, v));
                     // The matrix and its reasoning live in
                     // `classify_resource_ref`; only the anchoring is here.
@@ -11240,6 +11270,70 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// A content-document `<link>` is a reference only when its `rel` names a
+    /// stylesheet.
+    ///
+    /// `OPSHandler.checkLink` registers one exactly then, and `OPSHandler30`
+    /// adds nothing — `processLink` reads the `class` attribute for CSS-005
+    /// and registers no reference at all. So `rel="prev"`, `rel="next"` and an
+    /// RDFa or microdata `<link property href>` with no `rel` are not
+    /// references, and a missing target is not a finding. epubcheck's own
+    /// `rdfa-valid` fixture carries all three shapes and it reports nothing on
+    /// any of them; we reported three RSC-007.
+    ///
+    /// **The RSC-020 assertion is why this test exists in this shape.**
+    /// `checkLink` calls `checkURL` *before* it looks at `rel`, so a malformed
+    /// URL is still reported on a link of any kind — only the existence
+    /// question goes unasked. The obvious fix, skipping non-stylesheet links
+    /// at the top of the walk, passes every other assertion here and silently
+    /// takes that with it. Same two-levers mistake as the `<script src>` gate:
+    /// `is_resource_reference` cannot express it, because that predicate
+    /// decides only what enters `resource_refs`.
+    ///
+    /// The shelf is blind to all of this — 405 books, per-book diff unchanged
+    /// — so the fixture and this test are the whole evidence.
+    #[test]
+    fn only_a_stylesheet_link_is_a_reference() {
+        let ids = |head: &str| -> Vec<&'static str> {
+            let ch1 = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>{head}</head>
+<body><p>x</p></body></html>"#
+            );
+            crate::validate_bytes(epub_with_ch1(&ch1))
+                .messages
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m.id,
+                        crate::ids::RSC_007 | crate::ids::RSC_008 | crate::ids::RSC_020
+                    )
+                })
+                .map(|m| m.id)
+                .collect()
+        };
+
+        assert!(
+            ids(r#"<link rel="prev" href="page6.html"/>"#).is_empty(),
+            "rel=prev is navigation, not a resource"
+        );
+        assert!(
+            ids(r#"<link property="http://purl.org/dc/terms/description" href="foo"/>"#).is_empty(),
+            "an RDFa link with no rel is not a resource"
+        );
+        assert_eq!(
+            ids(r#"<link rel="stylesheet" type="text/css" href="gone.css"/>"#),
+            vec![crate::ids::RSC_007],
+            "a stylesheet link IS a reference, so the question is still asked - and the \
+             target is absent from the container, which is RSC-007 rather than RSC-008"
+        );
+        assert_eq!(
+            ids(r#"<link rel="prev" href="page 6.html"/>"#),
+            vec![crate::ids::RSC_020],
+            "the URL is still parsed on a link of any kind - checkURL runs before rel is read"
+        );
     }
 
     /// A stylesheet an SVG content document links **is** a reference.

@@ -10,6 +10,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Only a stylesheet `<link>` is a reference** (#113). `rel="prev"`,
+`rel="next"` and an RDFa or microdata `<link property href>` with no `rel`
+drew `RSC-007` when their target was missing; epubcheck registers a
+content-document `<link>` as a reference only when `rel` names a stylesheet,
+in both versions, and reports nothing on its own `rdfa-valid` fixture, which
+carries all three shapes.
+
+The exemption sits after the URL handling rather than before it, because
+epubcheck parses the URL before it reads `rel`: a malformed URL is still
+reported on a link of any kind, and only the existence question goes unasked.
+
 **A stylesheet an SVG content document links now counts as referenced**
 (#112). `OPF-097` called it unreferenced on two of epubcheck's own `*-valid`
 fixtures, where epubcheck reports nothing at all — an SVG linking its CSS
