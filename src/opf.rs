@@ -9448,6 +9448,40 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         opf_path,
                         report,
                     );
+                    // **OPF-097 applies to a remote item too**, and the
+                    // `continue` here used to skip it. In epubcheck this is one
+                    // check over every manifest item — `!(isInSpine() ||
+                    // isNav() || isNcx())` plus an empty reference registry —
+                    // and the RSC-006/RSC-006b branch just above it in
+                    // `checkItemAfterResourceValidation` is separate and
+                    // additional, not an alternative. So an unreferenced remote
+                    // resource draws both, which two of its own fixtures show:
+                    // `resources-remote-spine-item-error` and
+                    // `package-manifest-prop-remote-resource-object-param-warning`.
+                    //
+                    // The href is the key here rather than a resolved container
+                    // path — a remote item has none — which is why this cannot
+                    // simply fall through to the local branch below.
+                    let is_nav = item
+                        .attr_no_ns("properties")
+                        .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
+                    let mt = item.attr_no_ns("media-type").unwrap_or_default();
+                    if !is_nav
+                        && mt != "application/x-dtbncx+xml"
+                        && !remote_resource_refs.contains(href)
+                    {
+                        report.push_node(
+                            OPF_097,
+                            Severity::Usage,
+                            format!(
+                                "'{href}' is declared in the manifest, but no content document references it"
+                            ),
+                            opf_path,
+                            item,
+                            "opf.manifest_item.never_referenced",
+                            vec![href.to_string()],
+                        );
+                    }
                     continue;
                 }
                 if is_external(href) {
@@ -11351,6 +11385,62 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// OPF-097 applies to a **remote** manifest item too.
+    ///
+    /// In epubcheck this is one check over every manifest item —
+    /// `!(isInSpine() || isNav() || isNcx())` plus an empty reference registry
+    /// — and the RSC-006/RSC-006b branch a few lines above it in
+    /// `checkItemAfterResourceValidation` is separate and additional, not an
+    /// alternative. We ran a remote item through the RSC-006 branch and then
+    /// `continue`d, so it never reached the reference question at all.
+    ///
+    /// Two of epubcheck's own fixtures show both messages together:
+    /// `resources-remote-spine-item-error` and
+    /// `package-manifest-prop-remote-resource-object-param-warning`.
+    ///
+    /// **The shelf says almost nothing here** — 3 of its 405 books declare a
+    /// remote manifest item and the per-book diff is unchanged — so the
+    /// fixtures and this test are the evidence, not the silence.
+    #[test]
+    fn opf_097_reaches_a_remote_manifest_item() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" properties="remote-resources"/>
+    <item id="r" href="https://example.org/clip.mp4" media-type="video/mp4"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+            let ch1 = format!(
+                "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            crate::validate_bytes(epub_with_opf(Some(OPF), &ch1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_097)
+                .map(|m| m.id)
+                .collect()
+        };
+
+        assert_eq!(
+            ids("<p>x</p>"),
+            vec![crate::ids::OPF_097],
+            "nothing references the remote item"
+        );
+        assert!(
+            ids(r#"<p><video src="https://example.org/clip.mp4"/></p>"#).is_empty(),
+            "a referenced remote item is not unreferenced - the control"
+        );
     }
 
     /// A `<guide>` child must be named `reference`, and a `<tours>` child

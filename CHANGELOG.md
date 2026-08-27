@@ -101,6 +101,15 @@ The exemption sits after the URL handling rather than before it, because
 epubcheck parses the URL before it reads `rel`: a malformed URL is still
 reported on a link of any kind, and only the existence question goes unasked.
 
+**`OPF-097` now reaches a remote manifest item** (#121). In epubcheck it is
+one check over every manifest item, and the `RSC-006` branch beside it is
+additional rather than an alternative; ours ran the remote branch and stopped,
+so a remote resource nothing references drew the error and not the usage note.
+Two of epubcheck's own fixtures show both on one item.
+
+Only 3 of the 405 shelf books declare a remote manifest item at all, so the
+unchanged shelf diff says little here — the fixtures are the evidence.
+
 **A misspelt `<guide>` child is an error again** (#120). Reported by JSWolf on
 MobileRead: `<guide><referen/>…</guide>` validated here and draws `element
 "referen" not allowed anywhere; expected element "reference"` from epubcheck.
