@@ -1057,6 +1057,50 @@ pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, rep
         return;
     }
     for node in d.descendants().filter(|n| n.is_element()) {
+        // `<input type="image">` needs a non-empty `alt`, and neither half was
+        // checked (#109, noticed while probing #107's `input@src`).
+        //
+        // **Checked here rather than in the grammar, deliberately.** epubcheck
+        // splits `<input>` into one element definition per `type` value, so
+        // the requirement falls out of `input.image.attrs`; reproducing that
+        // split would be a large change to reach one rule, and our RELAX NG
+        // engine reports a missing required attribute without naming it —
+        // `element "input" is missing a required attribute` against
+        // epubcheck's `missing required attribute "alt"`. Naming it is the
+        // whole diagnosis. A required attribute carrying a value constraint
+        // would also meet the double-blame in #123.
+        //
+        // The boundary was probed rather than read, one book per shape:
+        // `type="image"` with no `alt` is the missing-attribute message,
+        // `alt=""` is the invalid-value one, `alt="a"` is clean, and
+        // `type="text"` is clean whatever else it carries. `src` is not
+        // required.
+        //
+        // EPUB 3 only by its position in this function, and correctly so:
+        // OPS 2.0.1 does not include the Forms module at all, so an EPUB 2
+        // `<input>` is already rejected outright by the element vocabulary.
+        if node.tag_name().namespace() == Some(XHTML_NS)
+            && node.tag_name().name() == "input"
+            && node.attr_no_ns("type").is_some_and(|t| t.trim() == "image")
+        {
+            match node.attr_no_ns("alt") {
+                None => report.push_at_pos(
+                    RSC_005,
+                    Severity::Error,
+                    "element \"input\" missing required attribute \"alt\"",
+                    path,
+                    Position::of(node),
+                ),
+                Some("") => report.push_at_pos(
+                    RSC_005,
+                    Severity::Error,
+                    "value of attribute \"alt\" is invalid; must be a string with at least 1 character",
+                    path,
+                    Position::of(node),
+                ),
+                Some(_) => {}
+            }
+        }
         if node.tag_name().namespace() == Some(XHTML_NS)
             && matches!(node.tag_name().name(), "base" | "embed" | "rp")
         {
@@ -1610,6 +1654,60 @@ mod tests {
         let mut report = Report::new();
         check_idref_resolution(&d, "c.xhtml", &mut report);
         report.messages.into_iter().map(|m| m.text).collect()
+    }
+
+    /// `<input type="image">` needs a non-empty `alt` (#109).
+    ///
+    /// Noticed while probing #107's `input@src` and left open then, because a
+    /// conditional-on-attribute-value requirement is the kind that invents
+    /// false positives when guessed. The boundary was probed instead, one book
+    /// per shape against 5.3.0, and it is small: the requirement turns on
+    /// `type="image"` alone, `src` is not required, and every other `type` is
+    /// unaffected.
+    ///
+    /// Checked here rather than in the grammar on purpose. epubcheck splits
+    /// `<input>` into one element definition per `type`, so the rule falls out
+    /// of `input.image.attrs`; reproducing that split to reach one rule is a
+    /// large change, and our RELAX NG engine reports a missing required
+    /// attribute *without naming it* — where naming it is the whole diagnosis.
+    ///
+    /// The shelf cannot see any of this: **0 of its 405 books contain an
+    /// `<input type="image">` at all**, so the probes are the evidence and the
+    /// unchanged per-book diff is not.
+    #[test]
+    fn an_image_input_needs_a_non_empty_alt() {
+        let ids = |input: &str| -> Vec<&'static str> {
+            let xhtml = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><form action="x">{input}</form></body></html>"#
+            );
+            let d = roxmltree::Document::parse(&xhtml).unwrap();
+            let mut report = Report::default();
+            check_dom(&d, "c.xhtml", true, &mut report);
+            report.messages.iter().map(|m| m.id).collect()
+        };
+
+        assert_eq!(
+            ids(r#"<input type="image" src="i.png"/>"#),
+            vec![RSC_005],
+            "no alt at all"
+        );
+        assert_eq!(
+            ids(r#"<input type="image" src="i.png" alt=""/>"#),
+            vec![RSC_005],
+            "an empty alt is invalid, not absent - epubcheck words these differently"
+        );
+        assert!(
+            ids(r#"<input type="image" src="i.png" alt="a"/>"#).is_empty(),
+            "the ordinary case"
+        );
+        assert!(
+            ids(r#"<input type="image" alt="a"/>"#).is_empty(),
+            "src is not required - probed, not assumed"
+        );
+        assert!(ids(r#"<input type="text"/>"#).is_empty(), "another type");
+        assert!(ids("<input/>").is_empty(), "no type at all");
     }
 
     #[test]

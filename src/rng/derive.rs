@@ -778,6 +778,13 @@ impl<'a> Env<'a> {
             blames.push(Blame::Element(node, ElementFault::NotAllowed(expected)));
             return cur;
         }
+        // Set when an attribute is *present* but its value is rejected. The
+        // recovery below reverts such an attribute as if it were never
+        // written, which is right for carrying on — and wrong for the
+        // required-attribute check at the close of the start tag, which then
+        // concludes the element is missing what it actually has. See the
+        // guard on that push.
+        let mut value_rejected = false;
         for att in node.attributes() {
             let ans = att.namespace().unwrap_or("");
             let prev = cur.clone();
@@ -795,6 +802,7 @@ impl<'a> Env<'a> {
                 } else {
                     AttributeFault::NotAllowed
                 };
+                value_rejected |= fault == AttributeFault::InvalidValue;
                 blames.push(Blame::Attribute(node, att, fault));
                 // Recover and keep going, same "report and skip" shape as
                 // `children_deriv`'s element-name-mismatch handling: revert
@@ -818,7 +826,24 @@ impl<'a> Env<'a> {
         }
         let before_close = cur.clone();
         cur = self.start_tag_close_deriv(&cur);
-        if is_not_allowed(&cur) {
+        // **Not when an attribute we just reverted is the one it wants** (#123).
+        // The revert above is what makes the element look incomplete: an
+        // `<epub:trigger action="zzz">` has its required `action`, the value
+        // fails the enumeration, we drop the attribute to keep going, and the
+        // close then reports it missing. epubcheck gives one finding there —
+        // the value error — and we gave two, the second inviting the author to
+        // add an attribute already written on the line above.
+        //
+        // Only `InvalidValue` sets the flag. A `NotAllowed` attribute has an
+        // unknown name, so reverting it can never have emptied a required
+        // slot, and suppressing on that would hide a real missing attribute.
+        //
+        // The cost, stated because it is a real one: an element that both
+        // carries an invalid value *and* is genuinely missing a different
+        // required attribute now reports only the first. It is still reported,
+        // still with a precise message, and the corpus's 255 strict scenarios
+        // are unchanged by this.
+        if is_not_allowed(&cur) && !value_rejected {
             blames.push(Blame::Element(node, ElementFault::MissingAttribute));
             // Recover the same way #60 did for incomplete content: take the
             // continuation the derivative is already holding, so the element's

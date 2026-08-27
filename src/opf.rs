@@ -9269,6 +9269,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             report,
         );
         let sheet = styloria::Parser::parse_stylesheet(&css_text);
+        // Whether the stylesheet references anything outside the container —
+        // the fact both `remote-resources` questions turn on.
+        //
+        // **Remote or `file:`, and nothing else.** epubcheck treats a `file:`
+        // URL as a remote resource in both directions — with the property
+        // declared it reports no OPF-018, without it OPF-014 — and its own
+        // `file-url-in-css-error` fixture is the first half, its only URL
+        // being `file:/font.woff` against an expectation of RSC-030 alone.
+        // Counting only http(s) cost both directions at once: a false positive
+        // there the moment OPF-018 was implemented, and an OPF-014 that had
+        // been silently missing before it.
+        //
+        // `is_external` looks like the predicate for this and is not: it
+        // answers "is there a container path to resolve", so it is also true
+        // of an **empty** href, a bare `#fragment`, and a `data:` URL.
+        // Reaching for it turned one false positive into two —
+        // `content-css-font-face-url-empty-error`, whose `src: url('')`
+        // suddenly declared a remote resource. Probed: `data:` and `''` draw
+        // no OPF-014 from epubcheck, so neither counts.
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
             // Consumed resources, for OPF-097 - a font is "used" if any
@@ -9292,8 +9311,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     vec![u.clone()],
                 );
             }
+            css_has_remote |= is_remote_url(&u) || u.trim_start().starts_with("file:");
             if is_remote_url(&u) {
-                css_has_remote = true;
                 let u = strip_url_fragment(&u);
                 // A stylesheet asking for a remote font *is* a reference to
                 // it, and RSC-006/RSC-006b turn on whether one exists
@@ -11480,14 +11499,12 @@ mod tests {
     /// living vocabulary: the element is deprecated and closed, so no new
     /// value can appear.
     ///
-    /// A known count difference is left alone and recorded rather than
-    /// papered over: an *invalid* `action` value draws one finding from
-    /// epubcheck and two from us — the value error, plus a spurious "missing
-    /// a required attribute" from the derivative engine's blame selection.
-    /// It survives whether the attributes are written as an interleave or a
-    /// plain group, so it is the engine's behaviour and not this model's; the
-    /// book is already invalid either way, and both tools name the real
-    /// defect. See #123.
+    /// The last assertion is #123, which this element is what exposed. An
+    /// *invalid* `action` value used to draw two findings from us against
+    /// epubcheck's one: the value error, plus a spurious "missing a required
+    /// attribute" — because the engine reverts a rejected attribute to keep
+    /// going, and the close of the start tag then finds the required slot
+    /// empty. The element has the attribute; only its value is wrong.
     #[test]
     fn epub_trigger_takes_action_and_ref() {
         let ids = |trigger: &str| -> Vec<&'static str> {
@@ -11520,6 +11537,12 @@ mod tests {
             ids(r#"<epub:trigger ev:observer="test" action="pause" ref="test"/>"#).len(),
             1,
             "and so is ev:event"
+        );
+        assert_eq!(
+            ids(r#"<epub:trigger ev:observer="test" ev:event="click" action="zzz" ref="test"/>"#)
+                .len(),
+            1,
+            "an invalid value is one finding, not also a missing-attribute one (#123)"
         );
     }
 
@@ -11608,6 +11631,30 @@ mod tests {
             ids("remote-resources", REMOTE, "application/vnd.dafont"),
             vec![crate::ids::CSS_007],
             "a remote font's media type is still examined"
+        );
+
+        // **A `file:` URL counts as remote for both questions**, and the three
+        // shapes that look like it and do not. epubcheck was asked all six,
+        // one book each: `file:` behaves exactly like `https:` here, while a
+        // `data:` URL and an empty `url('')` declare nothing.
+        //
+        // The empty one is not hypothetical — reaching for `is_external`,
+        // which answers "is there a container path to resolve" rather than "is
+        // this outside the container", made `src: url('')` declare a remote
+        // resource and turned one false positive into two. The corpus's
+        // over-reported counter is what caught it.
+        assert!(
+            ids("remote-resources", "file:/f.woff", "font/woff").is_empty(),
+            "a file: URL satisfies the declared property"
+        );
+        assert_eq!(
+            ids("", "file:/f.woff", "font/woff"),
+            vec![crate::ids::OPF_014],
+            "and requires it when undeclared"
+        );
+        assert!(
+            ids("", "data:font/woff;base64,AAAA", "font/woff").is_empty(),
+            "a data: URL is not a remote resource"
         );
     }
 

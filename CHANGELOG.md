@@ -101,6 +101,25 @@ The exemption sits after the URL handling rather than before it, because
 epubcheck parses the URL before it reads `rel`: a malformed URL is still
 reported on a link of any kind, and only the existence question goes unasked.
 
+**`<input type="image">` needs a non-empty `alt`** (#109), which neither half
+of was checked. Filed yesterday and left open because a
+conditional-on-attribute-value requirement is the kind that invents false
+positives when guessed; the boundary was probed instead, one book per shape,
+and it turns out to be small — the requirement turns on `type="image"` alone
+and `src` is not required.
+
+**A required attribute with a bad value is blamed once, not twice** (#123).
+The RELAX NG engine reverts a rejected attribute so the rest of the element
+still gets checked, and the close of the start tag then found the required
+slot empty and reported it missing as well. The element has the attribute;
+only its value is wrong. An `<epub:trigger action="zzz">` drew two findings
+against epubcheck's one.
+
+A `file:` URL in a stylesheet now counts as a remote resource for both
+`remote-resources` questions, as it does in epubcheck — measured in six
+combinations, since `data:` and an empty `url('')` look like the same case and
+are not.
+
 **`<epub:trigger>` keeps its own attributes** (#124). Our grammar gave it the
 global attribute set, which holds neither `action` nor `ref`, so epubcheck's
 own `trigger-deprecated-warning` fixture — where it reports the deprecation
