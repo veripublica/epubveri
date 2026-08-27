@@ -583,15 +583,26 @@ impl NavCompleteness {
 
 /// §3.4 Teacher's Editions, §8.1 Profile Identification, §8.3
 /// Accessibility Metadata - all confirmed via real, single-Package-
-/// Document (bare `.opf`) fixtures. A `dc:type=teacher-edition` (a real,
-/// distinct content signal, unlike bare `dc:type=edupub` detection which
-/// needs real CLI-profile support this project doesn't build - named,
-/// accepted gap) without `dc:type=edupub` also present still needs it
-/// declared; a teacher's edition should (warning) name its corresponding
-/// student edition via `dc:source`; a confirmed edupub publication needs
-/// at least one `schema:accessibilityFeature` declaration, and "none" is
-/// specifically insufficient there (though a legitimate general-purpose
-/// schema.org value otherwise).
+/// Document (bare `.opf`) fixtures. A teacher's edition should (warning) name
+/// its corresponding student edition via `dc:source`; a confirmed edupub
+/// publication needs at least one `schema:accessibilityFeature` declaration,
+/// and "none" is specifically insufficient there (though a legitimate
+/// general-purpose schema.org value otherwise).
+///
+/// **`dc:type=teacher-edition` alone does not turn the profile on**, and the
+/// note that used to say so has expired twice over. It read: "a real, distinct
+/// content signal, unlike bare `dc:type=edupub` detection which needs real
+/// CLI-profile support this project doesn't build - named, accepted gap". The
+/// gap is closed — `--profile edupub` exists and works — and the premise was
+/// wrong anyway: epubcheck's `PublicationType` knows `edupub`, `dictionary`,
+/// `index` and `preview`, and nothing named `teacher-edition`, so it applies
+/// the EDUPUB rules only under the profile or a real `dc:type=edupub`.
+/// Handed `edupub-teacher-edition-metadata-type-missing-error.opf` with no
+/// profile it reports the missing file and nothing else, and with
+/// `--profile edupub` both tools report the same RSC-005 — measured both ways.
+/// The corpus passes the profile (the feature file's Background says so), so
+/// the scenario is unaffected; only a `compare` run, which passes none, could
+/// see this.
 pub(crate) fn check_teacher_edition_and_accessibility(
     dc_types: &[String],
     profile: Option<&str>,
@@ -602,7 +613,7 @@ pub(crate) fn check_teacher_edition_and_accessibility(
     let is_edupub_pub = dc_types.iter().any(|t| t == "edupub");
     let is_teacher_edition = dc_types.iter().any(|t| t == "teacher-edition");
 
-    if !is_edupub_pub && (is_teacher_edition || profile == Some("edupub")) {
+    if !is_edupub_pub && profile == Some("edupub") {
         match metadata {
             Some(md) => report.push_node(
                 RSC_005,

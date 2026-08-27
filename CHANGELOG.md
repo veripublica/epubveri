@@ -10,6 +10,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**`dc:type=teacher-edition` alone no longer turns on the EDUPUB rules**
+(#119). epubcheck's publication types are `epub`, `dictionary`, `edupub`,
+`index` and `preview` — there is no `teacher-edition` — so a book declaring
+only that gets no EDUPUB checks unless the profile is asked for. We reported
+`RSC-005` on one; with `--profile edupub` both tools report it and always did.
+
+The comment justifying the wider detection had expired twice: it named
+CLI-profile support as a gap this project does not build, and `--profile
+edupub` has existed for some time — and the premise was wrong anyway.
+
 **Five places where one defect drew two findings** (#117). Each is a second
 check still asking a question epubcheck had already stopped asking, so the
 extra message named a repair that would not have helped:
