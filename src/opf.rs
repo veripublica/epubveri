@@ -11388,7 +11388,8 @@ mod tests {
             opf_ids_of(&opf, &[crate::ids::RSC_007W])
         };
         assert!(
-            link("    <item id=\"g\" href=\"gone.xml\" media-type=\"application/xml\"/>\n").is_empty(),
+            link("    <item id=\"g\" href=\"gone.xml\" media-type=\"application/xml\"/>\n")
+                .is_empty(),
             "declared but missing: RSC-001 says it once"
         );
         assert_eq!(
@@ -11400,7 +11401,12 @@ mod tests {
         // A malformed property value is not a prefix usage. epubcheck reports
         // OPF-026 and `continue`s before the lookup, so the prefix is never
         // examined. `metadata-meta-property-malformed-error.opf`.
-        let prop = |value: &str| opf_ids_of(&meta_opf(value), &[crate::ids::OPF_026, crate::ids::OPF_028]);
+        let prop = |value: &str| {
+            opf_ids_of(
+                &meta_opf(value),
+                &[crate::ids::OPF_026, crate::ids::OPF_028],
+            )
+        };
         assert_eq!(
             prop("foo:"),
             vec![crate::ids::OPF_026],
@@ -11445,7 +11451,10 @@ mod tests {
             );
             opf_ids_of(&opf, &[crate::ids::OPF_033])
         };
-        assert!(spine("").is_empty(), "an empty spine is the grammar's finding");
+        assert!(
+            spine("").is_empty(),
+            "an empty spine is the grammar's finding"
+        );
         assert_eq!(
             spine(r#"<itemref idref="ch1" linear="no"/>"#),
             vec![crate::ids::OPF_033],
