@@ -8,7 +8,27 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.12.5] - 2026-08-27
+
+**The published corpus recall figure goes 595 → 603, and this time the
+denominator grew** (#111). Eight EDUPUB scenarios that 0.12.4 had to skip are
+asked and answered again: the test harness was wrapping a loose fixture into a
+book while leaving the document *outside* the reading order, and some of
+epubcheck's rules do not apply there — so those fixtures could not pose their
+question, and 0.12.4's notes said so. That was the harness's doing rather than
+the suite's, and the wrap now puts the target in the spine. Verified from
+epubcheck's side too: handed the rebuilt books it now reports the finding the
+feature file expects, where before it reported nothing.
+
+Four scenarios remain unaskable, all one cause — they are written for
+epubcheck's loose-file mode and are about a badly-named file, which a wrap's
+container does not contain. The count and the reason print on every run, and
+the README states the suite's 607 beside the scored 603.
+
+The same work removed a large source of noise in the comparison harness: a
+wrap declared every sibling fixture in the directory as a manifest item,
+including other package documents, which epubcheck then validated in full. On
+the 981 built scenarios, agreement with epubcheck went from 831 books to 872.
 
 **`dc:type=teacher-edition` alone no longer turns on the EDUPUB rules**
 (#119). epubcheck's publication types are `epub`, `dictionary`, `edupub`,
