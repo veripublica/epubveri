@@ -44,6 +44,42 @@ fn sorted_siblings(dir: &Path) -> Vec<String> {
     names
 }
 
+/// The media type a *sibling* fixture is declared with inside a wrap.
+///
+/// Siblings are in the manifest so the **target**'s relative references
+/// resolve — its stylesheet, images, fonts — not to be validated. Each is an
+/// independent test fixture in its own right, so any type epubcheck hands its
+/// own checker is demoted to an inert one.
+///
+/// **`.opf` was the omission, and it was expensive.** `guess_media_type` calls
+/// it `application/oebps-package+xml`, epubcheck's `CheckerFactory` maps that
+/// to `OPFChecker`, and every sibling package document in the directory was
+/// then fully validated as part of a wrap testing something else entirely. On
+/// 2026-08-27 that accounted for **294 of the 329** rows on the gap side of
+/// the 981-book `compare` run — findings that looked like ours to miss and
+/// were the harness's to stop creating. `.ncx` is the same shape and is
+/// demoted with it.
+///
+/// **`text/css` is deliberately *not* demoted**, though epubcheck checks it
+/// too: a stylesheet is exactly the kind of resource the target legitimately
+/// links, and declaring it inert would invent an error about the link. The
+/// line is "does the target reference this", not "does epubcheck check it".
+fn sibling_media_type(name: &str, target_name: &str) -> &'static str {
+    let mt = guess_media_type(name);
+    if name != target_name
+        && matches!(
+            mt,
+            "application/xhtml+xml"
+                | "image/svg+xml"
+                | "application/oebps-package+xml"
+                | "application/x-dtbncx+xml"
+        )
+    {
+        return "application/octet-stream";
+    }
+    mt
+}
+
 fn guess_media_type(name: &str) -> &'static str {
     let ext = Path::new(name)
         .extension()
@@ -158,10 +194,7 @@ pub fn wrap_nav_doc(target_full: &Path, target_name: &str, version: &str) -> Pat
         if fn_ == target_name {
             continue;
         }
-        let mut mt = guess_media_type(fn_);
-        if mt == "application/xhtml+xml" || mt == "image/svg+xml" {
-            mt = "application/octet-stream";
-        }
+        let mt = sibling_media_type(fn_, target_name);
         manifest_items.push(format!(
             "<item id=\"f{i}\" href=\"{fn_}\" media-type=\"{mt}\"/>"
         ));
@@ -304,10 +337,7 @@ pub fn wrap_single_doc(
     // not just the one under test, so they're demoted to an inert media
     // type (the target itself keeps its real one).
     for (i, fn_) in siblings.iter().enumerate() {
-        let mut mt = guess_media_type(fn_);
-        if fn_ != target_name && (mt == "application/xhtml+xml" || mt == "image/svg+xml") {
-            mt = "application/octet-stream";
-        }
+        let mt = sibling_media_type(fn_, target_name);
         manifest_items.push(format!(
             "<item id=\"f{i}\" href=\"{fn_}\" media-type=\"{mt}\"/>"
         ));
@@ -431,10 +461,7 @@ pub fn wrap_svg_file(target_full: &Path, target_name: &str) -> PathBuf {
         if fn_ == target_name {
             continue;
         }
-        let mut mt = guess_media_type(fn_);
-        if mt == "application/xhtml+xml" || mt == "image/svg+xml" {
-            mt = "application/octet-stream";
-        }
+        let mt = sibling_media_type(fn_, target_name);
         manifest_items.push(format!(
             "<item id=\"f{i}\" href=\"{fn_}\" media-type=\"{mt}\"/>"
         ));
