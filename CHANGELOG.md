@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.12.4] - 2026-08-27
 
 **Encrypted resources are no longer parsed as their declared type** (#101).
 Reported by Doitsu on MobileRead with an obfuscation test book and both
@@ -167,7 +167,7 @@ present** before writing anything. The build jobs upload with
 still reported success and `needs: build` did not catch it — the v0.5.10
 failure from the other direction, a release published with fewer binaries than
 it claims, which looks exactly like a finished release.
-## [0.12.3] - 2026-08-27
+## [0.12.3] - 2026-08-26
 
 Eight changes. The first three come from Doitsu's report on MobileRead #248,
 and the first of those is the report itself — reproduced, and deliberate. The
