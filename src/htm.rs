@@ -1119,7 +1119,7 @@ fn reserved_namespace_host(uri: &str) -> bool {
         || host.ends_with(".idpf.org")
 }
 
-fn is_valid_data_attr_suffix(rest: &str) -> bool {
+pub(crate) fn is_valid_data_attr_suffix(rest: &str) -> bool {
     !rest.is_empty() && !rest.starts_with('-') && !rest.chars().any(|c| c.is_ascii_uppercase())
 }
 

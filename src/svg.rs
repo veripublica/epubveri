@@ -525,6 +525,45 @@ pub(crate) fn check_attribute_vocabulary(
 fn check_attrs_of(n: roxmltree::Node, path: &str, report: &mut Report) {
     for attr in n.attributes().filter(|a| a.namespace().is_none()) {
         let name = attr.name();
+        // `data-*` is allowed on SVG exactly as it is on XHTML, and this list
+        // could never have carried it: it is an open-ended family, not a
+        // vocabulary entry. epubcheck's own `data-attribute-valid.svg` fixture
+        // says so — its title is "data-\* attributes are allowed" — and we
+        // reported RSC-025 on it.
+        //
+        // Probed rather than read off the grammar, one book per shape against
+        // 5.3.0, because the grammar files contain no `data-` at all and the
+        // reason is not visible in them: `data-a-b` draws nothing, `data-` and
+        // `data-FOO` draw **HTM_061** (the name is malformed, which is a
+        // different question), and `data` with no hyphen draws RSC-025, which
+        // we already agreed on. So the shape is accepted here and the suffix
+        // is judged by `htm::check_dom`, exactly as on the XHTML side — see
+        // `is_data_attribute_name`, which deliberately does not re-validate
+        // the suffix for the same reason.
+        //
+        // A control was part of the probe: `zzz-foo` is rejected by both
+        // tools, so the grammar really is applied to this document and the
+        // silence on `data-epub` is a rule rather than an absence.
+        if crate::htm::is_data_attribute_name(name) {
+            // The suffix is still judged, and on a *standalone* SVG only this
+            // site can do it: `htm::check_dom` runs over content documents
+            // declared `application/xhtml+xml`, so it already covers inline
+            // SVG and never sees a bare `.svg` file. Accepting the shape
+            // without this would have traded one wrong finding for silence,
+            // which is the worse of the two — epubcheck reports HTM_061 here.
+            if let Some(rest) = name.strip_prefix("data-")
+                && !crate::htm::is_valid_data_attr_suffix(rest)
+            {
+                report.push_at_pos(
+                    crate::ids::HTM_061,
+                    Severity::Error,
+                    format!("'data-{rest}' is not a valid data-* attribute name"),
+                    path,
+                    Position::of(n),
+                );
+            }
+            continue;
+        }
         if !is_recognized_attribute(name) {
             report.push_at_pos(
                 RSC_025,
@@ -974,6 +1013,67 @@ mod tests {
     /// eleven wrong errors instead of eleven wrong usage notes.
     ///
     /// Each was confirmed silent in epubcheck 5.3.0 on its own book.
+    /// `data-*` is allowed on SVG, and its *suffix* is still judged.
+    ///
+    /// epubcheck's own `data-attribute-valid.svg`, whose title is "data-\*
+    /// attributes are allowed" and on which it reports nothing; we reported
+    /// RSC-025. The vocabulary list could never have carried the rule — an
+    /// open-ended family is not a vocabulary entry.
+    ///
+    /// **Settled by probe, not by reading the grammar**, which is the part
+    /// worth keeping: the SVG schema files contain no `data-` at all, so the
+    /// reason is not visible in them. One book per shape against 5.3.0 gives
+    /// all six answers below, and the `zzz-foo` control is what makes the
+    /// silence on `data-epub` a rule rather than an absence — it proves the
+    /// grammar is applied to this document at all.
+    ///
+    /// The two HTM_061 rows are why accepting the shape is not the whole fix.
+    /// `htm::check_dom` judges the suffix for anything declared
+    /// `application/xhtml+xml`, so inline SVG was always covered and a bare
+    /// `.svg` file never is. Accepting the shape without this would have
+    /// traded a wrong finding for silence, which is the worse of the two.
+    #[test]
+    fn svg_allows_data_attributes_and_still_checks_their_names() {
+        let ids = |attrs: &str| -> Vec<&'static str> {
+            let svg = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<svg viewBox="0 0 12 4" xmlns="http://www.w3.org/2000/svg" xml:lang="en">
+<title>t</title><desc>d</desc><rect x="1" y="2" width="7" height="3" {attrs}/>
+</svg>"#
+            );
+            let d = roxmltree::Document::parse(&svg).unwrap();
+            let mut report = Report::default();
+            check_attribute_vocabulary(d.root_element(), "c.svg", &mut report);
+            report.messages.iter().map(|m| m.id).collect()
+        };
+
+        assert!(ids(r#"data-epub="allowed""#).is_empty(), "the plain case");
+        assert!(
+            ids(r#"data-a-b="x""#).is_empty(),
+            "hyphens in the suffix are fine"
+        );
+        assert_eq!(
+            ids(r#"data-="x""#),
+            vec![crate::ids::HTM_061],
+            "empty suffix"
+        );
+        assert_eq!(
+            ids(r#"data-FOO="x""#),
+            vec![crate::ids::HTM_061],
+            "uppercase is not a valid data-* name"
+        );
+        assert_eq!(
+            ids(r#"data="x""#),
+            vec![RSC_025],
+            "`data` with no hyphen is not the family at all"
+        );
+        assert_eq!(
+            ids(r#"zzz-foo="x""#),
+            vec![RSC_025],
+            "the control: an unknown attribute is still rejected, so the check is live"
+        );
+    }
+
     #[test]
     fn the_svg_vocabulary_covers_all_of_svg_1_1() {
         for name in [

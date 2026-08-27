@@ -10,6 +10,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**`data-*` is allowed on SVG, and a malformed one is now named properly**
+(#115). `RSC-025` fired on `data-epub` in a standalone SVG, including on
+epubcheck's own fixture whose title says the family is allowed. The attribute
+vocabulary could never have carried the rule — `data-*` is an open-ended
+family, not a vocabulary entry.
+
+Accepting the shape alone would have traded a wrong finding for silence, so
+the suffix is judged here too: `data-` and `data-FOO` draw `HTM_061`, exactly
+as they do on the XHTML side. That check runs over documents declared
+`application/xhtml+xml`, so inline SVG was always covered and a bare `.svg`
+file never was.
+
 **A hyperlink epubcheck aborts is asked nothing about its fragment** (#114).
 `RSC-012` was reported alongside `RSC-011`, where epubcheck reports the second
 alone — `case HYPERLINK` throws after either of its two findings, so the
