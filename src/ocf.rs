@@ -659,6 +659,30 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                         vec![segment.to_string()],
                     );
                 }
+                // PKG-010 belongs here with its three siblings, and it was the
+                // one missing from the set. epubcheck asks all four in
+                // `OCFFilenameChecker`, which in full-publication mode runs
+                // over **container entries**; we were asking this one of the
+                // manifest *href* instead, in `opf.rs`. That happens to agree
+                // whenever the file exists and disagrees whenever it does not
+                // — probed: a declared-but-absent `a b.xhtml` draws RSC-001
+                // alone from epubcheck and RSC-001 plus PKG-010 from us, and
+                // an `a%20b.xhtml` href whose entry is literally named that
+                // draws OPF-003 there and OPF-003 plus PKG-010 here, because
+                // the space exists only after percent-decoding.
+                //
+                // Asking the container instead also covers the case no
+                // manifest mentions at all, which the href form could not see.
+                if segment.contains(' ') {
+                    report.push_at_rule(
+                        PKG_010,
+                        Severity::Warning,
+                        format!("file name '{segment}' contains a space"),
+                        name.as_str(),
+                        "ocf.filename.contains_space",
+                        vec![segment.to_string()],
+                    );
+                }
             }
             names.push(name);
         }

@@ -10,6 +10,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**The OCF filename rules are asked of the container, not of a manifest href**
+(#116). epubcheck says so in its own source — *"only check the filename in
+single-file mode (it is checked by the container checker in full-publication
+mode)"* — and epubveri takes a packaged `.epub` only, so the href form could
+never be right here. It fired exactly where epubcheck is silent: on a file the
+manifest declares and the container does not hold, and on a `%20` href whose
+entry is literally named that, where the space exists only after decoding.
+
+`PKG-010` had to be **added** to the container loop first: it carried the
+other three filename rules and not that one, so removing the href form alone
+would have lost the rule on real books. 22 of the 405 shelf books report it,
+241 findings, and the per-book counts are unchanged.
+
+Four more corpus scenarios turn out to be written for single-file mode and
+unaskable once wrapped — handed the harness's book epubcheck reports
+`RSC-001` and nothing else on each. The scored denominator goes 599 → 595,
+the count and reason print on every run, and the README now states the whole
+suite's size beside it rather than only the shrinking number.
+
 **`data-*` is allowed on SVG, and a malformed one is now named properly**
 (#115). `RSC-025` fired on `data-epub` in a standalone SVG, including on
 epubcheck's own fixture whose title says the family is allowed. The attribute

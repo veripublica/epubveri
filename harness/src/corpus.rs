@@ -725,7 +725,12 @@ const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
 ];
 
 /// Fixtures whose expected finding **epubcheck itself does not make** once the
-/// harness wraps them, because the wrap puts the document outside the spine.
+/// harness wraps them into a publication.
+///
+/// Two causes so far, both of the same shape — the fixture was written for a
+/// mode we do not have, and the wrap changes epubcheck's own answer:
+/// the document ends up outside the spine, or the badly-named file is not in
+/// the container at all.
 ///
 /// The EDUPUB structure and semantics Schematron is selected in
 /// `OPSChecker.validatorMap` only for an item that is neither `FIXED_LAYOUT`
@@ -741,9 +746,16 @@ const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
 ///
 /// **This moves the headline number up, so read it as a shrunken denominator
 /// rather than a better score.** Until this list existed the corpus scored
-/// these as hits — crediting us for eight findings epubcheck does not make on
-/// the same input, the fourth time an instrument here has been caught
-/// flattering us. The honest fix is to the *wrapper*, not to this list: put
+/// these as hits — crediting us for findings epubcheck does not make on the
+/// same input, the fourth time an instrument here has been caught flattering
+/// us.
+///
+/// **It is a class, not a handful of cases, and it will grow.** Every entry so
+/// far is a fixture written for a mode we do not have, wrapped into a
+/// publication where epubcheck's own answer is different. Expect more as the
+/// `compare`-over-fixtures triage continues, and report the count rather than
+/// quietly re-baselining: `README.md` states the whole suite's size, how many
+/// scenarios the wrap can pose, and that all of those pass. The honest fix is to the *wrapper*, not to this list: put
 /// the target in the spine and the question becomes askable again. That is a
 /// change to every one of the 981 books and is deliberately not being made at
 /// the end of a day.
@@ -756,6 +768,17 @@ const UNREACHABLE_IN_WRAP: &[&str] = &[
     "edupub-titles-invalid-missing-error.xhtml",
     "edupub-titles-subtitle-header-error.xhtml",
     "edupub-untitled-heading-level-error.xhtml",
+    // The filename rules, which epubcheck applies to *container entries* in
+    // full-publication mode and to the declared href only in single-file
+    // `-mode opf` — its own comment in `OPFChecker` says so. The harness wraps
+    // these `.opf` fixtures into a publication whose container does not hold
+    // the badly-named file at all, so there is no name to check and no href
+    // check to reach. All four draw `RSC-001 x2` from epubcheck and nothing
+    // else, which is exactly what we now report.
+    "item-href-contains-spaces-warning.opf",
+    "ocf-filename-character-forbidden-error.opf",
+    "ocf-filename-character-non-ascii-usage.opf",
+    "ocf-filename-character-space-warning.opf",
 ];
 
 /// Apply [`WRAPPED_MODE_EXPECTATION`] to the parsed scenarios.
@@ -935,7 +958,9 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
             .is_some_and(|f| UNREACHABLE_IN_WRAP.contains(&f))
         {
             *skipped
-                .entry("wrapped outside the spine, so epubcheck reports nothing either")
+                .entry(
+                    "the wrap makes the question unaskable; epubcheck reports nothing there either",
+                )
                 .or_insert(0) += 1;
             continue;
         }

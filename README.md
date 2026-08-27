@@ -183,36 +183,34 @@ between releases.)
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
 official test cases, each one a small EPUB file specifically constructed
-to be valid or to trip exactly one specific rule. Measured on 0.12.4
+to be valid or to trip exactly one specific rule. Measured on 0.12.5
 (2026-08-27):
 
 - **100%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
-  would report (599 of 599).
+  would report (595 of 595).
 - **100%** of the test suite's "this is perfectly valid" cases are
   correctly left alone — no false alarms on any of the 355.
 
-**That denominator was 607 in 0.12.3 and it went down, not up.** Nine
-scenarios are now scored differently, and both corrections are worth
-stating because a shrinking denominator is exactly the kind of thing a
-project can be tempted to shrink quietly.
+**Where 595 comes from, since the suite has 607.** epubcheck can check loose
+files on their own; epubveri takes a packaged `.epub` file only, so the test
+harness wraps such a fixture into a minimal book — and for some fixtures that
+wrap changes *epubcheck's own* answer, because they were written for a mode we
+do not have.
 
-epubveri takes a packaged `.epub` file only, while epubcheck can also
-check loose files on their own, so the harness wraps such a fixture into
-a minimal book. That wrap changes epubcheck's own answer twice over:
+**Twelve** are then unaskable: handed the harness's book, epubcheck reports
+nothing where the fixture expects a finding, so the suite cannot pose its
+question and the scenario is skipped. Two causes so far — the wrapped document
+ends up outside the book's reading order, where certain rules do not apply, or
+a badly-named file is simply not in the container to be named. **One** more is
+scored against the different code epubcheck gives once the file is inside a
+container.
 
-- For one scenario — a bare package document — epubcheck reports a
-  different code once the file is inside a container. It is scored
-  against that answer, and the same defect is scored separately in its
-  packaged-book form anyway.
-- For eight EDUPUB scenarios, the wrap places the document outside the
-  book's reading order, and epubcheck applies those particular rules only
-  to documents inside it. Handed the harness's own book, epubcheck
-  reports nothing there either — so the suite cannot ask its question,
-  and the eight had been counted as passes. They are now skipped.
-
-Both counts are printed on every run, so the number above cannot quietly
-drift from what the suite actually asked.
+The count and the reason print on every run. Those twelve had previously been
+counted as passes, which credited epubveri with findings epubcheck does not
+make on the same input. Expect the number to keep moving as this is worked
+through; what will not move is that it is stated rather than quietly
+re-baselined.
 
 These are the numbers epubveri's own release pre-flight prints, and they
 cover epubcheck's corpus only. That corpus is built from synthetic

@@ -4264,17 +4264,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         vec![id.to_string(), href.to_string()],
                     );
                 }
-                if resolved.contains(' ') {
-                    report.push_full(
-                        PKG_010,
-                        Severity::Warning,
-                        format!("resource '{resolved}' has a space in its name"),
-                        opf_path,
-                        Position::of(item),
-                        "opf.manifest_item.filename_contains_space",
-                        vec![resolved.clone()],
-                    );
-                }
                 if resolved_nfc == opf_own_name {
                     report.push_at_pos(
                         OPF_099,
@@ -4425,44 +4414,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     "opf.manifest_item.missing_resource",
                     vec![id.to_string(), href.to_string()],
                 );
-                // PKG-009/012: real epubcheck's single-package-document
-                // check mode has no actual container to inspect, so it
-                // validates the declared href's own file-name segments
-                // directly (confirmed via a real fixture pair testing the
-                // identical defect once as a real file name, once as a
-                // bare `.opf`'s manifest href) - only meaningful here when
-                // the resource doesn't actually exist, since an existing
-                // file's real name is already checked in `ocf::open` and
-                // double-reporting the same defect for a normal, fully-
-                // resolvable publication would be wrong.
-                let href_path = href.split(['?', '#']).next().unwrap_or(href);
-                for segment in href_path.split('/').filter(|s| !s.is_empty()) {
-                    let decoded = percent_decode(segment);
-                    if crate::filename::has_forbidden_char(&decoded) {
-                        report.push_node_attr(
-                            PKG_009,
-                            Severity::Error,
-                            format!("manifest item '{id}' href segment '{decoded}' contains a forbidden character"),
-                            opf_path,
-                            item,
-                            href_attr,
-                            "opf.manifest_item.href_segment_forbidden_char",
-                            vec![decoded.clone()],
-                        );
-                    }
-                    if crate::filename::has_non_ascii(&decoded) {
-                        report.push_node_attr(
-                            PKG_012,
-                            Severity::Usage,
-                            format!("manifest item '{id}' href segment '{decoded}' contains non-ASCII characters"),
-                            opf_path,
-                            item,
-                            href_attr,
-                            "opf.manifest_item.href_segment_non_ascii",
-                            vec![decoded.clone()],
-                        );
-                    }
-                }
+                // **The filename rules belong to the container, not to the
+                // manifest href, and this block was the last place asking the
+                // wrong one.** epubcheck runs `OCFFilenameChecker` over
+                // container entries in full-publication mode and over the
+                // declared href only in single-file `-mode opf`, which its own
+                // comment says outright: *"only check the filename in
+                // single-file mode (it is checked by the container checker in
+                // full-publication mode)"*. We take a packaged `.epub` only,
+                // so the href form could never be right here — and it fired
+                // exactly where epubcheck is silent, on a declared file that
+                // is not in the container. Probed: `a|b.xhtml` absent draws
+                // RSC-001 there and RSC-001 plus PKG-009 here.
+                //
+                // The comment this replaces had the condition inverted. It
+                // reasoned that the href check is "only meaningful when the
+                // resource doesn't actually exist, since an existing file's
+                // real name is already checked in `ocf::open`" — plausible,
+                // and the opposite of the rule: epubcheck asks it when there
+                // is **no container at all**, not when a resource is missing
+                // from one. `ocf.rs` now carries all four filename rules.
             }
             // An XHTML Content Document can never be remote - it *is* the
             // publication's content, unlike embedded media/fonts, which
@@ -11318,6 +11289,129 @@ mod tests {
                 ("OEBPS/ch1.xhtml", ch1.as_str()),
                 ("OEBPS/nav.xhtml", nav.as_str()),
             ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// The OCF filename rules belong to the **container**, not to a manifest
+    /// href.
+    ///
+    /// epubcheck's `OPFChecker` says it outright: *"only check the filename in
+    /// single-file mode (it is checked by the container checker in
+    /// full-publication mode)"*. We take a packaged `.epub` only, so asking
+    /// the href could never be right — and it fired exactly where epubcheck is
+    /// silent, on a file the manifest declares and the container does not
+    /// hold.
+    ///
+    /// The comment being replaced had the condition inverted, which is why
+    /// this lasted: it reasoned that the href form is "only meaningful when
+    /// the resource doesn't actually exist, since an existing file's real name
+    /// is already checked". Plausible, and the opposite of the rule —
+    /// epubcheck asks the href when there is **no container at all**.
+    ///
+    /// Five shapes, one book each against 5.3.0, and the two "present" rows
+    /// are the controls that keep the fix from being a silencing:
+    ///
+    /// | file | epubcheck | before |
+    /// |---|---|---|
+    /// | `a\|b.xhtml` present | PKG-009 | PKG-009 |
+    /// | `a\|b.xhtml` absent | RSC-001 | RSC-001 + PKG-009 |
+    /// | `a b.xhtml` present | PKG-010 | PKG-010 |
+    /// | `a b.xhtml` absent | RSC-001 | RSC-001 + PKG-010 |
+    /// | href `a%20b.xhtml`, entry named that | OPF-003 + RSC-001 | + PKG-010 |
+    ///
+    /// The last row is the one no reading would have predicted: the space
+    /// exists only after percent-decoding, so the container has no such name
+    /// and epubcheck has nothing to report.
+    ///
+    /// PKG-010 had to be *added* to the container loop, which carried its
+    /// three siblings and not it — so removing the href form without that
+    /// would have lost the rule on real books. 22 of the 405 on the shelf
+    /// report it, 241 findings, and the per-book counts are unchanged.
+    #[test]
+    fn the_filename_rules_are_asked_of_the_container() {
+        let ids = |name: &str, present: bool| -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="{name}" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let mut ids: Vec<&'static str> = crate::validate_bytes(epub_named_resource(
+                &opf,
+                if present { Some(name) } else { None },
+            ))
+            .messages
+            .iter()
+            .filter(|m| {
+                matches!(
+                    m.id,
+                    crate::ids::PKG_009 | crate::ids::PKG_010 | crate::ids::RSC_001
+                )
+            })
+            .map(|m| m.id)
+            .collect();
+            ids.sort();
+            ids
+        };
+
+        assert_eq!(ids("a|b.xhtml", true), vec![crate::ids::PKG_009]);
+        assert_eq!(ids("a|b.xhtml", false), vec![crate::ids::RSC_001]);
+        assert_eq!(ids("a b.xhtml", true), vec![crate::ids::PKG_010]);
+        assert_eq!(ids("a b.xhtml", false), vec![crate::ids::RSC_001]);
+    }
+
+    /// An EPUB 3 whose one chapter is written under a caller-chosen name, or
+    /// left out of the container entirely. `nav.xhtml` links to it either way,
+    /// so a missing file is a missing *reference* target too, exactly as in the
+    /// fixtures this mirrors.
+    fn epub_named_resource(opf: &str, write_as: Option<&str>) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const CH: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>x</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>n</title></head><body><nav epub:type="toc"><ol><li>t</li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            let mut files: Vec<(String, &str)> = vec![
+                ("META-INF/container.xml".to_string(), CONTAINER),
+                ("OEBPS/content.opf".to_string(), opf),
+                ("OEBPS/nav.xhtml".to_string(), NAV),
+            ];
+            if let Some(n) = write_as {
+                files.push((format!("OEBPS/{n}"), CH));
+            }
+            for (name, data) in files {
                 zip.start_file(name, deflated).unwrap();
                 zip.write_all(data.as_bytes()).unwrap();
             }
