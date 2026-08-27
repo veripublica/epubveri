@@ -1953,9 +1953,21 @@ fn check_prefix_usage(
     report: &mut Report,
 ) {
     for tok in text.split_whitespace() {
-        let Some((prefix, _)) = tok.split_once(':') else {
+        let Some((prefix, local)) = tok.split_once(':') else {
             continue;
         };
+        // A **malformed** token is not a prefix usage. epubcheck's
+        // `VocabUtil.parseProperties` reports OPF-026 and `continue`s before it
+        // ever looks the prefix up, so `property="foo:"` draws OPF-026 alone
+        // there and drew OPF-026 *and* OPF-028 here — two errors for one
+        // defect, and the second invites the author to declare a prefix that
+        // would not help. `metadata-meta-property-malformed-error.opf` is the
+        // fixture; epubcheck's condition is `group(2).isEmpty() ||
+        // group(3).isEmpty()`, i.e. either half missing, and the empty-prefix
+        // half is the `prefix.is_empty()` test just below.
+        if local.is_empty() {
+            continue;
+        }
         if prefix.is_empty() || RESERVED_PREFIXES_ANY.iter().any(|(n, _)| *n == prefix) {
             continue;
         }
@@ -3427,6 +3439,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "meta")
         {
             if let Some(property) = n.attr_no_ns("property") {
+                // An **empty or whitespace-only** value yields no token to
+                // look up. epubcheck splits the attribute on whitespace and
+                // iterates; `""` and `"   "` produce nothing, so its loop body
+                // never runs and no OPF-026/027/028 is possible. The value is
+                // still wrong, and the grammar says so — RSC-005 `value of
+                // attribute "property" is invalid (must not be empty)` — which
+                // both tools report. We added "unknown metadata property ''"
+                // on top: a second error for one defect, naming a property
+                // that is not there. `metadata-meta-property-empty-error.opf`
+                // carries both spellings.
+                if property.trim().is_empty() {
+                    continue;
+                }
                 if property.starts_with("rendition:")
                     && !KNOWN_RENDITION_PROPERTIES.contains(&property)
                 {
@@ -4070,7 +4095,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     vec![id.to_string()],
                 );
             }
-            if href.contains(' ') {
+            // **Not a `data:` URL**, whose payload is base64 and is routinely
+            // wrapped across lines — the whitespace is part of the encoding,
+            // not an unencoded space in a path. epubcheck reports RSC-029
+            // ("Data URL is not allowed in this context") and says nothing
+            // about the URL's syntax; we reported RSC-020 on top, describing a
+            // path that is not a path. `data-url-in-manifest-item-error.opf`
+            // is the fixture, and its payload is wrapped over eight lines.
+            if href.contains(' ') && !href.trim_start().starts_with("data:") {
                 report.push_node_attr(
                     RSC_020,
                     Severity::Error,
@@ -4874,7 +4906,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             );
         }
         let resolved = resolve(&base_dir, href);
-        if !name_index.contains_key(&nfc(&resolved)) {
+        let resolved_nfc = nfc(&resolved);
+        // **A link to a declared manifest item is not an undeclared
+        // reference**, even when the file is missing. epubcheck reaches
+        // `checkUndeclaredReference` only when the resource registry has no
+        // entry for the target, and the registry holds everything the manifest
+        // *declares* whether or not it exists — so a missing declared file is
+        // reported once, as RSC-001 from the manifest, and the link adds
+        // nothing. We added RSC-007w beside it: a second warning about one
+        // defect, pointing at the link rather than at the missing file.
+        //
+        // Probed both ways, one book each against 5.3.0: declared and missing
+        // draws RSC-001 alone there, undeclared and missing draws RSC-007w
+        // from both tools. `link-to-spine-item-valid.opf` is the fixture — its
+        // metadata link points at the nav, which the manifest declares.
+        let declared = items.values().any(|(p, _)| nfc(p) == resolved_nfc);
+        if !declared && !name_index.contains_key(&resolved_nfc) {
             // RSC-007w, not RSC-007: epubcheck's `checkUndeclaredReference`
             // splits this one case out by ID, `version == VERSION_3 &&
             // reference.type == LINK`, and it is the *warning* form. We
@@ -4983,12 +5030,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "itemref")
             .collect();
         // linear defaults to "yes" when absent; only an explicit "no"
-        // (whitespace-trimmed) marks an itemref non-linear. A spine that's
-        // empty, or where every itemref is explicitly non-linear, has no
-        // linear resources at all.
-        if refs
-            .iter()
-            .all(|ir| ir.attr_no_ns("linear").map(str::trim) == Some("no"))
+        // (whitespace-trimmed) marks an itemref non-linear.
+        //
+        // **An empty spine is not this finding**, though `.all()` on an empty
+        // iterator says otherwise and the comment here used to argue the point
+        // — "a spine that's empty ... has no linear resources at all". True,
+        // and not what OPF-033 means. epubcheck guards the whole block with
+        // `if (!opfHandler.getSpineItems().isEmpty())`, so the message says
+        // "there are itemrefs and none of them is linear"; an empty `<spine>`
+        // is caught by the grammar instead, which requires at least one
+        // `<itemref>`, and both tools report that RSC-005. We reported it too
+        // and added OPF-033 beside it. `spine-empty-error.opf` is the fixture.
+        if !refs.is_empty()
+            && refs
+                .iter()
+                .all(|ir| ir.attr_no_ns("linear").map(str::trim) == Some("no"))
         {
             report.push_at_pos(
                 OPF_033,
@@ -11295,6 +11351,174 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// Five shapes of "one defect, two messages", found together while
+    /// triaging the `.opf`-wrapped candidates and fixed together because they
+    /// are the same mistake: a second check kept asking a question epubcheck
+    /// had already stopped asking.
+    ///
+    /// Every assertion pairs the fixed case with a control that must still
+    /// fire, because each fix is a suppression and a suppression that is one
+    /// step too wide is silence.
+    #[test]
+    fn one_defect_draws_one_message() {
+        // A metadata <link> to a **declared** manifest item is not an
+        // undeclared reference, even when the file is missing: epubcheck's
+        // registry holds what the manifest declares whether or not it exists,
+        // so `checkUndeclaredReference` is never reached and the miss is
+        // reported once, as RSC-001. `link-to-spine-item-valid.opf`.
+        let link = |extra_item: &str| -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <link rel="record" href="gone.xml" media-type="application/xml"/>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+{extra_item}  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            opf_ids_of(&opf, &[crate::ids::RSC_007W])
+        };
+        assert!(
+            link("    <item id=\"g\" href=\"gone.xml\" media-type=\"application/xml\"/>\n").is_empty(),
+            "declared but missing: RSC-001 says it once"
+        );
+        assert_eq!(
+            link(""),
+            vec![crate::ids::RSC_007W],
+            "undeclared and missing is still the undeclared-reference case"
+        );
+
+        // A malformed property value is not a prefix usage. epubcheck reports
+        // OPF-026 and `continue`s before the lookup, so the prefix is never
+        // examined. `metadata-meta-property-malformed-error.opf`.
+        let prop = |value: &str| opf_ids_of(&meta_opf(value), &[crate::ids::OPF_026, crate::ids::OPF_028]);
+        assert_eq!(
+            prop("foo:"),
+            vec![crate::ids::OPF_026],
+            "malformed: the prefix is never looked up"
+        );
+        assert_eq!(
+            prop("foo:bar"),
+            vec![crate::ids::OPF_028],
+            "well-formed with an undeclared prefix is still OPF-028"
+        );
+
+        // An empty or whitespace-only value yields no token at all, so there
+        // is no property to call unknown. The grammar reports it either way.
+        // `metadata-meta-property-empty-error.opf`.
+        let unknown = |value: &str| opf_ids_of(&meta_opf(value), &[crate::ids::OPF_027]);
+        assert!(unknown("").is_empty(), "no token to look up");
+        assert!(unknown("   ").is_empty(), "whitespace is no token either");
+        assert_eq!(
+            unknown("nosuchproperty"),
+            vec![crate::ids::OPF_027],
+            "a real unprefixed name that is not in the vocabulary still reports"
+        );
+
+        // OPF-033 means "there are itemrefs and none is linear", not "the
+        // spine is empty" — epubcheck guards the whole block with
+        // `!getSpineItems().isEmpty()`. `spine-empty-error.opf`.
+        let spine = |body: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>{body}</spine>
+</package>"#
+            );
+            opf_ids_of(&opf, &[crate::ids::OPF_033])
+        };
+        assert!(spine("").is_empty(), "an empty spine is the grammar's finding");
+        assert_eq!(
+            spine(r#"<itemref idref="ch1" linear="no"/>"#),
+            vec![crate::ids::OPF_033],
+            "itemrefs present and none linear is what the message means"
+        );
+
+        // A `data:` URL's base64 payload is routinely wrapped across lines;
+        // that whitespace is the encoding, not an unencoded space in a path.
+        // `data-url-in-manifest-item-error.opf`.
+        let href = |h: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="i" href="{h}" media-type="image/jpeg"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            opf_ids_of(&opf, &[crate::ids::RSC_020])
+        };
+        assert!(
+            href("data:image/jpeg;base64,AAAA\n      BBBB").is_empty(),
+            "wrapped base64 is not a path with spaces in it"
+        );
+        assert_eq!(
+            href("a b.jpg"),
+            vec![crate::ids::RSC_020],
+            "a real unencoded space in a real path still reports"
+        );
+    }
+
+    /// A package document with one `<meta property="…">`, for the property
+    /// checks above.
+    fn meta_opf(property: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="{property}">x</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        )
+    }
+
+    /// Validate a book built around `opf` and keep only the ids in `want`,
+    /// deduplicated and in a stable order.
+    fn opf_ids_of(opf: &str, want: &[&'static str]) -> Vec<&'static str> {
+        const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                           <head><title>t</title></head><body><p>x</p></body></html>";
+        let mut ids: Vec<&'static str> = crate::validate_bytes(epub_with_opf(Some(opf), CH1))
+            .messages
+            .iter()
+            .filter(|m| want.contains(&m.id))
+            .map(|m| m.id)
+            .collect();
+        ids.dedup();
+        ids
     }
 
     /// The OCF filename rules belong to the **container**, not to a manifest

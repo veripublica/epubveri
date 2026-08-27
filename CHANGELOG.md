@@ -10,6 +10,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**Five places where one defect drew two findings** (#117). Each is a second
+check still asking a question epubcheck had already stopped asking, so the
+extra message named a repair that would not have helped:
+
+- a package `<link>` to a **declared** manifest item no longer adds `RSC-007w`
+  beside the `RSC-001` for the missing file;
+- a malformed `property` value (`"foo:"`) no longer adds `OPF-028` beside
+  `OPF-026` — epubcheck reports the malformed value and never looks the prefix
+  up;
+- an empty or whitespace-only `property` no longer draws `OPF-027`, since
+  there is no token to look up and the grammar already reports the value;
+- `OPF-033` needs a spine that *has* itemrefs — it means "none of them is
+  linear", not "the spine is empty", which the grammar reports;
+- a `data:` URL's wrapped base64 no longer draws `RSC-020` for the newlines in
+  its payload.
+
+Two of these had their reasoning written down and wrong. The `OPF-033` comment
+argued that an empty spine has no linear resources — true, and not what the
+message means.
+
 **The OCF filename rules are asked of the container, not of a manifest href**
 (#116). epubcheck says so in its own source — *"only check the filename in
 single-file mode (it is checked by the container checker in full-publication
