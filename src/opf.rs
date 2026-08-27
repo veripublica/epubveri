@@ -9478,7 +9478,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let Some(b) = ocf.read_content(orig) else {
                 continue;
             };
-            resource_refs.extend(extract(&String::from_utf8_lossy(&b), &parent_dir(path)));
+            // The extractors return remote hrefs unresolved and local ones
+            // as container paths, so the two sets are filled from one walk.
+            for r in extract(&String::from_utf8_lossy(&b), &parent_dir(path)) {
+                if is_remote_url(&r) {
+                    remote_resource_refs.insert(r);
+                } else {
+                    resource_refs.insert(r);
+                }
+            }
         }
         // A media-overlay attribute consumes its SMIL, and the SMIL's own
         // audio/text targets are consumed in turn (folded in just above);
@@ -11724,6 +11732,114 @@ mod tests {
             Some(11),
             "and so does its sibling, from the same rule"
         );
+    }
+
+    /// A media overlay's **remote** audio counts as a reference.
+    ///
+    /// `package-remote-audio-in-overlays-missing-property-error`, surfaced by
+    /// #121: once OPF-097 reached remote manifest items at all, the remote
+    /// audio of every media-overlay book was reported unreferenced, because
+    /// the only thing referencing it is the SMIL and `smil::resource_refs`
+    /// dropped external hrefs on the floor.
+    ///
+    /// **The fix is one walk with two outputs, not a second walk.** A
+    /// mirrored function is precisely how the local half of this came to be
+    /// missing a source in the first place — the overlay's own targets were
+    /// "collected by the overlay pass" that ran too late, on 19 of W3C's 209
+    /// conformance publications. The extractors now return a remote href
+    /// unresolved, since it has no container path and the caller keys it by
+    /// the href as written.
+    #[test]
+    fn a_remote_overlay_audio_is_referenced() {
+        let ids_with_overlay_src = |src: &str, overlay_src: &str| -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="media:duration">0:00:01</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="ov"
+          properties="remote-resources"/>
+    <item id="ov" href="ov.smil" media-type="application/smil+xml"/>
+    <item id="a" href="{src}" media-type="audio/mp4"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let smil = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+<body><par><text src="ch1.xhtml#p1"/><audio src="{overlay_src}"/></par></body></smil>"#
+            );
+            crate::validate_bytes(epub_with_opf_and_overlay(&opf, &smil))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_097)
+                .map(|m| m.id)
+                .collect()
+        };
+
+        assert!(
+            ids_with_overlay_src("https://example.com/a.mp4", "https://example.com/a.mp4")
+                .is_empty(),
+            "the overlay references it, so it is not unreferenced"
+        );
+        // The control: the same book with the overlay pointing elsewhere
+        // leaves the declared audio referenced by nothing, so the question is
+        // still being asked.
+        assert_eq!(
+            ids_with_overlay_src("https://example.com/a.mp4", "https://example.com/other.mp4"),
+            vec![crate::ids::OPF_097],
+            "an audio no overlay references is still unreferenced"
+        );
+    }
+
+    /// An EPUB 3 with one chapter, one overlay and a caller-supplied package
+    /// document.
+    fn epub_with_opf_and_overlay(opf: &str, smil: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p id="p1">x</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>n</title></head>
+<body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">c</a></li></ol></nav></body></html>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let d = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/ov.smil", smil),
+            ] {
+                zip.start_file(name, d).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
     }
 
     /// OPF-097 applies to a **remote** manifest item too.

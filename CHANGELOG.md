@@ -137,6 +137,13 @@ unchanged shelf.
 every external URL outright, so `CSS-007` never examined one; epubcheck asks
 the question of the manifest entry whether or not the URL is remote.
 
+**A media overlay's remote audio counts as a reference** (#125). Surfaced by
+#121: once `OPF-097` reached remote manifest items, the remote audio of every
+media-overlay book was reported unreferenced, because the only thing
+referencing it is the SMIL and that extractor dropped external hrefs. Fixed as
+one walk with two outputs rather than a second walk — a mirrored function is
+how the local half of this came to be missing a source in the first place.
+
 **`OPF-097` now reaches a remote manifest item** (#121). In epubcheck it is
 one check over every manifest item, and the `RSC-006` branch beside it is
 additional rather than an alternative; ours ran the remote branch and stopped,

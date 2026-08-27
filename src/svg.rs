@@ -165,6 +165,13 @@ pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
             .flatten()
         {
             let v = v.trim();
+            // Remote targets come back unresolved, as the SMIL extractor's do
+            // and for the same reason: they have no container path, and the
+            // caller keys them by the href as written.
+            if crate::opf::is_remote_url(v) {
+                out.push(v.to_string());
+                continue;
+            }
             if v.is_empty() || v.starts_with('#') || is_external(v) {
                 continue;
             }

@@ -178,6 +178,22 @@ pub(crate) fn resource_refs(smil_xml: &str, base_dir: &str) -> Vec<String> {
     };
     let mut out = Vec::new();
     let mut push = |v: &str| {
+        // **Remote targets are returned too, unresolved.** They have no
+        // container path, so `resolve` would produce nonsense; the caller
+        // needs the href exactly as written, which is the key the manifest and
+        // `remote_resource_refs` use. Dropping them here is what made a
+        // media-overlay book's remote audio look unreferenced —
+        // `package-remote-audio-in-overlays-missing-property-error` draws
+        // OPF-097 from us and not from epubcheck, because the only thing
+        // referencing that file is this SMIL.
+        //
+        // One walk, two outputs, deliberately: a second function mirroring
+        // this one is exactly how the local half came to be missing a source
+        // in the first place.
+        if crate::opf::is_remote_url(v) {
+            out.push(v.trim().to_string());
+            return;
+        }
         if !is_external(v) {
             let (path_part, _) = split_fragment(v);
             if !path_part.is_empty() {
