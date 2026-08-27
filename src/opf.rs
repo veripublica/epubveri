@@ -6004,7 +6004,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // ("EDUPUB structural requirements do not apply to non-linear
             // content", also a real fixture comment).
             let is_fxl = fixed_layout_docs.get(&doc_key).copied().unwrap_or(false);
-            let is_non_linear = non_linear_paths.iter().any(|(p, _)| p == &doc_key);
+            // **"Not linear" includes "not in the spine at all"**, which this
+            // missed. epubcheck derives the flag in `OPFItem`, where
+            // `spinePosition < 0 || !linear` both add its NON_LINEAR property,
+            // and `OPSHandler30.processSectioning` — the source of *both*
+            // rules below — is gated on `isLinear` in one condition. So a
+            // manifest document the spine never names contributes no sections
+            // and is asked nothing about its headings.
+            //
+            // We had only the explicit `linear="no"` half, so such a document
+            // still contributed sections and NAV-004's
+            // `sections != tocLinks` fired where epubcheck counts nothing.
+            // Surfaced by the harness's own single-document wraps, which
+            // declare every sibling fixture in the manifest and put one in the
+            // spine — a shape no real book has, and a reminder that a
+            // synthetic book can still point at a real divergence.
+            let is_non_linear = !spine_order.contains_key(&doc_key)
+                || non_linear_paths.iter().any(|(p, _)| p == &doc_key);
             if !is_fxl && !is_non_linear {
                 crate::edupub::check_sectioning_and_headings(&d, &path, report);
             }
@@ -6024,7 +6040,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // comment reads "Section with no heading OK in FXL" - but that is
             // about headings, not about counting. One condition, two rules,
             // and it was only ever measured against one of them.
-            if !is_non_linear && !is_nav {
+            //
+            // **The navigation document counts too**, and excluding it was the
+            // other half of the same mistake: `NavHandler extends
+            // OPSHandler30`, so the nav runs the very same
+            // `processSectioning`. A nav that is a linear spine item — which
+            // is the ordinary case — contributes its own implicit section,
+            // and leaving it out put our count one below epubcheck's in every
+            // EDUPUB book.
+            if !is_non_linear {
                 nav_completeness.add_sections(&d);
             }
         }
@@ -11177,6 +11201,117 @@ mod tests {
                 ("OEBPS/content.opf", OPF),
                 ("OEBPS/ch1.xhtml", ch1.as_str()),
                 ("OEBPS/nav.xhtml", nav.as_str()),
+            ] {
+                zip.start_file(name, deflated).unwrap();
+                zip.write_all(data.as_bytes()).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        buf
+    }
+
+    /// NAV-004 counts sections in **linear spine items only**, and the
+    /// navigation document is one of them when the spine names it.
+    ///
+    /// Two halves of one rule, and we had both wrong in opposite directions.
+    /// epubcheck derives the flag in `OPFItem`, where `spinePosition < 0 ||
+    /// !linear` both add `NON_LINEAR`, and `OPSHandler30.processSectioning` —
+    /// which produces the SECTIONS feature NAV-004 counts — is gated on
+    /// `isLinear`. `NavHandler extends OPSHandler30`, so the nav runs the very
+    /// same code.
+    ///
+    /// So: a manifest document the spine never names contributes nothing (we
+    /// counted it, because our gate only knew explicit `linear="no"`), and a
+    /// nav that *is* a spine item contributes its own implicit section (we
+    /// excluded it by name, which put our count one below epubcheck's).
+    ///
+    /// Surfaced by the harness's single-document wraps, where the nav is the
+    /// only spine item — a shape no real book has, which is worth keeping in
+    /// mind: a synthetic book can still point at a real divergence, and this
+    /// one was two.
+    #[test]
+    fn nav_004_counts_linear_spine_items_and_the_nav_is_one() {
+        let ids = |spine: &str, nav_body: &str| -> Vec<String> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language><dc:type>edupub</dc:type>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>{spine}</spine>
+</package>"#
+            );
+            let nav = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>n</title></head><body>{nav_body}</body></html>"#
+            );
+            const CH1: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head>
+<body><section><h1>A</h1></section><section><h1>B</h1></section></body></html>"#;
+            crate::validate_bytes(epub_edupub_spine(&opf, CH1, &nav))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::NAV_004)
+                .map(|m| m.id.to_string())
+                .collect()
+        };
+
+        const TOC: &str =
+            r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav>"#;
+
+        // The nav is the only spine item: its own implicit section is the one
+        // section, against the one toc link. ch1 is in no spine, so its two
+        // sections are not counted - if either half were wrong this fires.
+        assert!(
+            ids(r#"<itemref idref="nav"/>"#, TOC).is_empty(),
+            "a linear nav counts once; a manifest document outside the spine counts not at all"
+        );
+
+        // Both linear: the nav's implicit section plus ch1's two, against one
+        // toc link. The count is live, so the test above is not vacuous.
+        assert_eq!(
+            ids(r#"<itemref idref="nav"/><itemref idref="ch1"/>"#, TOC),
+            vec!["NAV-004"],
+            "three sections against one toc link"
+        );
+    }
+
+    /// An EDUPUB book whose spine the caller chooses, with the nav and one
+    /// chapter as the only manifest documents. `epub_edupub` fixes both the
+    /// spine and the nav's placement, which is exactly the variable the
+    /// linear-spine gate turns on.
+    fn epub_edupub_spine(opf: &str, ch1: &str, nav: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+
+        let mut buf = Vec::new();
+        {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            zip.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            zip.write_all(b"application/epub+zip").unwrap();
+            let deflated =
+                SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf),
+                ("OEBPS/ch1.xhtml", ch1),
+                ("OEBPS/nav.xhtml", nav),
             ] {
                 zip.start_file(name, deflated).unwrap();
                 zip.write_all(data.as_bytes()).unwrap();

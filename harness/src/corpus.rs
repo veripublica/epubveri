@@ -724,6 +724,40 @@ const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
     ("version-missing-error.opf", &["OPF-001"]),
 ];
 
+/// Fixtures whose expected finding **epubcheck itself does not make** once the
+/// harness wraps them, because the wrap puts the document outside the spine.
+///
+/// The EDUPUB structure and semantics Schematron is selected in
+/// `OPSChecker.validatorMap` only for an item that is neither `FIXED_LAYOUT`
+/// nor `NON_LINEAR`, and `OPFItem` marks an item `NON_LINEAR` when
+/// `spinePosition < 0 || !linear` — so a manifest document the spine never
+/// names is not asked these questions at all. `wrap.rs` keeps the target out
+/// of the spine on purpose, to isolate the content-model check; the price is
+/// that these eight fixtures cannot pose their question in this wrap.
+///
+/// **Verified per fixture by running epubcheck on the harness's own book**:
+/// `edupub-heading-missing-error.xhtml.epub` draws `ERROR(RSC-011)` and
+/// nothing else, where the feature file expects RSC-005.
+///
+/// **This moves the headline number up, so read it as a shrunken denominator
+/// rather than a better score.** Until this list existed the corpus scored
+/// these as hits — crediting us for eight findings epubcheck does not make on
+/// the same input, the fourth time an instrument here has been caught
+/// flattering us. The honest fix is to the *wrapper*, not to this list: put
+/// the target in the spine and the question becomes askable again. That is a
+/// change to every one of the 981 books and is deliberately not being made at
+/// the end of a day.
+const UNREACHABLE_IN_WRAP: &[&str] = &[
+    "edupub-body-explicit-section-no-heading-error.xhtml",
+    "edupub-heading-img-no-alt-error.xhtml",
+    "edupub-heading-missing-error.xhtml",
+    "edupub-titles-aria-label-matches-heading-error.xhtml",
+    "edupub-titles-explicit-body-error.xhtml",
+    "edupub-titles-invalid-missing-error.xhtml",
+    "edupub-titles-subtitle-header-error.xhtml",
+    "edupub-untitled-heading-level-error.xhtml",
+];
+
 /// Apply [`WRAPPED_MODE_EXPECTATION`] to the parsed scenarios.
 fn apply_wrapped_mode_expectations(scenarios: &mut [Scenario]) -> Vec<(String, String)> {
     let mut applied = Vec::new();
@@ -893,6 +927,15 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
         if s.unsettled {
             *skipped
                 .entry("expectation commented out by epubcheck")
+                .or_insert(0) += 1;
+            continue;
+        }
+        if s.name
+            .as_deref()
+            .is_some_and(|f| UNREACHABLE_IN_WRAP.contains(&f))
+        {
+            *skipped
+                .entry("wrapped outside the spine, so epubcheck reports nothing either")
                 .or_insert(0) += 1;
             continue;
         }

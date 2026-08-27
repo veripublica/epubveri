@@ -125,6 +125,19 @@ give one per rule; `COVERAGE.md` documents the difference and our count is
 always the lower of the two. With no declarations its count is zero and ours
 was one, which is not a granularity difference but a note about an embedded
 font where there is no font.
+
+**`NAV-004` counts sections in linear spine items only, and the navigation
+document is one of them** (#110). Two errors in opposite directions in one
+condition, which is why they hid: a manifest document the spine never names
+was contributing sections, and the nav — excluded by name — was not
+contributing its own. epubcheck marks anything with `spinePosition < 0` as
+non-linear, gates `processSectioning` on that, and runs the same handler over
+the nav, so its count includes the nav and excludes the stray document. Ours
+did the reverse of both, and in most books the two cancelled out.
+
+The same reading finishes yesterday's fixed-layout fix: the EDUPUB structure
+and semantics rules are selected only for an item that is neither fixed-layout
+nor non-linear, which is where that exemption actually lives.
 ## [0.12.3] - 2026-08-27
 
 Eight changes. The first three come from Doitsu's report on MobileRead #248,
