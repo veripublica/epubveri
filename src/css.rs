@@ -265,19 +265,46 @@ pub(crate) fn check(
     // Each collected item keeps the span of the token that produced it, so
     // the deferred RSC-00x findings below can report its position.
     let mut urls: Vec<Spanned<String>> = Vec::new();
+    // **A rule whose block never closed does not get its declarations
+    // second-guessed.** An unclosed `{` swallows everything after it — the
+    // next rule's selector and braces included — so the "declaration list"
+    // inside it is not a declaration list at all, and every shape complaint
+    // it produces is a consequence of the one defect the parser has already
+    // reported as `UnterminatedBlock`.
+    //
+    // Measured on `content-css-syntax-error`, which has two unclosed blocks:
+    // styloria reports exactly two errors and so does epubcheck; the third
+    // finding was ours, a `css.declaration.malformed_shape` on the `p {` that
+    // the first unclosed block had absorbed. The count difference was never
+    // styloria's error recovery — its answer already matched — and calling it
+    // a CSS-crate granularity difference sent a fix to the wrong repository.
+    // Parity with epubcheck is this consumer's business, not the library's.
+    //
+    // Positions still differ from epubcheck's and that is left alone: it
+    // points at the token that got confused (or at EOF), we point at the `{`
+    // that was never closed, which is the one an author has to fix.
+    let unterminated: Vec<usize> = syntax_errs
+        .iter()
+        .filter(|e| e.kind == spanned::SyntaxErrorKind::UnterminatedBlock)
+        .map(|e| e.span.start)
+        .collect();
+    let block_never_closed =
+        |start: usize, end: usize| unterminated.iter().any(|u| start <= *u && *u < end);
     for rule in &sheet.rules {
         match &rule.node {
             spanned::Rule::Qualified(q) => {
                 collect_urls_spanned(&q.prelude, &mut urls);
                 collect_urls_spanned(&q.block.node.values, &mut urls);
-                check_declaration_shapes_spanned(
-                    &q.block.node.values,
-                    css,
-                    css_path,
-                    origin,
-                    is_epub3,
-                    report,
-                );
+                if !block_never_closed(rule.span.start, rule.span.end) {
+                    check_declaration_shapes_spanned(
+                        &q.block.node.values,
+                        css,
+                        css_path,
+                        origin,
+                        is_epub3,
+                        report,
+                    );
+                }
             }
             spanned::Rule::At(a) => {
                 collect_urls_spanned(&a.prelude, &mut urls);
@@ -385,15 +412,19 @@ pub(crate) fn check(
         // just `@import`.
         match (declared, present) {
             (true, false) => {
-                report.push_full(
-                    RSC_001,
-                    Severity::Error,
-                    format!("references a missing resource '{url}'"),
-                    css_path,
-                    pos,
-                    "css.url.declared_resource_missing",
-                    vec![url.clone()],
-                );
+                // **Nothing here: the manifest walk has already said it.**
+                // RSC-001 is per *resource* in epubcheck, not per reference —
+                // its `PublicationResourceChecker` visits each publication
+                // resource once — so a declared-but-absent file named by an
+                // `@import` draws one finding there and drew two here, on
+                // `content-css-import-not-present-error`. Being `declared` is
+                // exactly the condition that guarantees the manifest item was
+                // visited and reported, which the fixture shows directly: the
+                // surviving finding is the manifest one, at `package.opf`.
+                //
+                // The other three arms stay. `RSC_008`/`RSC_007` are about the
+                // *reference*, which is this walk's business and which the
+                // manifest cannot see.
             }
             (false, true) => {
                 report.push_full(
@@ -2125,6 +2156,46 @@ mod tests {
         assert!(findings.contains(&RSC_007));
     }
 
+    /// An unclosed block is **one** finding, however much it swallows.
+    ///
+    /// A `{` with no `}` absorbs everything after it — the next rule's
+    /// selector and braces included — so the "declarations" inside it are not
+    /// declarations, and every shape complaint they produce is a consequence
+    /// of the one defect styloria has already reported as
+    /// `UnterminatedBlock`. On epubcheck's `content-css-syntax-error`, which
+    /// has two unclosed blocks, styloria reports two errors and so does
+    /// epubcheck; the third was ours.
+    ///
+    /// **The controls matter more than the first case here.** Suppressing too
+    /// eagerly would take a genuine malformed declaration with it, so a bad
+    /// shape in a *closed* block, and the plain unterminated block on its own,
+    /// are both asserted.
+    #[test]
+    fn an_unclosed_block_does_not_multiply_its_findings() {
+        let idx = empty_index();
+        let count = |css: &str| run(css, &idx).iter().filter(|i| **i == CSS_008).count();
+        assert_eq!(
+            count("a {\n  color: red;\n\nb { color: blue }\n"),
+            1,
+            "the unclosed block is the defect; the rule it ate is not a second one"
+        );
+        assert_eq!(
+            count("a { color: red"),
+            1,
+            "control: an unclosed block with nothing after it still reports"
+        );
+        assert_eq!(
+            count("a { span.bold: bold }\n"),
+            1,
+            "control: a malformed declaration in a closed block is still reported"
+        );
+        assert_eq!(
+            count("a { color: red }\nb { color: blue }\n"),
+            0,
+            "control: valid CSS stays silent"
+        );
+    }
+
     #[test]
     fn missing_background_url_nested_in_media() {
         let css = "@media screen { body { background: url(missing.png); } }";
@@ -2132,8 +2203,16 @@ mod tests {
         assert!(findings.contains(&RSC_007));
     }
 
+    /// A declared-but-absent `@import` target is reported by the **manifest**
+    /// walk, not here.
+    ///
+    /// This asserted `vec![RSC_001]` from this module, which is what made one
+    /// missing file two findings: epubcheck's RSC-001 is per publication
+    /// *resource*, so it says it once. The assertion is now that this walk is
+    /// silent — and the two arms either side of it, which are about the
+    /// *reference* rather than the resource, still speak.
     #[test]
-    fn import_target_declared_but_file_missing_is_rsc001() {
+    fn import_target_declared_but_file_missing_is_left_to_the_manifest() {
         let mut manifest_paths = HashSet::new();
         manifest_paths.insert("OEBPS/missing.css".to_string());
         let mut report = Report::new();
@@ -2149,7 +2228,10 @@ mod tests {
             &mut report,
         );
         let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
-        assert_eq!(ids, vec![RSC_001]);
+        assert!(
+            ids.is_empty(),
+            "the manifest item's own RSC-001 is the whole answer: {ids:?}"
+        );
     }
 
     #[test]
