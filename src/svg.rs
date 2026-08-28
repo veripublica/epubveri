@@ -1120,10 +1120,37 @@ const SVG_FILTER_PRIMITIVES: &[&str] = &[
 /// error it does not. Cardinality is a different axis (its attribute
 /// equivalent is `check_required_attributes`) and wants its own measured
 /// increment; being one lower is the safe direction meanwhile.
+/// How often, and in what order, a model's `extra` children may appear.
+///
+/// Three values because three were measured, one book per cell (#93). The
+/// default is `Any`; the other two exist for the filter sub-elements, whose
+/// models are the only ordered or counted ones in the closed slice.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cardinality {
+    /// `extra` may appear any number of times in any order — `<feMerge>` with
+    /// two `<feMergeNode>` is clean.
+    Any,
+    /// `extra` is an **ordered** sequence, each member at most once:
+    /// `feFuncR?, feFuncG?, feFuncB?, feFuncA?`. Both halves measured —
+    /// `feFuncR` then `feFuncG` is clean, `feFuncG` then `feFuncR` is not, and
+    /// neither is a repeated `feFuncR`. Same shape as the EPUB 2 table row
+    /// groups in #48, and the same trap: a set would have accepted all three.
+    OrderedOptional,
+    /// **Exactly one** of `extra`. Zero makes the parent incomplete; a second
+    /// one is "not allowed here", which is how epubcheck words it too.
+    ExactlyOneOf,
+}
+
 const SVG_FILTER_SUBMODELS: &[(&str, &[&str])] = &[
     (
         "feComponentTransfer",
-        &["feFuncA", "feFuncB", "feFuncG", "feFuncR"],
+        // **In SVG's order, not alphabetical.** The model is the ordered
+        // sequence `feFuncR?, feFuncG?, feFuncB?, feFuncA?`, so sorting this
+        // list - harmless while the cardinality was a set membership test -
+        // inverts the rule the moment it becomes `OrderedOptional`: it made
+        // `feFuncR` followed by `feFuncG` an error and let the reversed pair
+        // through. Caught by the two cells that measure exactly that.
+        &["feFuncR", "feFuncG", "feFuncB", "feFuncA"],
     ),
     (
         "feDiffuseLighting",
@@ -1153,6 +1180,8 @@ struct SvgModel {
     animation: bool,
     /// Element children beyond the descriptive and animation ones.
     extra: &'static [&'static str],
+    /// How often and in what order `extra` may appear.
+    cardinality: Cardinality,
     /// Whether character data is content rather than a mistake.
     text: bool,
 }
@@ -1166,6 +1195,7 @@ fn svg_model(name: &str) -> Option<SvgModel> {
         descriptive: true,
         animation: true,
         extra: &[],
+        cardinality: Cardinality::Any,
         text: false,
     };
     if SVG_CLOSED_MODEL_ELEMENTS.contains(&name) {
@@ -1203,10 +1233,19 @@ fn svg_model(name: &str) -> Option<SvgModel> {
         });
     }
     if let Some((_, children)) = SVG_FILTER_SUBMODELS.iter().find(|(e, _)| *e == name) {
+        let cardinality = match name {
+            // `feFuncR?, feFuncG?, feFuncB?, feFuncA?` - ordered, each once.
+            "feComponentTransfer" => Cardinality::OrderedOptional,
+            // The lighting primitives take exactly one light source.
+            "feDiffuseLighting" | "feSpecularLighting" => Cardinality::ExactlyOneOf,
+            // `<feMerge>` is `(feMergeNode)*` - repeats are fine.
+            _ => Cardinality::Any,
+        };
         return Some(SvgModel {
             descriptive: false,
             animation: false,
             extra: children,
+            cardinality,
             ..base
         });
     }
@@ -1236,6 +1275,12 @@ pub(crate) fn check_content_model(
             continue;
         };
         let is_text_element = model.text;
+        // Position reached in an `OrderedOptional` sequence, and the count for
+        // `ExactlyOneOf`. Both answer "has this child already been used up",
+        // which is why one pass settles order, repetition and the
+        // required-child question together.
+        let mut seq_at = 0usize;
+        let mut chosen = 0usize;
         for child in parent.children() {
             if child.is_element() {
                 // A foreign-namespaced child is somebody else's question, and
@@ -1251,8 +1296,26 @@ pub(crate) fn check_content_model(
                 if model.descriptive && SVG_DESCRIPTIVE_ELEMENTS.contains(&cname) {
                     continue;
                 }
-                if model.extra.contains(&cname) {
-                    continue;
+                if let Some(pos) = model.extra.iter().position(|e| *e == cname) {
+                    match model.cardinality {
+                        Cardinality::Any => continue,
+                        Cardinality::OrderedOptional => {
+                            // Out of order, or a repeat: both land before the
+                            // position already reached, and epubcheck words
+                            // both as "not allowed here" rather than as a
+                            // cardinality message.
+                            if pos >= seq_at {
+                                seq_at = pos + 1;
+                                continue;
+                            }
+                        }
+                        Cardinality::ExactlyOneOf => {
+                            chosen += 1;
+                            if chosen == 1 {
+                                continue;
+                            }
+                        }
+                    }
                 }
                 // `textPath` is admitted directly inside `<text>` and nowhere
                 // else, `<tspan>` and `<textPath>` included, so it cannot live
@@ -1282,6 +1345,26 @@ pub(crate) fn check_content_model(
                     Position::of(child),
                 );
             }
+        }
+        // The one genuinely *missing*-child rule in the closed slice: a
+        // lighting primitive with no light source is incomplete. Measured -
+        // `<feMerge/>`, `<feComponentTransfer/>`, `<clipPath/>`, `<filter/>`
+        // and an empty gradient are all clean, so nothing else here requires
+        // a child.
+        if model.cardinality == Cardinality::ExactlyOneOf && chosen == 0 {
+            let expected = model
+                .extra
+                .iter()
+                .map(|e| format!("\"{e}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            report.push_at_pos(
+                id,
+                severity,
+                format!("element \"{pname}\" has incomplete content; expected one of {expected}"),
+                path,
+                Position::of(parent),
+            );
         }
     }
 }
@@ -1535,7 +1618,10 @@ mod tests {
             r#"<defs><filter id="f"><feMerge><desc>d</desc></feMerge></filter></defs>"#,
             r#"<defs><filter id="f"><feMerge><animate attributeName="x" dur="1s"/></feMerge></filter></defs>"#,
             r#"<defs><filter id="f"><feComponentTransfer><desc>d</desc></feComponentTransfer></filter></defs>"#,
-            r#"<defs><filter id="f"><feDiffuseLighting><desc>d</desc></feDiffuseLighting></filter></defs>"#,
+            // The light source keeps this cell about containment alone -
+            // without it the parent is *also* incomplete, and epubcheck
+            // reports two. Measured both ways.
+            r#"<defs><filter id="f"><feDiffuseLighting><desc>d</desc><feDistantLight/></feDiffuseLighting></filter></defs>"#,
         ] {
             assert_eq!(
                 ids(body, false),
@@ -1561,6 +1647,44 @@ mod tests {
             assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
             assert!(ids(body, true).is_empty(), "EPUB 3 clean: {body}");
         }
+        // --- cardinality. Thirteen more cells, and the axis turned out to be
+        // two rules rather than a family: the lighting primitives take
+        // **exactly one** light source, and `feComponentTransfer`'s children
+        // are an **ordered** at-most-once sequence. Everything else that could
+        // have required a child does not - `<feMerge/>`, `<feComponentTransfer/>`,
+        // `<clipPath/>`, `<filter/>` and an empty gradient are all clean.
+        for body in [
+            // No light source at all: the parent is incomplete.
+            r#"<defs><filter id="f"><feDiffuseLighting/></filter></defs>"#,
+            r#"<defs><filter id="f"><feSpecularLighting/></filter></defs>"#,
+            // Two of them: the second is "not allowed here", which is how
+            // epubcheck words it too - a second light source is a containment
+            // error there, not a cardinality one.
+            r#"<defs><filter id="f"><feDiffuseLighting><feDistantLight/><fePointLight/></feDiffuseLighting></filter></defs>"#,
+            // Out of SVG's order, and a repeat: both rejected.
+            r#"<defs><filter id="f"><feComponentTransfer><feFuncG type="identity"/><feFuncR type="identity"/></feComponentTransfer></filter></defs>"#,
+            r#"<defs><filter id="f"><feComponentTransfer><feFuncR type="identity"/><feFuncR type="identity"/></feComponentTransfer></filter></defs>"#,
+        ] {
+            assert_eq!(
+                ids(body, false),
+                vec![crate::ids::RSC_005],
+                "EPUB 2: {body}"
+            );
+            assert_eq!(ids(body, true), vec![RSC_025], "EPUB 3: {body}");
+        }
+        for body in [
+            r#"<defs><filter id="f"><feComponentTransfer><feFuncR type="identity"/><feFuncG type="identity"/></feComponentTransfer></filter></defs>"#,
+            r#"<defs><filter id="f"><feMerge><feMergeNode/><feMergeNode/></feMerge></filter></defs>"#,
+            r#"<defs><filter id="f"><feMerge/></filter></defs>"#,
+            r#"<defs><filter id="f"><feComponentTransfer/></filter></defs>"#,
+            r#"<defs><clipPath id="a"/></defs>"#,
+            r#"<defs><filter id="f"/></defs>"#,
+            r#"<defs><linearGradient id="g"/></defs>"#,
+        ] {
+            assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
+            assert!(ids(body, true).is_empty(), "EPUB 3 clean: {body}");
+        }
+
         // `feDropShadow` is SVG 2, so at EPUB 2 the *vocabulary* check rejects
         // it and the content model must not add a second finding for the same
         // mistake — which is why it is in the filter's allowed set.
