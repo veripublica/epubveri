@@ -3161,6 +3161,158 @@ fn normalize_opus(mt: &str) -> &str {
     t
 }
 
+/// Resolve `unique-identifier` against the `dc:identifier` elements found, and
+/// report what does not resolve. Returns the identifier's text when it does.
+///
+/// Shared by the normal path and the fatal-recovery one below, which is the
+/// point: epubcheck runs **all three** of these findings after a fatal parse
+/// error, not just OPF-030, because all three depend on nothing but the root
+/// element's start tag. Measured on a fatal OPF with no `unique-identifier`:
+/// RSC-005, OPF-048 and OPF-030 together.
+fn check_unique_identifier(
+    pkg: roxmltree::Node,
+    identifiers: &[roxmltree::Node],
+    opf_path: &str,
+    pos: Position,
+    report: &mut Report,
+) -> Option<String> {
+    match pkg.attr_no_ns("unique-identifier").map(str::trim) {
+        Some(uid) => {
+            match identifiers
+                .iter()
+                .find(|n| n.attr_no_ns("id").map(str::trim) == Some(uid))
+            {
+                Some(n) => {
+                    return Some(
+                        n.descendants()
+                            .filter(|t| t.is_text())
+                            .filter_map(|t| t.text())
+                            .collect::<String>(),
+                    );
+                }
+                None => {
+                    report.push_full(
+                        OPF_030,
+                        Severity::Error,
+                        format!(
+                            "package unique-identifier '{uid}' does not match any dc:identifier id"
+                        ),
+                        opf_path,
+                        pos,
+                        "opf.package.unique_identifier_unresolved",
+                        vec![uid.to_string()],
+                    );
+                }
+            }
+        }
+        None => {
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                "<package> is missing the required attribute \"unique-identifier\"".to_string(),
+                opf_path,
+                pos,
+                "opf.package.missing_unique_identifier_attribute",
+                Vec::new(),
+            );
+            report.push_at_pos(
+                OPF_048,
+                Severity::Error,
+                "<package> is missing its required unique-identifier attribute",
+                opf_path,
+                pos,
+            );
+            // epubcheck reports OPF-030 here too, printing its Java `null` for
+            // the value it never read. The id, the severity and the count
+            // match; the message says what happened rather than leaking a null
+            // into user-facing text.
+            report.push_full(
+                OPF_030,
+                Severity::Error,
+                "no unique-identifier is declared, so no dc:identifier could be resolved"
+                    .to_string(),
+                opf_path,
+                pos,
+                "opf.package.unique_identifier_unresolved",
+                Vec::new(),
+            );
+        }
+    }
+    None
+}
+
+/// The root element's start tag in a document that failed to parse, with its
+/// byte offset — everything before it (prolog, comments, processing
+/// instructions, a DOCTYPE with an internal subset) skipped.
+///
+/// **Bounded recovery, not a second parser** (issue #126). A fatal XML error
+/// leaves us with no tree at all, so the package's own identity is lost;
+/// epubcheck keeps it because it reads as a stream and had already passed the
+/// start tag. This recovers exactly that much and nothing else. The attribute
+/// lexing is not hand-rolled either — the caller hands the tag back to
+/// roxmltree as a self-closing document, so quoting and entity rules stay
+/// where they belong.
+///
+/// The two shapes worth naming, both covered by tests: a `>` inside a quoted
+/// attribute value does not end the tag, and a `>` inside a DOCTYPE's internal
+/// subset does not end the DOCTYPE.
+fn recover_root_start_tag(xml: &str) -> Option<(usize, &str)> {
+    let b = xml.as_bytes();
+    let mut i = 0usize;
+    loop {
+        while i < b.len() && (b[i] as char).is_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() || b[i] != b'<' {
+            return None;
+        }
+        if b[i..].starts_with(b"<?") {
+            i += xml[i..].find("?>")? + 2;
+        } else if b[i..].starts_with(b"<!--") {
+            i += xml[i..].find("-->")? + 3;
+        } else if b[i..].starts_with(b"<!") {
+            let mut depth = 0usize;
+            let mut j = i + 2;
+            while j < b.len() {
+                match b[j] {
+                    b'[' => depth += 1,
+                    b']' => depth = depth.saturating_sub(1),
+                    b'>' if depth == 0 => break,
+                    _ => {}
+                }
+                j += 1;
+            }
+            i = j + 1;
+        } else {
+            break;
+        }
+    }
+    let mut j = i + 1;
+    let mut quote: Option<u8> = None;
+    while j < b.len() {
+        match (quote, b[j]) {
+            (None, q @ (b'"' | b'\'')) => quote = Some(q),
+            (Some(q), c) if c == q => quote = None,
+            (None, b'>') => return Some((i, &xml[i..=j])),
+            _ => {}
+        }
+        j += 1;
+    }
+    None
+}
+
+/// Line/column of a byte offset in text we could not parse, so there is no
+/// document to ask.
+fn line_col_at(xml: &str, off: usize) -> Position {
+    let before = &xml[..off.min(xml.len())];
+    let line = before.matches('\n').count() + 1;
+    let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    Position {
+        line: line as u32,
+        column: column as u32,
+    }
+}
+
 pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
     let profile = options.profile.as_deref();
     let advisory = options.advisory;
@@ -3194,6 +3346,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 "opf.package.malformed_xml",
                 Vec::new(),
             );
+            // **The package's identity survives a fatal, and epubcheck keeps
+            // it** (issue #126). Reading as a stream, epubcheck has already
+            // passed the root start tag when the document falls apart, so the
+            // three findings that depend on nothing else still run: RSC-005
+            // and OPF-048 for a missing `unique-identifier`, and OPF-030 for
+            // one that cannot resolve. We had no tree at all and said nothing.
+            //
+            // Recovered rather than re-parsed: `recover_root_start_tag` finds
+            // the start tag lexically and hands it back to roxmltree as a
+            // self-closing document, so no XML rule is re-implemented. The
+            // identifier list is empty by construction - the metadata is
+            // exactly what the fatal cost us - which is the same state a
+            // package with no `<metadata>` is in, and reaches the same three
+            // findings through the same function.
+            if let Some((off, tag)) = recover_root_start_tag(&text) {
+                let selfclosed = format!("{}/>", tag.trim_end_matches('>').trim_end_matches('/'));
+                if let Ok(stub) = roxmltree::Document::parse(&selfclosed) {
+                    let root = stub.root_element();
+                    if root.tag_name().name() == "package" {
+                        check_unique_identifier(
+                            root,
+                            &[],
+                            opf_path,
+                            line_col_at(&text, off),
+                            report,
+                        );
+                    }
+                }
+            }
             return;
         }
     };
@@ -3480,7 +3661,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // --- required metadata ---
     // The package's actual identifier text (the dc:identifier named by
     // unique-identifier), used later for the NCX dtb:uid cross-check.
-    let mut package_identifier_text: Option<String> = None;
+    // Assigned exactly once, by `check_unique_identifier` below - declared here
+    // because the NCX cross-check needs it much further down.
+    let package_identifier_text: Option<String>;
     // Package-level fixed-layout default (individual spine itemrefs can
     // override this via their own 'properties'), used for the viewport/
     // viewBox checks below.
@@ -4847,68 +5030,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .flat_map(|md| md.children())
             .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
             .collect();
-        match pkg.attr_no_ns("unique-identifier").map(str::trim) {
-            Some(uid) => {
-                match identifiers
-                    .iter()
-                    .find(|n| n.attr_no_ns("id").map(str::trim) == Some(uid))
-                {
-                    Some(n) => {
-                        package_identifier_text = Some(
-                            n.descendants()
-                                .filter(|t| t.is_text())
-                                .filter_map(|t| t.text())
-                                .collect::<String>(),
-                        );
-                    }
-                    None => {
-                        report.push_full(
-                            OPF_030,
-                            Severity::Error,
-                            format!(
-                                "package unique-identifier '{uid}' does not match any dc:identifier id"
-                            ),
-                            opf_path,
-                            Position::of(pkg),
-                            "opf.package.unique_identifier_unresolved",
-                            vec![uid.to_string()],
-                        );
-                    }
-                }
-            }
-            None => {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    "<package> is missing the required attribute \"unique-identifier\"",
-                    opf_path,
-                    pkg,
-                    "opf.package.missing_unique_identifier_attribute",
-                    Vec::new(),
-                );
-                report.push_at_pos(
-                    OPF_048,
-                    Severity::Error,
-                    "<package> is missing its required unique-identifier attribute",
-                    opf_path,
-                    Position::of(pkg),
-                );
-                // epubcheck reports OPF-030 here too, printing its Java
-                // `null` for the value it never read. The id, the severity
-                // and the count match; the message says what happened
-                // rather than leaking a null into user-facing text.
-                report.push_full(
-                    OPF_030,
-                    Severity::Error,
-                    "no unique-identifier is declared, so no dc:identifier could be resolved"
-                        .to_string(),
-                    opf_path,
-                    Position::of(pkg),
-                    "opf.package.unique_identifier_unresolved",
-                    Vec::new(),
-                );
-            }
-        }
+        package_identifier_text =
+            check_unique_identifier(pkg, &identifiers, opf_path, Position::of(pkg), report);
     }
     // A media-overlay attribute's target item must itself be a Media
     // Overlay Document (application/smil+xml).
@@ -19540,6 +19663,74 @@ mod tests {
         // 2.0 has no such rule — epubcheck reports OPF-050 alone there.
         assert!(!rule_fired("2.0", "t001"), "EPUB 2 has no 3.0 Schematron");
         assert!(!rule_fired("2.0", "nosuchid"));
+    }
+
+    /// A fatal XML error leaves us with no tree, but the package's identity is
+    /// still in the bytes — and epubcheck keeps it, because it reads as a
+    /// stream and had already passed the root start tag. All three findings
+    /// that depend on nothing but that tag still run there: RSC-005 and
+    /// OPF-048 for a missing `unique-identifier`, OPF-030 for one that cannot
+    /// resolve. We said nothing (issue #126).
+    ///
+    /// The recovery is lexical and bounded; the attribute lexing is handed
+    /// back to roxmltree. These are the shapes that would break a naive scan.
+    #[test]
+    fn the_root_start_tag_is_recovered_from_a_document_that_will_not_parse() {
+        use crate::xmlext::NodeExt;
+        let uid = |xml: &str| -> Option<String> {
+            let (_, tag) = super::recover_root_start_tag(xml)?;
+            let selfclosed = format!("{}/>", tag.trim_end_matches('>').trim_end_matches('/'));
+            let d = roxmltree::Document::parse(&selfclosed).ok()?;
+            d.root_element()
+                .attr_no_ns("unique-identifier")
+                .map(str::to_string)
+        };
+
+        assert_eq!(
+            uid(r#"<?xml version="1.0"?><package unique-identifier="uid"><metadata>"#).as_deref(),
+            Some("uid"),
+            "the prolog is skipped"
+        );
+        assert_eq!(
+            uid(r#"<!-- c --><package unique-identifier="uid">"#).as_deref(),
+            Some("uid"),
+            "a comment before the root is skipped"
+        );
+        assert_eq!(
+            uid(r#"<?xml-stylesheet href="a"?><package unique-identifier="uid">"#).as_deref(),
+            Some("uid"),
+            "so is a processing instruction"
+        );
+        // A '>' inside a DOCTYPE's internal subset does not end the DOCTYPE.
+        assert_eq!(
+            uid(r#"<!DOCTYPE package [ <!ENTITY x "y>z"> ]><package unique-identifier="uid">"#)
+                .as_deref(),
+            Some("uid"),
+            "the internal subset is bracket-counted"
+        );
+        // ...and a '>' inside a quoted attribute value does not end the tag.
+        assert_eq!(
+            uid(r#"<package unique-identifier="a>b">"#).as_deref(),
+            Some("a>b"),
+            "quoted values are honoured"
+        );
+        assert_eq!(
+            uid("<package\n   unique-identifier=\"uid\"\n   version=\"3.0\">").as_deref(),
+            Some("uid"),
+            "a start tag may span lines"
+        );
+        assert!(
+            super::recover_root_start_tag(r#"<?xml version="1.0"?>"#).is_none(),
+            "a document with no root element recovers nothing"
+        );
+
+        // And the position is computed from the original text, since there is
+        // no document to ask.
+        let (off, _) =
+            super::recover_root_start_tag("<?xml version=\"1.0\"?>\n\n  <package a=\"b\">")
+                .expect("root found");
+        let p = super::line_col_at("<?xml version=\"1.0\"?>\n\n  <package a=\"b\">", off);
+        assert_eq!((p.line, p.column), (3, 3));
     }
 
     /// An EPUB 2 whose single content document is named `name`, referenced
