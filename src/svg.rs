@@ -1029,6 +1029,51 @@ const SVG_REQUIRED_ATTRS: &[(&str, &[&str])] = &[
     ("vkern", &["k"]),
 ];
 
+/// The SVG attributes whose **value** epubcheck actually constrains.
+///
+/// Five of them, and that is the whole axis. `schema/20/rng/svg/svg-datatypes.rng`
+/// declares 22 datatypes and **17 are a plain `<data type="string"/>`** —
+/// `SVGLength`, `Number`, `OpacityValue`, `TransformList`, `PathData`, `SVGURI`
+/// and the rest carry their meaning in an `<a:documentation>` and constrain
+/// nothing. Probed rather than inferred: `width="abc"`, `r="-1"`,
+/// `opacity="junk"`, `transform="notafunction(1)"` and an invalid path `d` are
+/// all clean, against a control that confirms the document is being validated.
+///
+/// So constraining lengths, numbers or path data would be **inventing errors
+/// epubcheck does not make**, which is the restrictive direction the `ADV-*`
+/// mechanism exists to keep out of the verdict. Only these five are a gap.
+const SVG_ENUM_ATTRS: &[(&str, &[&str])] = &[
+    ("clip-rule", &["evenodd", "inherit", "nonzero"]),
+    ("externalResourcesRequired", &["false", "true"]),
+    ("fill-rule", &["evenodd", "inherit", "nonzero"]),
+    ("preserveAlpha", &["false", "true"]),
+];
+
+/// The ten alignment keywords `preserveAspectRatio` admits, optionally
+/// followed by `meet` or `slice`. The grammar states it as a regular
+/// expression; this is the same thing without a regex engine.
+const SVG_PRESERVE_ASPECT_RATIO: &[&str] = &[
+    "none", "xMaxYMax", "xMaxYMid", "xMaxYMin", "xMidYMax", "xMidYMid", "xMidYMin", "xMinYMax",
+    "xMinYMid", "xMinYMin",
+];
+
+/// Whether `preserveAspectRatio`'s value matches the grammar's pattern:
+/// optional whitespace, one alignment keyword, optionally whitespace and
+/// `meet` or `slice`, optional whitespace.
+fn preserve_aspect_ratio_is_valid(v: &str) -> bool {
+    let mut parts = v.split_whitespace();
+    let Some(align) = parts.next() else {
+        return false;
+    };
+    if !SVG_PRESERVE_ASPECT_RATIO.contains(&align) {
+        return false;
+    }
+    match parts.next() {
+        None => true,
+        Some(m) => matches!(m, "meet" | "slice") && parts.next().is_none(),
+    }
+}
+
 /// The elements whose required attribute is the **namespaced** `xlink:href`,
 /// which `has_attr_no_ns` cannot see — the reason they were missing from the
 /// table above rather than merely unlisted.
@@ -1555,6 +1600,38 @@ pub(crate) fn check_required_attributes(
             missing.iter().map(|a| (*a).to_string()).collect(),
         );
     }
+    // The five attributes whose value epubcheck constrains. Reported in the
+    // same pass and with the same severity split as the required attributes:
+    // one grammar, one normativity.
+    for n in svg_root
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+    {
+        for attr in n.attributes().filter(|a| a.namespace().is_none()) {
+            let name = attr.name();
+            let value = attr.value();
+            let bad = if name == "preserveAspectRatio" {
+                !preserve_aspect_ratio_is_valid(value)
+            } else if let Ok(i) = SVG_ENUM_ATTRS.binary_search_by_key(&name, |(a, _)| a) {
+                !SVG_ENUM_ATTRS[i].1.contains(&value)
+            } else {
+                continue;
+            };
+            if !bad {
+                continue;
+            }
+            report.push_full(
+                id,
+                severity,
+                format!("value of attribute \"{name}\" is invalid"),
+                path,
+                Position::of_attr(n, attr),
+                "opf.content_document.svg_invalid_attribute_value",
+                vec![name.to_string(), value.to_string()],
+            );
+        }
+    }
+
     // The six elements whose required attribute is the **namespaced**
     // `xlink:href`. Kept as a second pass rather than folded into the table
     // above because `has_attr_no_ns` cannot see a namespaced attribute at all
@@ -1584,6 +1661,72 @@ pub(crate) fn check_required_attributes(
 
 #[cfg(test)]
 mod tests {
+
+    /// **Five SVG attributes have a constrained value, and that is the whole
+    /// datatype axis.** `schema/20/rng/svg/svg-datatypes.rng` declares 22
+    /// datatypes and 17 of them are a plain `<data type="string"/>`: length,
+    /// number, opacity, transform list, path data and URI carry their meaning
+    /// in documentation and constrain nothing.
+    ///
+    /// Probed rather than inferred, against a control that confirms the
+    /// document is validated at all: `width="abc"`, `width="-5"`, `r="-1"`,
+    /// `opacity="junk"`, `transform="notafunction(1)"` and an invalid path
+    /// `d` are every one of them clean in epubcheck. Constraining those would
+    /// be inventing errors it does not make.
+    #[test]
+    fn only_five_svg_attribute_values_are_constrained() {
+        let bad = |body: &str| -> Vec<String> {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
+                   <title>s</title>{body}</svg>"#
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_required_attributes(d.root_element(), "c.xhtml", false, &mut report);
+            report
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.svg_invalid_attribute_value"))
+                .map(|m| m.text.clone())
+                .collect()
+        };
+
+        for body in [
+            r#"<rect width="1" height="1" fill-rule="junk"/>"#,
+            r#"<rect width="1" height="1" clip-rule="junk"/>"#,
+            r#"<rect width="1" height="1" externalResourcesRequired="maybe"/>"#,
+            r#"<rect width="1" height="1" preserveAspectRatio="junk"/>"#,
+            // A valid keyword with an invalid qualifier, and a valid one with
+            // something after it - both fail the grammar's pattern.
+            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid tight"/>"#,
+            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid meet extra"/>"#,
+        ] {
+            assert_eq!(bad(body).len(), 1, "should be one finding: {body}");
+        }
+
+        for body in [
+            r#"<rect width="1" height="1" fill-rule="evenodd"/>"#,
+            r#"<rect width="1" height="1" clip-rule="inherit"/>"#,
+            r#"<rect width="1" height="1" externalResourcesRequired="true"/>"#,
+            // The three spellings the local shelf actually uses, 309 times
+            // across 260 books.
+            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid meet"/>"#,
+            r#"<rect width="1" height="1" preserveAspectRatio="none"/>"#,
+            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid"/>"#,
+            // The seventeen unconstrained datatypes. Every one of these is
+            // clean in epubcheck, measured, and reporting them would be a
+            // restrictive divergence rather than a gap closed.
+            r#"<rect width="abc" height="1"/>"#,
+            r#"<rect width="-5" height="1"/>"#,
+            r#"<circle r="-1"/>"#,
+            r#"<rect width="50%" height="1"/>"#,
+            r#"<g opacity="junk"><rect width="1" height="1"/></g>"#,
+            r#"<g transform="notafunction(1)"><rect width="1" height="1"/></g>"#,
+            r#"<path d="totally invalid"/>"#,
+        ] {
+            assert!(bad(body).is_empty(), "should be silent: {body}");
+        }
+    }
 
     /// The required-attribute table, extended from seven elements to
     /// twenty-six, plus six that require the namespaced `xlink:href`.
