@@ -260,6 +260,19 @@ pub struct Message {
     /// yields `"epub:type"`. It is an identity token for display and grouping,
     /// and **must not be used as a lookup key into the source text**.
     ///
+    /// ## What the rest of `params` carries
+    ///
+    /// `params[1..]` is detail, and its meaning follows the kind. For
+    /// [`MissingAttribute`](ViolationKind::MissingAttribute) it is the
+    /// **local names of the attributes the element still needs**, sorted and
+    /// de-duplicated — so an `<img>` with no `alt` arrives as
+    /// `["img", "alt"]`. It can be empty when the pattern demands an
+    /// attribute it cannot name (a wildcard name class), which is the same
+    /// condition that leaves the message generic. Added after JSWolf's
+    /// MobileRead #256, alongside naming them in the text; the two element
+    /// kinds already carried their detail the same way, and this kind was
+    /// the odd one out because it did not compute the names at all.
+    ///
     /// One known limit, inherited rather than introduced: element names are
     /// local, so `(violation_kind, params[0])` cannot distinguish two
     /// namespaces — an SVG `title` and an XHTML `title` share a key, as do a

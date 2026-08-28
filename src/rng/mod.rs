@@ -481,7 +481,7 @@ mod tests {
                 "stray text is not allowed directly in \"ol\"; wrap it in an element",
             ),
             (
-                Blame::Element(ol, ElementFault::MissingAttribute),
+                Blame::Element(ol, ElementFault::MissingAttribute(Vec::new())),
                 "element \"ol\" is missing a required attribute",
             ),
             (
@@ -741,6 +741,89 @@ mod tests {
     /// `big`/`tt`/`acronym` are valid here but removed in HTML5; `s`/`u` and
     /// every HTML5 addition are the reverse. Both fall out of the vocabulary
     /// with no per-element code.
+    /// The EPUB 2 grammar rejects a foreign-namespaced attribute itself.
+    ///
+    /// A hand-coded DOM walk used to report these as well, so
+    /// `custom-ns-attr-error.xhtml` drew two RSC-005 per attribute against
+    /// epubcheck's one. The walk came out; this is what has to keep holding
+    /// for that to be safe.
+    ///
+    /// **The `foo:class` case is the one worth having.** It is the case the
+    /// removed walk looked written for — a foreign attribute whose *local*
+    /// name is a perfectly legal one — and it is what a grammar matching on
+    /// local names alone would wave through.
+    #[test]
+    fn epub2_grammar_rejects_foreign_namespaced_attributes() {
+        let g = xhtml_grammar_epub2();
+        let rejects = |attr: &str| {
+            let x = format!(
+                "<html {XHTML_NS_DECLS} xmlns:foo=\"https://example.org\">\
+                 <head><title>t</title></head><body><p {attr}>a</p></body></html>"
+            );
+            !validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .is_empty()
+        };
+        assert!(rejects("foo:zzz=\"y\""), "a foreign attribute is rejected");
+        assert!(
+            rejects("foo:class=\"x\""),
+            "and so is one whose local name is legal — the case the walk existed for"
+        );
+        let x = format!(
+            "<html {XHTML_NS_DECLS}><head><title>t</title></head><body><p class=\"x\">a</p></body></html>"
+        );
+        assert!(
+            validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .is_empty(),
+            "the control: a real `class` is still fine"
+        );
+    }
+
+    /// HTML5's full `iframe.attrs` set, EPUB 3 only.
+    ///
+    /// `srcdoc` was reported as an error on epubcheck's
+    /// `obsolete-seamless-error.xhtml`, where epubcheck rejects `seamless`
+    /// alone and lists `srcdoc` among the attributes it *would* have taken —
+    /// a false positive on valid markup, not a count difference. Five more
+    /// were missing beside it; the whole list from `mod/html5/embed.rnc` was
+    /// taken, because a fixture only ever names the attribute it happens to
+    /// carry.
+    ///
+    /// `seamless` stays rejected, which is the control: a test that only
+    /// asserted the six are accepted would also pass on a grammar that had
+    /// stopped checking `iframe` attributes at all.
+    ///
+    /// EPUB 2 is deliberately untouched — `sandbox` and `allowfullscreen` are
+    /// `v5only` in epubcheck's schema, and the file's existing convention
+    /// (see `aEl`'s note on `ping`/`referrerpolicy`) is to keep those out of
+    /// the 2.0 grammar.
+    #[test]
+    fn epub3_iframe_takes_the_whole_html5_attribute_set() {
+        let g = xhtml_grammar();
+        let ok = |attrs: &str| {
+            let x = format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+                 <body><iframe {attrs}></iframe></body></html>"
+            );
+            validate_node_report(&g, roxmltree::Document::parse(&x).unwrap().root_element())
+                .is_empty()
+        };
+        for a in [
+            "srcdoc=\"&lt;p&gt;x&lt;/p&gt;\"",
+            "loading=\"lazy\"",
+            "sandbox=\"allow-scripts\"",
+            "allowfullscreen=\"allowfullscreen\"",
+            "allow=\"fullscreen\"",
+            "referrerpolicy=\"no-referrer\"",
+            "src=\"a.xhtml\"",
+        ] {
+            assert!(ok(a), "iframe should accept {a}");
+        }
+        assert!(
+            !ok("seamless=\"seamless\""),
+            "seamless was dropped from HTML5 and must still be rejected"
+        );
+    }
+
     #[test]
     fn epub2_grammar_matches_the_xhtml11_vocabulary() {
         let g = xhtml_grammar_epub2();
@@ -1856,9 +1939,43 @@ mod tests {
         let d = roxmltree::Document::parse(&doc).unwrap();
         let missing = validate_node_report(&two, d.root_element())
             .into_iter()
-            .filter(|b| matches!(b, Blame::Element(_, ElementFault::MissingAttribute)))
+            .filter(|b| matches!(b, Blame::Element(_, ElementFault::MissingAttribute(_))))
             .count();
         assert_eq!(missing, 3, "every image, not just the first");
+
+        // **The attribute is named.** `is missing a required attribute` on an
+        // element whose whole attribute set is written on the line left the
+        // author to guess which one; epubcheck names it and now so do we
+        // (JSWolf, MobileRead #256). The name also reaches `params`, after the
+        // element name, which is what lets a consumer act without parsing the
+        // text. This is the shape 3,434 of the local shelf's occurrences take.
+        let d = roxmltree::Document::parse(&doc).unwrap();
+        let named: Vec<Vec<String>> = validate_node_report(&two, d.root_element())
+            .into_iter()
+            .filter_map(|b| match &b {
+                Blame::Element(_, ElementFault::MissingAttribute(m)) => Some(m.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            named,
+            vec![vec!["alt".to_string()]; 3],
+            "every one names alt"
+        );
+        let (text, params) = validate_node_report(&two, d.root_element())
+            .into_iter()
+            .find(|b| matches!(b, Blame::Element(_, ElementFault::MissingAttribute(_))))
+            .expect("an image with no alt")
+            .describe();
+        assert_eq!(
+            text,
+            "element \"img\" is missing the required attribute \"alt\""
+        );
+        assert_eq!(
+            params,
+            vec!["img".to_string(), "alt".to_string()],
+            "element name first — `params[0]` is contract — then the names"
+        );
 
         // ...and a later, unrelated fault is still found, which is the part
         // the `break` used to lose.

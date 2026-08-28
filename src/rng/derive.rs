@@ -379,6 +379,57 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// The attribute names still demanded when the start tag closed.
+    ///
+    /// The same walk as `required_names`, matching `Attribute` instead of
+    /// `Element`: an `Attribute` pattern is never nullable, so the
+    /// early-return on a nullable pattern is what makes "nothing is
+    /// required" the common answer. `Choice` intersects, so an element that
+    /// may satisfy its model two ways names only what both roads demand.
+    fn required_attribute_names(
+        &self,
+        p: &Pat,
+        out: &mut Vec<String>,
+        visited: &mut HashSet<usize>,
+    ) {
+        if self.nullable(p) {
+            return;
+        }
+        match &**p {
+            Pattern::Attribute(nc, _) => {
+                let mut locals = Vec::new();
+                nc.concrete_locals(&mut locals);
+                for l in locals {
+                    if !out.iter().any(|e| e == l) {
+                        out.push(l.to_string());
+                    }
+                }
+            }
+            Pattern::Group(a, b) | Pattern::Interleave(a, b) => {
+                self.required_attribute_names(a, out, visited);
+                self.required_attribute_names(b, out, visited);
+            }
+            Pattern::Choice(a, b) => {
+                let (mut na, mut nb) = (Vec::new(), Vec::new());
+                self.required_attribute_names(a, &mut na, &mut visited.clone());
+                self.required_attribute_names(b, &mut nb, visited);
+                for n in na.into_iter().filter(|n| nb.contains(n)) {
+                    if !out.contains(&n) {
+                        out.push(n);
+                    }
+                }
+            }
+            // The continuation past the end tag belongs to the parent; an
+            // attribute cannot be required *here* from there.
+            Pattern::After(a, _) => self.required_attribute_names(a, out, visited),
+            Pattern::OneOrMore(a) => self.required_attribute_names(a, out, visited),
+            Pattern::Ref(i) if visited.insert(*i) => {
+                self.required_attribute_names(&self.defs[*i], out, visited);
+            }
+            _ => {}
+        }
+    }
+
     fn text_deriv(&self, p: &Pat, s: &str) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => choice(self.text_deriv(a, s), self.text_deriv(b, s)),
@@ -844,7 +895,12 @@ impl<'a> Env<'a> {
         // still with a precise message, and the corpus's 255 strict scenarios
         // are unchanged by this.
         if is_not_allowed(&cur) && !value_rejected {
-            blames.push(Blame::Element(node, ElementFault::MissingAttribute));
+            let mut missing = Vec::new();
+            self.required_attribute_names(&before_close, &mut missing, &mut HashSet::new());
+            blames.push(Blame::Element(
+                node,
+                ElementFault::MissingAttribute(missing),
+            ));
             // Recover the same way #60 did for incomplete content: take the
             // continuation the derivative is already holding, so the element's
             // *siblings* are still checked. Returning NotAllowed made
@@ -967,8 +1023,18 @@ pub enum ElementFault {
     /// tail - empty when the position admits only wildcard-named content, in
     /// which case no suggestion is made.
     NotAllowed(Vec<String>),
-    /// The element is missing a required attribute.
-    MissingAttribute,
+    /// The element is missing one or more required attributes, named.
+    ///
+    /// epubcheck spells them out — `missing required attributes "content"
+    /// and "name"` — and a bare "is missing a required attribute" leaves the
+    /// author to work out which one, on an element whose whole attribute set
+    /// is written right there. Reported by JSWolf on an EPUB 2 `<meta>` whose
+    /// `name`/`content` pair had been replaced by an EPUB 3 `property`
+    /// (MobileRead #256).
+    ///
+    /// Empty when the pattern demands an attribute it cannot name — a
+    /// wildcard name class — in which case the message stays generic.
+    MissingAttribute(Vec<String>),
     /// The element's content is incomplete - a required child is absent.
     ///
     /// `missing` is the one element the model demands next, when it demands
@@ -1072,7 +1138,7 @@ impl<'d, 'i> Blame<'d, 'i> {
         match self {
             Blame::Element(_, ElementFault::NotAllowed(_)) => K::ElementNotAllowed,
             Blame::Element(_, ElementFault::IncompleteContent { .. }) => K::IncompleteContent,
-            Blame::Element(_, ElementFault::MissingAttribute) => K::MissingAttribute,
+            Blame::Element(_, ElementFault::MissingAttribute(_)) => K::MissingAttribute,
             Blame::Text { .. } => K::StrayText,
             Blame::Attribute(_, _, AttributeFault::NotAllowed) => K::AttributeNotAllowed,
             Blame::Attribute(_, _, AttributeFault::InvalidValue) => K::InvalidAttributeValue,
@@ -1173,8 +1239,27 @@ impl<'d, 'i> Blame<'d, 'i> {
                         }
                         t
                     }
-                    ElementFault::MissingAttribute => {
-                        format!("element \"{name}\" is missing a required attribute")
+                    ElementFault::MissingAttribute(missing) => {
+                        let distinct = distinct_sorted(missing);
+                        // The names go into `params` too, after the element
+                        // name — the same shape `NotAllowed` and
+                        // `IncompleteContent` already use, and the reason
+                        // this kind had none was that it did not know them.
+                        // A consumer can now act on the finding (an `<img>`
+                        // with no `alt` is 3,434 of the 3,434 occurrences on
+                        // the local shelf) without parsing `text`.
+                        params.extend(distinct.iter().cloned());
+                        match distinct.len() {
+                            0 => format!("element \"{name}\" is missing a required attribute"),
+                            1 => format!(
+                                "element \"{name}\" is missing the required attribute \"{}\"",
+                                distinct[0]
+                            ),
+                            _ => format!(
+                                "element \"{name}\" is missing required attributes {}",
+                                quoted_and(&distinct)
+                            ),
+                        }
                     }
                     ElementFault::IncompleteContent { missing, expected } => {
                         // What is missing, *appended* rather than substituted.
@@ -1269,6 +1354,19 @@ fn distinct_sorted(names: &[String]) -> Vec<String> {
     v.sort_unstable();
     v.dedup();
     v
+}
+
+/// Several names as epubcheck writes them in this one message: `"content"
+/// and "name"`. Distinct from `one_of`, which is a *suggestion* list — this
+/// is an enumeration of things all of which are missing, so "and" is the
+/// correct conjunction and "one of" would be wrong.
+fn quoted_and(names: &[String]) -> String {
+    let quoted: Vec<String> = names.iter().map(|n| format!("\"{n}\"")).collect();
+    match quoted.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// One name reads as `"head"`; several as `one of "td", "th"`.
