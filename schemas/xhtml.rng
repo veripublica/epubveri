@@ -909,6 +909,18 @@
            is what puts <template> in flow content too, since flowChoice
            includes phrasingChoice. -->
       <ref name="templateEl"/>
+      <!-- `common.elem.phrasing |= area.elem` (embed.rnc). HTML5 classifies
+           `area` as phrasing content and leaves "must be inside a `map`" to
+           prose, which epubcheck enforces with a Schematron rule
+           (`area-in-map`); `xhtml.sch` ports it. Restricting it to `map` in
+           the grammar as well made a stray `<area>` two RSC-005 — the
+           content-model one and the Schematron one — where epubcheck reports
+           only the second, on `schematron-error.xhtml`.
+
+           EPUB 2 keeps `areaEl-epub2` inside `map` alone: XHTML 1.1's
+           csismap.rng declares `area` only there, and no Schematron rule
+           covers it. -->
+      <ref name="areaEl"/>
       <ref name="aEl"/>
       <element name="span"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
       <element name="em"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
@@ -1696,6 +1708,28 @@
       <!-- #33: found by the corpus fallout of excepting `name` from the
            wildcard for input/select/textarea/button's own rules. -->
       <optional><attribute name="name"><data type="string"/></attribute></optional>
+      <!-- The rest of HTML5's `iframe.attrs` (epubcheck's
+           `mod/html5/embed.rnc`). `srcdoc` was reported as an error on
+           `obsolete-seamless-error.xhtml`, where epubcheck rejects only
+           `seamless` and lists `srcdoc` among what it would have accepted —
+           so this was a false positive, not a count difference.
+
+           The whole list is taken rather than the one attribute that showed
+           up: five more were missing beside it, and a fixture only ever
+           names the one it happens to carry.
+
+           **Values are left unconstrained on purpose.** epubcheck enumerates
+           `loading` and `allowfullscreen` and gives `sandbox`/`allow` real
+           datatypes; taking the names closes the gap in the safe direction,
+           while taking the value grammars would be a second, restrictive
+           surface with its own false-positive risk — the same call already
+           made for MathML attribute values and for `role`/`aria-*`. -->
+      <optional><attribute name="srcdoc"><data type="string"/></attribute></optional>
+      <optional><attribute name="loading"><data type="string"/></attribute></optional>
+      <optional><attribute name="sandbox"><data type="string"/></attribute></optional>
+      <optional><attribute name="allowfullscreen"><data type="string"/></attribute></optional>
+      <optional><attribute name="allow"><data type="string"/></attribute></optional>
+      <optional><attribute name="referrerpolicy"><data type="string"/></attribute></optional>
     </element>
   </define>
 
