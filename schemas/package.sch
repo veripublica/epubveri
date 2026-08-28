@@ -260,8 +260,20 @@
 
   <!-- 5.9.3 NCX -->
 
+  <!-- **EPUB 3 only**, matching epubcheck's `opf.toc.ncx.2`, which lives in
+       `package-30.sch` and so never runs on a 2.0 package. Unscoped, this
+       doubled with the hand-coded EPUB 2 check in `opf.rs`
+       (`opf.spine.missing_toc_epub2`) on `spine-toc-attribute-missing-error`:
+       two findings where epubcheck gives one.
+
+       The hand check is the one that stays, and it is not
+       interchangeable with this rule — epubcheck's EPUB 2 requirement comes
+       from `opf20.rng`, where `toc` is required whether or not an NCX item
+       exists, while this rule needs one to be there. A 2.0 book with no NCX
+       at all is reported by epubcheck and by the hand check, and would be
+       reported by nothing if this rule were made to serve both. -->
   <pattern id="opf-legacy-ncx-toc-required">
-    <rule context="opf:package[opf:manifest/opf:item[normalize-space(@media-type) = 'application/x-dtbncx+xml']]/opf:spine[not(@toc)]">
+    <rule context="opf:package[starts-with(@version, '3')][opf:manifest/opf:item[normalize-space(@media-type) = 'application/x-dtbncx+xml']]/opf:spine[not(@toc)]">
       <assert test="false()"
         >the spine "toc" attribute must be set when an NCX document is present</assert>
     </rule>
@@ -291,53 +303,49 @@
        plain Dublin Core element (checked via a namespace-qualified
        existence test, e.g. //dc:subject[@id=...] — our XPath 1.0 core has
        no local-name() function) or another meta property (checked by the
-       target's own @property) — a @refines value may or may not have a
-       leading '#' in the wild, so every target lookup strips one optional
-       leading '#' before resolving @id. -->
+       target's own @property).
 
-  <pattern id="meta-authority-must-refine-subject">
-    <rule context="opf:meta[normalize-space(@property) = 'authority']">
-      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
-      <assert test="@refines and //dc:subject[normalize-space(@id) = $target-id]"
-        >Property "authority" must refine a "subject" property</assert>
+       The per-property "must refine X" asserts are NOT here: they are the
+       `opf-meta-*-refines` patterns further up, ported straight from
+       epubcheck. This block used to carry a second copy of all seven with a
+       looser target lookup, so every one of those violations was reported
+       twice; the duplicates were removed rather than the originals, because
+       the looser lookup was also what made the pairing rule over-report. -->
+
+
+  <!-- The authority/term pairing is ONE rule per `dc:subject`, not one per
+       `meta`. epubcheck's context is `opf:metadata/dc:subject` and it makes
+       three reports from there; ours were four patterns contexted on the
+       `meta`, so each offending `meta` blamed itself and a subject carrying
+       two `authority` properties drew two findings where epubcheck draws
+       one. Same shifted-context defect as the `rendition:*` family — see
+       `a_duplicated_cardinality_property_is_reported_once` in `opf.rs`.
+
+       The two "must refine a subject" patterns stay on the `meta`: that
+       question really is asked of each property, and epubcheck asks it from
+       its own per-`meta` patterns too.
+
+       `@refines` is matched with epubcheck's fixed `substring(..., 2)`, NOT
+       this file's optional-'#' convention. Measured, not assumed: with the
+       optional form, two authorities refining a bare `s1` counted as two
+       against one subject and drew a pairing finding epubcheck does not make
+       (5 findings against its 4) — the looser lookup turns a rule that only
+       *counts* into a false positive. -->
+  <pattern id="meta-authority-term-pairing">
+    <rule context="opf:metadata/dc:subject">
+      <let name="subject-id" value="normalize-space(@id)"/>
+      <let name="authorities" value="//opf:meta[normalize-space(@property) = 'authority'][substring(normalize-space(@refines), 2) = $subject-id]"/>
+      <let name="terms" value="//opf:meta[normalize-space(@property) = 'term'][substring(normalize-space(@refines), 2) = $subject-id]"/>
+      <report test="count($authorities) = 1 and count($terms) = 0"
+        >A term property must be associated with each authority property</report>
+      <report test="count($authorities) = 0 and count($terms) = 1"
+        >An authority property must be associated with each term property</report>
+      <report test="count($authorities) &gt; 1 or count($terms) &gt; 1"
+        >Only one pair of authority and term properties may be defined for the same expression</report>
     </rule>
   </pattern>
 
-  <pattern id="meta-authority-needs-term">
-    <rule context="opf:meta[normalize-space(@property) = 'authority']">
-      <assert test="//opf:meta[normalize-space(@property) = 'term'][normalize-space(@refines) = normalize-space(current()/@refines)]"
-        >A term property must be associated with each authority property</assert>
-    </rule>
-  </pattern>
 
-  <pattern id="meta-authority-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'authority']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'authority'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >Only one pair of authority and term properties may be defined for the same expression</assert>
-    </rule>
-  </pattern>
-
-  <pattern id="meta-term-must-refine-subject">
-    <rule context="opf:meta[normalize-space(@property) = 'term']">
-      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
-      <assert test="@refines and //dc:subject[normalize-space(@id) = $target-id]"
-        >Property "term" must refine a "subject" property</assert>
-    </rule>
-  </pattern>
-
-  <pattern id="meta-term-needs-authority">
-    <rule context="opf:meta[normalize-space(@property) = 'term']">
-      <assert test="//opf:meta[normalize-space(@property) = 'authority'][normalize-space(@refines) = normalize-space(current()/@refines)]"
-        >An authority property must be associated with each term property</assert>
-    </rule>
-  </pattern>
-
-  <pattern id="meta-term-cardinality">
-    <rule context="opf:meta[normalize-space(@property) = 'term']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'term'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >Only one pair of authority and term properties may be defined for the same expression</assert>
-    </rule>
-  </pattern>
 
   <pattern id="meta-belongs-to-collection-refines">
     <rule context="opf:meta[normalize-space(@property) = 'belongs-to-collection'][@refines]">
@@ -347,64 +355,43 @@
     </rule>
   </pattern>
 
-  <pattern id="meta-collection-type-must-refine">
-    <rule context="opf:meta[normalize-space(@property) = 'collection-type']">
-      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
-      <assert test="@refines and //opf:meta[normalize-space(@id) = $target-id]/@property = 'belongs-to-collection'"
-        >Property "collection-type" must refine a "belongs-to-collection" property</assert>
-    </rule>
-  </pattern>
 
   <pattern id="meta-collection-type-cardinality">
     <rule context="opf:meta[normalize-space(@property) = 'collection-type']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'collection-type'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >"collection-type" cannot be declared more than once to refine the same expression</assert>
+      <report test="preceding-sibling::opf:meta[normalize-space(@property) = 'collection-type'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >"collection-type" cannot be declared more than once to refine the same expression</report>
     </rule>
   </pattern>
 
   <pattern id="meta-display-seq-cardinality">
     <rule context="opf:meta[normalize-space(@property) = 'display-seq']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'display-seq'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >"display-seq" cannot be declared more than once to refine the same expression</assert>
+      <report test="preceding-sibling::opf:meta[normalize-space(@property) = 'display-seq'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >"display-seq" cannot be declared more than once to refine the same expression</report>
     </rule>
   </pattern>
 
   <pattern id="meta-file-as-cardinality">
     <rule context="opf:meta[normalize-space(@property) = 'file-as']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'file-as'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >"file-as" cannot be declared more than once to refine the same expression</assert>
+      <report test="preceding-sibling::opf:meta[normalize-space(@property) = 'file-as'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >"file-as" cannot be declared more than once to refine the same expression</report>
     </rule>
   </pattern>
 
   <pattern id="meta-group-position-cardinality">
     <rule context="opf:meta[normalize-space(@property) = 'group-position']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'group-position'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >"group-position" cannot be declared more than once to refine the same expression</assert>
+      <report test="preceding-sibling::opf:meta[normalize-space(@property) = 'group-position'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >"group-position" cannot be declared more than once to refine the same expression</report>
     </rule>
   </pattern>
 
-  <pattern id="meta-identifier-type-must-refine">
-    <rule context="opf:meta[normalize-space(@property) = 'identifier-type']">
-      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
-      <assert test="@refines and (//dc:identifier[normalize-space(@id) = $target-id] or //dc:source[normalize-space(@id) = $target-id])"
-        >Property "identifier-type" must refine an "identifier" or "source" property</assert>
-    </rule>
-  </pattern>
 
   <pattern id="meta-identifier-type-cardinality">
     <rule context="opf:meta[normalize-space(@property) = 'identifier-type']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'identifier-type'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >"identifier-type" cannot be declared more than once to refine the same expression</assert>
+      <report test="preceding-sibling::opf:meta[normalize-space(@property) = 'identifier-type'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >"identifier-type" cannot be declared more than once to refine the same expression</report>
     </rule>
   </pattern>
 
-  <pattern id="meta-role-must-refine">
-    <rule context="opf:meta[normalize-space(@property) = 'role']">
-      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
-      <assert test="@refines and (//dc:creator[normalize-space(@id) = $target-id] or //dc:contributor[normalize-space(@id) = $target-id] or //dc:publisher[normalize-space(@id) = $target-id])"
-        >"role" must refine a "creator", "contributor", or "publisher" property</assert>
-    </rule>
-  </pattern>
 
   <pattern id="meta-source-of-value">
     <rule context="opf:meta[normalize-space(@property) = 'source-of']">
@@ -413,33 +400,19 @@
     </rule>
   </pattern>
 
-  <pattern id="meta-source-of-must-refine-source">
-    <rule context="opf:meta[normalize-space(@property) = 'source-of']">
-      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
-      <assert test="@refines and //dc:source[normalize-space(@id) = $target-id]"
-        >The "source-of" property must refine a "source" property</assert>
-    </rule>
-  </pattern>
 
   <pattern id="meta-source-of-cardinality">
     <rule context="opf:meta[normalize-space(@property) = 'source-of']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'source-of'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >"source-of" cannot be declared more than once to refine the same expression</assert>
+      <report test="preceding-sibling::opf:meta[normalize-space(@property) = 'source-of'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >"source-of" cannot be declared more than once to refine the same expression</report>
     </rule>
   </pattern>
 
-  <pattern id="meta-title-type-must-refine">
-    <rule context="opf:meta[normalize-space(@property) = 'title-type']">
-      <let name="target-id" value="substring(normalize-space(@refines), 1 + starts-with(normalize-space(@refines), '#'))"/>
-      <assert test="@refines and //dc:title[normalize-space(@id) = $target-id]"
-        >Property "title-type" must refine a "title" property</assert>
-    </rule>
-  </pattern>
 
   <pattern id="meta-title-type-cardinality">
     <rule context="opf:meta[normalize-space(@property) = 'title-type']">
-      <assert test="count(//opf:meta[normalize-space(@property) = 'title-type'][normalize-space(@refines) = normalize-space(current()/@refines)]) = 1"
-        >"title-type" cannot be declared more than once to refine the same expression</assert>
+      <report test="preceding-sibling::opf:meta[normalize-space(@property) = 'title-type'][normalize-space(@refines) = normalize-space(current()/@refines)]"
+        >"title-type" cannot be declared more than once to refine the same expression</report>
     </rule>
   </pattern>
 
