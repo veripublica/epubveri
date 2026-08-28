@@ -8,6 +8,142 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.13.1] - 2026-08-28
+
+**Six false positives, and none of them was reaching anyone.** Every one is a
+parity fix against epubcheck's own fixtures: measured across the 415-book local
+shelf, not one of the six changes a real book. What the day actually adds to a
+reader's output is three *true* findings on two books, each confirmed against
+epubcheck at the same file, line and wording.
+
+**The content-document set is the version's set, and ours was version-blind**
+(issue #129). OPS 2.0.1's content documents are XHTML and DTBook; EPUB 3's are
+XHTML and SVG — so the two differ **in both directions**, and a predicate that
+ignores the version is wrong twice. Four sites consulted it:
+
+- a **hyperlink** to a manifest-declared SVG that is not in the spine drew
+  RSC-011 from us and RSC-010 from epubcheck at 2.0 — a wrong id on entirely
+  ordinary markup;
+- a **`<guide>` reference** to an SVG is OPF-032 at 2.0 and we were silent,
+  the EPUB 3 mirror (a guide reference to DTBook) likewise;
+- the **NCX `<content src>`** needed *both* of epubcheck's questions rather
+  than one. It now shares `hyperlink_abort` instead of restating its
+  conditions, which is how it had come to hold the first arm and not the
+  second: an NCX pointing at a declared XHTML document that is simply **not in
+  the spine** drew nothing at all from us;
+- the **fallback chain**, the hyperlink's escape hatch from RSC-010, was the
+  last and the sharpest. `FallbackChainResolver` calls
+  `isBlessedItemType(type, version)`, so a PDF that falls back to an SVG is
+  rescued at 3.0 and not at 2.0, DTBook being the mirror. Half of those four
+  cells were a wrong id, and the comment at that site had claimed the resolver
+  applies "no version condition" — it never did.
+
+The other three sites are **not** version-dependent, read at the source rather
+than probed: `ResourceReferencesChecker`:179 gates fragment resolution on
+`MIMEType.SVG.is(..) || MIMEType.XHTML.is(..)` with no version in the call. One
+dead line went with them — the `<guide>` site carried the same content-document
+guard twice in a row, the second unreachable.
+
+**A `data:` URL in a hyperlink is not finished at RSC-029** (issue #128).
+epubcheck does not stop there: the reference reaches the ordinary hyperlink
+checks and is asked the same two questions of the media type the data URL
+declares for itself. Fourteen books later — one per type per version — the
+either/or is gone: at 3.0 we reported RSC-029 alone where epubcheck reports it
+*and* RSC-010 or RSC-011; at 2.0 we reported RSC-010 for every type, right for
+an image or a PDF and wrong for `text/html`, XHTML and DTBook. The comparison
+is case-sensitive, so `data:TEXT/HTML,x` and `data:text/html,x` differ.
+
+**OPF-030 was asked only inside the `<metadata>` block, and OPF-048 could not
+be reached at all.** Resolving `unique-identifier` lived under
+`if let Some(md) = metadata`, so a package with no `<metadata>` element drew no
+OPF-030 — and one with neither the element nor the attribute drew **nothing**:
+not the RSC-005, not OPF-048, not OPF-030. epubcheck reports all three. No
+fixture anywhere builds that book, which is why the regression test does.
+
+**A `<package>` in a foreign namespace now stops after the schema error.** A
+namespace that is neither the OPF one nor a legacy one means the document is
+not a package document, and epubcheck's grammar says so by rejecting the root —
+after which it never builds the package model, asks nothing about the manifest,
+and opens no content document. We kept going: two RSC-001 on its own fixture,
+and on a book carrying a genuinely broken content document, two more RSC-005
+from validating a document epubcheck never opens. What is left behind is a
+strict subset of epubcheck's findings, and the stop is guarded on the schema
+violation having actually been reported rather than on the namespace test
+alone.
+
+**OPF-097's three exemptions were all wider or narrower than epubcheck's.**
+`isNcx()` is set in exactly one place — on the item the spine's `toc` attribute
+resolves to — so an NCX-typed item that no `toc` names is not exempt, and our
+media-type test excused it. `isInSpine()` is a property of the *item*, not of
+the resource: two manifest items may declare the same href, and then only the
+one the spine names is exempt. And a `data:` href was not asked the question at
+all. A data URL is named by its first 30 characters plus an ellipsis, as
+epubcheck names it; the first version put three kilobytes of base64 into a
+usage message.
+
+**A remote `<base>` restricts the stylesheet and not the hyperlink.** RSC-006
+says a remote reference is not allowed *in this context*, and a hyperlink is
+not one of those contexts — you may link to a website. We had it inverted:
+RSC-006 on every relative `<a href>` in such a document, and silence on the
+`<link rel="stylesheet">` beside it. The corpus could not see this, because
+both of its base fixtures expect one RSC-006 and got one, from the wrong
+element. The restricted-remote classification is now one predicate shared by
+the two sites that ask it, which is how they had drifted: only a reference
+written remote was asked, never one that resolves remote through a base.
+
+### SVG in EPUB 2 is validated normatively (issue #93)
+
+`schema/20/rng/content.rng` includes the SVG 1.1 modules directly, so inline
+and standalone SVG in an EPUB 2 publication is validated **normatively** and
+reported as ERROR RSC-005, where EPUB 3 runs the same grammar informatively as
+RSC-025 usage. Three checks were gated to EPUB 3 on a comment that is correct
+about RSC-025 and wrong about the validation underneath it — the gate was not
+avoiding an opinion epubcheck lacks, it was suppressing a finding epubcheck
+makes. Its own example proves it: a lowercase `viewbox` in a real book had been
+written off there as our false positive, and epubcheck reports it.
+
+Both lists were diffed against the authority before either arm was switched on,
+and nothing was missing: **0 of the 81 element names** and **0 of the 256
+unprefixed attribute names** `schema/20/rng/svg/*.rng` declares are absent from
+ours. What ours carry beyond SVG 1.1 is one element (`feDropShadow`) and four
+attributes (`focusable`, `href`, `rel`, `tabindex`), each probed in both
+versions: all are RSC-005 at 2.0 and clean at 3.0.
+
+The **content model** now covers its closed half, in four shapes measured cell
+by cell — 33 books, one per cell:
+
+- the graphics elements (`rect`, `circle`, `image`, `use`, `path`, `tref`, …)
+  hold descriptive and animation elements and nothing else, not even text;
+- the text elements (`text`, `tspan`, `textPath`) are a mixed pool that also
+  admits `a`, `altGlyph`, `tref` and `tspan` — and `textPath` only directly
+  inside `<text>`;
+- the gradients add `<stop>`;
+- `<stop>` itself takes **animation elements only**, not even a `<desc>`.
+
+Indentation whitespace is not loose text, which is the one cell of the 33 that
+could have cost a real book. The container elements — `g`, `defs`, `svg`, `a`,
+`switch`, `marker` and the rest — are deliberately outside this slice: their
+models are open-ended pools, and that is where a from-scratch grammar starts
+reporting what epubcheck does not.
+
+Measured cost before and after: of the shelf's 261 EPUB 2 books carrying inline
+SVG, the whole population uses **two** element names and **nine** unprefixed
+attribute names. Three of the nine are outside SVG 1.1 — one occurrence each,
+two books — and all three are errors epubcheck reports at the same line.
+
+### Positions are unchanged, and that is a decision
+
+An empty `<guide>` draws the same finding from both tools at different
+coordinates: epubcheck at the character after `</guide>`, epubveri at the
+`<guide>` itself. Both are internally consistent. epubcheck reports where its
+reader had reached when the fault surfaced, which gives it three different
+anchors for three kinds of fault — just past the start tag, just past the end
+tag, and just past the start tag's `>` for an attribute, where it points at
+neither the element nor the attribute. We report where the fault begins,
+because that is where an author has to go and where a repair tool has to start.
+`range().end` reproduces epubcheck's number exactly if this is ever revisited;
+the reasoning now lives on `Position::of`.
+
 ## [0.13.0] - 2026-08-28
 
 **Breaking, library only:** `rng::ElementFault::MissingAttribute` is now
