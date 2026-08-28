@@ -42,6 +42,23 @@ type Ann = (&'static str, Option<&'static str>, &'static str);
 
 #[rustfmt::skip]
 const ANN: &[Ann] = &[
+    // --- CHK ---
+    ("CHK-008", None,
+        "**Not one of the CLI/tooling messages the rest of this family are**, \
+         though it inherited their note until 2026-08-28: without an entry \
+         here every CHK id gets `FAMILY_NA_NOTE`, and the family note above \
+         had already been corrected while this row still said \"custom \
+         message-overrides file\". Its real call site is the \
+         `catch (IllegalStateException)` around `checker.check()` in \
+         `OPFChecker`:400 - epubcheck announcing that one of *its own* \
+         checkers threw and the item was skipped. Still N/A, for RSC-022's \
+         reason: it describes the validator's internal failure rather than \
+         the book, and we have no equivalent failure to announce. \
+         **What it costs epubcheck is worth knowing**: on a book whose spine \
+         `toc` names a non-NCX item, the NCXChecker it builds over a non-NCX \
+         context throws, so that document is never validated at all - measured \
+         with a deliberate error inside it, which epubcheck does not report \
+         and we do (issue #127)."),
     // --- PKG (reviewed) ---
     ("PKG-003", None,
         "epubcheck's `OCFZipChecker` reads a **58-byte** header and reports \

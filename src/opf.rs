@@ -5645,6 +5645,36 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // Table of contents (NCX): required in EPUB 2, and when present the
         // 'toc' attribute must point to an NCX manifest item.
         const NCX: &str = "application/x-dtbncx+xml";
+        // **EPUB 3 says it a second time, and we said it once** (issue #127).
+        // `package-30.sch`'s `opf.toc.ncx` asserts the referenced item's media
+        // type from `opf:spine[@toc]`, so it fires whenever a `toc` attribute
+        // is present and does not resolve to an NCX — the unresolved case
+        // included, since an empty media type fails the assert too. Measured
+        // one book per arrangement: at 3.0 epubcheck reports OPF-050 *and*
+        // this, or OPF-049 *and* this; at 2.0 the rule does not exist and only
+        // the OPF id is reported.
+        if is_epub3
+            && let Some(sp) = spine
+            && let Some(toc) = sp.attr_no_ns("toc").map(str::trim)
+        {
+            let mt = items
+                .get(toc)
+                .map(|(_, mt)| mt.as_str())
+                .unwrap_or_default();
+            if mt != NCX {
+                report.push_full(
+                    RSC_005,
+                    Severity::Error,
+                    format!(
+                        "spine element toc attribute must reference the NCX manifest item (referenced media type was \"{mt}\")"
+                    ),
+                    opf_path,
+                    Position::of(sp),
+                    "opf.spine.toc_not_ncx",
+                    vec![toc.to_string()],
+                );
+            }
+        }
         match sp.attr_no_ns("toc").map(str::trim) {
             None => {
                 // ...but not in OEBPS 1.2, which predates the NCX entirely.
@@ -19426,6 +19456,90 @@ mod tests {
                 "{ver}, hyperlink to a PDF falling back to {fallback_type}"
             );
         }
+    }
+
+    /// `package-30.sch`'s `opf.toc.ncx` asserts, from `opf:spine[@toc]`, that
+    /// the referenced item is an NCX — so it fires whenever a `toc` attribute
+    /// is present and does not resolve to one, **the unresolved case
+    /// included**, since an absent media type fails the assert too.
+    ///
+    /// We reported only the OPF id (OPF-050 or OPF-049) and not this, which
+    /// was the real gap behind issue #127 — the issue had framed it as our
+    /// RSC-001 standing in for epubcheck's CHK-008, and CHK-008 turns out to
+    /// be epubcheck announcing that one of its own checkers threw.
+    ///
+    /// EPUB 3 only: the rule lives in the 3.0 Schematron, and at 2.0
+    /// epubcheck reports the OPF id alone. One book per arrangement.
+    #[test]
+    fn an_epub3_spine_toc_must_resolve_to_an_ncx() {
+        fn book(ver: &str, toc: &str) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let (meta, prop) = if ver == "3.0" {
+                (
+                    r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#,
+                    r#" properties="nav""#,
+                )
+            } else {
+                ("", "")
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="uid"
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <metadata><dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>{meta}</metadata>
+  <manifest>
+    <item id="t001" href="contents.xhtml"{prop} media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="{toc}"><itemref idref="t001"/></spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="package.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>n</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"contents.xhtml\">c</a></li></ol>\
+                </nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("package.opf", opf.as_str()),
+                    ("contents.xhtml", NAV),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+        let rule_fired = |ver: &str, toc: &str| {
+            crate::validate_bytes(book(ver, toc))
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.spine.toc_not_ncx"))
+        };
+
+        // 3.0: the target is XHTML, and the target does not exist at all.
+        assert!(rule_fired("3.0", "t001"), "toc names a non-NCX item");
+        assert!(rule_fired("3.0", "nosuchid"), "toc names nothing at all");
+        // 2.0 has no such rule — epubcheck reports OPF-050 alone there.
+        assert!(!rule_fired("2.0", "t001"), "EPUB 2 has no 3.0 Schematron");
+        assert!(!rule_fired("2.0", "nosuchid"));
     }
 
     /// An EPUB 2 whose single content document is named `name`, referenced
