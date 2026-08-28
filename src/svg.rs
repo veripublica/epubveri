@@ -1120,6 +1120,69 @@ const SVG_FILTER_PRIMITIVES: &[&str] = &[
 /// error it does not. Cardinality is a different axis (its attribute
 /// equivalent is `check_required_attributes`) and wants its own measured
 /// increment; being one lower is the safe direction meanwhile.
+/// The container elements. Their model is **not** the open-ended pool it was
+/// taken for in the previous increment: it is descriptive and animation
+/// elements plus every SVG element that does not belong to a specific parent,
+/// and no character data.
+const SVG_CONTAINER_ELEMENTS: &[&str] = &[
+    "a", "defs", "g", "marker", "mask", "pattern", "svg", "switch", "symbol",
+];
+
+/// The SVG elements a container may **not** hold, because each belongs to a
+/// particular parent — the gradient's `stop`, the text children, the filter
+/// primitives and their sub-children, the font internals, and
+/// `animateMotion`'s `mpath`.
+///
+/// Stated as an exclusion rather than as a 39-name allow-list because that is
+/// the actual rule, and because it cannot drift from `SVG_ELEMENTS` the way a
+/// second copy would. **Verified in both directions, one book per name:** all
+/// 41 of these are rejected inside a `<g>`, and all 39 remaining SVG element
+/// names are accepted there.
+const SVG_NON_CONTAINER_CHILDREN: &[&str] = &[
+    "altGlyph",
+    "altGlyphItem",
+    "definition-src",
+    "feBlend",
+    "feColorMatrix",
+    "feComponentTransfer",
+    "feComposite",
+    "feConvolveMatrix",
+    "feDiffuseLighting",
+    "feDisplacementMap",
+    "feDistantLight",
+    "feDropShadow",
+    "feFlood",
+    "feFuncA",
+    "feFuncB",
+    "feFuncG",
+    "feFuncR",
+    "feGaussianBlur",
+    "feImage",
+    "feMerge",
+    "feMergeNode",
+    "feMorphology",
+    "feOffset",
+    "fePointLight",
+    "feSpecularLighting",
+    "feSpotLight",
+    "feTile",
+    "feTurbulence",
+    "font-face-format",
+    "font-face-name",
+    "font-face-src",
+    "font-face-uri",
+    "glyph",
+    "glyphRef",
+    "hkern",
+    "missing-glyph",
+    "mpath",
+    "stop",
+    "textPath",
+    "tref",
+    "tspan",
+    "vkern",
+];
+
 /// How often, and in what order, a model's `extra` children may appear.
 ///
 /// Three values because three were measured, one book per cell (#93). The
@@ -1184,6 +1247,10 @@ struct SvgModel {
     cardinality: Cardinality,
     /// Whether character data is content rather than a mistake.
     text: bool,
+    /// A container: `extra` is not a list but "every SVG element that does not
+    /// belong to a specific parent", i.e. the complement of
+    /// [`SVG_NON_CONTAINER_CHILDREN`].
+    container: bool,
 }
 
 /// The content model of `name`, or `None` when it is outside this slice.
@@ -1197,7 +1264,22 @@ fn svg_model(name: &str) -> Option<SvgModel> {
         extra: &[],
         cardinality: Cardinality::Any,
         text: false,
+        container: false,
     };
+    if SVG_CONTAINER_ELEMENTS.contains(&name) {
+        return Some(SvgModel {
+            container: true,
+            // `<a>` is the one container that also carries character data,
+            // in both of its contexts: `<g><a>loose</a></g>` and
+            // `<text><a>a</a></text>` are both clean, while `<g>loose</g>` is
+            // not. It is still a container otherwise — a `<tspan>` inside one
+            // is rejected even when the `<a>` sits in a `<text>`. Four cells,
+            // and the first version of this table got it wrong, which an
+            // assertion written for the text family caught.
+            text: name == "a",
+            ..base
+        });
+    }
     if SVG_CLOSED_MODEL_ELEMENTS.contains(&name) {
         return Some(base);
     }
@@ -1295,6 +1377,16 @@ pub(crate) fn check_content_model(
                 }
                 if model.descriptive && SVG_DESCRIPTIVE_ELEMENTS.contains(&cname) {
                     continue;
+                }
+                if model.container {
+                    // A name the vocabulary does not know is that check's
+                    // finding, not this one's - reporting it here as well
+                    // would give one mistake two findings.
+                    if !SVG_ELEMENTS.contains(&cname)
+                        || !SVG_NON_CONTAINER_CHILDREN.contains(&cname)
+                    {
+                        continue;
+                    }
                 }
                 if let Some(pos) = model.extra.iter().position(|e| *e == cname) {
                     match model.cardinality {
@@ -1696,6 +1788,69 @@ mod tests {
             .is_empty(),
             "one mistake, one finding"
         );
+
+        // --- the containers. Not the open-ended pool the earlier increment
+        // took them for: descriptive and animation elements plus every SVG
+        // element that does not belong to a specific parent, and no character
+        // data. Verified in both directions with one book per name against
+        // 5.3.0 — all 41 excluded names are rejected inside a `<g>`, all 39
+        // remaining ones are accepted.
+        for body in [
+            r#"<g><stop offset="0"/></g>"#,
+            r#"<g><tspan>a</tspan></g>"#,
+            r#"<g><feBlend/></g>"#,
+            r#"<g><feMergeNode/></g>"#,
+            r#"<defs><stop offset="0"/></defs>"#,
+            r#"<g>loose text</g>"#,
+        ] {
+            assert_eq!(
+                ids(body, false),
+                vec![crate::ids::RSC_005],
+                "EPUB 2: {body}"
+            );
+            assert_eq!(ids(body, true), vec![RSC_025], "EPUB 3: {body}");
+        }
+        for body in [
+            r#"<g><rect width="1" height="1"/></g>"#,
+            r#"<g><text x="0" y="0">t</text></g>"#,
+            r#"<g><defs><filter id="f"/></defs></g>"#,
+            r#"<g><clipPath id="c"/></g>"#,
+            r#"<g><linearGradient id="lg"/></g>"#,
+            r#"<switch><rect width="1" height="1"/></switch>"#,
+            r#"<mask id="m"><rect width="1" height="1"/></mask>"#,
+            r#"<marker id="mk"><rect width="1" height="1"/></marker>"#,
+        ] {
+            assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
+            assert!(ids(body, true).is_empty(), "EPUB 3 clean: {body}");
+        }
+        // An unknown name inside a container is the *vocabulary* check's
+        // finding. Reporting it here as well would give one mistake two
+        // findings, which is the shape a whole release was spent removing.
+        assert!(
+            ids(r#"<g><notarealsvgelement/></g>"#, false).is_empty(),
+            "the vocabulary check owns unknown names"
+        );
+        // `<a>` is the one container that also carries character data, in both
+        // of its contexts — and it is still a container otherwise. Four cells;
+        // the first version of the table gave it the plain container model and
+        // an assertion written for the text family caught it.
+        for body in [
+            r##"<g><a xlink:href="#z">loose</a></g>"##,
+            r##"<text x="0" y="0"><a xlink:href="#z">a</a></text>"##,
+            r##"<g><a xlink:href="#z"><rect width="1" height="1"/></a></g>"##,
+        ] {
+            assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
+        }
+        for body in [
+            r##"<g><a xlink:href="#z"><tspan>x</tspan></a></g>"##,
+            r##"<text x="0" y="0"><a xlink:href="#z"><tspan>x</tspan></a></text>"##,
+        ] {
+            assert_eq!(
+                ids(body, false),
+                vec![crate::ids::RSC_005],
+                "EPUB 2: {body}"
+            );
+        }
     }
 
     #[test]
