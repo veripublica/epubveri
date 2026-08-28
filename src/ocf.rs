@@ -630,58 +630,74 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             // name is a file name too), on every real entry regardless of
             // whether it's a "publication resource" (confirmed via a real
             // fixture flagging a forbidden character inside META-INF).
-            for segment in name.split('/').filter(|s| !s.is_empty()) {
-                if crate::filename::has_forbidden_char(segment) {
-                    report.push_at_rule(
-                        PKG_009,
-                        Severity::Error,
-                        format!("file name '{segment}' contains a forbidden character"),
-                        name.as_str(),
-                        "ocf.filename.forbidden_char",
-                        vec![segment.to_string()],
-                    );
-                }
-                if crate::filename::ends_with_full_stop(segment) {
-                    report.push_at(
-                        PKG_011,
-                        Severity::Error,
-                        format!("file name '{segment}' must not end with a full stop"),
-                        name.as_str(),
-                    );
-                }
-                if crate::filename::has_non_ascii(segment) {
-                    report.push_at_rule(
-                        PKG_012,
-                        Severity::Usage,
-                        format!("file name '{segment}' contains non-ASCII characters"),
-                        name.as_str(),
-                        "ocf.filename.non_ascii",
-                        vec![segment.to_string()],
-                    );
-                }
-                // PKG-010 belongs here with its three siblings, and it was the
-                // one missing from the set. epubcheck asks all four in
-                // `OCFFilenameChecker`, which in full-publication mode runs
-                // over **container entries**; we were asking this one of the
-                // manifest *href* instead, in `opf.rs`. That happens to agree
-                // whenever the file exists and disagrees whenever it does not
-                // — probed: a declared-but-absent `a b.xhtml` draws RSC-001
-                // alone from epubcheck and RSC-001 plus PKG-010 from us, and
-                // an `a%20b.xhtml` href whose entry is literally named that
-                // draws OPF-003 there and OPF-003 plus PKG-010 here, because
-                // the space exists only after percent-decoding.
-                //
-                // Asking the container instead also covers the case no
-                // manifest mentions at all, which the href form could not see.
-                if segment.contains(' ') {
-                    report.push_at_rule(
-                        PKG_010,
-                        Severity::Warning,
-                        format!("file name '{segment}' contains a space"),
-                        name.as_str(),
-                        "ocf.filename.contains_space",
-                        vec![segment.to_string()],
-                    );
+            //
+            // **A directory ENTRY is skipped, though, and that is not the
+            // same statement.** `OCFChecker` runs `OCFFilenameChecker` only
+            // in the `else` of `if (resource.isDirectory())`, so epubcheck
+            // never asks these of a directory entry — while a directory
+            // *name* is still asked, as a segment of the paths of the files
+            // inside it. Checking the entry as well reported the same
+            // segment twice: `ocf-filepath-utf8-valid` carries both
+            // `EPUB/spécial/` and `EPUB/spécial/styles.css`, and drew two
+            // PKG-012 against epubcheck's one. An empty offending directory
+            // now says nothing, which is also what epubcheck says.
+            //
+            // The entry stays in `names`: OPF-060 and PKG-014 below both
+            // need it.
+            if !name.ends_with('/') {
+                for segment in name.split('/').filter(|s| !s.is_empty()) {
+                    if crate::filename::has_forbidden_char(segment) {
+                        report.push_at_rule(
+                            PKG_009,
+                            Severity::Error,
+                            format!("file name '{segment}' contains a forbidden character"),
+                            name.as_str(),
+                            "ocf.filename.forbidden_char",
+                            vec![segment.to_string()],
+                        );
+                    }
+                    if crate::filename::ends_with_full_stop(segment) {
+                        report.push_at(
+                            PKG_011,
+                            Severity::Error,
+                            format!("file name '{segment}' must not end with a full stop"),
+                            name.as_str(),
+                        );
+                    }
+                    if crate::filename::has_non_ascii(segment) {
+                        report.push_at_rule(
+                            PKG_012,
+                            Severity::Usage,
+                            format!("file name '{segment}' contains non-ASCII characters"),
+                            name.as_str(),
+                            "ocf.filename.non_ascii",
+                            vec![segment.to_string()],
+                        );
+                    }
+                    // PKG-010 belongs here with its three siblings, and it was the
+                    // one missing from the set. epubcheck asks all four in
+                    // `OCFFilenameChecker`, which in full-publication mode runs
+                    // over **container entries**; we were asking this one of the
+                    // manifest *href* instead, in `opf.rs`. That happens to agree
+                    // whenever the file exists and disagrees whenever it does not
+                    // — probed: a declared-but-absent `a b.xhtml` draws RSC-001
+                    // alone from epubcheck and RSC-001 plus PKG-010 from us, and
+                    // an `a%20b.xhtml` href whose entry is literally named that
+                    // draws OPF-003 there and OPF-003 plus PKG-010 here, because
+                    // the space exists only after percent-decoding.
+                    //
+                    // Asking the container instead also covers the case no
+                    // manifest mentions at all, which the href form could not see.
+                    if segment.contains(' ') {
+                        report.push_at_rule(
+                            PKG_010,
+                            Severity::Warning,
+                            format!("file name '{segment}' contains a space"),
+                            name.as_str(),
+                            "ocf.filename.contains_space",
+                            vec![segment.to_string()],
+                        );
+                    }
                 }
             }
             names.push(name);
