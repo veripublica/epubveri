@@ -19,6 +19,17 @@ fn nav_type<'a>(nav: roxmltree::Node<'a, 'a>) -> Option<&'a str> {
 /// anywhere inside it, or an `<img>` descendant (confirmed via a real
 /// fixture: two `<img>` elements with no text at all, one even with an
 /// empty `alt`, are still a valid non-empty label).
+/// Is `n` inside an `<ol>` that is itself inside `nav`?
+///
+/// The `//html:ol//` step of epubcheck's anchor- and span-label contexts. A
+/// nav's own heading is not in the list, so its contents are not label text.
+fn within_ol(nav: roxmltree::Node, n: roxmltree::Node) -> bool {
+    n.ancestors()
+        .skip(1)
+        .take_while(|a| *a != nav)
+        .any(|a| a.is_element() && a.tag_name().name() == "ol")
+}
+
 fn has_text_or_image(n: roxmltree::Node) -> bool {
     let has_text = n
         .descendants()
@@ -388,9 +399,22 @@ pub(crate) fn check(doc: &roxmltree::Document, path: &str, dir: &str, report: &m
             continue; // no epub:type at all - unrestricted content model
         };
         check_nav_content_model(nav, ty, path, report);
+        // **Both label rules are scoped to the list, not to the whole nav.**
+        // epubcheck's contexts are `html:nav[@epub:type]//html:ol//html:a`
+        // and `…//html:ol//html:span` (`epub-nav-30.sch`), and we walked every
+        // descendant instead — so an empty `<span>` inside the nav's *heading*
+        // drew "Spans within nav elements must contain text" on top of the
+        // heading rule that already covers it. Two findings for one empty
+        // element, against epubcheck's one, on
+        // `content-model-heading-empty-error.xhtml`.
+        //
+        // The heading rule is the one that keeps that case: its context is
+        // `html:h1|…|html:h6` with no nav scoping at all, so nothing goes
+        // quiet here.
         for a in nav
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "a")
+            .filter(|n| within_ol(nav, *n))
         {
             if !has_text_or_image(a) {
                 report.push_node(
@@ -407,6 +431,7 @@ pub(crate) fn check(doc: &roxmltree::Document, path: &str, dir: &str, report: &m
         for span in nav
             .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "span")
+            .filter(|n| within_ol(nav, *n))
         {
             if !has_text_or_image(span) {
                 report.push_node(
