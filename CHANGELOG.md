@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [0.13.1] - 2026-08-28
+## [0.13.1] - 2026-08-29
 
 **Six false positives, and none of them was reaching anyone.** Every one is a
 parity fix against epubcheck's own fixtures: measured across the 415-book local
@@ -130,6 +130,92 @@ Measured cost before and after: of the shelf's 261 EPUB 2 books carrying inline
 SVG, the whole population uses **two** element names and **nine** unprefixed
 attribute names. Three of the nine are outside SVG 1.1 — one occurrence each,
 two books — and all three are errors epubcheck reports at the same line.
+
+### Three more parity fixes, each found by reading epubcheck's source
+
+**An EPUB 3 spine `toc` must resolve to an NCX** (issue #127). `package-30.sch`'s
+`opf.toc.ncx` asserts from `opf:spine[@toc]` that the referenced item is an
+NCX, and it fires whenever a `toc` attribute is present and does not resolve to
+one — the unresolved case included, since an absent media type fails the assert
+too. We reported the OPF id alone. EPUB 3 only; at 2.0 epubcheck reports the
+OPF id alone as well.
+
+That issue had been filed on the belief that our RSC-001 was standing in for
+epubcheck's CHK-008. `OPFChecker`:381-400 says otherwise: CHK-008 is the
+`catch (IllegalStateException)` around `checker.check()`, i.e. epubcheck
+announcing that **one of its own checkers threw**. `toc.ncx()` is called on
+whatever the spine's `toc` resolves to, unconditionally, so a `toc` naming an
+XHTML item makes it build an `NCXChecker` over a non-NCX context — which throws
+before the document is ever opened. Handed such a book with a deliberate error
+inside that document, epubcheck reports nothing about it. Our extra findings
+there are true findings it loses to its own exception handling.
+
+CHK-008 therefore stays N/A, and `COVERAGE.md` now says why in its own words:
+the family note had been corrected in August while the table **row** still
+carried the corrected-away reason, because an id with no `ANN` entry inherits
+the family's.
+
+**The package's identity survives a fatal parse error** (issue #126). epubcheck
+reads as a stream, so when a package document falls apart it has already passed
+the root start tag, and everything depending on nothing else still runs there —
+RSC-005 and OPF-048 for a missing `unique-identifier`, OPF-030 for one that
+cannot resolve. Measured: three findings, not the one the issue assumed. We had
+no tree and said nothing.
+
+The root start tag is now recovered lexically — prolog, comments, processing
+instructions and a DOCTYPE with an internal subset skipped — and handed back to
+roxmltree as a self-closing document, so no XML rule is re-implemented. The two
+shapes that break a naive scan have tests: a `>` inside a quoted attribute
+value, and a `>` inside a DOCTYPE's internal subset. Near-zero risk by
+construction: it runs only where we previously reported nothing beyond the
+fatal, on a book that is INVALID either way.
+
+### The SVG content model, in four increments and 146 measured cells
+
+Every rule below was measured against 5.3.0 one book per cell, and every cell
+is a test. Ten shapes:
+
+- **the graphics elements** (`rect`, `circle`, `image`, `use`, `path`, `tref`,
+  …) hold descriptive and animation elements and nothing else, not even text —
+  though indentation whitespace is not text, which is the one cell of the first
+  increment that could have cost a real book;
+- **the text elements** (`text`, `tspan`, `textPath`) are a mixed pool that also
+  admits `a`, `altGlyph`, `tref` and `tspan`, with `textPath` allowed only
+  directly inside `<text>`. `tref` is not one of them: it names the text it
+  renders, so its own model is closed;
+- **the gradients** add `<stop>`, and **`<stop>` itself** takes animation
+  elements only — not even a `<desc>`;
+- **`clipPath`** takes the shape elements plus `use`, and not every graphics
+  element: `<g>` and `<image>` are errors inside one;
+- **`filter`** takes the primitives, and its three sub-elements (`feMerge`,
+  `feComponentTransfer`, the two lighting primitives) are stricter than
+  anything else here — neither descriptive nor animation, only their own
+  children;
+- **the containers** (`svg`, `g`, `defs`, `a`, `switch`, `marker`, `symbol`,
+  `pattern`, `mask`) were the increment that corrected an earlier assumption.
+  They are not open-ended pools: a container holds every SVG element that does
+  not belong to a specific parent, and no character data. Stated as an
+  exclusion rather than a 39-name allow-list, and verified in both directions —
+  all 41 excluded names rejected inside a `<g>`, all 39 remaining ones
+  accepted. `<a>` is the one container that also carries character data, in
+  both of its contexts.
+
+**Cardinality is two rules rather than a family.** Of everything that could
+require a child, only the lighting primitives do — an empty `feMerge`,
+`feComponentTransfer`, `clipPath`, `filter` or gradient is clean. They take
+exactly one light source; a second is "not allowed here", which is how
+epubcheck words it too. And `feComponentTransfer`'s children are the **ordered**
+sequence `feFuncR?, feFuncG?, feFuncB?, feFuncA?`, each at most once.
+
+Two of those rules nearly shipped wrong, and both were caught by measuring the
+cell rather than reasoning about it. The `feFunc` names had been listed
+alphabetically — harmless while the model was a set membership test, and an
+inversion the moment it became a sequence. And `<a>` was first given the plain
+container model, which an assertion written for the text family a commit
+earlier caught. The 209-publication W3C suite would not have: it contains no
+`<a>` carrying text inside SVG, and reported no disagreement on that build.
+
+Nothing here moves a book on the 415-book local shelf.
 
 ### Positions are unchanged, and that is a decision
 
