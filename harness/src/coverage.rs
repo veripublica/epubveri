@@ -172,6 +172,18 @@ const ANN: &[Ann] = &[
         "A metadata `<link>` target that is also a manifest item - and, as \
          epubcheck has it, only when that item is not in the spine (#55)."),
     // --- RSC (partials confirmed earlier) ---
+    ("RSC-001", None,
+        "A referenced file could not be found. **Known count divergence on \
+         one shape, left as is (2026-08-28):** when two manifest items share \
+         an `id`, epubcheck's manifest is keyed by it, so the later entry \
+         hides the earlier one and only the later item's missing file is \
+         reported; we check both items and report both. Matching would mean \
+         reproducing an implementation artefact and dropping a finding that \
+         is true, and such a book is invalid in both tools regardless. \
+         Population: 0 of 415 shelf books have a duplicate manifest `id`. \
+         Seen on `attr-id-duplicate-error.opf`, \
+         `attr-id-duplicate-with-spaces-error.opf` and \
+         `xml-id-duplicate-error.opf`."),
     ("RSC-005", Some("partial"),
         "XHTML content model is real (EPUB 2 XHTML 1.1 grammar + EPUB 3 HTML5 \
          grammar + Schematron nesting/IDREF rules + closed per-element \
@@ -417,9 +429,24 @@ const ANN: &[Ann] = &[
          different reason and no longer does - a stray declaration outside \
          any rule was reported once per bad token (4 against epubcheck's 1), \
          which was a real defect rather than a granularity choice and is \
-         fixed in styloria 0.9.1. When this row shows a new count gap, ask \
-         which of the two it is: several *selectors* is deliberate, several \
-         findings inside *one* selector is not."),
+         fixed in styloria 0.9.1. **A third shape was a defect and is fixed \
+         (2026-08-28):** a shape complaint raised *inside* a block styloria \
+         had already reported as unterminated. An unclosed `{` swallows the \
+         next rule whole, so its \"declaration list\" is not one, and we \
+         reported both the unterminated block and the mess it absorbed - \
+         three findings against epubcheck's two on `content-css-syntax-error`. \
+         **The count difference was never styloria's error recovery**, which \
+         had reported exactly two all along; parity with epubcheck is this \
+         consumer's question, and reading it as a CSS-crate granularity \
+         difference had sent the fix to the wrong repository. Positions still \
+         differ and are left alone: epubcheck points at the token that got \
+         confused, or at EOF; we point at the `{` that was never closed. \
+         Shelf population when fixed: 8 malformed-shape findings and 2 \
+         unterminated blocks, none overlapping, so no book moved. When this \
+         row shows a new count gap, ask which of the three it is: several \
+         *selectors* is deliberate, several findings inside *one* selector is \
+         not, and anything inside an unterminated block should be a single \
+         finding."),
     ("CSS-028", None,
         "A `@font-face` declaration is present (usage). Known granularity \
          difference, left as is (measured 2026-08-09): we report once per \
