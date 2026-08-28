@@ -8,7 +8,13 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.13.0] - 2026-08-28
+
+**Breaking, library only:** `rng::ElementFault::MissingAttribute` is now
+`MissingAttribute(Vec<String>)` - it carries the names of the attributes the
+element is missing. A consumer matching on that variant needs a binding; the
+CLI, the JSON output and the WASM bindings are unaffected. `params[0]` is
+unchanged for every kind, and the names arrive after it.
 
 **Twenty-six false positives.** Twenty-three are one shape — a defect reported twice,
 where each message was true but the count did not match epubcheck's, which to
