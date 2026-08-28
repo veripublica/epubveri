@@ -129,15 +129,16 @@ fn check_unreferenced_remote_item(
         "opf.manifest_item.remote_never_referenced",
         vec![href.to_string()],
     );
-    report.push_node(
-        OPF_097,
-        Severity::Usage,
-        format!("'{href}' is declared in the manifest, but no content document references it"),
-        opf_path,
-        item,
-        "opf.manifest_item.never_referenced",
-        vec![href.to_string()],
-    );
+    // **No OPF-097 here.** Its caller asks that question of every remote item
+    // straight after this call, under epubcheck's own condition
+    // (`!(isInSpine() || isNav() || isNcx())` plus an empty reference
+    // registry). Asking it here as well gave two identical OPF-097 — same
+    // message, same position — for one item, on `package-remote-img-in-link-
+    // error` and the two `resources-remote-resource-for-script-*` fixtures.
+    //
+    // The caller's copy is the one kept because it is the general one: this
+    // function returns early for audio/video/font, SWF and XHTML items, and
+    // OPF-097 still applies to all of those.
 }
 
 /// Does this manifest item's `fallback` chain reach a Content Document?
@@ -2060,25 +2061,39 @@ fn extract_pi_href(value: &str) -> Option<String> {
 /// top-level `<?xml-stylesheet?>` processing instruction. Only reached
 /// for SVG docs that declare a `media-overlay` (the CSS-029/030
 /// cross-reference is the only reason SVG's own CSS matters at all).
+/// The class names an SVG content document's CSS defines, and **whether it
+/// has any CSS at all**.
+///
+/// The second half is CSS-030's condition and is not derivable from the
+/// first: a stylesheet that defines no class yields an empty set, which is
+/// not the same as having no stylesheet. Answered here rather than at the
+/// call site so the three style sources — an `xml-stylesheet` PI, a `<style>`
+/// element, and an XHTML-namespaced `<link rel="stylesheet">` — are
+/// enumerated in exactly one place. Detecting them separately at the call
+/// site missed the `<link>` form and turned
+/// `mediaoverlays-active-class-svg-stylesheet-link-valid` red.
 fn collect_svg_class_names(
     doc: &roxmltree::Document,
     dir: &str,
     name_index: &HashMap<String, String>,
     ocf: &mut Ocf,
-) -> HashSet<String> {
+) -> (HashSet<String>, bool) {
     let mut classes = HashSet::new();
+    let mut has_css = false;
 
     for pi in doc.root().children().filter(|n| n.is_pi()) {
         if let Some(p) = pi.pi()
             && p.target == "xml-stylesheet"
             && let Some(href) = p.value.and_then(extract_pi_href)
         {
+            has_css = true;
             classes.extend(read_stylesheet_classes(&href, dir, name_index, ocf));
         }
     }
 
     for node in doc.descendants().filter(|n| n.is_element()) {
         if node.tag_name().name() == "style" {
+            has_css = true;
             let css_text: String = node
                 .descendants()
                 .filter(|n| n.is_text())
@@ -2097,11 +2112,12 @@ fn collect_svg_class_names(
             })
             && let Some(href) = node.attr_no_ns("href")
         {
+            has_css = true;
             classes.extend(read_stylesheet_classes(href, dir, name_index, ocf));
         }
     }
 
-    classes
+    (classes, has_css)
 }
 
 fn check_collection_roles(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
@@ -3982,17 +3998,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 );
             }
         }
-    } else {
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "OPF is missing the <metadata> element",
-            opf_path,
-            pkg,
-            "opf.package.missing_metadata_element",
-            Vec::new(),
-        );
     }
+    // **No `else` reporting a missing `<metadata>`**, for the reason the
+    // missing-`<spine>` branch further down carries: both package grammars
+    // make it a required child, so the content model already says
+    // `element "package" has incomplete content; missing required element
+    // "metadata"`. Probed in 2.0 and 3.0 before removing.
 
     let base_dir = parent_dir(opf_path);
 
@@ -4023,6 +4034,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // content-doc resolved-path -> declared media-overlay manifest id (raw,
     // resolved to an overlay path once the full manifest is known below).
     let mut media_overlay_attrs: Vec<(String, String)> = Vec::new();
+    // Resolved+NFC'd paths of items carrying `media-overlay` that are NOT
+    // content documents. They stay in `media_overlay_attrs` — the overlay
+    // id still has to resolve, and the duration metadata still has to be
+    // there — but MED_013 is not asked of them; see the push site below.
+    let mut overlay_on_non_content_doc: HashSet<String> = HashSet::new();
     // manifest id -> its declared 'fallback' manifest id, for spine
     // core-media-type fallback-chain resolution.
     let mut fallback_map: HashMap<String, String> = HashMap::new();
@@ -4049,7 +4065,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest");
     if let Some(mn) = manifest {
-        let mut seen = HashSet::new();
         // resolved+NFC'd resource path -> first manifest item id that
         // declared it, for the OPF-074 duplicate-resource check below.
         let mut resource_seen: HashMap<String, String> = HashMap::new();
@@ -4067,15 +4082,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let (id, href, mt) = match (id, href, mt) {
                 (Some(i), Some(h), Some(m)) => (i.trim(), h, m),
                 _ => {
-                    report.push_node(
-                        RSC_005,
-                        Severity::Error,
-                        format!("manifest <item> is missing id/href/media-type (id={id:?})"),
-                        opf_path,
-                        item,
-                        "opf.manifest_item.missing_required_attribute",
-                        vec![format!("{id:?}")],
-                    );
+                    // **Skip the item, say nothing.** All three attributes are
+                    // required by both package grammars, so the content model
+                    // reports it — and since the missing name is now in that
+                    // message (`element "item" is missing the required
+                    // attribute "media-type"`) it says strictly more than this
+                    // did. Probed in both versions, one book per missing
+                    // attribute, six in all.
+                    //
+                    // The old message also printed a Rust `Option` through
+                    // `{:?}` — `id=Some("img002")` — into a user-facing string
+                    // and into `params[0]`.
                     continue;
                 }
             };
@@ -4084,17 +4101,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let Some(href_attr) = attr_no_ns_node(item, "href") else {
                 continue;
             };
-            if !seen.insert(id.to_string()) {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    format!("duplicate manifest item id '{id}'"),
-                    opf_path,
-                    item,
-                    "opf.manifest_item.duplicate_id",
-                    vec![id.to_string()],
-                );
-            }
+            // **No duplicate-id check here.** Two manifest items sharing an
+            // `id` are already reported by the package document's own
+            // id-uniqueness rule — twice, once per occurrence, which is
+            // exactly what epubcheck reports — so this site added a third
+            // finding for one defect. Verified rather than assumed, in both
+            // directions that could have made the removal a silent gap: the
+            // general rule normalises whitespace (epubcheck's
+            // `attr-id-duplicate-with-spaces-error.opf` carries `"  t001  "`
+            // and is caught), and it is not EPUB 3 only (probed on a 2.0
+            // package). `opf.manifest_item.duplicate_id` was consumed by
+            // nothing downstream.
             // **Not a `data:` URL**, whose payload is base64 and is routinely
             // wrapped across lines — the whitespace is part of the encoding,
             // not an unencoded space in a path. epubcheck reports RSC-029
@@ -4503,6 +4520,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         "opf.manifest_item.media_overlay_on_non_content_document",
                         Vec::new(),
                     );
+                    // epubcheck reaches MED_013 through its content-document
+                    // checkers, so an overlay declared on something that is
+                    // not a content document is never asked whether the
+                    // overlay references it back — the RSC-005 above is the
+                    // whole answer. We asked anyway, and
+                    // `mediaoverlays-non-contentdoc-error.opf` drew two
+                    // MED_013 against epubcheck's one.
+                    overlay_on_non_content_doc.insert(nfc(&resolved));
                 }
                 media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
             }
@@ -4596,9 +4621,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // OPF-045: a `fallback` chain must not form a cycle - same DFS-cycle-
     // detector shape as OPF-065's `@refines`-cycle check, over
     // `fallback_map` (already built above) instead of walking the DOM
-    // again. The direct self-fallback case (`fb == id`) is already caught
-    // separately above; this catches longer cycles (confirmed via a real
-    // 2-item cycle fixture).
+    // again. This catches longer cycles (confirmed via a real 2-item cycle
+    // fixture); the direct self-fallback case (`fb == id`) is reported above.
+    //
+    // **The one-item cycle is skipped here, and it was not before** — this
+    // comment claimed the self case was "already caught separately above"
+    // and left it to fall through anyway, so `fallback-to-self-error.opf`
+    // drew two OPF-045 against epubcheck's one. Both messages were true;
+    // one defect gets one. The self-fallback message is the one kept
+    // because it names the item and carries its position, where this one
+    // can only point at the package document.
     {
         let mut reported = HashSet::new();
         for start in fallback_map.keys() {
@@ -4612,6 +4644,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if seen.first().map(|s| s.as_str()) == Some(start.as_str()) {
                         for id in &seen {
                             reported.insert(id.clone());
+                        }
+                        if seen.len() == 1 {
+                            // An item falling back to itself: reported above,
+                            // with the item's own name and position.
+                            break;
                         }
                         report.push_at_rule(
                             OPF_045,
@@ -4991,15 +5028,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // regardless of whether it resolves; if it *also* doesn't resolve
         // to a real manifest item, that's additionally OPF-063.
         if let Some(page_map) = sp.attr_no_ns("page-map") {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "attribute \"page-map\" not allowed here",
-                opf_path,
-                sp,
-                "opf.spine.pagemap_not_allowed",
-                Vec::new(),
-            );
+            // **Only when the grammar has not already said it.** `opf20`'s
+            // spine attribute list is closed, so an EPUB 2 package draws
+            // `attribute "page-map" is not allowed here` from the content
+            // model and this said it again — two RSC-005 for one attribute,
+            // against epubcheck's one, on both `opf-pagemap-*` fixtures. The
+            // EPUB 3 grammar does *not* reject it (measured, one book each
+            // way), so removing this outright would have gone silent there:
+            // the check is load-bearing for 3.x and redundant for 2.x.
+            //
+            // Asked of the report rather than gated on the version, so it
+            // cannot drift if either grammar changes — the same
+            // verify-don't-believe shape the entity suppression uses. The
+            // query is structural, not a text match: `violation_kind` plus
+            // `params[0]` is exactly the pair that contract exists for.
+            let grammar_said_it = report.messages.iter().any(|m| {
+                m.rule == Some("opf.package.schema_violation")
+                    && m.violation_kind == Some(crate::report::ViolationKind::AttributeNotAllowed)
+                    && m.location.as_deref() == Some(opf_path)
+                    && m.params.first().is_some_and(|p| p == "page-map")
+            });
+            if !grammar_said_it {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    "attribute \"page-map\" not allowed here",
+                    opf_path,
+                    sp,
+                    "opf.spine.pagemap_not_allowed",
+                    Vec::new(),
+                );
+            }
             // OPF-062 (usage): epubcheck notes the extension's *presence*
             // alongside the schema error above - two findings for the one
             // attribute, saying different things. The RSC-005 says the
@@ -5410,17 +5469,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
             },
         }
-    } else {
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "OPF is missing the <spine> element",
-            opf_path,
-            pkg,
-            "opf.package.missing_spine_element",
-            Vec::new(),
-        );
     }
+    // **No `else` reporting a missing `<spine>`.** Both package grammars make
+    // it a required child, so the content-model check already says
+    // `element "package" has incomplete content; missing required element
+    // "spine"` — which is epubcheck's one message for this, near enough word
+    // for word. Saying it again from here made one defect two findings on
+    // `spine-missing-error` and `opf-spine-missing-error`. Verified in both
+    // versions before removing: a 2.0 and a 3.0 book with no spine each draw
+    // the grammar message, so nothing here goes quiet.
 
     // OPF-067 (#55): a resource pointed at by a metadata <link> must not
     // also be a manifest item. epubcheck's rule
@@ -5734,6 +5791,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // associated stylesheets (inline <style> + linked <link
     // rel="stylesheet">), for the CSS-029/030 cross-referencing pass below.
     let mut doc_class_names: HashMap<String, HashSet<String>> = HashMap::new();
+    // Content documents that carry **any** CSS at all, which is a different
+    // question from which class names that CSS defines. epubcheck's CSS-030
+    // condition is `!hasCSS` (`OPSHandler30.checkOverlaysStyles`), not "no
+    // matching selector", and `doc_class_names` cannot stand in for it: the
+    // SVG pass below inserts an entry for every overlaid SVG whether or not
+    // it has a stylesheet, so an empty entry there means "nothing found",
+    // while an absent entry for an XHTML document means "no CSS at all".
+    let mut docs_with_css: HashSet<String> = HashSet::new();
     // Where a media-overlay class name is actually *written*: (class name,
     // the file holding that CSS, position within it). `doc_class_names`
     // above answers "which classes does this content document see", which
@@ -6452,10 +6517,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // `application/xhtml+xml` like the grammar, so it does not run for a
         // `text/html` item.
         if schema_validated {
-            let mut seen: HashSet<&str> = HashSet::new();
+            // **Every occurrence, not every occurrence after the first.**
+            // `!seen.insert(id)` reported only the later ones, so a document
+            // with `id="owned"` twice drew one finding where epubcheck draws
+            // two — and it disagreed with our *own* package-document rule,
+            // whose `reports_once_per_occurrence` test states the same thing
+            // the corpus does: "reported 2 times (once for each ID)". A
+            // duplicate has no innocent half; naming only the second tells an
+            // author to look at one of the two places it could be fixed.
+            let mut counts: HashMap<&str, usize> = HashMap::new();
+            for n in d.descendants().filter(|n| n.is_element()) {
+                if let Some(id) = n.attr_no_ns("id") {
+                    *counts.entry(id).or_insert(0) += 1;
+                }
+            }
             for n in d.descendants().filter(|n| n.is_element()) {
                 if let Some(id) = n.attr_no_ns("id")
-                    && !seen.insert(id)
+                    && counts.get(id).copied().unwrap_or(0) > 1
                 {
                     report.push_node(
                         RSC_005,
@@ -6656,25 +6734,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // EPUB 3 only (#58). `descendant-dfn-dfn` lives in
         // `epub-xhtml-30.sch`; EPUB 2's whole XHTML Schematron is a single
         // rule (nested hyperlinks), and XHTML 1.1's grammar lets `dfn` nest.
-        for n in d
-            .descendants()
-            .filter(|n| is_epub3 && n.is_element() && n.tag_name().name() == "dfn")
-        {
-            if n.descendants()
-                .skip(1)
-                .any(|c| c.is_element() && c.tag_name().name() == "dfn")
-            {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    "a \"dfn\" element must not contain a nested \"dfn\" element",
-                    path.clone(),
-                    n,
-                    "opf.content_document.nested_dfn",
-                    Vec::new(),
-                );
-            }
-        }
+        // **Nested `<dfn>` is `xhtml.sch`'s `no-dfn-in-dfn`, and only that.**
+        // This walk asked the same question from the other end — blaming the
+        // *outer* element for containing one — so `content-xhtml-schematron-
+        // error` drew two RSC-005 where epubcheck draws one. epubcheck has a
+        // single pattern, `descendant-dfn-dfn`, which is the abstract
+        // `disallowed-descendants` shape our Schematron rule already ports:
+        // it blames the inner element, which is also where epubcheck points.
+        //
+        // EPUB 2 stays silent, probed both ways — XHTML 1.1 lets `dfn` nest
+        // and neither tool says anything there, so the version gate this walk
+        // carried was not doing work the Schematron rule does not already do.
 
         // epub:trigger is deprecated; its ref/ev:observer attributes must
         // each resolve to a real id in the same document.
@@ -8294,6 +8364,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .entry(path.clone())
                     .or_default()
                     .extend(inline_classes);
+                docs_with_css.insert(path.clone());
                 for u in crate::css::stylesheet_urls(&sheet) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
@@ -8341,6 +8412,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         .entry(path.clone())
                         .or_default()
                         .extend(crate::css::selector_class_names(&sheet));
+                    docs_with_css.insert(path.clone());
                     let css_path = nfc(&resolved);
                     for c in crate::css::selector_class_names_spanned(&css_text) {
                         if is_media_overlay_class(&c.node) {
@@ -8626,26 +8698,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 );
             }
         }
-        // RSC-006: a hyperlink (<a href>, not an embedding element)
-        // points to a remote resource that *is* declared, but as an
-        // image - hyperlinking to an image directly is the wrong
-        // construct (should be embedded, e.g. via <img>).
-        for r in &remote_link_refs {
-            if remote_manifest
-                .get(r)
-                .is_some_and(|mt| mt.starts_with("image/"))
-            {
-                report.push_node(
-                    RSC_006,
-                    Severity::Error,
-                    format!("remote image '{r}' is referenced from an \"a\" element"),
-                    path.clone(),
-                    d.root_element(),
-                    "opf.content_document.remote_image_hyperlinked",
-                    vec![r.clone()],
-                );
-            }
-        }
+        // **A hyperlink to a remote image is not reported here, and epubcheck
+        // does not report it anywhere.** This walk blamed `<a href>` pointing
+        // at a manifest item declared `image/*`, on the reasoning that an
+        // image should be embedded rather than linked. Its fixture,
+        // `package-remote-img-in-link-error`, expects exactly one RSC-006 and
+        // gets it from the *manifest* side — the resource is remote and
+        // nothing references it, which is a different question with the same
+        // id.
+        //
+        // Probed in the two arrangements that could have made this check
+        // load-bearing, and it was neither:
+        //   - the image declared but not otherwise used: both tools report
+        //     one RSC-006, ours from the manifest walk, and this added a
+        //     second;
+        //   - the image both hyperlinked *and* embedded, so the manifest walk
+        //     goes quiet: epubcheck still reports one, for the `<img>`, and
+        //     this added a second again.
+        // epubcheck's hyperlink case aborts before the reference checks that
+        // could produce RSC-006, which is the same abort behind the RSC-012
+        // note further down.
         // RSC-006: img/iframe/script/stylesheet/non-exempt-object always
         // disallow a remote resource, regardless of manifest declaration.
         for r in &restricted_remote_refs {
@@ -8859,10 +8931,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let text = String::from_utf8_lossy(&b).into_owned();
         let Ok(d) = parse_xml(&text) else { continue };
         let dir = parent_dir(doc_path);
+        let (svg_classes, svg_has_css) = collect_svg_class_names(&d, &dir, &name_index, ocf);
         doc_class_names
             .entry(doc_path.clone())
             .or_default()
-            .extend(collect_svg_class_names(&d, &dir, &name_index, ocf));
+            .extend(svg_classes);
+        if svg_has_css {
+            docs_with_css.insert(doc_path.clone());
+        }
     }
 
     // Standalone top-level SVG content documents (`image/svg+xml`) never
@@ -9196,28 +9272,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
     }
 
-    // CSS-030: a declared property has no matching CSS selector in the
-    // content document its media overlay actually applies to.
-    let empty_classes: HashSet<String> = HashSet::new();
-    for doc_path in content_doc_overlay
-        .keys()
-        .filter(|p| xhtml_doc_paths.contains(p.as_str()) || svg_doc_paths.contains(p.as_str()))
-    {
-        let classes = doc_class_names.get(doc_path).unwrap_or(&empty_classes);
-        for (property_name, declared_class) in [
-            ("media:active-class", &media_active_class),
-            ("media:playback-active-class", &media_playback_active_class),
-        ] {
-            if let Some(name) = declared_class
-                && !classes.contains(name.as_str())
-            {
-                report.push_at(
-                        CSS_030,
-                        Severity::Error,
-                        format!("{property_name} '{name}' has no matching CSS selector in this content document"),
-                        doc_path.clone(),
-                    );
-            }
+    // CSS-030: the package declares media-overlay styling class names and an
+    // overlaid content document has no CSS at all.
+    //
+    // **Both halves of this were wrong, and measured one book per shape.**
+    // It used to ask whether each declared class had a *matching selector*,
+    // once per property:
+    //
+    //   - a document with a stylesheet that simply does not define the class
+    //     drew an error from us and nothing from epubcheck — a false
+    //     positive on a valid book, and the reason this is a condition change
+    //     rather than a cardinality one;
+    //   - a document with no CSS at all drew two findings when both
+    //     `media:active-class` and `media:playback-active-class` were
+    //     declared, against epubcheck's one.
+    //
+    // epubcheck asks `!hasCSS` once per document
+    // (`OPSHandler30.checkOverlaysStyles`), guarded on the item having a
+    // media overlay and on either property being declared — which is exactly
+    // the three conditions below, in that order.
+    if media_active_class.is_some() || media_playback_active_class.is_some() {
+        for doc_path in content_doc_overlay
+            .keys()
+            .filter(|p| xhtml_doc_paths.contains(p.as_str()) || svg_doc_paths.contains(p.as_str()))
+            .filter(|p| !docs_with_css.contains(p.as_str()))
+        {
+            report.push_at(
+                CSS_030,
+                Severity::Error,
+                "the package declares media-overlay styling class names, but this content document has no CSS",
+                doc_path.clone(),
+            );
         }
     }
 
@@ -9810,7 +9895,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let actual = referenced_by.get(content_doc_path);
         match actual.map(|s| s.len()).unwrap_or(0) {
             0 => {
-                if declared.is_some() {
+                if declared.is_some()
+                    && !overlay_on_non_content_doc.contains(content_doc_path.as_str())
+                {
                     report.push_at(
                         MED_013,
                         Severity::Error,
@@ -10945,6 +11032,86 @@ mod tests {
         }
     }
 
+    /// Two manifest items sharing an `id` are **two** findings, not three.
+    ///
+    /// The manifest loop used to carry its own duplicate-`id` check on top of
+    /// the package document's id-uniqueness rule, so one defect was reported
+    /// three times where epubcheck reports two. The `duplicate_ids` tests
+    /// above cover the general rule directly; this one covers the part that
+    /// made removing the extra site safe — that manifest item ids actually
+    /// reach it through the whole validation path. Assert the count, not
+    /// presence: a re-added second site would pass a `> 0`.
+    #[test]
+    fn duplicate_manifest_item_ids_are_reported_by_the_general_rule_only() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="c1" href="a.xhtml" media-type="application/xhtml+xml"/>
+    <item id="  c1  " href="b.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+            <body><nav epub:type=\"toc\"><ol><li><a href=\"a.xhtml\">c</a></li></ol></nav></body></html>";
+        const DOC: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/a.xhtml", DOC),
+                ("OEBPS/b.xhtml", DOC),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        let msgs = crate::validate_bytes(buf).messages;
+        // The whitespace variant is deliberate: it is also what proves the
+        // general rule normalises before comparing, which is the property the
+        // removed site would otherwise have been covering.
+        let dupes: Vec<&str> = msgs
+            .iter()
+            .filter(|m| m.text.contains("duplicate") && m.text.contains("c1"))
+            .map(|m| m.text.as_str())
+            .collect();
+        assert_eq!(
+            dupes.len(),
+            2,
+            "one per occurrence and nothing more: {dupes:?}"
+        );
+        assert!(
+            dupes.iter().all(|t| *t == r#"duplicate id "c1""#),
+            "only the general rule speaks: {dupes:?}"
+        );
+    }
+
     /// These tables are keyed lookups - `RESERVED_PREFIXES` by prefix,
     /// `ALLOWED_EXTERNAL_IDENTIFIERS` by media type. A duplicated key makes
     /// the first entry silently shadow the rest, and every fixture that
@@ -11009,6 +11176,202 @@ mod tests {
         assert!(!is_valid_dc_date("2025-04-24T25:00:00Z")); // hour 25
         assert!(!is_valid_dc_date("2025-04-24T17:00:00")); // missing timezone
         assert!(!is_valid_dc_date("2025-04-24T17:00:00X")); // bad timezone
+    }
+
+    /// A duplicate `id` in a content document is reported on **every**
+    /// occurrence.
+    ///
+    /// `!seen.insert(id)` reported only the second and later ones, so a
+    /// document with an id twice drew one finding where epubcheck draws two —
+    /// and it disagreed with our own package-document rule, whose
+    /// `reports_once_per_occurrence` test states the same thing epubcheck's
+    /// corpus does. A duplicate has no innocent half.
+    ///
+    /// **This one moved real books**, which almost nothing else in this run
+    /// did: seven shelf titles gained findings, and on the two checked
+    /// against epubcheck the duplicate counts then matched exactly (10 and
+    /// 74). It closed a false negative rather than trimming a false positive.
+    #[test]
+    fn a_duplicate_id_is_reported_at_every_occurrence() {
+        fn dupes(nav_body: &str) -> usize {
+            crate::validate_bytes(epub_with_nav_body(nav_body))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.duplicate_id"))
+                .count()
+        }
+        assert_eq!(
+            dupes(
+                r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">c</a></li></ol></nav><p id="x">a</p><p id="x">b</p>"#
+            ),
+            2,
+            "both halves of a duplicate pair"
+        );
+        assert_eq!(
+            dupes(
+                r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">c</a></li></ol></nav><p id="x">a</p><p id="x">b</p><p id="x">c</p>"#
+            ),
+            3,
+            "three occurrences, three findings"
+        );
+        assert_eq!(
+            dupes(
+                r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">c</a></li></ol></nav><p id="x">a</p><p id="y">b</p>"#
+            ),
+            0,
+            "distinct ids stay silent"
+        );
+    }
+
+    /// CSS-030 asks whether the document has **any** CSS, once, not whether
+    /// each declared class has a matching selector.
+    ///
+    /// epubcheck's condition is `!hasCSS` (`OPSHandler30.checkOverlaysStyles`)
+    /// and it fires once per overlaid document. Ours asked for a matching
+    /// selector, once per declared property, and was wrong in two ways at
+    /// once — measured one book per arrangement:
+    ///
+    /// - **B is the false positive**, and the reason this is a condition
+    ///   change rather than a tidy-up: a document with a stylesheet that
+    ///   simply does not define the class is valid, and we reported it.
+    /// - **A is the count**: two declared properties, one document with no
+    ///   CSS, two findings against epubcheck's one.
+    ///
+    /// C is the control — the arrangement that was always right and must stay
+    /// silent.
+    #[test]
+    fn css030_is_about_having_css_at_all() {
+        fn findings(head_extra: &str) -> usize {
+            crate::validate_bytes(epub_with_media_overlay(head_extra))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::CSS_030)
+                .count()
+        }
+        assert_eq!(findings(""), 1, "A: no CSS, two properties, one finding");
+        assert_eq!(
+            findings("<style>p { color: red; }</style>"),
+            0,
+            "B: CSS that does not define the class is not our business"
+        );
+        assert_eq!(
+            findings("<style>.-epub-active { color: red; }</style>"),
+            0,
+            "C: the class is there"
+        );
+    }
+
+    /// A minimal EPUB 3 with a media overlay on its one content document and
+    /// both styling class properties declared, with the caller's markup added
+    /// to `<head>`.
+    fn epub_with_media_overlay(head_extra: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const OPF: &str = r##"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" prefix="media: http://www.idpf.org/vocab/overlays/#">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title><dc:language>en</dc:language><dc:identifier id="uid">NOID</dc:identifier>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="media:active-class">-epub-active</meta>
+    <meta property="media:playback-active-class">-epub-playing</meta>
+    <meta property="media:duration">0:10</meta>
+    <meta property="media:duration" refines="#mo">0:10</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav" media-overlay="mo"/>
+    <item id="mo" href="mo.smil" media-type="application/smil+xml"/>
+    <item id="au" href="a.mp3" media-type="audio/mpeg"/>
+  </manifest>
+  <spine><itemref idref="nav"/></spine>
+</package>"##;
+        const SMIL: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0"><body><par id="p1"><text src="nav.xhtml#t1"/><audio src="a.mp3" clipBegin="0s" clipEnd="1s"/></par></body></smil>"#;
+        let nav = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+             xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title>{head_extra}</head>\
+             <body><nav epub:type=\"toc\"><ol><li><a href=\"nav.xhtml\">c</a></li></ol></nav>\
+             <p id=\"t1\">x</p></body></html>"
+        );
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("EPUB/package.opf", OPF),
+                ("EPUB/mo.smil", SMIL),
+                ("EPUB/nav.xhtml", nav.as_str()),
+                ("EPUB/a.mp3", "ID3"),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// The nav label rules are scoped to the list, and the heading rule is
+    /// not scoped to the nav.
+    ///
+    /// epubcheck's contexts are `html:nav[@epub:type]//html:ol//html:a` and
+    /// `…//html:ol//html:span`; ours walked every descendant of the nav, so an
+    /// empty `<span>` inside the nav's *heading* drew the span rule on top of
+    /// the heading rule — two findings for one empty element, against
+    /// epubcheck's one.
+    ///
+    /// **A narrowing change is a silence risk, so both directions are
+    /// asserted.** The empty span in the list must still be reported; the one
+    /// in the heading must be reported once, by the heading rule.
+    #[test]
+    fn nav_label_rules_are_scoped_to_the_list() {
+        fn rules(nav_body: &str) -> Vec<&'static str> {
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_nav_body(nav_body))
+                .messages
+                .iter()
+                .filter_map(|m| m.rule)
+                .filter(|r| r.starts_with("navdoc.label.") || r.contains("heading"))
+                .collect();
+            v.sort_unstable();
+            v
+        }
+
+        // In the list: still reported, both kinds.
+        assert!(
+            rules(r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml"><span></span></a></li></ol></nav>"#)
+                .contains(&"navdoc.label.empty_span"),
+            "an empty span inside the list is still a missing label"
+        );
+        assert!(
+            rules(r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml"></a></li></ol></nav>"#)
+                .contains(&"navdoc.label.empty_anchor"),
+            "an empty anchor inside the list is still a missing label"
+        );
+
+        // In the heading: the heading rule owns it, and the span rule is
+        // silent — this is the pair that used to double.
+        let heading = rules(
+            r#"<nav epub:type="toc"><h1><span></span></h1><ol><li><a href="ch1.xhtml">c</a></li></ol></nav>"#,
+        );
+        assert!(
+            !heading.contains(&"navdoc.label.empty_span"),
+            "the span rule must not reach the nav's heading: {heading:?}"
+        );
+        assert_eq!(
+            heading.len(),
+            1,
+            "exactly one finding for one empty element: {heading:?}"
+        );
     }
 
     // --- OPF-096 non-linear reachability via a self-link (issue #1) ---
@@ -12290,6 +12653,149 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// The package grammar is the only thing that reports a missing
+    /// `<metadata>` or a manifest item with a missing required attribute.
+    ///
+    /// Both had a hand-coded check on top of the content model, so one defect
+    /// drew two findings. Removing them is safe only while the grammars keep
+    /// reporting, in **both** versions — which is what this asserts, and what
+    /// the corpus cannot: the extra finding carried the same id, so its
+    /// "no other errors" comparison passed either way.
+    #[test]
+    fn the_package_grammar_reports_these_alone() {
+        fn count(opf: &str, needle: &str) -> usize {
+            crate::validate_bytes(epub_named_resource(opf, Some("ch1.xhtml")))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005 && m.text.contains(needle))
+                .count()
+        }
+        for version in ["2.0", "3.0"] {
+            let no_metadata = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="ch1"><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            assert_eq!(
+                count(&no_metadata, "missing required element \"metadata\""),
+                1,
+                "v{version}: the content model says it, once"
+            );
+
+            let no_media_type = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml"/>
+  </manifest>
+  <spine toc="ch1"><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            assert_eq!(
+                count(
+                    &no_media_type,
+                    "is missing the required attribute \"media-type\""
+                ),
+                1,
+                "v{version}: named once, by the grammar"
+            );
+        }
+    }
+
+    /// Two manifest defects that each drew **two** findings for one problem.
+    ///
+    /// Both are count parity, not presence, and that is why nothing caught
+    /// them for so long: the id and the severity were already right, so the
+    /// corpus's "no other errors" comparison passed and the shelf has no book
+    /// that does either of these things. They were found by running epubcheck
+    /// over the corpus's own dumped books and diffing the counts.
+    ///
+    /// - **OPF-045**: an item falling back to itself is a cycle of length one,
+    ///   so the chain detector reported it as well as the check that names the
+    ///   item. The detector's own comment claimed otherwise.
+    /// - **OPF-097**: `check_unreferenced_remote_item` reported it, and its
+    ///   caller reported it again straight afterwards — same message, same
+    ///   position.
+    ///
+    /// Assert the counts. `> 0` passed throughout both defects' lifetimes.
+    #[test]
+    fn one_manifest_defect_is_one_finding() {
+        fn count(opf: &str, id: &str) -> usize {
+            crate::validate_bytes(epub_named_resource(opf, Some("ch1.xhtml")))
+                .messages
+                .iter()
+                .filter(|m| m.id == id)
+                .count()
+        }
+        const HEAD: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#;
+        const TAIL: &str = r#"
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+
+        // An item that falls back to itself: the self-fallback message, and
+        // not the chain-cycle one as well.
+        let self_fb = format!(
+            r#"{HEAD}
+    <item id="img" href="i.xxx" media-type="application/x-unknown" fallback="img"/>{TAIL}"#
+        );
+        assert_eq!(
+            count(&self_fb, crate::ids::OPF_045),
+            1,
+            "a self-fallback is one finding, not one per check that noticed"
+        );
+
+        // A longer cycle still reports, so the one-item skip did not disarm
+        // the detector — the assertion that would have caught an over-broad
+        // fix.
+        let two_cycle = format!(
+            r#"{HEAD}
+    <item id="a1" href="a.xxx" media-type="application/x-unknown" fallback="b1"/>
+    <item id="b1" href="b.xxx" media-type="application/x-unknown" fallback="a1"/>{TAIL}"#
+        );
+        assert_eq!(
+            count(&two_cycle, crate::ids::OPF_045),
+            1,
+            "a two-item cycle is still reported"
+        );
+
+        // A remote resource nothing references: one OPF-097, from the caller.
+        let remote = format!(
+            r#"{HEAD}
+    <item id="r1" href="https://example.org/i.jpg" media-type="image/jpeg"/>{TAIL}"#
+        );
+        assert_eq!(
+            count(&remote, crate::ids::OPF_097),
+            1,
+            "an unreferenced remote item is named once"
+        );
+        // It still draws its RSC-006, which is a different question and must
+        // not have gone with the duplicate.
+        assert_eq!(
+            count(&remote, crate::ids::RSC_006),
+            1,
+            "the remote-not-allowed error is untouched"
+        );
     }
 
     /// A hyperlink epubcheck aborts asks nothing about its fragment.
@@ -14485,6 +14991,142 @@ mod tests {
         );
     }
 
+    /// The meta-properties vocabulary reports a refinement duplicate the way
+    /// epubcheck does — and the two families do it by **different** idioms,
+    /// which is why one fix could not serve both.
+    ///
+    /// `opf.meta.title-type` and its six siblings use
+    /// `preceding-sibling::opf:meta[same property][same refines]`, so N
+    /// duplicates draw **N-1** findings: the first occurrence is not blamed.
+    /// Ours asserted `count(...) = 1` from each `meta`, so N duplicates drew
+    /// N. The authority/term pair is not in that family at all — epubcheck
+    /// checks it once per `dc:subject` (`opf.dc.subject.authority-term`,
+    /// and `opf.meta.term` carries a comment saying so), so N authorities
+    /// draw **one** finding there however many there are.
+    ///
+    /// Both counts were measured against epubcheck on a three-duplicate book,
+    /// one probe each, rather than read off its Schematron: 2 and 1.
+    ///
+    /// **Neither the corpus nor the shelf can see this class.** The extra
+    /// finding carries the same id (RSC-005) at the same severity, so the
+    /// corpus's "no other errors" comparison passes and the shelf has no book
+    /// that refines anything. It was found by running epubcheck over the
+    /// corpus's own dumped books and diffing the *counts*.
+    #[test]
+    fn a_refinement_duplicate_is_counted_the_way_epubcheck_counts_it() {
+        fn findings(metadata: &str, needle: &str) -> usize {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title id="t1">T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <dc:subject id="s1">S</dc:subject>
+    {metadata}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>
+  <spine><itemref idref="nav"/></spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"nav.xhtml\">c</a></li></ol></nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/nav.xhtml", NAV),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            crate::validate_bytes(buf)
+                .messages
+                .iter()
+                .filter(|m| m.text.contains(needle))
+                .count()
+        }
+
+        // The `preceding-sibling` family: N duplicates, N-1 findings.
+        const TT: &str = r##"<meta refines="#t1" property="title-type">main</meta>"##;
+        const DUP: &str = "cannot be declared more than once";
+        assert_eq!(findings(TT, DUP), 0, "one title-type is right");
+        assert_eq!(
+            findings(&format!("{TT}{TT}"), DUP),
+            1,
+            "two title-type: the second is blamed, the first is not"
+        );
+        assert_eq!(
+            findings(&format!("{TT}{TT}{TT}"), DUP),
+            2,
+            "three title-type: N-1, measured against epubcheck"
+        );
+
+        // The authority/term pair: one finding per `dc:subject`, whatever N is.
+        const AU: &str = r##"<meta refines="#s1" property="authority">https://a.example</meta>"##;
+        const TERM: &str = r##"<meta refines="#s1" property="term">x</meta>"##;
+        const PAIR: &str = "Only one pair of authority and term";
+        assert_eq!(
+            findings(&format!("{AU}{TERM}"), PAIR),
+            0,
+            "one authority and one term is exactly the allowed pair"
+        );
+        assert_eq!(
+            findings(&format!("{AU}{AU}{TERM}"), PAIR),
+            1,
+            "two authorities on one subject: one finding, not one per meta"
+        );
+        assert_eq!(
+            findings(&format!("{AU}{AU}{AU}{TERM}"), PAIR),
+            1,
+            "three authorities are still one finding — measured against epubcheck"
+        );
+
+        // The pairing reports moved to the same rule, so they are per-subject
+        // too. An authority with no term is one finding, not one per meta.
+        assert_eq!(
+            findings(AU, "A term property must be associated"),
+            1,
+            "an authority with no term is reported once"
+        );
+        assert_eq!(
+            findings(TERM, "An authority property must be associated"),
+            1,
+            "a term with no authority is reported once"
+        );
+
+        // **The silence case, which is where a container-contexted rule goes
+        // wrong**: the rule now runs on every `dc:subject`, so a subject with
+        // neither property must say nothing at all.
+        assert_eq!(findings("", PAIR), 0, "a bare dc:subject is silent");
+        assert_eq!(
+            findings("", "A term property must be associated"),
+            0,
+            "a bare dc:subject does not demand a term"
+        );
+    }
+
     /// A nav link to a non-Content-Document draws RSC-010 exactly **once**.
     ///
     /// #78 generalised this check from the two toc paths to every hyperlink
@@ -15847,30 +16489,102 @@ mod tests {
     /// (*which* non-standard feature is in use — the part that tells an
     /// author whether they meant it). We had only the first; epubcheck emits
     /// both (reported by Doitsu on the MobileRead forum).
+    ///
+    /// **Exactly one RSC-005, in both versions, and which check produces it
+    /// differs by version.** `opf20`'s spine attribute list is closed, so a
+    /// 2.0 package is told by the content model; the EPUB 3 grammar does not
+    /// reject the attribute, so there the hand-coded check is the only
+    /// reporter. It used to fire in both, and a 2.0 book got two RSC-005 for
+    /// one attribute against epubcheck's one.
+    ///
+    /// So the assertion is on the **count**, not on which rule said it —
+    /// asserting the rule slug is what made the old version of this test
+    /// pass while the duplicate was live. Removing the hand check outright
+    /// makes the 3.0 case silent, and asserting only the 2.0 case cannot see
+    /// that; both directions are here for that reason.
     #[test]
     fn adobe_page_map_draws_both_the_error_and_the_usage_note() {
-        let report = crate::validate_bytes(epub2_spine_case(" page-map=\"pm\"", ""));
-        let rules: Vec<_> = report
-            .messages
-            .iter()
-            .filter_map(|m| m.rule)
-            .filter(|r| r.starts_with("opf.spine."))
-            .collect();
-        assert!(
-            rules.contains(&"opf.spine.pagemap_not_allowed"),
-            "got {rules:?}"
+        fn findings(book: Vec<u8>) -> (usize, Vec<&'static str>) {
+            let report = crate::validate_bytes(book);
+            let errors = report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005 && m.text.contains("page-map"))
+                .count();
+            let usage: Vec<&'static str> = report
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_062)
+                .filter_map(|m| m.rule)
+                .collect();
+            (errors, usage)
+        }
+
+        let (errors, usage) = findings(epub2_spine_case(" page-map=\"pm\"", ""));
+        assert_eq!(errors, 1, "EPUB 2: the content model says it, once");
+        assert_eq!(usage, vec!["opf.spine.adobe_pagemap_usage"]);
+
+        let (errors, usage) = findings(epub3_page_map_case());
+        assert_eq!(
+            errors, 1,
+            "EPUB 3: its grammar does not reject the attribute, so the \
+             hand-coded check is the only thing that can report it"
         );
-        assert!(
-            rules.contains(&"opf.spine.adobe_pagemap_usage"),
-            "the usage note naming the extension is missing; got {rules:?}"
-        );
-        let usage = report
+        assert_eq!(usage, vec!["opf.spine.adobe_pagemap_usage"]);
+
+        let severity = crate::validate_bytes(epub2_spine_case(" page-map=\"pm\"", ""))
             .messages
-            .iter()
+            .into_iter()
             .find(|m| m.rule == Some("opf.spine.adobe_pagemap_usage"))
+            .map(|m| m.severity);
+        assert_eq!(severity, Some(crate::report::Severity::Usage));
+    }
+
+    /// A minimal EPUB 3 whose spine carries the Adobe `page-map` attribute.
+    fn epub3_page_map_case() -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>
+  <spine page-map="pm"><itemref idref="nav"/></spine>
+</package>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+            <body><nav epub:type=\"toc\"><ol><li><a href=\"nav.xhtml\">c</a></li></ol></nav></body></html>";
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
             .unwrap();
-        assert_eq!(usage.id, crate::ids::OPF_062);
-        assert_eq!(usage.severity, crate::report::Severity::Usage);
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/nav.xhtml", NAV),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
     }
 
     /// An attribute fault is reported at the **attribute**, not at the element
@@ -16977,19 +17691,40 @@ mod tests {
                 .collect()
         };
         let two = rules(epub2_with_ch1(&epub2));
-        for r in [
-            "opf.content_document.lang_xmllang_mismatch",
-            "opf.content_document.nested_dfn",
-        ] {
-            assert!(
-                !two.contains(&r.to_string()),
-                "{r} must not fire on EPUB 2; got {two:?}"
-            );
-            assert!(
-                rules(epub_with_ch1(&epub3)).contains(&r.to_string()),
-                "{r} must still fire on EPUB 3"
-            );
-        }
+        let r = "opf.content_document.lang_xmllang_mismatch";
+        assert!(
+            !two.contains(&r.to_string()),
+            "{r} must not fire on EPUB 2; got {two:?}"
+        );
+        assert!(
+            rules(epub_with_ch1(&epub3)).contains(&r.to_string()),
+            "{r} must still fire on EPUB 3"
+        );
+
+        // **Nested `dfn` is asserted on the finding, not on a rule name.**
+        // It used to have a hand-coded check of its own
+        // (`opf.content_document.nested_dfn`) *beside* `xhtml.sch`'s
+        // `no-dfn-in-dfn`, which made one nested `dfn` two RSC-005 against
+        // epubcheck's one. The hand check is gone; the constraint is not, and
+        // the constraint is what this pair is for. Naming the rule would have
+        // tied the test to whichever check happens to own it.
+        let dfns = |bytes: Vec<u8>| -> usize {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005 && m.text.contains("dfn"))
+                .count()
+        };
+        assert_eq!(
+            dfns(epub2_with_ch1(&epub2)),
+            0,
+            "XHTML 1.1 lets dfn nest — EPUB 2 must stay silent"
+        );
+        assert_eq!(
+            dfns(epub_with_ch1(&epub3)),
+            1,
+            "EPUB 3 reports it exactly once"
+        );
     }
 
     /// OPF-005 (#50): a prefix declaration ending in a name with no URI.
