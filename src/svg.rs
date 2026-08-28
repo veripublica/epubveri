@@ -124,7 +124,17 @@ pub(crate) const SVG_ELEMENTS: &[&str] = &[
     "vkern",
 ];
 
-fn is_recognized_element(name: &str) -> bool {
+/// `feDropShadow` is the one name whose recognition is version-dependent: it
+/// is an SVG 2 filter primitive, present in epubcheck's `schema/30/mod/svg11/
+/// svg-filter.rnc` and in **none** of `schema/20/rng/svg/`. Diffing our list
+/// against the EPUB 2 modules gives exactly this one extra name and nothing
+/// missing, which is what makes the EPUB 2 arm below safe to make an error.
+const SVG2_ONLY_ELEMENTS: &[&str] = &["feDropShadow"];
+
+fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
+    if !is_epub3 && SVG2_ONLY_ELEMENTS.contains(&name) {
+        return false;
+    }
     SVG_ELEMENTS.contains(&name)
 }
 
@@ -184,16 +194,44 @@ pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
     out
 }
 
-pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
+pub(crate) fn check_vocabulary(
+    svg_root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    // **The same question, asked at both versions with different force**, as
+    // `check_required_attributes` already is. `schema/20/rng/content.rng`
+    // includes the SVG 1.1 modules directly, so an unknown SVG element in an
+    // EPUB 2 book is a normative RSC-005; at 3.0 the strict grammar runs
+    // informatively and the same element is RSC-025 usage (issue #93).
+    //
+    // Measured four ways against 5.3.0 - inline and standalone, each version,
+    // one book per cell - and they agree: EPUB 2 error, EPUB 3 usage, for a
+    // document referenced as `image/svg+xml` just as for `<svg>` in an XHTML
+    // document.
+    //
+    // What makes the EPUB 2 arm safe to make an *error* is that the list is
+    // closed and was checked against the authority rather than assumed: every
+    // one of the 81 element names `schema/20/rng/svg/*.rng` declares is in
+    // `SVG_ELEMENTS`, and the single name ours has beyond them is handled by
+    // `SVG2_ONLY_ELEMENTS`. On the local shelf, 261 EPUB 2 books carry inline
+    // SVG and between them use two element names, both recognised - so this
+    // adds no finding to any of them.
+    let (id, severity) = if is_epub3 {
+        (RSC_025, Severity::Usage)
+    } else {
+        (RSC_005, Severity::Error)
+    };
     for child in svg_root.children().filter(|n| n.is_element()) {
         if child.tag_name().namespace() != Some(SVG_NS) {
             continue;
         }
         let name = child.tag_name().name();
-        if !is_recognized_element(name) {
+        if !is_recognized_element(name, is_epub3) {
             report.push_at_pos(
-                RSC_025,
-                Severity::Usage,
+                id,
+                severity,
                 format!("element \"{name}\" not allowed here"),
                 path,
                 Position::of(child),
@@ -202,7 +240,7 @@ pub(crate) fn check_vocabulary(svg_root: roxmltree::Node, path: &str, report: &m
         if matches!(name, "foreignObject" | "title") {
             continue;
         }
-        check_vocabulary(child, path, report);
+        check_vocabulary(child, path, is_epub3, report);
     }
 }
 
@@ -494,12 +532,23 @@ const SVG_ATTRIBUTES: &[&str] = &[
     "zoomAndPan",
 ];
 
-fn is_recognized_attribute(name: &str) -> bool {
+/// The four attributes our list carries beyond SVG 1.1. Diffing
+/// `SVG_ATTRIBUTES` against the unprefixed `<attribute name>` declarations in
+/// `schema/20/rng/svg/*.rng` gives **nothing missing and exactly these four
+/// extra**; each was then probed on its own EPUB 2 and EPUB 3 book against
+/// 5.3.0, and each is RSC-005 at 2.0 and clean at 3.0. Same shape as
+/// [`SVG2_ONLY_ELEMENTS`].
+const SVG3_ONLY_ATTRIBUTES: &[&str] = &["focusable", "href", "rel", "tabindex"];
+
+fn is_recognized_attribute(name: &str, is_epub3: bool) -> bool {
     // `role` and `aria-*`: `epub-svg-strict-inc.rnc` folds `aria.global`
     // into `SVG.Core.attrib`, which covers the `aria-*` set but not `role`
     // itself. `role` is allowed here anyway - accepting it is a miss, and
     // rejecting an accessibility attribute that authors do put on SVG
     // would be the expensive direction of wrong.
+    if !is_epub3 && SVG3_ONLY_ATTRIBUTES.contains(&name) {
+        return false;
+    }
     SVG_ATTRIBUTES.contains(&name) || name == "role" || name.starts_with("aria-")
 }
 
@@ -511,9 +560,23 @@ fn is_recognized_attribute(name: &str) -> bool {
 pub(crate) fn check_attribute_vocabulary(
     svg_root: roxmltree::Node,
     path: &str,
+    is_epub3: bool,
     report: &mut Report,
 ) {
-    check_attrs_of(svg_root, path, report);
+    // **Normative in EPUB 2, informative in EPUB 3**, exactly as the element
+    // vocabulary and the required attributes are (#93). This ran at 3.0 only,
+    // on the reasoning that "epubcheck has no opinion in EPUB 2" - true of
+    // RSC-025 and false of the validation underneath it. A lowercase
+    // `viewbox` in an EPUB 2 book was written off here as our own false
+    // positive; handed that book, epubcheck reports ERROR RSC-005. The gate
+    // was suppressing a true finding.
+    //
+    // Cost measured before switching it on: across the shelf's 261 EPUB 2
+    // books carrying inline SVG, nine distinct unprefixed attributes appear
+    // and three are outside SVG 1.1 - `alt`, `preserveaspectratio` and
+    // `viewbox`, one occurrence each in two books. All three confirmed to be
+    // errors epubcheck reports.
+    check_attrs_of(svg_root, path, is_epub3, report);
     for child in svg_root
         .children()
         .filter(|c| c.is_element() && c.tag_name().namespace() == Some(SVG_NS))
@@ -522,14 +585,14 @@ pub(crate) fn check_attribute_vocabulary(
         // XHTML and `title` may hold a whole embedded document, so neither
         // subtree is SVG to begin with.
         if matches!(child.tag_name().name(), "foreignObject" | "title") {
-            check_attrs_of(child, path, report);
+            check_attrs_of(child, path, is_epub3, report);
             continue;
         }
-        check_attribute_vocabulary(child, path, report);
+        check_attribute_vocabulary(child, path, is_epub3, report);
     }
 }
 
-fn check_attrs_of(n: roxmltree::Node, path: &str, report: &mut Report) {
+fn check_attrs_of(n: roxmltree::Node, path: &str, is_epub3: bool, report: &mut Report) {
     for attr in n.attributes().filter(|a| a.namespace().is_none()) {
         let name = attr.name();
         // `data-*` is allowed on SVG exactly as it is on XHTML, and this list
@@ -571,10 +634,15 @@ fn check_attrs_of(n: roxmltree::Node, path: &str, report: &mut Report) {
             }
             continue;
         }
-        if !is_recognized_attribute(name) {
+        if !is_recognized_attribute(name, is_epub3) {
+            let (id, severity) = if is_epub3 {
+                (RSC_025, Severity::Usage)
+            } else {
+                (RSC_005, Severity::Error)
+            };
             report.push_at_pos(
-                RSC_025,
-                Severity::Usage,
+                id,
+                severity,
                 format!("attribute \"{name}\" not allowed here"),
                 path,
                 Position::of(n),
@@ -942,6 +1010,197 @@ const SVG_REQUIRED_ATTRS: &[(&str, &[&str])] = &[
     ("rect", &["height", "width"]),
 ];
 
+/// SVG 1.1's **descriptive elements**, allowed inside any graphics element.
+const SVG_DESCRIPTIVE_ELEMENTS: &[&str] = &["desc", "metadata", "title"];
+
+/// SVG 1.1's **animation elements**, likewise allowed inside any graphics
+/// element.
+const SVG_ANIMATION_ELEMENTS: &[&str] = &[
+    "animate",
+    "animateColor",
+    "animateMotion",
+    "animateTransform",
+    "set",
+];
+
+/// The graphics elements whose SVG 1.1 content model is **closed**: any number
+/// of descriptive and animation elements, in any order, and nothing else — no
+/// other element and no text.
+///
+/// This is the first slice of the content-model axis, and it was chosen for
+/// the property that made the vocabulary slices safe: the rule is closed and
+/// enumerable, so it cannot fire where epubcheck stays silent. Eleven cells
+/// measured against 5.3.0, one book each — `rect > circle`, `use > rect`,
+/// `image > rect` and `line > text` are errors; `rect > desc`, `rect > set`,
+/// `image > title`, `path > metadata`, `polygon > animate` are clean; loose
+/// text inside a shape is an error and **indentation whitespace is not**,
+/// which is the only one of the eleven that could have cost a false positive
+/// on a real book.
+///
+/// Deliberately *not* here: the container elements (`g`, `defs`, `svg`, `a`,
+/// `switch`, `marker`, …), whose models are open-ended pools. Those are the
+/// part where a from-scratch grammar could invent findings, and they wait for
+/// their own increment.
+const SVG_CLOSED_MODEL_ELEMENTS: &[&str] = &[
+    "circle", "ellipse", "image", "line", "path", "polygon", "polyline", "rect",
+    // `tref` belongs here rather than with the text elements below: it names
+    // the text it renders through `xlink:href`, so its own model is closed and
+    // carries no character data. Measured — `<tref>loose</tref>` is
+    // `text not allowed here` and `<tref><desc/></tref>` is clean.
+    "tref", "use",
+];
+
+/// The text elements, whose model is a **mixed pool**: character data, the
+/// descriptive and animation elements, and a short closed list of text
+/// children. Unlike the graphics elements above, text here is content rather
+/// than a mistake.
+const SVG_TEXT_CONTENT_ELEMENTS: &[&str] = &["text", "textPath", "tspan"];
+
+/// What a text element may contain beyond character data, descriptive and
+/// animation elements.
+///
+/// `textPath` is **not** in this list because it is not allowed everywhere the
+/// others are: SVG 1.1 admits it directly inside `<text>` and nowhere else, so
+/// it is handled as its own case. Measured both ways — `text > textPath` is
+/// clean, `tspan > textPath` and `textPath > textPath` are errors.
+const SVG_TEXT_CHILDREN: &[&str] = &["a", "altGlyph", "tref", "tspan"];
+
+/// The gradients, whose model is the descriptive and animation elements plus
+/// `<stop>`, and no character data.
+const SVG_GRADIENT_ELEMENTS: &[&str] = &["linearGradient", "radialGradient"];
+
+/// `<stop>` takes **animation elements only** — not even a `<desc>`, which is
+/// the one cell here that memory would have got wrong. Measured:
+/// `<stop><set/></stop>` is clean, `<stop><desc/></stop>` is
+/// `element "desc" not allowed here`.
+const SVG_ANIMATION_ONLY_ELEMENTS: &[&str] = &["stop"];
+
+/// The closed half of the SVG content model: what a graphics element may
+/// contain.
+///
+/// Normative in EPUB 2 and informative in EPUB 3, the split the whole SVG
+/// family takes — `schema/20/rng/content.rng` includes the SVG 1.1 modules
+/// directly while EPUB 3 runs the strict grammar with `isNormative=false`.
+/// What one element of the closed slice may contain.
+struct SvgModel {
+    /// Whether the descriptive elements are admitted. True everywhere except
+    /// `<stop>`.
+    descriptive: bool,
+    /// Element children beyond the descriptive and animation ones.
+    extra: &'static [&'static str],
+    /// Whether character data is content rather than a mistake.
+    text: bool,
+}
+
+/// The content model of `name`, or `None` when it is outside this slice.
+///
+/// Animation elements are admitted by all four shapes, so they are not listed
+/// here.
+fn svg_model(name: &str) -> Option<SvgModel> {
+    if SVG_CLOSED_MODEL_ELEMENTS.contains(&name) {
+        return Some(SvgModel {
+            descriptive: true,
+            extra: &[],
+            text: false,
+        });
+    }
+    if SVG_TEXT_CONTENT_ELEMENTS.contains(&name) {
+        return Some(SvgModel {
+            descriptive: true,
+            extra: SVG_TEXT_CHILDREN,
+            text: true,
+        });
+    }
+    if SVG_GRADIENT_ELEMENTS.contains(&name) {
+        return Some(SvgModel {
+            descriptive: true,
+            extra: &["stop"],
+            text: false,
+        });
+    }
+    if SVG_ANIMATION_ONLY_ELEMENTS.contains(&name) {
+        return Some(SvgModel {
+            descriptive: false,
+            extra: &[],
+            text: false,
+        });
+    }
+    None
+}
+
+pub(crate) fn check_content_model(
+    svg_root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    let (id, severity) = if is_epub3 {
+        (RSC_025, Severity::Usage)
+    } else {
+        (RSC_005, Severity::Error)
+    };
+    for parent in svg_root
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+    {
+        let pname = parent.tag_name().name();
+        // The four closed shapes, each measured cell by cell rather than
+        // read off a grammar. `None` means this element is not part of the
+        // slice — every container is, deliberately.
+        let Some(model) = svg_model(pname) else {
+            continue;
+        };
+        let is_text_element = model.text;
+        for child in parent.children() {
+            if child.is_element() {
+                // A foreign-namespaced child is somebody else's question, and
+                // `metadata` legitimately carries one — leave the whole class
+                // alone rather than guess at it.
+                if child.tag_name().namespace() != Some(SVG_NS) {
+                    continue;
+                }
+                let cname = child.tag_name().name();
+                if SVG_ANIMATION_ELEMENTS.contains(&cname) {
+                    continue;
+                }
+                if model.descriptive && SVG_DESCRIPTIVE_ELEMENTS.contains(&cname) {
+                    continue;
+                }
+                if model.extra.contains(&cname) {
+                    continue;
+                }
+                // `textPath` is admitted directly inside `<text>` and nowhere
+                // else, `<tspan>` and `<textPath>` included, so it cannot live
+                // in `SVG_TEXT_CHILDREN` with the rest.
+                if cname == "textPath" && pname == "text" {
+                    continue;
+                }
+                report.push_at_pos(
+                    id,
+                    severity,
+                    format!("element \"{cname}\" is not allowed inside \"{pname}\""),
+                    path,
+                    Position::of(child),
+                );
+            } else if !is_text_element
+                && child.is_text()
+                && child.text().is_some_and(|t| !t.trim().is_empty())
+            {
+                // Indentation is not content: epubcheck accepts a `<rect>`
+                // spread over three lines around its `<desc>`, and rejects
+                // `<rect>hello</rect>`. Measured both ways.
+                report.push_at_pos(
+                    id,
+                    severity,
+                    format!("text is not allowed inside \"{pname}\""),
+                    path,
+                    Position::of(child),
+                );
+            }
+        }
+    }
+}
+
 pub(crate) fn check_required_attributes(
     svg_root: roxmltree::Node,
     path: &str,
@@ -1039,6 +1298,146 @@ mod tests {
     /// `application/xhtml+xml`, so inline SVG was always covered and a bare
     /// `.svg` file never is. Accepting the shape without this would have
     /// traded a wrong finding for silence, which is the worse of the two.
+    /// The closed half of the SVG content model: a graphics element holds
+    /// descriptive and animation elements and nothing else — no other
+    /// element, no text, but **indentation whitespace is not text**.
+    ///
+    /// Fifteen cells measured against 5.3.0, one book each, and the whole
+    /// point of the slice is that it is closed: it cannot fire where
+    /// epubcheck is silent. The last two assertions are the ones that would
+    /// have cost real books — a shape spread over several lines is the
+    /// commonest formatting there is.
+    #[test]
+    fn a_graphics_element_holds_only_descriptive_and_animation_children() {
+        let ids = |body: &str, is_epub3: bool| -> Vec<&'static str> {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"
+                        xmlns:xlink="http://www.w3.org/1999/xlink"
+                        viewBox="0 0 10 10"><title>s</title>{body}</svg>"#
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_content_model(d.root_element(), "c.xhtml", is_epub3, &mut report);
+            report.messages.iter().map(|m| m.id).collect()
+        };
+
+        // Rejected, and the id moves with the version: normative in EPUB 2,
+        // informative in EPUB 3.
+        for body in [
+            r#"<rect width="1" height="1"><circle r="1"/></rect>"#,
+            r##"<use xlink:href="#s"><rect width="1" height="1"/></use>"##,
+            r#"<image xlink:href="x.png" width="1" height="1"><rect width="1" height="1"/></image>"#,
+            r#"<line x1="0" y1="0" x2="1" y2="1"><text x="0" y="0">t</text></line>"#,
+            r#"<rect width="1" height="1">hello</rect>"#,
+        ] {
+            assert_eq!(
+                ids(body, false),
+                vec![crate::ids::RSC_005],
+                "EPUB 2: {body}"
+            );
+            assert_eq!(ids(body, true), vec![RSC_025], "EPUB 3: {body}");
+        }
+
+        // Accepted in both versions.
+        for body in [
+            r#"<rect width="1" height="1"><desc>d</desc></rect>"#,
+            r#"<rect width="1" height="1"><set attributeName="x" to="1"/></rect>"#,
+            r#"<image xlink:href="x.png" width="1" height="1"><title>t</title></image>"#,
+            r#"<path d="M0 0"><metadata><x xmlns="urn:x"/></metadata></path>"#,
+            r#"<polygon points="0,0 1,1"><animate attributeName="x" dur="1s"/></polygon>"#,
+        ] {
+            assert!(ids(body, false).is_empty(), "EPUB 2: {body}");
+            assert!(ids(body, true).is_empty(), "EPUB 3: {body}");
+        }
+
+        // Indentation is not content — the one cell that could have cost a
+        // false positive on a real book, since a shape spread over several
+        // lines is ordinary formatting.
+        assert!(
+            ids(
+                "<rect width=\"1\" height=\"1\">\n      <desc>d</desc>\n  </rect>",
+                false
+            )
+            .is_empty(),
+            "whitespace around a legal child is not loose text"
+        );
+        // The container elements are deliberately outside this slice: their
+        // models are open-ended pools, and inventing one is how a
+        // from-scratch grammar starts reporting things epubcheck does not.
+        assert!(
+            ids(
+                r#"<g><rect width="1" height="1"/><circle r="1"/></g>"#,
+                false
+            )
+            .is_empty(),
+            "containers are not judged by this check"
+        );
+
+        // --- the text family. A mixed pool rather than a closed model:
+        // character data is content here, not a mistake. Fourteen more cells
+        // against 5.3.0, one book each.
+        for body in [
+            // `textPath` is admitted directly inside `<text>` and nowhere
+            // else — not in a `<tspan>` and not in another `<textPath>`.
+            r##"<text x="0" y="0"><tspan><textPath xlink:href="#pp">a</textPath></tspan></text>"##,
+            r##"<text x="0" y="0"><textPath xlink:href="#pp"><textPath xlink:href="#pp">a</textPath></textPath></text>"##,
+            r#"<text x="0" y="0"><rect width="1" height="1"/></text>"#,
+            r#"<text x="0" y="0"><tspan><rect width="1" height="1"/></tspan></text>"#,
+            // `tref` names the text it renders, so it carries none of its
+            // own — it sits in the closed set, not the text pool.
+            r##"<text x="0" y="0"><tref xlink:href="#tt">loose</tref></text>"##,
+        ] {
+            assert_eq!(
+                ids(body, false),
+                vec![crate::ids::RSC_005],
+                "EPUB 2: {body}"
+            );
+            assert_eq!(ids(body, true), vec![RSC_025], "EPUB 3: {body}");
+        }
+        for body in [
+            r#"<text x="0" y="0"><tspan>a</tspan></text>"#,
+            r##"<text x="0" y="0"><textPath xlink:href="#pp">a</textPath></text>"##,
+            r#"<text x="0" y="0">plain</text>"#,
+            r#"<text x="0" y="0"><desc>d</desc>a</text>"#,
+            r##"<text x="0" y="0"><tref xlink:href="#tt"><desc>d</desc></tref></text>"##,
+            r##"<text x="0" y="0"><a xlink:href="#tt">a</a></text>"##,
+            r#"<text x="0" y="0"><tspan><tspan>a</tspan></tspan></text>"#,
+            r##"<text x="0" y="0"><textPath xlink:href="#pp"><tspan>a</tspan></textPath></text>"##,
+            r##"<text x="0" y="0"><altGlyph xlink:href="#tt">a</altGlyph></text>"##,
+        ] {
+            assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
+            assert!(ids(body, true).is_empty(), "EPUB 3 clean: {body}");
+        }
+        // --- gradients. A third shape: the descriptive and animation
+        // elements plus `<stop>`, and no character data. Ten more cells.
+        for body in [
+            r#"<defs><linearGradient id="a"><rect width="1" height="1"/></linearGradient></defs>"#,
+            r#"<defs><linearGradient id="a">loose</linearGradient></defs>"#,
+            r#"<defs><radialGradient id="b"><rect width="1" height="1"/></radialGradient></defs>"#,
+            // `<stop>` is a fourth shape: **animation elements only**, not
+            // even a `<desc>`. This is the cell memory would have got wrong.
+            r#"<defs><linearGradient id="a"><stop offset="0"><desc>d</desc></stop></linearGradient></defs>"#,
+            r#"<defs><linearGradient id="a"><stop offset="0">loose</stop></linearGradient></defs>"#,
+        ] {
+            assert_eq!(
+                ids(body, false),
+                vec![crate::ids::RSC_005],
+                "EPUB 2: {body}"
+            );
+            assert_eq!(ids(body, true), vec![RSC_025], "EPUB 3: {body}");
+        }
+        for body in [
+            r#"<defs><linearGradient id="a"><stop offset="0"/></linearGradient></defs>"#,
+            r#"<defs><linearGradient id="a"><desc>d</desc></linearGradient></defs>"#,
+            r#"<defs><linearGradient id="a"><animate attributeName="x" dur="1s"/></linearGradient></defs>"#,
+            r#"<defs><radialGradient id="b"><stop offset="0"/></radialGradient></defs>"#,
+            r#"<defs><linearGradient id="a"><stop offset="0"><set attributeName="offset" to="1"/></stop></linearGradient></defs>"#,
+        ] {
+            assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
+            assert!(ids(body, true).is_empty(), "EPUB 3 clean: {body}");
+        }
+    }
+
     #[test]
     fn svg_allows_data_attributes_and_still_checks_their_names() {
         let ids = |attrs: &str| -> Vec<&'static str> {
@@ -1050,7 +1449,7 @@ mod tests {
             );
             let d = roxmltree::Document::parse(&svg).unwrap();
             let mut report = Report::default();
-            check_attribute_vocabulary(d.root_element(), "c.svg", &mut report);
+            check_attribute_vocabulary(d.root_element(), "c.svg", true, &mut report);
             report.messages.iter().map(|m| m.id).collect()
         };
 
@@ -1096,19 +1495,28 @@ mod tests {
             "font-face-uri",
             "glyphRef",
         ] {
-            assert!(
-                is_recognized_element(name),
-                "{name} is SVG 1.1 and epubcheck accepts it"
-            );
+            for v3 in [true, false] {
+                assert!(
+                    is_recognized_element(name, v3),
+                    "{name} is SVG 1.1 and epubcheck accepts it (epub3={v3})"
+                );
+            }
         }
         // The control: the check still has teeth. A name that is in no
         // version of SVG must still be recognised as unknown, or this test
         // would pass against a predicate that answers `true` for everything.
-        assert!(!is_recognized_element("notanelement"));
-        assert!(!is_recognized_element("recct"));
-        // Kept deliberately though it is SVG 2 rather than 1.1: epubcheck
-        // accepts it too, so dropping it would start a divergence.
-        assert!(is_recognized_element("feDropShadow"));
+        for v3 in [true, false] {
+            assert!(!is_recognized_element("notanelement", v3));
+            assert!(!is_recognized_element("recct", v3));
+        }
+        // `feDropShadow` is SVG 2, and this is the one name whose answer
+        // moves with the version: it is declared in
+        // `schema/30/mod/svg11/svg-filter.rnc` and in none of
+        // `schema/20/rng/svg/`. Both arms measured on their own book against
+        // 5.3.0 — clean at 3.0, RSC-005 at 2.0 (#93). This assertion used to
+        // read "epubcheck accepts it too", which was true only of EPUB 3.
+        assert!(is_recognized_element("feDropShadow", true));
+        assert!(!is_recognized_element("feDropShadow", false));
     }
     use super::*;
     use crate::report::Report;
@@ -1191,7 +1599,7 @@ mod tests {
                 .find(|n| n.tag_name().name() == "svg")
                 .unwrap();
             let mut report = Report::new();
-            check_attribute_vocabulary(root, "c.xhtml", &mut report);
+            check_attribute_vocabulary(root, "c.xhtml", true, &mut report);
             report
                 .messages
                 .iter()
@@ -1199,6 +1607,39 @@ mod tests {
                 .map(|m| m.text.clone())
                 .collect::<Vec<_>>()
         };
+        // The same document at EPUB 2, where the SVG 1.1 grammar is
+        // normative: the finding is `RSC-005` at error severity rather than
+        // `RSC-025` usage (#93). This check ran at 3.0 only, on a comment
+        // that read the absence of RSC-025 in EPUB 2 as an absence of any
+        // opinion; epubcheck has one, and it is stricter.
+        let epub2_ids = |attrs: &str| -> Vec<(&'static str, Severity)> {
+            let xml = format!(
+                "{XHTML_OPEN}<body><svg:svg viewBox=\"0 0 600 800\" width=\"100%\" \
+                 height=\"100%\" preserveAspectRatio=\"xMidYMid meet\" version=\"1.1\">\
+                 <svg:image {attrs} xlink:href=\"c.png\"/></svg:svg></body></html>"
+            );
+            let d = doc(&xml);
+            let root = d
+                .descendants()
+                .find(|n| n.tag_name().name() == "svg")
+                .unwrap();
+            let mut report = Report::new();
+            check_attribute_vocabulary(root, "c.xhtml", false, &mut report);
+            report
+                .messages
+                .iter()
+                .map(|m| (m.id, m.severity))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            epub2_ids("alt=\"cover image\" width=\"600\" height=\"800\""),
+            vec![(crate::ids::RSC_005, Severity::Error)],
+            "EPUB 2 runs the SVG grammar normatively"
+        );
+        assert!(
+            epub2_ids("width=\"600\" height=\"800\"").is_empty(),
+            "and stays silent on attributes that are real SVG"
+        );
 
         assert_eq!(
             attrs_on_image("alt=\"cover image\" width=\"600\" height=\"800\"").len(),
@@ -1478,10 +1919,45 @@ mod tests {
         let d = doc(xml);
         let svg_root = d.root_element();
         let mut report = Report::new();
-        check_vocabulary(svg_root, "c.xhtml", &mut report);
+        check_vocabulary(svg_root, "c.xhtml", true, &mut report);
         assert_eq!(
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
-            vec![RSC_025]
+            vec![RSC_025],
+            "EPUB 3 runs the SVG grammar informatively"
+        );
+        // The same element is a normative RSC-005 in EPUB 2, because
+        // `schema/20/rng/content.rng` includes the SVG 1.1 modules directly
+        // (#93). Measured against 5.3.0 inline and standalone.
+        let mut two = Report::new();
+        check_vocabulary(svg_root, "c.xhtml", false, &mut two);
+        assert_eq!(
+            two.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![crate::ids::RSC_005],
+            "EPUB 2 runs it normatively"
+        );
+        assert_eq!(two.messages[0].severity, Severity::Error);
+
+        // `feDropShadow` is the one name whose recognition moves with the
+        // version: SVG 2, present in `schema/30/mod/svg11/svg-filter.rnc` and
+        // in none of `schema/20/rng/svg/`. Both arms measured on their own
+        // book.
+        let fd = doc(concat!(
+            "<svg xmlns=\"http://www.w3.org/2000/svg\">",
+            "<defs><filter id=\"f\"><feDropShadow dx=\"1\" dy=\"1\"/></filter></defs>",
+            "</svg>"
+        ));
+        let mut three = Report::new();
+        check_vocabulary(fd.root_element(), "c.xhtml", true, &mut three);
+        assert!(
+            three.messages.is_empty(),
+            "SVG 2 filter primitive, valid at 3.0"
+        );
+        let mut older = Report::new();
+        check_vocabulary(fd.root_element(), "c.xhtml", false, &mut older);
+        assert_eq!(
+            older.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![crate::ids::RSC_005],
+            "SVG 1.1 has no feDropShadow"
         );
     }
 
@@ -1495,7 +1971,8 @@ mod tests {
         );
         let d = doc(xml);
         let mut report = Report::new();
-        check_vocabulary(d.root_element(), "c.xhtml", &mut report);
+        check_vocabulary(d.root_element(), "c.xhtml", true, &mut report);
+        check_vocabulary(d.root_element(), "c.xhtml", false, &mut report);
         assert!(report.messages.is_empty());
     }
 
@@ -1509,7 +1986,8 @@ mod tests {
         );
         let d = doc(xml);
         let mut report = Report::new();
-        check_vocabulary(d.root_element(), "c.xhtml", &mut report);
+        check_vocabulary(d.root_element(), "c.xhtml", true, &mut report);
+        check_vocabulary(d.root_element(), "c.xhtml", false, &mut report);
         assert!(report.messages.is_empty());
     }
 }

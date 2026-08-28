@@ -164,6 +164,7 @@ pub(crate) fn fallback_reaches_content_document(
     start_id: &str,
     items: &HashMap<String, (String, String)>,
     fallback_map: &HashMap<String, String>,
+    is_epub3: bool,
 ) -> bool {
     let mut cur = start_id;
     for _ in 0..10 {
@@ -174,9 +175,23 @@ pub(crate) fn fallback_reaches_content_document(
             return false;
         };
         // `hasContentDocumentFallback` is satisfied by the deprecated types
-        // too - epubcheck's `FallbackChainResolver`:48-49 ORs both predicates,
-        // with no version condition.
-        if is_content_document_type(mt) || is_deprecated_content_document_type(mt) {
+        // too - epubcheck's `FallbackChainResolver`:48-49 ORs both predicates.
+        //
+        // **It passes the version, and this used to say it did not.**
+        // `OPFChecker.isBlessedItemType(type, version)` is `xhtml | dtbook`
+        // at 2.0 and `xhtml | svg` at 3.0, so a fallback chain ending in an
+        // SVG rescues a hyperlink at 3.0 and not at 2.0, and a chain ending
+        // in DTBook does the opposite. With the version-blind predicate here,
+        // a hyperlink to a PDF that falls back to an SVG drew RSC-011 from us
+        // and RSC-010 from epubcheck at 2.0 — a wrong id, in both directions,
+        // measured one book per cell (#129).
+        //
+        // The escape hatch has to move with the direct test above it: they
+        // are one question asked twice, and this is the drift the "one
+        // predicate, two callers" note on `hyperlink_abort` warns about.
+        if is_referenced_content_document_type(mt, is_epub3)
+            || is_deprecated_content_document_type(mt)
+        {
             return true;
         }
         cur = next.as_str();
@@ -313,6 +328,117 @@ pub(crate) fn is_content_document_type(mt: &str) -> bool {
 /// being OEBPS 1.2, and neither is this one.
 pub(crate) fn is_deprecated_content_document_type(mt: &str) -> bool {
     matches!(mt, "text/html" | "text/x-oeb1-document")
+}
+
+/// The content-document types a **reference** may point at, which is
+/// version-dependent — and in *both* directions, which is why it cannot be
+/// the version-blind [`is_content_document_type`].
+///
+/// OPS 2.0.1's content documents are XHTML and DTBook; EPUB 3's are XHTML and
+/// SVG. So an EPUB 2 hyperlink to an SVG is RSC-010 (not a content document)
+/// while the same link in an EPUB 3 book is RSC-011 (a content document, just
+/// not in the spine), and DTBook is the mirror image of that.
+///
+/// Measured one book per type per version against 5.3.0 — seven types, both
+/// versions, both as a `data:` URL and, for SVG, as a real manifest-declared
+/// document, since a data URL could have had its own rules. It does not: the
+/// answers agree.
+///
+/// `text/html` is not here: it is deprecated-blessed
+/// ([`is_deprecated_content_document_type`]) in both versions, measured the
+/// same way, and callers ask that question separately.
+pub(crate) fn is_referenced_content_document_type(mt: &str, is_epub3: bool) -> bool {
+    match mt {
+        "application/xhtml+xml" => true,
+        "image/svg+xml" => is_epub3,
+        "application/x-dtbook+xml" => !is_epub3,
+        _ => false,
+    }
+}
+
+/// Whether a remote reference is one EPUB 3 forbids outright (RSC-006), as
+/// opposed to one it merely wants declared (RSC-008).
+///
+/// Shared by the two sites that ask it - a reference that is *written*
+/// remote, and a relative one that *resolves* remote through a `<base href>`
+/// or `xml:base`. They had drifted: only the first asked at all, so a book
+/// with a remote base reported nothing about its stylesheet and epubcheck
+/// reported RSC-006 (`content-xhtml-base-url-remote-relative-path-error`).
+///
+/// `remote_manifest` is consulted for the three tags whose answer depends on
+/// what the manifest declares the resource to be; under a base there is
+/// nothing to find there, which is the correct answer for an undeclared
+/// remote resource anyway.
+fn is_restricted_remote_ref(
+    tag: &str,
+    attr: &str,
+    node: roxmltree::Node,
+    bare: &str,
+    remote_manifest: &HashMap<String, String>,
+) -> bool {
+    match tag {
+        "img" | "iframe" => true,
+        "script" if attr == "src" => true,
+        // `embed@src` and `input@src` are GENERIC references in epubcheck,
+        // exactly like `object@data`, so they carry its rule: a remote target
+        // is allowed only when the manifest declares it audio, video or a
+        // font.
+        "embed" | "input" | "object" if matches!(attr, "src" | "data") => !remote_manifest
+            .get(bare)
+            .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt)),
+        "link" if attr == "href" => node.attr_no_ns("rel").is_some_and(|r| {
+            r.split_whitespace()
+                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+        }),
+        _ => false,
+    }
+}
+
+/// Resolve a relative reference against a document base URI, well enough for
+/// the remote-resource question. Only the two shapes a `<base href>` takes in
+/// practice: an absolute reference wins outright, anything else is appended
+/// after the base's last `/`.
+fn join_base(base: &str, href: &str) -> String {
+    if crate::url::is_absolute(href) {
+        return href.to_string();
+    }
+    let stem = match base.rfind('/') {
+        Some(i) => &base[..=i],
+        None => base,
+    };
+    format!("{stem}{}", href.trim_start_matches('/'))
+}
+
+/// How a `data:` URL is named in a finding: the first 30 characters plus an
+/// ellipsis.
+///
+/// epubcheck's own rule, `OPFItem`:113-117 — *"the URL string truncated
+/// arbitrarily to 30 chars"* — and it truncates the **parsed** URL, so the
+/// whitespace an XML attribute may carry across lines is gone before the
+/// count. Without that a base64 image href puts several kilobytes of payload
+/// into a usage message, which is what our first version did.
+pub(crate) fn data_url_display(href: &str) -> String {
+    let compact: String = href.chars().filter(|c| !c.is_whitespace()).collect();
+    match compact.char_indices().nth(30) {
+        Some((i, _)) => format!("{}…", &compact[..i]),
+        None => compact,
+    }
+}
+
+/// The media type a `data:` URL declares for itself, or `""` when it declares
+/// none — `data:,x` defaults to `text/plain`, which is not blessed either way,
+/// so the empty string lands on the same answer.
+///
+/// Parameters are dropped (`data:text/html;charset=utf-8` is `text/html`) and
+/// the case is **kept**: epubcheck's comparison is case-sensitive, and
+/// `data:TEXT/HTML,x` is RSC-010 where `data:text/html,x` is RSC-011.
+pub(crate) fn data_url_media_type(href: &str) -> &str {
+    let rest = match href.trim_start().strip_prefix("data:") {
+        Some(r) => r,
+        None => return "",
+    };
+    let end = rest.find([',', ';']).unwrap_or(rest.len());
+    rest[..end].trim()
 }
 
 /// True for hrefs we should not resolve against the container (remote/special).
@@ -552,11 +678,17 @@ fn hyperlink_abort(
     items: &HashMap<String, (String, String)>,
     fallback_map: &HashMap<String, String>,
     spine_order: &HashMap<String, usize>,
+    is_epub3: bool,
 ) -> Option<&'static str> {
+    // Version-aware on purpose: an EPUB 2 hyperlink to an SVG document is
+    // RSC-010 there and RSC-011 at 3.0, and DTBook is the mirror of that.
+    // We used the version-blind predicate and reported RSC-011 for an
+    // EPUB 2 SVG target — a wrong id on ordinary markup, found while
+    // measuring the `data:` URL case (issue #128).
     if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == *target)
-        && !is_content_document_type(mt)
+        && !is_referenced_content_document_type(mt, is_epub3)
         && !is_deprecated_content_document_type(mt)
-        && !fallback_reaches_content_document(id, items, fallback_map)
+        && !fallback_reaches_content_document(id, items, fallback_map, is_epub3)
     {
         return Some(RSC_010);
     }
@@ -1078,6 +1210,9 @@ const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
 
 /// The OEBPS 1.2 package namespace — the pre-EPUB format's own (see OPF-047).
 const OEB12_PKG_NS: &str = "http://openebook.org/namespaces/oeb-package/1.0/";
+
+/// The OPF package namespace — the one a real package document is in.
+const OPF_PKG_NS: &str = "http://www.idpf.org/2007/opf";
 
 /// OPF-092: a language tag (`xml:lang`, `link/@hreflang`, or `dc:language`'s
 /// own text) must not have leading/trailing whitespace, and - once trimmed
@@ -2285,7 +2420,15 @@ fn check_guide_references(
                 // `!isBlessedItemType && !isDeprecatedBlessedItemType` - so a
                 // guide reference to a `text/html` document is not OPF-032
                 // (issue #72).
-                if !is_content_document_type(mt) && !is_deprecated_content_document_type(mt) {
+                //
+                // `isBlessedItemType` is the **version's** set, which the
+                // predicate here was not (#129): an EPUB 2 guide reference to
+                // an SVG is OPF-032 and we said nothing, while the EPUB 3
+                // mirror - a guide reference to DTBook - is OPF-032 there and
+                // not at 2.0. Four books, one per cell, against 5.3.0.
+                if !is_referenced_content_document_type(mt, is_epub3)
+                    && !is_deprecated_content_document_type(mt)
+                {
                     report.push_at_pos(
                         OPF_032,
                         Severity::Error,
@@ -2319,15 +2462,20 @@ fn check_guide_references(
                         Position::of(r),
                     );
                 }
-                if !is_content_document_type(mt) && !is_deprecated_content_document_type(mt) {
-                    continue;
-                }
                 // epubcheck only resolves a fragment against XHTML and SVG
-                // targets (`ResourceReferencesChecker`), which leaves out the
-                // third Content Document type, DTBook - whose documents this
-                // project doesn't validate either (see `docs/COVERAGE.md`).
+                // targets, and **this one is not version-gated**:
+                // `ResourceReferencesChecker`:179 tests `MIMEType.SVG.is(..)
+                // || MIMEType.XHTML.is(..)` with no version in the call,
+                // unlike the `isBlessedItemType(type, version)` the hyperlink
+                // arm uses. Read at the source rather than inferred from the
+                // neighbouring site (#129). DTBook, the third Content
+                // Document type, is left out in both versions - and this
+                // project does not validate DTBook documents anyway (#52).
                 // A deprecated-blessed target (`text/html`) is not skipped:
                 // its missing fragment is RSC-014 rather than RSC-012 (#82).
+                //
+                // This condition used to be written twice in a row, the
+                // second copy unreachable.
                 if !is_content_document_type(mt) && !is_deprecated_content_document_type(mt) {
                     continue;
                 }
@@ -2383,6 +2531,7 @@ fn check_ncx_content_fragments(
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
     fallback_map: &HashMap<String, String>,
+    spine_order: &HashMap<String, usize>,
     is_epub3: bool,
     report: &mut Report,
 ) {
@@ -2444,24 +2593,51 @@ fn check_ncx_content_fragments(
             );
             continue;
         }
-        // The deprecated types are exempt here too. epubcheck's hyperlink
-        // branch (`ResourceReferencesChecker`:227) tests both predicates and
-        // is *not* version-gated, unlike the OPF-043 exemption.
-        if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == resolved)
-            && !is_content_document_type(mt)
-            && !is_deprecated_content_document_type(mt)
-            && !fallback_reaches_content_document(id, items, fallback_map)
-        {
-            report.push_node(
-                RSC_010,
-                Severity::Error,
-                format!("NCX content src '{src}' does not target an OPS document"),
-                ncx_path,
-                n,
-                "opf.ncx.content_src_not_content_document",
-                vec![src.to_string()],
-            );
-            continue;
+        // **Both** of the questions epubcheck asks of a hyperlink, asked
+        // here by the same predicate. `ResourceReferencesChecker` has one
+        // path for every registered reference and an NCX `<content src>` is
+        // registered like any other: a target that is not a content document
+        // is RSC-010, a content document that is not a spine item is
+        // RSC-011, and either one aborts the reference, so no fragment is
+        // resolved after it.
+        //
+        // We had the RSC-010 half alone, over the version-blind type set
+        // (#129). Measured one book per cell against 5.3.0: an EPUB 2 NCX
+        // pointing at a declared XHTML document that is simply **not in the
+        // spine** draws RSC-011 from epubcheck and drew nothing at all from
+        // us - an ordinary shape rather than a corner case. SVG is the
+        // version-split one, RSC-010 at 2.0 and RSC-011 at 3.0, and DTBook
+        // is its mirror.
+        //
+        // Sharing `hyperlink_abort` rather than restating its conditions is
+        // the point: this site had already drifted from it once, holding the
+        // first arm and not the second.
+        match hyperlink_abort(&resolved, items, fallback_map, spine_order, is_epub3) {
+            Some(id) if id == RSC_010 => {
+                report.push_node(
+                    RSC_010,
+                    Severity::Error,
+                    format!("NCX content src '{src}' does not target an OPS document"),
+                    ncx_path,
+                    n,
+                    "opf.ncx.content_src_not_content_document",
+                    vec![src.to_string()],
+                );
+                continue;
+            }
+            Some(_) => {
+                report.push_node(
+                    RSC_011,
+                    Severity::Error,
+                    format!("NCX content src '{src}' does not target a spine item"),
+                    ncx_path,
+                    n,
+                    "opf.ncx.content_src_not_in_spine",
+                    vec![src.to_string()],
+                );
+                continue;
+            }
+            None => {}
         }
         let Some(frag) = frag else { continue };
         if frag.is_empty() {
@@ -3247,6 +3423,39 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
     }
 
+    // A `<package>` in a namespace that is neither the OPF one nor a legacy
+    // one is not a package document at all, and the grammar above has just
+    // said so by rejecting the root element. **epubcheck stops there too**,
+    // and stops much harder than it looks: it never builds the package
+    // model, so it asks nothing about the manifest, validates no content
+    // document, and reports every entry in the container as undeclared
+    // (OPF-003) precisely because nothing was declared to it.
+    //
+    // We kept going. On its own fixture, `xml-namespace-wrongdefault-error`,
+    // that was two RSC-001 for hrefs the manifest names; on a book carrying
+    // a genuinely broken content document it was two more RSC-005 from
+    // validating a document epubcheck never opens. Both measured against
+    // 5.3.0. To anyone diffing the two tools all four are invented errors.
+    //
+    // What is left behind is a strict subset of epubcheck's findings rather
+    // than a superset: the metadata cascade, OPF-030 and the OPF-003s are
+    // now false negatives on a book that is INVALID from both tools either
+    // way. That is the safe direction; reporting is not.
+    //
+    // Guarded on the schema violation having *actually been reported*, not
+    // on the namespace test alone — a stop justified by another check is
+    // only as good as that check having run, which is the rule the
+    // silent-skip audit produced.
+    if !is_oeb12
+        && pkg.tag_name().namespace() != Some(OPF_PKG_NS)
+        && report
+            .messages
+            .iter()
+            .any(|m| m.rule == Some("opf.package.schema_violation"))
+    {
+        return;
+    }
+
     // Schematron rules our own RNG can't express (id uniqueness,
     // unique-identifier resolution, dcterms:modified cardinality, @refines
     // targets). Same additive pattern, reported as RSC-005. Each finding
@@ -3912,51 +4121,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 md,
                 "opf.metadata.missing_identifier",
                 Vec::new(),
-            );
-        }
-        if let Some(uid) = pkg.attr_no_ns("unique-identifier").map(str::trim) {
-            let matching = identifiers
-                .iter()
-                .find(|n| n.attr_no_ns("id").map(str::trim) == Some(uid));
-            match matching {
-                Some(n) => {
-                    package_identifier_text = Some(
-                        n.descendants()
-                            .filter(|t| t.is_text())
-                            .filter_map(|t| t.text())
-                            .collect::<String>(),
-                    );
-                }
-                None => {
-                    report.push_full(
-                        OPF_030,
-                        Severity::Error,
-                        format!(
-                            "package unique-identifier '{uid}' does not match any dc:identifier id"
-                        ),
-                        opf_path,
-                        Position::of(pkg),
-                        "opf.package.unique_identifier_unresolved",
-                        vec![uid.to_string()],
-                    );
-                }
-            }
-        } else {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "<package> is missing the required attribute \"unique-identifier\"",
-                opf_path,
-                pkg,
-                "opf.package.missing_unique_identifier_attribute",
-                Vec::new(),
-            );
-            report.push_at_pos(
-                OPF_048,
-                Severity::Error,
-                "<package> is missing its required unique-identifier attribute",
-                opf_path,
-                Position::of(pkg),
             );
         }
 
@@ -4669,6 +4833,83 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
         }
     }
+
+    // The unique-identifier attribute must name a dc:identifier in the
+    // metadata. Hoisted out of the `metadata` block above on purpose: every
+    // arm of this fires when there is no <metadata> element at all, and
+    // epubcheck reports them there. Guarded by the block, a package with no
+    // <metadata> drew no OPF-030, and one with neither a <metadata> nor the
+    // attribute drew no OPF-048 and no RSC-005 either - the gap between two
+    // checks, reporting nothing at all.
+    {
+        let identifiers: Vec<_> = metadata
+            .into_iter()
+            .flat_map(|md| md.children())
+            .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
+            .collect();
+        match pkg.attr_no_ns("unique-identifier").map(str::trim) {
+            Some(uid) => {
+                match identifiers
+                    .iter()
+                    .find(|n| n.attr_no_ns("id").map(str::trim) == Some(uid))
+                {
+                    Some(n) => {
+                        package_identifier_text = Some(
+                            n.descendants()
+                                .filter(|t| t.is_text())
+                                .filter_map(|t| t.text())
+                                .collect::<String>(),
+                        );
+                    }
+                    None => {
+                        report.push_full(
+                            OPF_030,
+                            Severity::Error,
+                            format!(
+                                "package unique-identifier '{uid}' does not match any dc:identifier id"
+                            ),
+                            opf_path,
+                            Position::of(pkg),
+                            "opf.package.unique_identifier_unresolved",
+                            vec![uid.to_string()],
+                        );
+                    }
+                }
+            }
+            None => {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    "<package> is missing the required attribute \"unique-identifier\"",
+                    opf_path,
+                    pkg,
+                    "opf.package.missing_unique_identifier_attribute",
+                    Vec::new(),
+                );
+                report.push_at_pos(
+                    OPF_048,
+                    Severity::Error,
+                    "<package> is missing its required unique-identifier attribute",
+                    opf_path,
+                    Position::of(pkg),
+                );
+                // epubcheck reports OPF-030 here too, printing its Java
+                // `null` for the value it never read. The id, the severity
+                // and the count match; the message says what happened
+                // rather than leaking a null into user-facing text.
+                report.push_full(
+                    OPF_030,
+                    Severity::Error,
+                    "no unique-identifier is declared, so no dc:identifier could be resolved"
+                        .to_string(),
+                    opf_path,
+                    Position::of(pkg),
+                    "opf.package.unique_identifier_unresolved",
+                    Vec::new(),
+                );
+            }
+        }
+    }
     // A media-overlay attribute's target item must itself be a Media
     // Overlay Document (application/smil+xml).
     for (_, overlay_id) in &media_overlay_attrs {
@@ -5011,6 +5252,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // content-doc resolved-path (NFC) -> reading-order position, for the
     // nav toc's spine-order check (NAV-011).
     let mut spine_order: HashMap<String, usize> = HashMap::new();
+    // The **item ids** the spine names, as opposed to the paths above.
+    // epubcheck's `isInSpine()` is a property of the item, not of the
+    // resource, and the two differ exactly when two manifest items declare
+    // the same href — `item-duplicate-resource-error.opf`, where the second
+    // item is not in the spine and draws OPF-097 while the first is exempt.
+    // Keyed by path, we excused both.
+    let mut spine_idrefs: HashSet<String> = HashSet::new();
     // resolved+NFC'd paths of every itemref explicitly marked
     // linear="no", each paired with that itemref's position, for the
     // OPF-096 reachability check below (the position lets OPF-096 point at
@@ -5153,6 +5401,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         ),
                         Some((path, mt)) => {
                             spine_order.entry(nfc(path)).or_insert(position);
+                            spine_idrefs.insert(idref.to_string());
                             if ir.attr_no_ns("linear").map(str::trim) == Some("no") {
                                 non_linear_paths.push((nfc(path), Position::of(ir)));
                             }
@@ -5454,6 +5703,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 &name_index,
                                 &items,
                                 &fallback_map,
+                                &spine_order,
                                 is_epub3,
                                 report,
                             );
@@ -6384,16 +6634,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // case-sensitive - but epubcheck has no opinion on it in EPUB 2,
             // and RSC-025 is the "informative" family precisely because it is
             // epubcheck's opinion rather than a spec requirement.
-            if is_epub3 {
-                crate::svg::check_vocabulary(svg_root, &path, report);
-                crate::svg::check_attribute_vocabulary(svg_root, &path, report);
-            }
+            // **The element vocabulary is asked at both versions and the
+            // attribute vocabulary is not**, and the two were gated together
+            // (#93). `schema/20/rng/content.rng` includes the SVG 1.1 modules
+            // directly, so an unrecognised SVG *element* is a normative
+            // RSC-005 in EPUB 2 - measured inline and standalone, one book
+            // each. The paragraph above stays true of everything else it
+            // names: it is about RSC-025, and the EPUB 2 arm reports RSC-005.
+            crate::svg::check_vocabulary(svg_root, &path, is_epub3, report);
+            crate::svg::check_attribute_vocabulary(svg_root, &path, is_epub3, report);
             // Required attributes are asked at BOTH versions, which is why
             // this sits outside the branch above (#93). epubcheck runs the
             // SVG 1.1 grammar normatively for EPUB 2 and informatively for
             // EPUB 3, so the same missing `width` is RSC-005 there and
             // RSC-025 usage here. Only the first half shipped originally.
             crate::svg::check_required_attributes(svg_root, &path, is_epub3, report);
+            crate::svg::check_content_model(svg_root, &path, is_epub3, report);
             crate::svg::check_epub_attributes(svg_root, &path, report);
             // `check_ids` is standalone-SVG-only: a real fixture confirms
             // `id="1"` on an SVG root is fine when the SVG is embedded
@@ -7136,7 +7392,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // the <a href> pass below uses it to reclassify targets as remote
         // (RSC-006), and the attribute walk uses it to not go looking for
         // them on disk.
-        let remote_base = d
+        let remote_base: Option<&str> = d
             .descendants()
             .find(|n| n.is_element() && n.tag_name().name() == "base")
             .and_then(|n| n.attr_no_ns("href"))
@@ -7145,8 +7401,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 d.root_element()
                     .attribute(("http://www.w3.org/XML/1998/namespace", "base"))
                     .filter(|v| is_remote_url(v))
-            })
-            .is_some();
+            });
 
         {
             let mut frag_id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
@@ -7219,18 +7474,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if !href.starts_with('#') && is_external(href) {
                     continue;
                 }
-                if remote_base {
-                    report.push_node(
-                        RSC_006,
-                        Severity::Error,
-                        format!(
-                            "relative reference '{href}' resolves to a remote resource via base"
-                        ),
-                        path.clone(),
-                        a,
-                        "opf.content_document.relative_reference_remote_via_base",
-                        vec![href.to_string()],
-                    );
+                // **A hyperlink may point anywhere, base or no base.**
+                // RSC-006 says "not allowed *in this context*", and a
+                // hyperlink is not one of those contexts - epubcheck reports
+                // nothing for `<a href="file.html#frag">` under a remote base
+                // while reporting the `<link rel="stylesheet">` beside it.
+                // We had it exactly the wrong way round: RSC-006 on every
+                // relative `<a href>` in such a document, and silence on the
+                // stylesheet. Measured on both of the corpus's base fixtures.
+                if remote_base.is_some() {
                     continue;
                 }
                 let (path_part, frag) = match href.split_once('#') {
@@ -7264,7 +7516,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // gives two errors for one defect, and the second names the
                 // wrong repair: a link into a document that is not in the
                 // spine is not fixed by adding the missing id.
-                if hyperlink_abort(&target_nfc, &items, &fallback_map, &spine_order).is_some() {
+                if hyperlink_abort(&target_nfc, &items, &fallback_map, &spine_order, is_epub3)
+                    .is_some()
+                {
                     continue;
                 }
                 if !frag_id_cache.contains_key(&target_nfc) {
@@ -7381,7 +7635,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
             }
             for (n, href, ref_kind) in typed_refs {
-                if crate::url::is_absolute(&href) || is_remote_url(&href) || remote_base {
+                if crate::url::is_absolute(&href) || is_remote_url(&href) || remote_base.is_some() {
                     continue;
                 }
                 let Some((path_part, frag)) = href.split_once('#') else {
@@ -8038,35 +8292,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             if tag != "link" {
                                 has_remote = true;
                             }
-                            let restricted = match tag {
-                                "img" | "iframe" => true,
-                                "script" if attr == "src" => true,
-                                // `embed@src` and `input@src` are GENERIC
-                                // references in epubcheck, exactly like
-                                // `object@data`, so they carry its rule: a
-                                // remote target is allowed only when the
-                                // manifest declares it audio, video or a font.
-                                // Both were missing, and the omission cost
-                                // twice over — no RSC-006 where epubcheck
-                                // gives one, and RSC-032 in its place, since
-                                // the fallback question is only skipped for a
-                                // reference this set names. Probed one book
-                                // each against 5.3.0.
-                                "embed" | "input" if attr == "src" => !remote_manifest
-                                    .get(&bare)
-                                    .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt)),
-                                "link" if attr == "href" => {
-                                    node.attr_no_ns("rel").is_some_and(|r| {
-                                        r.split_whitespace()
-                                            .any(|t| t.eq_ignore_ascii_case("stylesheet"))
-                                    })
-                                }
-                                "object" if attr == "data" => !remote_manifest
-                                    .get(&bare)
-                                    .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt)),
-                                _ => false,
-                            };
-                            if restricted {
+                            // `embed@src`/`input@src` were once missing from
+                            // this set, and the omission cost twice over — no
+                            // RSC-006 where epubcheck gives one, and RSC-032
+                            // in its place, since the fallback question is
+                            // only skipped for a reference the set names.
+                            if is_restricted_remote_ref(tag, attr, node, &bare, &remote_manifest) {
                                 restricted_remote_refs.insert(bare);
                             }
                         }
@@ -8088,7 +8319,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // document never asked for (issue #26; epubcheck reports
                     // only the RSC-006 that the remote resolution itself
                     // earns).
-                    if remote_base {
+                    if let Some(base) = remote_base {
+                        let resolved_remote = join_base(base, v);
+                        let bare = strip_url_fragment(&resolved_remote);
+                        if is_restricted_remote_ref(tag, attr, node, &bare, &remote_manifest) {
+                            report.push_node(
+                                RSC_006,
+                                Severity::Error,
+                                format!(
+                                    "'{v}' resolves through the document base to the remote resource '{bare}', which must be inside the container"
+                                ),
+                                path.clone(),
+                                node,
+                                "opf.content_document.restricted_remote_reference",
+                                vec![bare.clone()],
+                            );
+                        }
                         continue;
                     }
                     // RSC-020: an unencoded space in a *relative* reference.
@@ -8187,15 +8433,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")));
                 if let Some(href) = href {
                     if href.trim_start().starts_with("data:") {
-                        // The condition is version-neutral, the id is not
-                        // (#95). RSC-029 comes from
+                        // RSC-029 is EPUB 3 only (#95): it comes from
                         // `OPSHandler30.processHyperlink`, an override the
-                        // EPUB 2 handler does not have; there the same link
-                        // falls through to `ResourceReferencesChecker`:231,
-                        // whose hyperlink arm reports RSC-010 for a target
-                        // that is not a blessed content type. Measured one
-                        // book per version. Gating RSC-029 alone would have
-                        // traded a wrong id for silence.
+                        // EPUB 2 handler does not have.
                         if is_epub3 {
                             report.push_node(
                                 RSC_029,
@@ -8204,6 +8444,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 path.clone(),
                                 node,
                                 "opf.content_document.hyperlink_data_url",
+                                Vec::new(),
+                            );
+                        }
+                        // **epubcheck does not stop at RSC-029**, and this
+                        // used to be an either/or. The reference reaches
+                        // `ResourceReferencesChecker` like any other
+                        // hyperlink and is asked the same two questions, of
+                        // the media type the data URL declares for itself:
+                        // not a content document is RSC-010, a content
+                        // document that is not a spine item is RSC-011 — and
+                        // a data URL is never a spine item, so a blessed type
+                        // always lands there.
+                        //
+                        // Fourteen books, one per media type per version,
+                        // measured against 5.3.0 (issue #128). At 3.0 the
+                        // corpus's own three fixtures draw RSC-029 *and*
+                        // RSC-011 and we reported only the first; at 2.0 we
+                        // reported RSC-010 for every type, which is right for
+                        // an image or a PDF and wrong for `text/html`,
+                        // XHTML and DTBook.
+                        let dmt = data_url_media_type(href);
+                        if is_referenced_content_document_type(dmt, is_epub3)
+                            || is_deprecated_content_document_type(dmt)
+                        {
+                            report.push_node(
+                                RSC_011,
+                                Severity::Error,
+                                "a hyperlink target must be a spine item, and a data URL is not one",
+                                path.clone(),
+                                node,
+                                "opf.content_document.hyperlink_target_not_in_spine",
                                 Vec::new(),
                             );
                         } else {
@@ -8822,7 +9093,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         //
         // Anchored at the source `<a>` (file + line:column + element path),
         // not the OPF package root, matching where epubcheck points (#22).
-        match hyperlink_abort(target, &items, &fallback_map, &spine_order) {
+        match hyperlink_abort(target, &items, &fallback_map, &spine_order, is_epub3) {
             Some(id) if id == RSC_010 => {
                 report.push_full_path(
                     RSC_010,
@@ -9026,10 +9297,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // EPUB 3 only, for the same reason as the inline-SVG site above:
         // `image/svg+xml` + VERSION_2 maps to `SVG_20_NVDL` with no
         // informative validator beside it.
-        if is_epub3 {
-            crate::svg::check_vocabulary(d.root_element(), doc_path, report);
-            crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, report);
-        }
+        // Same split as the inline site: the element vocabulary is normative
+        // in EPUB 2 (RSC-005) and informative in EPUB 3 (RSC-025); the
+        // attribute vocabulary is EPUB 3 only, which is what the note above
+        // is really about - running it at 2.0 made a lowercase `viewbox` in a
+        // real book our last false-positive candidate.
+        crate::svg::check_vocabulary(d.root_element(), doc_path, is_epub3, report);
+        crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, is_epub3, report);
+        crate::svg::check_content_model(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
         crate::svg::check_ids(d.root_element(), doc_path, report);
         crate::svg::check_link_labels(d.root_element(), doc_path, report);
@@ -9638,17 +9913,78 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     }
                     continue;
                 }
+                // **A `data:` URL manifest item is still a manifest item.**
+                // epubcheck registers it as a resource keyed by the URL
+                // itself and asks OPF-097 of it like any other, which
+                // `data-url-in-manifest-item-error.opf` shows: the RSC-029
+                // for the href is separate and additional, not an
+                // alternative. `is_external` sent it out of the loop.
+                //
+                // Keyed on the href, as the remote branch above is - a data
+                // URL has no container path to resolve either.
+                if href.trim_start().starts_with("data:") {
+                    let is_nav = item
+                        .attr_no_ns("properties")
+                        .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
+                    // **The same three exemptions as the local branch below**,
+                    // and writing only the first of them here was the shape
+                    // this whole family keeps producing: a new branch that
+                    // does not carry the full set. `isInSpine()` is one of
+                    // epubcheck's three, and `data-url-in-manifest-item-in-
+                    // spine-error.opf` puts the data URL in the spine
+                    // precisely to exercise it - we invented an OPF-097 there
+                    // and our own 981-book run caught it.
+                    let in_spine = item
+                        .attr_no_ns("id")
+                        .map(str::trim)
+                        .is_some_and(|id| spine_idrefs.contains(id));
+                    let is_spine_ncx = spine
+                        .and_then(|sp| sp.attr_no_ns("toc"))
+                        .map(str::trim)
+                        .is_some_and(|toc| item.attr_no_ns("id").map(str::trim) == Some(toc));
+                    if !is_nav && !in_spine && !is_spine_ncx && !resource_refs.contains(href) {
+                        let shown = data_url_display(href);
+                        report.push_node(
+                            OPF_097,
+                            Severity::Usage,
+                            format!(
+                                "'{shown}' is declared in the manifest, but no content document references it"
+                            ),
+                            opf_path,
+                            item,
+                            "opf.manifest_item.never_referenced",
+                            vec![shown.clone()],
+                        );
+                    }
+                    continue;
+                }
                 if is_external(href) {
                     continue;
                 }
                 let resolved = nfc(&resolve(&base_dir, href));
-                let mt = item.attr_no_ns("media-type").unwrap_or_default();
                 let is_nav = item
                     .attr_no_ns("properties")
                     .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
-                if spine_order.contains_key(&resolved)
+                // **The NCX exemption is the item the spine names, not any
+                // item carrying the NCX media type.** epubcheck's condition
+                // is `item.isNcx()`, and that flag is set in exactly one
+                // place - `OPFHandler`:584-587, on the builder the spine's
+                // `toc` attribute resolves to. An NCX-typed item that no
+                // `toc` attribute names is therefore not exempt, which is
+                // what `legacy-ncx-toc-attribute-missing-error.opf` shows:
+                // the `toc` attribute is absent, epubcheck reports OPF-097
+                // for `ncx.ncx`, and our media-type test excused it.
+                let is_spine_ncx = spine
+                    .and_then(|sp| sp.attr_no_ns("toc"))
+                    .map(str::trim)
+                    .is_some_and(|toc| item.attr_no_ns("id").map(str::trim) == Some(toc));
+                let in_spine = item
+                    .attr_no_ns("id")
+                    .map(str::trim)
+                    .is_some_and(|id| spine_idrefs.contains(id));
+                if in_spine
                     || is_nav
-                    || mt == "application/x-dtbncx+xml"
+                    || is_spine_ncx
                     || overlay_paths.contains(&resolved)
                     || resource_refs.contains(&resolved)
                 {
@@ -18339,6 +18675,759 @@ mod tests {
         buf
     }
 
+    /// An EPUB 2 whose `<package>` attributes and metadata block are given
+    /// verbatim, so a book can be built with no `<metadata>` element, no
+    /// `unique-identifier` attribute, or neither.
+    fn epub2_package(pkg_attrs: &str, metadata: &str) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0"{pkg_attrs}>
+  {metadata}
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// Resolving `unique-identifier` does not belong inside the `<metadata>`
+    /// block, and used to live there. Three arrangements, each measured
+    /// against epubcheck 5.3.0 on the corpus fixture that builds it:
+    ///
+    /// * `package-no-metadata-element-error.opf` — the attribute is present
+    ///   and there is no `<metadata>` at all. epubcheck reports OPF-030;
+    ///   we reported only the content model's RSC-005, because the block
+    ///   that owns OPF-030 was skipped.
+    /// * `unique-identifier-attribute-missing-error.opf` — the attribute is
+    ///   absent. epubcheck reports RSC-005, OPF-048 *and* OPF-030, printing
+    ///   its Java `null` for the value it never read.
+    /// * neither the element nor the attribute. No fixture anywhere builds
+    ///   this book, and it reported **nothing at all** — not the RSC-005,
+    ///   not OPF-048, not OPF-030 — which is why it is asserted here rather
+    ///   than left to the corpus.
+    #[test]
+    fn unique_identifier_is_resolved_without_a_metadata_element() {
+        const MD: &str = "<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+            <dc:identifier id=\"other\">u</dc:identifier><dc:title>T</dc:title>\
+            <dc:language>en</dc:language></metadata>";
+        let ids = |attrs: &str, md: &str| {
+            let r = crate::validate_bytes(epub2_package(attrs, md));
+            let mut v = r.messages.iter().map(|m| m.id).collect::<Vec<_>>();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+
+        // Baseline: attribute present and resolving, metadata present.
+        let ok = ids(
+            " unique-identifier=\"id\"",
+            "<metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:identifier id=\"id\">u</dc:identifier><dc:title>T</dc:title>\
+             <dc:language>en</dc:language></metadata>",
+        );
+        assert!(
+            !ok.contains(&crate::ids::OPF_030) && !ok.contains(&crate::ids::OPF_048),
+            "a package that resolves must stay silent, got {ok:?}"
+        );
+
+        let no_metadata = ids(" unique-identifier=\"id\"", "");
+        assert!(
+            no_metadata.contains(&crate::ids::OPF_030),
+            "no <metadata> means the unique-identifier resolves to nothing, got {no_metadata:?}"
+        );
+
+        let no_attribute = ids("", MD);
+        for id in [
+            crate::ids::RSC_005,
+            crate::ids::OPF_048,
+            crate::ids::OPF_030,
+        ] {
+            assert!(
+                no_attribute.contains(&id),
+                "a missing unique-identifier attribute draws {id}, got {no_attribute:?}"
+            );
+        }
+
+        let neither = ids("", "");
+        for id in [crate::ids::OPF_048, crate::ids::OPF_030] {
+            assert!(
+                neither.contains(&id),
+                "neither the element nor the attribute must still draw {id}, got {neither:?}"
+            );
+        }
+    }
+
+    /// A `<package>` in a namespace that is neither the OPF one nor OEBPS
+    /// 1.2's is not a package document, and epubcheck rejects the root
+    /// element and stops there: it never builds the package model, so it
+    /// asks nothing about the manifest and opens no content document.
+    ///
+    /// Measured on 5.3.0 with this exact book. It reports the root RSC-005,
+    /// three more for the metadata children, OPF-030, and two OPF-003 —
+    /// every container entry is "not declared in the manifest", because
+    /// nothing was declared to it. It says nothing about the missing
+    /// manifest href and nothing about the broken content document. We
+    /// reported both, which from outside is an invented error.
+    ///
+    /// The second arm is the same book in the right namespace, and it is
+    /// the half that can fail: without it this test would pass just as
+    /// happily on a build that had stopped reporting those two findings
+    /// everywhere.
+    #[test]
+    fn a_foreign_package_namespace_stops_after_the_schema_error() {
+        fn book(ns: &str) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="{ns}" version="2.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="gone" href="missing.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#
+            );
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><notarealelement>x</notarealelement></body></html>";
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/ch1.xhtml", CH1),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+
+        // Control: the same book in the OPF namespace reports both of the
+        // findings the foreign-namespace arm must not.
+        let ok = crate::validate_bytes(book("http://www.idpf.org/2007/opf"));
+        assert!(
+            ok.messages.iter().any(|m| m.id == crate::ids::RSC_001),
+            "control: the missing manifest href is reported, got {:?}",
+            ok.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        );
+        assert!(
+            ok.messages
+                .iter()
+                .any(|m| m.location.as_deref() == Some("OEBPS/ch1.xhtml")),
+            "control: the broken content document is validated"
+        );
+
+        // The typo epubcheck's own fixture carries: idpf -> ipdf.
+        let foreign = crate::validate_bytes(book("http://www.ipdf.org/2007/opf"));
+        assert!(
+            foreign
+                .messages
+                .iter()
+                .any(|m| m.rule == Some("opf.package.schema_violation")),
+            "the reason the document is rejected is still reported"
+        );
+        assert!(
+            !foreign.messages.iter().any(|m| m.id == crate::ids::RSC_001),
+            "the manifest is not read at all, got {:?}",
+            foreign.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        );
+        assert!(
+            !foreign
+                .messages
+                .iter()
+                .any(|m| m.location.as_deref() == Some("OEBPS/ch1.xhtml")),
+            "no content document is opened either"
+        );
+        // A legacy OEBPS 1.2 package is a different question and keeps its
+        // whole check set - `is_oeb12` guards the stop.
+        let legacy =
+            crate::validate_bytes(book("http://openebook.org/namespaces/oeb-package/1.0/"));
+        assert!(
+            legacy.messages.iter().any(|m| m.id == crate::ids::OPF_047),
+            "OEBPS 1.2 is detected, not stopped, got {:?}",
+            legacy.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        );
+    }
+
+    /// The blessed content-document set is the **version's** set, and it
+    /// differs in both directions: OPS 2.0.1 has XHTML and DTBook, EPUB 3 has
+    /// XHTML and SVG. A version-blind predicate was therefore wrong at every
+    /// site that asks a reference question (#129).
+    ///
+    /// Two sites are covered here, measured one book per cell against 5.3.0:
+    ///
+    /// * the `<guide>` reference (OPF-032). SVG is not a content document at
+    ///   2.0, so a guide pointing at one is OPF-032 there and clean at 3.0;
+    ///   DTBook is the mirror. We were silent in both directions.
+    /// * the NCX `<content src>`, which epubcheck registers like any other
+    ///   reference and therefore asks **both** questions of: RSC-010 when the
+    ///   target is not a content document, RSC-011 when it is one that is not
+    ///   a spine item. We had the first arm only, so an NCX pointing at a
+    ///   declared XHTML document missing from the spine drew nothing at all.
+    ///
+    /// The guide does *not* get the not-in-spine question — `g3svg` below is
+    /// clean although the SVG is not in the spine, which is why the two sites
+    /// are asserted separately rather than sharing one expectation.
+    #[test]
+    fn a_reference_is_judged_against_its_own_versions_content_documents() {
+        fn book(ver: &str, extra: &str, guide: &str, ncx_src: &str) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let (meta, nav_item, nav_ref) = if ver == "3.0" {
+                (
+                    r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#,
+                    r#"<item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>"#,
+                    r#"<itemref idref="nav"/>"#,
+                )
+            } else {
+                ("", "", "")
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>{meta}
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+    {nav_item}{extra}
+  </manifest>
+  <spine toc="ncx"><itemref idref="c1"/>{nav_ref}</spine>
+  <guide><reference type="text" title="t" href="{guide}"/></guide>
+</package>"#
+            );
+            let ncx = format!(
+                "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+                 version=\"2005-1\"><head><meta name=\"dtb:uid\" content=\"u\"/></head>\
+                 <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+                 <navLabel><text>T</text></navLabel><content src=\"{ncx_src}\"/></navPoint>\
+                 </navMap></ncx>"
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p>x</p></body></html>";
+            const OTHER: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>o</title></head>\
+                <body><p>o</p></body></html>";
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>n</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol>\
+                </nav></body></html>";
+            const SVG: &str = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1 1\">\
+                <title>s</title></svg>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/toc.ncx", ncx.as_str()),
+                    ("OEBPS/ch1.xhtml", CH1),
+                    ("OEBPS/other.xhtml", OTHER),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/pic.svg", SVG),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+
+        const SVG_ITEM: &str = r#"<item id="sv" href="pic.svg" media-type="image/svg+xml"/>"#;
+        const XHTML_ITEM: &str =
+            r#"<item id="x2" href="other.xhtml" media-type="application/xhtml+xml"/>"#;
+        let has =
+            |b: Vec<u8>, id: &str| crate::validate_bytes(b).messages.iter().any(|m| m.id == id);
+
+        // --- the guide, OPF-032 only: no not-in-spine question is asked
+        assert!(
+            has(
+                book("2.0", SVG_ITEM, "pic.svg", "ch1.xhtml"),
+                crate::ids::OPF_032
+            ),
+            "EPUB 2: SVG is not an OPS content document, so a guide reference to one is OPF-032"
+        );
+        assert!(
+            !has(
+                book("3.0", SVG_ITEM, "pic.svg", "ch1.xhtml"),
+                crate::ids::OPF_032
+            ),
+            "EPUB 3: SVG is a content document, and not being in the spine is not the guide's question"
+        );
+
+        // --- the NCX content src, both arms
+        assert!(
+            has(
+                book("2.0", SVG_ITEM, "ch1.xhtml", "pic.svg"),
+                crate::ids::RSC_010
+            ),
+            "EPUB 2: an NCX pointing at an SVG is RSC-010"
+        );
+        assert!(
+            has(
+                book("3.0", SVG_ITEM, "ch1.xhtml", "pic.svg"),
+                crate::ids::RSC_011
+            ),
+            "EPUB 3: the same SVG is a content document, so the answer moves to RSC-011"
+        );
+        assert!(
+            has(
+                book("2.0", XHTML_ITEM, "ch1.xhtml", "other.xhtml"),
+                crate::ids::RSC_011
+            ),
+            "the ordinary shape: an NCX target declared in the manifest but absent from the spine"
+        );
+        // Control: the same NCX pointing at a document that *is* in the spine
+        // stays silent, so the assertions above are not just "always fires".
+        let clean = crate::validate_bytes(book("2.0", XHTML_ITEM, "ch1.xhtml", "ch1.xhtml"));
+        assert!(
+            !clean
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::RSC_010 || m.id == crate::ids::RSC_011),
+            "a spine target is clean, got {:?}",
+            clean.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        );
+    }
+
+    /// OPF-097's three exemptions are narrower than they looked, each
+    /// measured against 5.3.0 on the corpus fixture that names it.
+    ///
+    /// * **the NCX** — epubcheck's `isNcx()` is set in one place,
+    ///   `OPFHandler`:584-587, on the item the spine's `toc` attribute
+    ///   resolves to. An NCX-typed item that no `toc` names is not exempt.
+    ///   We tested the media type and excused it
+    ///   (`legacy-ncx-toc-attribute-missing-error.opf`).
+    /// * **the spine** — `isInSpine()` is a property of the *item*, not of
+    ///   the resource. Two manifest items may declare the same href, and
+    ///   then only the one the spine names is exempt
+    ///   (`item-duplicate-resource-error.opf`). Keyed by path, we excused
+    ///   both.
+    /// * **`data:` hrefs were not asked at all**, because `is_external` sent
+    ///   them out of the loop before the question
+    ///   (`data-url-in-manifest-item-error.opf`).
+    #[test]
+    fn opf_097_exempts_the_item_the_spine_names_not_the_resource() {
+        fn book(manifest: &str, spine_attrs: &str, spine: &str) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <metadata>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>
+    {manifest}
+  </manifest>
+  <spine{spine_attrs}><itemref idref="nav"/>{spine}</spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="package.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>n</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"nav.xhtml\">c</a></li></ol>\
+                </nav></body></html>";
+            const CH: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p>x</p></body></html>";
+            const NCX: &str = "<?xml version=\"1.0\"?><ncx \
+                xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\"><head>\
+                <meta name=\"dtb:uid\" content=\"u\"/></head><docTitle><text>T</text></docTitle>\
+                <navMap><navPoint id=\"n1\" playOrder=\"1\"><navLabel><text>T</text></navLabel>\
+                <content src=\"nav.xhtml\"/></navPoint></navMap></ncx>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("package.opf", opf.as_str()),
+                    ("nav.xhtml", NAV),
+                    ("ch.xhtml", CH),
+                    ("toc.ncx", NCX),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+        let unreferenced = |b: Vec<u8>| -> Vec<String> {
+            crate::validate_bytes(b)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_097)
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect()
+        };
+
+        const NCX_ITEM: &str =
+            r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#;
+
+        // --- the NCX: exempt only when the spine's toc attribute names it
+        assert_eq!(
+            unreferenced(book(NCX_ITEM, r#" toc="ncx""#, "")),
+            Vec::<String>::new(),
+            "the spine names it, so it is the publication's NCX"
+        );
+        assert_eq!(
+            unreferenced(book(NCX_ITEM, "", "")),
+            vec!["toc.ncx".to_string()],
+            "no toc attribute: nothing marks this item as the NCX"
+        );
+
+        // --- the spine: per item, not per resource
+        const TWO: &str = r#"<item id="a" href="ch.xhtml" media-type="application/xhtml+xml"/>
+    <item id="b" href="ch.xhtml" media-type="application/xhtml+xml"/>"#;
+        assert_eq!(
+            unreferenced(book(TWO, "", r#"<itemref idref="a"/>"#)),
+            vec!["ch.xhtml".to_string()],
+            "item 'a' is in the spine and 'b' is not, though they share the resource"
+        );
+        assert_eq!(
+            unreferenced(book(TWO, "", r#"<itemref idref="a"/><itemref idref="b"/>"#)),
+            Vec::<String>::new(),
+            "both in the spine: nothing to report"
+        );
+
+        // --- a data: href is asked the question, and is named by its first
+        // 30 characters plus an ellipsis, as epubcheck's `OPFItem`:117 does.
+        let data = r#"<item id="img" href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA" media-type="image/jpeg"/>"#;
+        assert_eq!(
+            unreferenced(book(data, "", "")),
+            vec!["data:image/jpeg;base64,/9j/4AA…".to_string()],
+            "the payload does not belong in a usage message"
+        );
+        // ...and it takes the same three exemptions as every other item. The
+        // first version of the data-URL branch carried only `isNav()`, and
+        // `data-url-in-manifest-item-in-spine-error.opf` — a fixture that
+        // exists to put a data URL in the spine — caught the invented
+        // OPF-097 on the 981-book run.
+        let spine_data = r#"<item id="img" href="data:application/xhtml+xml,%3Ch1%3EHi%3C%2Fh1%3E" media-type="application/xhtml+xml"/>"#;
+        assert_eq!(
+            unreferenced(book(spine_data, "", r#"<itemref idref="img"/>"#)),
+            Vec::<String>::new(),
+            "a data URL in the spine is exempt like any other spine item"
+        );
+    }
+
+    /// A remote `<base href>` makes every relative reference in the document
+    /// resolve to a remote URL — but **RSC-006 is about the context, not the
+    /// reference**. A hyperlink may point anywhere; a stylesheet may not.
+    ///
+    /// We had it inverted: RSC-006 on every relative `<a href>` in such a
+    /// document, and nothing at all on the `<link rel="stylesheet">` beside
+    /// it. Measured against 5.3.0 on both corpus fixtures
+    /// (`content-xhtml-base-url-remote-relative-path-error` and its
+    /// `xml:base` twin), which report the stylesheet and say nothing about
+    /// the anchor.
+    ///
+    /// The corpus could not see this: both fixtures expect one RSC-006 and
+    /// got one, from the wrong element.
+    #[test]
+    fn a_remote_base_restricts_the_stylesheet_and_not_the_hyperlink() {
+        fn book(base_form: &str) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            // Either spelling of the base, plus a control arm with none.
+            let (html_attr, base_el) = match base_form {
+                "base" => ("", r#"<base href="http://example.org/"/>"#),
+                "xml" => (r#" xml:base="http://example.org/""#, ""),
+                _ => ("", ""),
+            };
+            let ch = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"{html_attr}><head>\
+                 <title>t</title>{base_el}\
+                 <link rel=\"stylesheet\" type=\"text/css\" href=\"style.css\"/>\
+                 </head><body><p><a href=\"other.xhtml#frag\">x</a></p></body></html>"
+            );
+            const OPF: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <metadata>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="o" href="other.xhtml" media-type="application/xhtml+xml"/>
+    <item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>
+    <item id="css" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine><itemref idref="c1"/><itemref idref="o"/><itemref idref="nav"/></spine>
+</package>"#;
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="package.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const OTHER: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>o</title></head>\
+                <body><p id=\"frag\">o</p></body></html>";
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>n</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol>\
+                </nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("package.opf", OPF),
+                    ("ch1.xhtml", ch.as_str()),
+                    ("other.xhtml", OTHER),
+                    ("nav.xhtml", NAV),
+                    ("style.css", "p { color: red; }"),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+        let rsc006 = |form: &str| -> Vec<String> {
+            crate::validate_bytes(book(form))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_006)
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect()
+        };
+
+        // Control: no base at all, and both references are ordinary local
+        // ones. Without this the assertions below would pass on a build that
+        // had stopped reporting RSC-006 altogether.
+        assert_eq!(
+            rsc006("none"),
+            Vec::<String>::new(),
+            "nothing is remote without a base"
+        );
+
+        for form in ["base", "xml"] {
+            assert_eq!(
+                rsc006(form),
+                vec!["http://example.org/style.css".to_string()],
+                "{form}: the stylesheet is the restricted context, and the \
+                 hyperlink beside it is not reported at all"
+            );
+        }
+    }
+
+    /// The fallback chain is a hyperlink's escape hatch from RSC-010, and it
+    /// is **version-aware in the same way the direct type test is**.
+    /// `FallbackChainResolver`:48-49 calls
+    /// `OPFChecker.isBlessedItemType(type, version)`, which is
+    /// `xhtml | dtbook` at 2.0 and `xhtml | svg` at 3.0 — so a PDF that falls
+    /// back to an SVG is rescued at 3.0 and not at 2.0, and one that falls
+    /// back to DTBook is the mirror of that.
+    ///
+    /// Ours used the version-blind predicate in the hatch while the test
+    /// above it had been made version-aware, so two of the four cells came
+    /// out RSC-011 where epubcheck says RSC-010 — a wrong id, which from
+    /// outside is the false-positive class. One book per cell against 5.3.0
+    /// (#129). The comment here used to say the resolver applies "no version
+    /// condition", which was never true.
+    #[test]
+    fn a_fallback_chain_rescues_a_hyperlink_per_version() {
+        fn book(ver: &str, fallback_type: &str) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let (meta, nav_item, nav_ref, toc_attr, ncx_item) = if ver == "3.0" {
+                (
+                    r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#,
+                    r#"<item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>"#,
+                    r#"<itemref idref="nav"/>"#,
+                    "",
+                    "",
+                )
+            } else {
+                (
+                    "",
+                    "",
+                    "",
+                    r#" toc="ncx""#,
+                    r#"<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>"#,
+                )
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>{meta}
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    {nav_item}{ncx_item}
+    <item id="fb" href="fb.bin" media-type="{fallback_type}"/>
+    <item id="pdf" href="d.pdf" media-type="application/pdf" fallback="fb"/>
+  </manifest>
+  <spine{toc_attr}><itemref idref="c1"/>{nav_ref}</spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p><a href=\"d.pdf\">link</a></p></body></html>";
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>n</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">c</a></li></ol>\
+                </nav></body></html>";
+            const NCX: &str = "<?xml version=\"1.0\"?><ncx \
+                xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\"><head>\
+                <meta name=\"dtb:uid\" content=\"u\"/></head><docTitle><text>T</text></docTitle>\
+                <navMap><navPoint id=\"n1\" playOrder=\"1\"><navLabel><text>T</text></navLabel>\
+                <content src=\"ch1.xhtml\"/></navPoint></navMap></ncx>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("content.opf", opf.as_str()),
+                    ("ch1.xhtml", CH1),
+                    ("nav.xhtml", NAV),
+                    ("toc.ncx", NCX),
+                    ("d.pdf", "%PDF-1.4\n"),
+                    ("fb.bin", "x"),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+
+        for (ver, fallback_type, want) in [
+            ("2.0", "image/svg+xml", crate::ids::RSC_010),
+            ("3.0", "image/svg+xml", crate::ids::RSC_011),
+            ("2.0", "application/x-dtbook+xml", crate::ids::RSC_011),
+            ("3.0", "application/x-dtbook+xml", crate::ids::RSC_010),
+        ] {
+            let ids: Vec<&str> = crate::validate_bytes(book(ver, fallback_type))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| *id == crate::ids::RSC_010 || *id == crate::ids::RSC_011)
+                .collect();
+            assert_eq!(
+                ids,
+                vec![want],
+                "{ver}, hyperlink to a PDF falling back to {fallback_type}"
+            );
+        }
+    }
+
     /// An EPUB 2 whose single content document is named `name`, referenced
     /// under that name from both the manifest and the NCX.
     fn epub2_named(name: &str) -> Vec<u8> {
@@ -21390,11 +22479,18 @@ mod tests {
     /// #95. Three more sites where a rule epubcheck runs only for EPUB 3 was
     /// reaching EPUB 2 books. Each row was probed against epubcheck 5.3.0.
     ///
-    /// The interesting one is the hyperlink: unlike the ten gates in 0.12.1,
-    /// the *condition* is version-neutral and only the id is not. epubcheck's
-    /// EPUB 2 handler has no `processHyperlink` override, so a `data:` link
-    /// falls through to `ResourceReferencesChecker`, which reports RSC-010.
-    /// Gating RSC-029 alone would have traded a wrong id for silence.
+    /// The interesting one is the hyperlink, and what is EPUB 3 only there is
+    /// **RSC-029 alone** — `OPSHandler30.processHyperlink`, an override the
+    /// EPUB 2 handler does not have. The rest of the reference is checked in
+    /// both versions: the link reaches `ResourceReferencesChecker` like any
+    /// other and draws RSC-010 or RSC-011 by the media type the data URL
+    /// declares, which is why the 3.0 arm below expects *two* ids.
+    ///
+    /// This used to read "the condition is version-neutral and only the id
+    /// is not", with RSC-029 and RSC-010 as an either/or. That was measured
+    /// on `text/plain` only — a type that is not blessed in either version,
+    /// so both arms landed on RSC-010 and the reading survived. Fourteen
+    /// books later (issue #128) the either/or is gone.
     #[test]
     fn three_more_epub3_only_sites_are_gated() {
         let ids = |ver: &str, body: &str| -> Vec<&'static str> {
@@ -21405,7 +22501,10 @@ mod tests {
                 .filter(|id| {
                     matches!(
                         *id,
-                        crate::ids::CSS_015 | crate::ids::RSC_029 | crate::ids::RSC_010
+                        crate::ids::CSS_015
+                            | crate::ids::RSC_029
+                            | crate::ids::RSC_010
+                            | crate::ids::RSC_011
                     )
                 })
                 .collect()
@@ -21419,10 +22518,46 @@ mod tests {
         assert_eq!(ids("3.0", alt), vec![crate::ids::CSS_015]);
         assert!(ids("2.0", alt).is_empty());
 
-        // Same condition, different id per version.
+        // `text/plain` is blessed in neither version, so the reference
+        // question lands on RSC-010 both times and only RSC-029 moves.
         let data_link = r#"<p><a href="data:text/plain,hi">x</a></p>"#;
-        assert_eq!(ids("3.0", data_link), vec![crate::ids::RSC_029]);
+        assert_eq!(
+            ids("3.0", data_link),
+            vec![crate::ids::RSC_029, crate::ids::RSC_010]
+        );
         assert_eq!(ids("2.0", data_link), vec![crate::ids::RSC_010]);
+
+        // A blessed type moves the *reference* answer to RSC-011, since a
+        // data URL is never a spine item. `text/html` is deprecated-blessed
+        // in both versions; SVG is a content document at 3.0 only and DTBook
+        // at 2.0 only, so those two are mirror images. One book per cell,
+        // measured against 5.3.0.
+        let cell = |mt: &str| format!(r#"<p><a href="data:{mt},x">y</a></p>"#);
+        for (mt, at3, at2) in [
+            ("text/html", crate::ids::RSC_011, crate::ids::RSC_011),
+            (
+                "application/xhtml+xml",
+                crate::ids::RSC_011,
+                crate::ids::RSC_011,
+            ),
+            ("image/svg+xml", crate::ids::RSC_011, crate::ids::RSC_010),
+            (
+                "application/x-dtbook+xml",
+                crate::ids::RSC_010,
+                crate::ids::RSC_011,
+            ),
+            ("application/pdf", crate::ids::RSC_010, crate::ids::RSC_010),
+            // Case-sensitive, as epubcheck's own comparison is.
+            ("TEXT/HTML", crate::ids::RSC_010, crate::ids::RSC_010),
+        ] {
+            let body = cell(mt);
+            assert_eq!(
+                ids("3.0", &body),
+                vec![crate::ids::RSC_029, at3],
+                "3.0, data:{mt}"
+            );
+            assert_eq!(ids("2.0", &body), vec![at2], "2.0, data:{mt}");
+        }
     }
 
     /// #95, the manifest half: a `data:` URL as a manifest item href is
