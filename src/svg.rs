@@ -1001,14 +1001,49 @@ pub(crate) fn check_foreign_object(
 /// chosen because it is closed and enumerable, so it cannot invent a finding
 /// epubcheck does not also make.
 const SVG_REQUIRED_ATTRS: &[(&str, &[&str])] = &[
+    ("animate", &["attributeName"]),
+    ("animateColor", &["attributeName"]),
+    ("animateTransform", &["attributeName"]),
     ("circle", &["r"]),
+    ("color-profile", &["name"]),
     ("ellipse", &["rx", "ry"]),
+    ("feBlend", &["in2"]),
+    ("feComposite", &["in2"]),
+    ("feConvolveMatrix", &["kernelMatrix", "order"]),
+    ("feDisplacementMap", &["in2"]),
+    ("feFuncA", &["type"]),
+    ("feFuncB", &["type"]),
+    ("feFuncG", &["type"]),
+    ("feFuncR", &["type"]),
+    ("font", &["horiz-adv-x"]),
+    ("foreignObject", &["height", "width"]),
+    ("hkern", &["k"]),
     ("image", &["height", "width"]),
     ("path", &["d"]),
     ("polygon", &["points"]),
     ("polyline", &["points"]),
     ("rect", &["height", "width"]),
+    ("script", &["type"]),
+    ("set", &["attributeName"]),
+    ("stop", &["offset"]),
+    ("vkern", &["k"]),
 ];
+
+/// The elements whose required attribute is the **namespaced** `xlink:href`,
+/// which `has_attr_no_ns` cannot see — the reason they were missing from the
+/// table above rather than merely unlisted.
+///
+/// Found while probing the containers with deliberately bare elements, and
+/// then enumerated properly: the grammar extraction that produced the rest of
+/// the table missed every one of these, because the xlink attributes are
+/// declared in their own module rather than in the element's own `attlist`.
+/// **The extractor was a candidate generator, not an authority** — each row
+/// here and above is a measured book.
+///
+/// `animateMotion`, `pattern` and `marker` were probed too and require
+/// nothing; they are listed here only so the next reader does not re-probe
+/// them.
+const SVG_REQUIRED_XLINK_HREF: &[&str] = &["cursor", "feImage", "mpath", "textPath", "tref", "use"];
 
 /// SVG 1.1's **descriptive elements**, allowed inside any graphics element.
 const SVG_DESCRIPTIVE_ELEMENTS: &[&str] = &["desc", "metadata", "title"];
@@ -1520,10 +1555,121 @@ pub(crate) fn check_required_attributes(
             missing.iter().map(|a| (*a).to_string()).collect(),
         );
     }
+    // The six elements whose required attribute is the **namespaced**
+    // `xlink:href`. Kept as a second pass rather than folded into the table
+    // above because `has_attr_no_ns` cannot see a namespaced attribute at all
+    // - which is why these were missing rather than merely unlisted, and why
+    // the grammar extraction that produced the rest of the table missed every
+    // one of them.
+    for n in svg_root
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+        .filter(|n| SVG_REQUIRED_XLINK_HREF.contains(&n.tag_name().name()))
+    {
+        if n.attribute((XLINK_NS, "href")).is_some() {
+            continue;
+        }
+        let name = n.tag_name().name();
+        report.push_node(
+            id,
+            severity,
+            format!("SVG element \"{name}\" has no required attribute \"xlink:href\""),
+            path,
+            n,
+            "opf.content_document.svg_missing_required_attribute",
+            vec![name.to_string(), "xlink:href".to_string()],
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// The required-attribute table, extended from seven elements to
+    /// twenty-six, plus six that require the namespaced `xlink:href`.
+    ///
+    /// Found while probing the containers, because those probes used
+    /// deliberately bare elements and epubcheck kept reporting a second
+    /// finding the containment question had nothing to do with. Twenty-five
+    /// cells, one book each against 5.3.0.
+    ///
+    /// **The grammar extraction that produced most of the table was a
+    /// candidate generator, not an authority.** It missed every one of the
+    /// `xlink:href` rows, because those attributes are declared in their own
+    /// module rather than in the element's `attlist` — and that is the same
+    /// set our own `has_attr_no_ns` cannot see, which is why they were
+    /// missing rather than merely unlisted.
+    #[test]
+    fn the_svg_required_attribute_table_covers_more_than_the_shapes() {
+        let missing = |body: &str| -> Vec<String> {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"
+                        xmlns:xlink="http://www.w3.org/1999/xlink"
+                        viewBox="0 0 10 10"><title>s</title>{body}</svg>"#
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_required_attributes(d.root_element(), "c.xhtml", false, &mut report);
+            report.messages.iter().map(|m| m.text.clone()).collect()
+        };
+
+        for (body, want) in [
+            (r#"<g><animate/></g>"#, "\"attributeName\""),
+            (r#"<g><set/></g>"#, "\"attributeName\""),
+            (r#"<g><animateTransform/></g>"#, "\"attributeName\""),
+            (r#"<g><animateColor/></g>"#, "\"attributeName\""),
+            (
+                r#"<defs><linearGradient id="g"><stop/></linearGradient></defs>"#,
+                "\"offset\"",
+            ),
+            (r#"<g><foreignObject/></g>"#, "\"height\" and \"width\""),
+            (
+                r#"<defs><filter id="f"><feBlend/></filter></defs>"#,
+                "\"in2\"",
+            ),
+            (
+                r#"<defs><filter id="f"><feConvolveMatrix/></filter></defs>"#,
+                "\"kernelMatrix\" and \"order\"",
+            ),
+            (
+                r#"<defs><filter id="f"><feComponentTransfer><feFuncR/></feComponentTransfer></filter></defs>"#,
+                "\"type\"",
+            ),
+            (r#"<script/>"#, "\"type\""),
+            (r#"<defs><color-profile/></defs>"#, "\"name\""),
+            (r#"<defs><font><hkern/></font></defs>"#, "\"horiz-adv-x\""),
+            // The namespaced ones, which the no-namespace lookup cannot see.
+            (r#"<g><use/></g>"#, "\"xlink:href\""),
+            (r#"<text x="0" y="0"><tref/></text>"#, "\"xlink:href\""),
+            (r#"<text x="0" y="0"><textPath/></text>"#, "\"xlink:href\""),
+            (r#"<g><cursor/></g>"#, "\"xlink:href\""),
+            (
+                r#"<defs><filter id="f"><feImage/></filter></defs>"#,
+                "\"xlink:href\"",
+            ),
+        ] {
+            let got = missing(body);
+            assert!(
+                got.iter().any(|m| m.contains(want)),
+                "{body} should name {want}, got {got:?}"
+            );
+        }
+
+        // Present, so silent - the control that keeps the assertions above
+        // from passing against a check that always fires.
+        for body in [
+            r##"<g><use xlink:href="#z"/></g>"##,
+            r#"<g><animate attributeName="x"/></g>"#,
+            r#"<defs><linearGradient id="g"><stop offset="0"/></linearGradient></defs>"#,
+            // Probed and requiring nothing, listed so the next reader does not
+            // re-probe them.
+            r#"<g><animateMotion/></g>"#,
+            r#"<defs><pattern id="pt"/></defs>"#,
+            r#"<defs><marker id="mk"/></defs>"#,
+        ] {
+            assert!(missing(body).is_empty(), "should be silent: {body}");
+        }
+    }
 
     /// Eleven ordinary SVG 1.1 element names were missing from
     /// [`SVG_ELEMENTS`], so we reported `RSC-025` for markup epubcheck
