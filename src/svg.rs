@@ -1075,6 +1075,67 @@ const SVG_GRADIENT_ELEMENTS: &[&str] = &["linearGradient", "radialGradient"];
 /// `element "desc" not allowed here`.
 const SVG_ANIMATION_ONLY_ELEMENTS: &[&str] = &["stop"];
 
+/// `<clipPath>` takes the **shape** elements plus `<use>` — and not every
+/// graphics element: `<g>` and `<image>` are both errors inside one, measured.
+const SVG_CLIP_PATH_CHILDREN: &[&str] = &[
+    "circle", "ellipse", "line", "path", "polygon", "polyline", "rect", "text", "use",
+];
+
+/// The filter primitives a `<filter>` may hold directly. Read off the
+/// `<element name>` declarations in `schema/20/rng/svg/svg*filter*.rng` rather
+/// than from memory, minus the four sub-children handled below.
+/// `feDropShadow` is included on purpose: it is SVG 2, so at EPUB 2 the
+/// *vocabulary* check already rejects it, and listing it here keeps the
+/// content model from adding a second finding for one mistake.
+const SVG_FILTER_PRIMITIVES: &[&str] = &[
+    "feBlend",
+    "feColorMatrix",
+    "feComponentTransfer",
+    "feComposite",
+    "feConvolveMatrix",
+    "feDiffuseLighting",
+    "feDisplacementMap",
+    "feDropShadow",
+    "feFlood",
+    "feGaussianBlur",
+    "feImage",
+    "feMerge",
+    "feMorphology",
+    "feOffset",
+    "feSpecularLighting",
+    "feTile",
+    "feTurbulence",
+];
+
+/// The three filter sub-elements whose models are **stricter than everything
+/// else here**: they admit neither descriptive nor animation elements, only
+/// their own children. Measured one book per cell — `<feMerge><desc/>` and
+/// `<feMerge><animate/>` are both errors, which is what forced `animation` to
+/// become a field rather than an assumption.
+///
+/// **Known gap, deliberately outside this increment:** the two lighting
+/// primitives also *require* a light-source child, so epubcheck reports two
+/// findings for `<feDiffuseLighting><rect/></feDiffuseLighting>` — the
+/// containment error this table catches, and an `incomplete` cardinality
+/// error it does not. Cardinality is a different axis (its attribute
+/// equivalent is `check_required_attributes`) and wants its own measured
+/// increment; being one lower is the safe direction meanwhile.
+const SVG_FILTER_SUBMODELS: &[(&str, &[&str])] = &[
+    (
+        "feComponentTransfer",
+        &["feFuncA", "feFuncB", "feFuncG", "feFuncR"],
+    ),
+    (
+        "feDiffuseLighting",
+        &["feDistantLight", "fePointLight", "feSpotLight"],
+    ),
+    ("feMerge", &["feMergeNode"]),
+    (
+        "feSpecularLighting",
+        &["feDistantLight", "fePointLight", "feSpotLight"],
+    ),
+];
+
 /// The closed half of the SVG content model: what a graphics element may
 /// contain.
 ///
@@ -1083,9 +1144,13 @@ const SVG_ANIMATION_ONLY_ELEMENTS: &[&str] = &["stop"];
 /// directly while EPUB 3 runs the strict grammar with `isNormative=false`.
 /// What one element of the closed slice may contain.
 struct SvgModel {
-    /// Whether the descriptive elements are admitted. True everywhere except
-    /// `<stop>`.
+    /// Whether the descriptive elements are admitted.
     descriptive: bool,
+    /// Whether the animation elements are admitted. False only for the filter
+    /// sub-elements, which was measured rather than assumed — it had been an
+    /// unconditional `continue` until `<feMerge><animate/></feMerge>` turned
+    /// out to be an error.
+    animation: bool,
     /// Element children beyond the descriptive and animation ones.
     extra: &'static [&'static str],
     /// Whether character data is content rather than a mistake.
@@ -1097,32 +1162,52 @@ struct SvgModel {
 /// Animation elements are admitted by all four shapes, so they are not listed
 /// here.
 fn svg_model(name: &str) -> Option<SvgModel> {
+    let base = SvgModel {
+        descriptive: true,
+        animation: true,
+        extra: &[],
+        text: false,
+    };
     if SVG_CLOSED_MODEL_ELEMENTS.contains(&name) {
-        return Some(SvgModel {
-            descriptive: true,
-            extra: &[],
-            text: false,
-        });
+        return Some(base);
     }
     if SVG_TEXT_CONTENT_ELEMENTS.contains(&name) {
         return Some(SvgModel {
-            descriptive: true,
             extra: SVG_TEXT_CHILDREN,
             text: true,
+            ..base
         });
     }
     if SVG_GRADIENT_ELEMENTS.contains(&name) {
         return Some(SvgModel {
-            descriptive: true,
             extra: &["stop"],
-            text: false,
+            ..base
         });
     }
     if SVG_ANIMATION_ONLY_ELEMENTS.contains(&name) {
         return Some(SvgModel {
             descriptive: false,
-            extra: &[],
-            text: false,
+            ..base
+        });
+    }
+    if name == "clipPath" {
+        return Some(SvgModel {
+            extra: SVG_CLIP_PATH_CHILDREN,
+            ..base
+        });
+    }
+    if name == "filter" {
+        return Some(SvgModel {
+            extra: SVG_FILTER_PRIMITIVES,
+            ..base
+        });
+    }
+    if let Some((_, children)) = SVG_FILTER_SUBMODELS.iter().find(|(e, _)| *e == name) {
+        return Some(SvgModel {
+            descriptive: false,
+            animation: false,
+            extra: children,
+            ..base
         });
     }
     None
@@ -1160,7 +1245,7 @@ pub(crate) fn check_content_model(
                     continue;
                 }
                 let cname = child.tag_name().name();
-                if SVG_ANIMATION_ELEMENTS.contains(&cname) {
+                if model.animation && SVG_ANIMATION_ELEMENTS.contains(&cname) {
                     continue;
                 }
                 if model.descriptive && SVG_DESCRIPTIVE_ELEMENTS.contains(&cname) {
@@ -1436,6 +1521,57 @@ mod tests {
             assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
             assert!(ids(body, true).is_empty(), "EPUB 3 clean: {body}");
         }
+        // --- clipPath and the filter family. Twenty more cells.
+        //
+        // `<clipPath>` takes the shape elements plus `<use>`, and not every
+        // graphics element — `<g>` and `<image>` are errors inside one. The
+        // filter sub-elements are stricter than anything else here: neither
+        // descriptive nor animation, only their own children.
+        for body in [
+            r#"<defs><clipPath id="a"><g><rect width="1" height="1"/></g></clipPath></defs>"#,
+            r##"<defs><clipPath id="a"><image xlink:href="x.png" width="1" height="1"/></clipPath></defs>"##,
+            r#"<defs><filter id="f"><rect width="1" height="1"/></filter></defs>"#,
+            r#"<defs><filter id="f"><feMerge><rect width="1" height="1"/></feMerge></filter></defs>"#,
+            r#"<defs><filter id="f"><feMerge><desc>d</desc></feMerge></filter></defs>"#,
+            r#"<defs><filter id="f"><feMerge><animate attributeName="x" dur="1s"/></feMerge></filter></defs>"#,
+            r#"<defs><filter id="f"><feComponentTransfer><desc>d</desc></feComponentTransfer></filter></defs>"#,
+            r#"<defs><filter id="f"><feDiffuseLighting><desc>d</desc></feDiffuseLighting></filter></defs>"#,
+        ] {
+            assert_eq!(
+                ids(body, false),
+                vec![crate::ids::RSC_005],
+                "EPUB 2: {body}"
+            );
+            assert_eq!(ids(body, true), vec![RSC_025], "EPUB 3: {body}");
+        }
+        for body in [
+            r#"<defs><clipPath id="a"><rect width="1" height="1"/></clipPath></defs>"#,
+            r#"<defs><clipPath id="a"><text x="0" y="0">t</text></clipPath></defs>"#,
+            r##"<defs><clipPath id="a"><use xlink:href="#z"/></clipPath></defs>"##,
+            r#"<defs><clipPath id="a"><desc>d</desc></clipPath></defs>"#,
+            r#"<defs><clipPath id="a"><animate attributeName="x" dur="1s"/></clipPath></defs>"#,
+            r#"<defs><filter id="f"><feGaussianBlur stdDeviation="1"/></filter></defs>"#,
+            r#"<defs><filter id="f"><desc>d</desc></filter></defs>"#,
+            r#"<defs><filter id="f"><animate attributeName="x" dur="1s"/></filter></defs>"#,
+            r#"<defs><filter id="f"><feMerge><feMergeNode/></feMerge></filter></defs>"#,
+            r#"<defs><filter id="f"><feComponentTransfer><feFuncR type="identity"/></feComponentTransfer></filter></defs>"#,
+            r#"<defs><filter id="f"><feDiffuseLighting><feDistantLight/></feDiffuseLighting></filter></defs>"#,
+            r#"<defs><filter id="f"><feSpecularLighting><feSpotLight/></feSpecularLighting></filter></defs>"#,
+        ] {
+            assert!(ids(body, false).is_empty(), "EPUB 2 clean: {body}");
+            assert!(ids(body, true).is_empty(), "EPUB 3 clean: {body}");
+        }
+        // `feDropShadow` is SVG 2, so at EPUB 2 the *vocabulary* check rejects
+        // it and the content model must not add a second finding for the same
+        // mistake — which is why it is in the filter's allowed set.
+        assert!(
+            ids(
+                r#"<defs><filter id="f"><feDropShadow dx="1" dy="1"/></filter></defs>"#,
+                false
+            )
+            .is_empty(),
+            "one mistake, one finding"
+        );
     }
 
     #[test]
