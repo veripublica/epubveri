@@ -257,6 +257,32 @@ This axis surfaced as a by-product: the container probes used deliberately bare
 elements, and epubcheck kept reporting a second finding the containment
 question had nothing to do with.
 
+**The datatype axis barely exists, and finding that out is most of what it
+took.** `schema/20/rng/svg/svg-datatypes.rng` declares 22 datatypes and **17
+are a plain `<data type="string"/>`** — `SVGLength`, `Number`, `OpacityValue`,
+`TransformList`, `PathData` and `SVGURI` carry their meaning in an
+`<a:documentation>` and constrain nothing. Probed rather than inferred, against
+a control confirming the document is validated at all: `width="abc"`,
+`width="-5"`, `r="-1"`, `opacity="junk"`, `transform="notafunction(1)"` and an
+invalid path `d` are every one of them clean in epubcheck. Constraining them
+would be *inventing* errors, which is the restrictive direction `ADV-*` exists
+to keep out of the verdict.
+
+Five attributes are genuinely constrained and are now checked: `clip-rule` and
+`fill-rule` (`nonzero | evenodd | inherit`), `externalResourcesRequired` and
+`preserveAlpha` (a boolean), and `preserveAspectRatio` (ten alignment keywords,
+optionally `meet` or `slice` — a regular expression in the grammar and a
+hand-written matcher here rather than a new dependency).
+
+This is the first SVG increment whose silence on the shelf means something:
+**260 of its EPUB 2 books carry `preserveAspectRatio`, 309 occurrences, three
+distinct values**, and all three are valid. The check runs over a real
+population and finds nothing.
+
+With that, every axis this issue named is closed — the element vocabulary, the
+attribute vocabulary, the content models, the required attributes and the
+datatypes.
+
 ### Positions are unchanged, and that is a decision
 
 An empty `<guide>` draws the same finding from both tools at different
