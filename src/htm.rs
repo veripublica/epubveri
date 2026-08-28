@@ -1003,21 +1003,14 @@ pub(crate) fn check_obsolete_attrs(
 /// nest another `<a>` (all three confirmed via dedicated real fixtures).
 pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut Report) {
     for node in d.descendants().filter(|n| n.is_element()) {
-        for attr in node.attributes() {
-            if let Some(ns) = attr.namespace()
-                && !KNOWN_NAMESPACES.contains(&ns)
-            {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    format!("attribute \"{}\" not allowed here", attr.name()),
-                    path,
-                    node,
-                    "htm.epub2_dom.custom_namespaced_attribute",
-                    vec![attr.name().to_string()],
-                );
-            }
-        }
+        // **Custom-namespaced attributes are the content model's business,
+        // not this walk's.** XHTML 1.1's attribute lists are closed and our
+        // EPUB 2 grammar matches attributes by namespace as well as name, so
+        // it already rejects them — including the case this check looked
+        // written for, a foreign attribute whose *local* name is a legal one
+        // (`foo:class`), which was probed rather than assumed. Reporting here
+        // as well gave two RSC-005 per attribute against epubcheck's one, on
+        // `custom-ns-attr-error.xhtml`.
         if node.tag_name().namespace() == Some(XHTML_NS) && node.tag_name().name() == "a" {
             let nested = node.descendants().skip(1).any(|d| {
                 d.is_element()
@@ -1446,6 +1439,54 @@ fn push_idref(
     );
 }
 
+/// One finding for an **IDREFS** attribute, however many of its tokens fail.
+///
+/// epubcheck's `idrefs-any` abstract pattern asserts
+/// `every $idref in tokenize(...) satisfies ...` from a rule contexted on the
+/// *element*, so a `headers="th1 th2"` naming two absent cells is one finding
+/// there and was two here. Six attributes are declared through that pattern
+/// (`aria-describedby`, `aria-labelledby`, `aria-controls`, `aria-flowto`,
+/// `aria-owns`, `output/@for`) and `@headers` has its own rule of the same
+/// shape — so this is a class of seven, of which
+/// `schematron-error.xhtml` happens to exercise only the last.
+///
+/// Every failing token is still named, which epubcheck's message does not do:
+/// matching its *count* is parity, matching its vagueness would not be. All
+/// of them go into `params` after the attribute name, so a consumer gets the
+/// list without parsing the sentence.
+fn push_idrefs(
+    report: &mut Report,
+    path: &str,
+    node: roxmltree::Node,
+    attr: &str,
+    ids: &[&str],
+    why_one: &str,
+    why_many: &str,
+) {
+    let text = match ids {
+        [] => return,
+        [only] => format!("the \"{attr}\" attribute refers to \"{only}\", {why_one}"),
+        _ => {
+            let quoted: Vec<String> = ids.iter().map(|i| format!("\"{i}\"")).collect();
+            format!(
+                "the \"{attr}\" attribute refers to {}, {why_many}",
+                quoted.join(", ")
+            )
+        }
+    };
+    let mut params = vec![attr.to_string()];
+    params.extend(ids.iter().map(|i| (*i).to_string()));
+    report.push_node(
+        RSC_005,
+        Severity::Error,
+        text,
+        path.to_string(),
+        node,
+        "opf.content_document.idref_unresolved",
+        params,
+    );
+}
+
 /// EPUB 3 (XHTML5) IDREF/IDREFS resolution: every id referenced by an ARIA
 /// relationship, `@form`, `@list`, `label/@for`, `@headers`,
 /// `@aria-activedescendant`, or a MathML `@xref`/`@indenttarget` must resolve
@@ -1478,6 +1519,7 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
         }
     }
     let no_such = "which is not the id of any element in the document";
+    let no_such_many = "which are not ids of any element in the document";
 
     for n in doc.descendants().filter(|n| n.is_element()) {
         let is_html = n.tag_name().namespace() == Some(XHTML_NS);
@@ -1492,11 +1534,11 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
             "aria-owns",
         ] {
             if let Some(v) = n.attr_no_ns(attr) {
-                for tok in v.split_whitespace() {
-                    if !id_owner.contains_key(tok) {
-                        push_idref(report, path, n, attr, tok, no_such);
-                    }
-                }
+                let bad: Vec<&str> = v
+                    .split_whitespace()
+                    .filter(|tok| !id_owner.contains_key(tok))
+                    .collect();
+                push_idrefs(report, path, n, attr, &bad, no_such, no_such_many);
             }
         }
 
@@ -1569,11 +1611,11 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
                         Some(_) => {}
                     }
                 } else if local == "output" {
-                    for tok in v.split_whitespace() {
-                        if !id_owner.contains_key(tok) {
-                            push_idref(report, path, n, "for", tok, no_such);
-                        }
-                    }
+                    let bad: Vec<&str> = v
+                        .split_whitespace()
+                        .filter(|tok| !id_owner.contains_key(tok))
+                        .collect();
+                    push_idrefs(report, path, n, "for", &bad, no_such, no_such_many);
                 }
             }
             // @headers -> "th" cells in the same table.
@@ -1583,25 +1625,27 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
                         && a.tag_name().name() == "table"
                         && a.tag_name().namespace() == Some(XHTML_NS)
                 });
-                for tok in v.split_whitespace() {
-                    let ok = table.is_some_and(|t| {
-                        t.descendants().any(|d| {
-                            d.tag_name().name() == "th"
-                                && d.tag_name().namespace() == Some(XHTML_NS)
-                                && d.attr_no_ns("id") == Some(tok)
+                let bad: Vec<&str> = v
+                    .split_whitespace()
+                    .filter(|tok| {
+                        !table.is_some_and(|t| {
+                            t.descendants().any(|d| {
+                                d.tag_name().name() == "th"
+                                    && d.tag_name().namespace() == Some(XHTML_NS)
+                                    && d.attr_no_ns("id") == Some(*tok)
+                            })
                         })
-                    });
-                    if !ok {
-                        push_idref(
-                            report,
-                            path,
-                            n,
-                            "headers",
-                            tok,
-                            "which is not a \"th\" cell in the same table",
-                        );
-                    }
-                }
+                    })
+                    .collect();
+                push_idrefs(
+                    report,
+                    path,
+                    n,
+                    "headers",
+                    &bad,
+                    "which is not a \"th\" cell in the same table",
+                    "which are not \"th\" cells in the same table",
+                );
             }
         }
 
