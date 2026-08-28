@@ -69,25 +69,40 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     // `%20` are RSC-020, `%C3%BC` and a real `user@` are clean.
     let host = percent_decode_lossy(host);
     let host = host.as_str();
-    // Internationalized domain names (real Unicode host labels),
-    // percent-encoded octets, and an underscore (non-standard but
-    // accepted by most browsers, confirmed via `url-valid.xhtml`) are all
-    // legitimate - only a stray ASCII character outside that alphabet
-    // (a comma, or a space) is a real syntax error. The space check is
-    // scoped to the *host* on purpose: a space in the path/query is
-    // normalized by the WHATWG parser EPUB references (percent-encoded, or
-    // stripped when leading/trailing), so it isn't an error there - see
-    // the module note.
     // An empty host for a special scheme: `http://` and `http:///x` both
     // parse to no authority at all, which epubcheck reports as
     // "Invalid host: empty host". A real book carries two.
     if host.is_empty() {
         return true;
     }
-    if host.chars().any(|c| {
-        c.is_ascii()
-            && !(c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':' | '[' | ']' | '%' | '_'))
-    }) {
+    // **A denylist of what epubcheck actually rejects, not an allowlist of
+    // what looks like a hostname.** This used to accept only
+    // alphanumerics plus `. - : [ ] % _` and call everything else a syntax
+    // error, which made us stricter than epubcheck on **seventeen** printable
+    // ASCII characters. Measured one URL per character against 5.3.0, all
+    // seventeen clean there and an error here:
+    //
+    //     , ! $ & ' ( ) * + ; = ~ ^ | { } `
+    //
+    // The comma is the one the corpus names. `url-host-unparseable-warning`
+    // carries `https://w,w.example.com` with the comment "Host contains an
+    // invalid character (see issue #1034)" — epubcheck's own fixture records
+    // that it *should* flag this and does not, and w3c/epubcheck#1034 is
+    // still open. Reporting it anyway is a restrictive divergence, which to
+    // anyone diffing the two tools is indistinguishable from a false
+    // positive; the project's rule sends those behind `--advisory`, and with
+    // a shelf population of zero there is nothing to send.
+    //
+    // What epubcheck *does* reject, same measurement: `\`, and — after the
+    // percent-decode above — `@` and a space (`%40`, `%20`). Those three are
+    // the whole list here.
+    //
+    // Known gaps, left as gaps deliberately (false negatives, which harm
+    // nobody who has them): a non-numeric port after `:`, and an unmatched
+    // `[`/`]`, both of which epubcheck reports. Closing them means modelling
+    // galimatias's port and IPv6 parsing, which is the inference this module
+    // already refuses to make — see the RSC-020 note in CLAUDE.md.
+    if host.chars().any(|c| matches!(c, '\\' | '@' | ' ')) {
         return true;
     }
     // A space anywhere in an absolute URL, not only in the host. The comment
@@ -250,9 +265,37 @@ mod tests {
         assert!(has_syntax_error("https:www.example.com"));
     }
 
+    /// The host character set is epubcheck's, and it is a **denylist**.
+    ///
+    /// This test used to assert the opposite — that a comma in the host is a
+    /// syntax error — which encoded our own stance rather than epubcheck's.
+    /// Measured one URL per character against 5.3.0: seventeen printable
+    /// ASCII characters our old allowlist rejected are clean there, the comma
+    /// among them. `url-host-unparseable-warning.xhtml` carries exactly that
+    /// URL and epubcheck says nothing about it; its own comment points at
+    /// w3c/epubcheck#1034, still open.
+    ///
+    /// The three it does reject are asserted below them, so this cannot drift
+    /// into accepting everything.
     #[test]
-    fn detects_invalid_host_character() {
-        assert!(has_syntax_error("https://w,w.example.com"));
+    fn host_characters_match_epubchecks_denylist() {
+        for c in [
+            ',', '!', '$', '&', '\'', '(', ')', '*', '+', ';', '=', '~', '^', '|', '{', '}', '`',
+        ] {
+            let url = format!("https://a{c}b.example.com");
+            assert!(
+                !has_syntax_error(&url),
+                "epubcheck accepts {url} and so must we"
+            );
+        }
+        assert!(has_syntax_error("https://a\\b.example.com"), "backslash");
+        // `%40` and `%20` decode to `@` and a space, which is why the
+        // percent-decode above has to run before this check.
+        assert!(has_syntax_error("https://a%40b.example.com"), "encoded @");
+        assert!(
+            has_syntax_error("https://a%20b.example.com"),
+            "encoded space"
+        );
     }
 
     #[test]
