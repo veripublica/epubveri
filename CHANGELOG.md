@@ -10,10 +10,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.13.1] - 2026-08-29
 
-**Six false positives, and none of them was reaching anyone.** Every one is a
+**Seven false positives, and none of them was reaching anyone.** Every one is a
 parity fix against epubcheck's own fixtures: measured across the 415-book local
-shelf, not one of the six changes a real book. What the day actually adds to a
-reader's output is three *true* findings on two books, each confirmed against
+shelf, not one of the seven changes a real book. What the day actually adds to
+a reader's output is three *true* findings on two books, each confirmed against
 epubcheck at the same file, line and wording.
 
 **The content-document set is the version's set, and ours was version-blind**
@@ -91,6 +91,29 @@ element. The restricted-remote classification is now one predicate shared by
 the two sites that ask it, which is how they had drifted: only a reference
 written remote was asked, never one that resolves remote through a base.
 
+**A leaking URL that the manifest declares and a content document references
+was two findings.** It is one fault, and epubcheck reports it once — the last
+row on the W3C conformance suite where our count exceeded theirs, and it had
+been there throughout. The rule is narrower than "once per URL", which is what
+the third arrangement pins:
+
+| | epubcheck | before |
+|---|---|---|
+| declared only | 1, at the manifest | 1 |
+| declared **and** referenced | 1 | 2 |
+| the same URL in two content documents, undeclared | **2** | 2 |
+
+So a declaration and a reference to that declaration are one fault, while two
+independent references are two. The first version of the suppression deduped
+across content documents as well and broke the third case.
+
+The manifest finding also moved from `push_at_pos` to `push_full`, so its href
+reaches `params`: a finding whose value lives only in its message text cannot
+be queried structurally, and the content-document pass has to *ask* whether the
+URL was already reported rather than trust a claim about what the manifest pass
+did. Our surviving finding sits at the manifest and epubcheck's at the content
+document — the position policy below, not an accident.
+
 ### SVG in EPUB 2 is validated normatively (issue #93)
 
 `schema/20/rng/content.rng` includes the SVG 1.1 modules directly, so inline
@@ -131,7 +154,7 @@ SVG, the whole population uses **two** element names and **nine** unprefixed
 attribute names. Three of the nine are outside SVG 1.1 — one occurrence each,
 two books — and all three are errors epubcheck reports at the same line.
 
-### Three more parity fixes, each found by reading epubcheck's source
+### Two more parity fixes, both settled by reading epubcheck's source
 
 **An EPUB 3 spine `toc` must resolve to an NCX** (issue #127). `package-30.sch`'s
 `opf.toc.ncx` asserts from `opf:spine[@toc]` that the referenced item is an
@@ -216,6 +239,23 @@ earlier caught. The 209-publication W3C suite would not have: it contains no
 `<a>` carrying text inside SVG, and reported no disagreement on that build.
 
 Nothing here moves a book on the 415-book local shelf.
+
+**The required-attribute table went from seven elements to twenty-six**, plus
+six whose required attribute is the namespaced `xlink:href` — `use`, `feImage`,
+`mpath`, `textPath`, `tref` and `cursor`. Twenty-five cells, one book each.
+
+Those six are the part worth knowing. `has_attr_no_ns` cannot see a namespaced
+attribute at all, so they could not have been in the main table — and the
+grammar extraction that generated the candidates for everything else missed
+every one of them too, because the xlink attributes are declared in their own
+module rather than in each element's `attlist`. **The extractor was a candidate
+generator, not an authority**; every row is a measured book. `animateMotion`,
+`pattern` and `marker` were probed and require nothing, and are named in the
+code so the next reader does not re-probe them.
+
+This axis surfaced as a by-product: the container probes used deliberately bare
+elements, and epubcheck kept reporting a second finding the containment
+question had nothing to do with.
 
 ### Positions are unchanged, and that is a decision
 
