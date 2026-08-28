@@ -55,6 +55,33 @@ impl Position {
     /// Position of `node` in its document's original text. DOM-based
     /// checks always have a `roxmltree::Node` in scope for the violation
     /// being reported, so this needs no extra plumbing.
+    ///
+    /// **`range().start`, deliberately: a finding points at where the fault
+    /// begins, not at where a parser noticed it** (owner's decision,
+    /// 2026-08-28, after JSWolf raised the difference on MobileRead #260).
+    ///
+    /// epubcheck reports the position its SAX cursor happened to be at when
+    /// the fault surfaced, which gives three different anchors for three
+    /// kinds of fault — measured, one book each:
+    ///
+    /// | fault | epubcheck's anchor |
+    /// |---|---|
+    /// | `element X not allowed` | just past the start tag |
+    /// | `element X incomplete` | just past the **end** tag |
+    /// | an attribute fault | just past the start tag's `>` |
+    ///
+    /// An empty `<guide>` opening at 11:9 and closing at 12:9 is therefore
+    /// `12:17` there and `11:9` here. Both are internally consistent; only
+    /// one of them is where the author has to go. Matching it would also mean
+    /// handing epubsana a position it has to walk *backwards* from to find
+    /// the element it repairs, and on nested elements it could not tell which
+    /// opening tag the position belonged to.
+    ///
+    /// `node.range().end` reproduces epubcheck's number exactly if this is
+    /// ever revisited — the divergence is a choice, not a limitation.
+    ///
+    /// The same principle settled #68, where stray text runs were collapsed
+    /// onto their parent's single line:column and are now blamed at the run.
     pub(crate) fn of(node: roxmltree::Node) -> Position {
         let p = node.document().text_pos_at(node.range().start);
         Position {
