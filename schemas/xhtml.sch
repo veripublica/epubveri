@@ -156,6 +156,17 @@
       <report test="ancestor::h:meter">a "meter" element must not appear inside a "meter" element</report>
     </rule>
   </pattern>
+  <!-- epubcheck's `bdo-dir` (`required-attr` with elem=h:bdo, attr=dir).
+       HTML5 makes `dir` required on `bdo` — the element exists to override
+       the bidi direction, so without one it says nothing. A real gap here,
+       found by diffing `schematron-error.xhtml` finding by finding rather
+       than by count: the totals differed by two and one of the two was an
+       over-report of ours, which cancelled half of it. -->
+  <pattern id="bdo-dir-required">
+    <rule context="h:bdo">
+      <assert test="@dir">a "bdo" element must have a "dir" attribute</assert>
+    </rule>
+  </pattern>
   <pattern id="no-dfn-in-dfn">
     <rule context="h:dfn">
       <report test="ancestor::h:dfn">a "dfn" element must not appear inside a "dfn" element</report>

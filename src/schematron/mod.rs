@@ -610,9 +610,11 @@ mod tests {
     #[test]
     fn xhtml_schema_parses_with_expected_rule_count() {
         // Guards the rule table: 33 nesting patterns (17 disallowed-descendant
-        // + 2 required-ancestor + 14 interactive-content) plus 7 attribute-
-        // level patterns. A change that dropped rules would trip this.
-        assert_eq!(xhtml_schema().patterns.len(), 40);
+        // + 2 required-ancestor + 14 interactive-content) plus 8 attribute-
+        // level patterns — the eighth is `bdo-dir-required`, epubcheck's
+        // `bdo-dir`, added after diffing `schematron-error.xhtml` finding by
+        // finding. A change that dropped rules would trip this.
+        assert_eq!(xhtml_schema().patterns.len(), 41);
     }
 
     #[test]
