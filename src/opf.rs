@@ -4640,12 +4640,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let resolved_nfc = nfc(&resolved);
             if !is_external(href) {
                 if href_leaks_container_root(&base_dir, href) {
-                    report.push_at_pos(
+                    // `push_full` rather than `push_at_pos`: the href has to
+                    // reach `params` so the content-document pass can ask
+                    // whether this URL has already been reported. A finding
+                    // whose value is only in its message text cannot be
+                    // queried structurally, which is the whole point of the
+                    // `params` contract.
+                    report.push_full(
                         RSC_026,
                         Severity::Error,
                         format!("manifest item '{id}' href '{href}' is path-absolute or escapes the container root"),
                         opf_path,
                         Position::of(item),
+                        "opf.manifest_item.href_leaks_container_root",
+                        vec![href.to_string()],
                     );
                 }
                 if href.contains('?') {
@@ -8351,7 +8359,40 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // hrefs only. It is additive with RSC-007: a leaking
                     // reference is both outside the container and missing
                     // from it, and epubcheck reports both.
-                    if !is_external(v)
+                    // **Once per URL when the manifest already declared it.**
+                    // epubcheck reports a leaking URL that is both declared in
+                    // the manifest and referenced from a content document
+                    // exactly once; we reported it twice. Measured three ways,
+                    // one book each: declared only (one finding, at the
+                    // manifest, and we match), declared *and* referenced (one,
+                    // and we gave two), and the same URL in two content
+                    // documents with no manifest entry (two, and we match) —
+                    // so the rule is not "once per URL" globally, it is that
+                    // the declaration and the reference to it are one fault.
+                    //
+                    // The verify-don't-believe shape: ask the report whether
+                    // this URL has already been reported rather than trust a
+                    // claim about what the manifest pass did.
+                    //
+                    // epubcheck's surviving finding sits at the content
+                    // document and ours sits at the manifest. That is our
+                    // position policy rather than an accident — the URL is
+                    // *declared* there, which is where it has to be fixed.
+                    let already = {
+                        let u = v.trim();
+                        report.messages.iter().any(|m| {
+                            // **The manifest pass only.** Two content
+                            // documents naming the same leaking URL are two
+                            // faults - epubcheck reports both, measured - so
+                            // this must not dedupe across them. Matching on
+                            // the rule rather than on the id is what keeps
+                            // the two cases apart.
+                            m.rule == Some("opf.manifest_item.href_leaks_container_root")
+                                && m.params.first().is_some_and(|p| p == u)
+                        })
+                    };
+                    if !already
+                        && !is_external(v)
                         && !v.trim().is_empty()
                         && href_leaks_container_root(&dir, v.trim())
                     {
@@ -19731,6 +19772,125 @@ mod tests {
                 .expect("root found");
         let p = super::line_col_at("<?xml version=\"1.0\"?>\n\n  <package a=\"b\">", off);
         assert_eq!((p.line, p.column), (3, 3));
+    }
+
+    /// A leaking URL that the manifest **declares** and a content document
+    /// **references** is one fault, not two. epubcheck reports it once; we
+    /// reported it twice, which was the last row on the W3C conformance suite
+    /// where our count exceeded epubcheck's.
+    ///
+    /// The rule is narrower than "once per URL", and the fourth case is what
+    /// pins it — the first version of this suppression deduped across content
+    /// documents too and broke it. Measured, one book each:
+    ///
+    /// | | epubcheck |
+    /// |---|---|
+    /// | declared only | 1, at the manifest |
+    /// | declared and referenced | 1 |
+    /// | the same URL in two content documents, undeclared | **2** |
+    ///
+    /// Our surviving finding sits at the manifest where epubcheck's sits at
+    /// the content document. That is the position policy rather than an
+    /// accident: the URL is declared there, which is where it has to be fixed.
+    #[test]
+    fn a_leaking_url_declared_and_referenced_is_one_finding() {
+        fn book(manifest_extra: &str, docs: &[(&str, &str)]) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let items = docs
+                .iter()
+                .map(|(n, _)| {
+                    let id = n.trim_end_matches(".xhtml");
+                    format!(r#"<item id="{id}" href="{n}" media-type="application/xhtml+xml"/>"#)
+                })
+                .collect::<String>();
+            let spine = docs
+                .iter()
+                .map(|(n, _)| format!(r#"<itemref idref="{}"/>"#, n.trim_end_matches(".xhtml")))
+                .collect::<String>();
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>
+    {items}{manifest_extra}
+  </manifest>
+  <spine><itemref idref="nav"/>{spine}</spine>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>n</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"nav.xhtml\">c</a></li></ol>\
+                </nav></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                z.start_file("META-INF/container.xml", o).unwrap();
+                z.write_all(CONTAINER.as_bytes()).unwrap();
+                z.start_file("EPUB/package.opf", o).unwrap();
+                z.write_all(opf.as_bytes()).unwrap();
+                z.start_file("EPUB/nav.xhtml", o).unwrap();
+                z.write_all(NAV.as_bytes()).unwrap();
+                for (name, body) in docs {
+                    z.start_file(format!("EPUB/{name}"), o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+        const LEAK: &str = "../../../../media/imgs/monastery.jpg";
+        let img = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+             <body><p><img src=\"{LEAK}\" alt=\"a\"/></p></body></html>"
+        );
+        const PLAIN: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let declared = format!(r#"<item id="photo" href="{LEAK}" media-type="image/jpeg"/>"#);
+        let count = |b: Vec<u8>| {
+            crate::validate_bytes(b)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_026)
+                .count()
+        };
+
+        assert_eq!(
+            count(book(&declared, &[("c1.xhtml", PLAIN)])),
+            1,
+            "declared only"
+        );
+        assert_eq!(
+            count(book(&declared, &[("c1.xhtml", &img)])),
+            1,
+            "declared and referenced is one fault"
+        );
+        assert_eq!(
+            count(book("", &[("c1.xhtml", &img), ("c2.xhtml", &img)])),
+            2,
+            "two content documents naming it, undeclared, are two faults"
+        );
+        assert_eq!(count(book("", &[("c1.xhtml", PLAIN)])), 0, "control");
     }
 
     /// An EPUB 2 whose single content document is named `name`, referenced
