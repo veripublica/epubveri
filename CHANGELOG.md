@@ -8,6 +8,272 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+**Twenty-six false positives.** Twenty-three are one shape — a defect reported twice,
+where each message was true but the count did not match epubcheck's, which to
+anyone diffing the two tools is indistinguishable from an invented error. Three
+are invented errors outright: `<iframe srcdoc>` is valid and we rejected it, so
+is a comma in a hostname, and so is a media-overlay document whose stylesheet
+does not happen to define the active-class.
+
+All twenty-six were found the same way, by running epubcheck over the corpus's
+own dumped books and diffing the **counts** rather than the id sets — the
+pairing that has now produced thirty-five findings in two days - two of them false negatives rather than false positives, both surfaced by the same line-by-line diff. The id-set diff
+is blind to every one of them, and so is the corpus: the extra finding carries
+the same id at the same severity, so its "no other errors" comparison passes.
+
+**The meta-properties vocabulary reported a refinement duplicate twice**, and
+in two different ways, because epubcheck checks the family with two different
+idioms and our Schematron used neither. Its per-property rules
+(`title-type`, `display-seq`, `file-as`, `group-position`, `identifier-type`,
+`source-of`, `collection-type`) report `preceding-sibling::` — so N duplicates
+draw N-1 findings and the first occurrence is not blamed; ours asserted
+`count(...) = 1` from each `meta` and drew N. The `authority`/`term` pair is
+not in that family at all: epubcheck checks it once per `dc:subject`, so any
+number of duplicates is one finding. Both counts were measured against
+epubcheck on a three-duplicate book rather than read off its schema.
+
+The same block also carried a **second copy of all seven "must refine X"
+rules**, with a looser target lookup, so every one of those violations was
+reported twice. The duplicates were removed and the originals kept — and the
+looser lookup turned out to be the reason the pairing rule over-reported too:
+matching a `@refines` with no leading `#` grouped two properties epubcheck
+counts as unrelated, inventing a cardinality finding on top.
+
+**A duplicate manifest item `id` drew three findings where epubcheck draws
+two.** The manifest loop had its own duplicate-`id` check on top of the package
+document's id-uniqueness rule. Removing it was verified in both directions
+first: the general rule normalises whitespace, and it is not EPUB 3 only.
+
+**An item that falls back to itself drew two OPF-045.** The cycle detector's
+own comment said the self-fallback case was handled elsewhere and it fell
+through anyway. One-item cycles are now left to the check that names the item
+and carries its position.
+
+**A non-ASCII directory name drew two PKG-012** — one for the file inside it,
+one for the directory entry. epubcheck runs its filename checks only on
+non-directory entries; a directory *name* is still checked, as a segment of the
+paths of the files inside it.
+
+**MED_013 was asked of an item that is not a content document.** A
+`media-overlay` attribute on an image already draws RSC-005; epubcheck reaches
+MED_013 only through its content-document checkers and never asks the second
+question.
+
+**Three more one-defect-two-findings pairs, all of them a hand-written check
+saying what a schema had already said.** A missing `<spine>` drew the content
+model's `element "package" has incomplete content; missing required element
+"spine"` and a hand-coded `OPF is missing the <spine> element`; an EPUB 2
+`<spine>` with no `toc` drew both a Schematron rule and a hand check; the Adobe
+`page-map` attribute drew the EPUB 2 grammar's rejection and a hand check.
+
+**None of the three could be closed by simply deleting the extra check, and
+that is the part worth recording.** Each hand check was load-bearing somewhere
+the schema is silent, and only measuring both versions showed where:
+
+- the `toc` Schematron rule needs an NCX item to be present, while epubcheck's
+  EPUB 2 requirement (`opf20.rng`) does not — so a 2.0 book with no NCX at all
+  is reported by epubcheck and by the hand check, and by nothing else. The rule
+  is now scoped to 3.x, matching epubcheck's, which lives in `package-30.sch`;
+- the EPUB 3 grammar does not reject `page-map`, so there the hand check is the
+  only reporter. It now asks the report whether the content model already named
+  the attribute instead of guessing from the version — a structural query on
+  `violation_kind` and `params[0]`, not a text match, so it cannot drift if
+  either grammar changes;
+- only the missing `<spine>` was a true duplicate, and both grammars were
+  checked before the check came out.
+
+The `page-map` pair is the first of this whole run to move a real book: one
+title on the local shelf uses the extension and loses one of its 803 findings.
+Everything else here is visible only against epubcheck's own fixtures.
+
+**`<iframe srcdoc>` was rejected on valid markup, and five more attributes
+with it.** This one is not a count difference: epubcheck rejects `seamless` on
+`obsolete-seamless-error.xhtml` and lists `srcdoc` among the attributes it
+*would* have accepted, so we were inventing an error. HTML5's whole
+`iframe.attrs` set is now taken from epubcheck's `mod/html5/embed.rnc` —
+`srcdoc`, `loading`, `sandbox`, `allowfullscreen`, `allow`, `referrerpolicy` —
+because a fixture only ever names the one attribute it happens to carry.
+EPUB 2 is untouched: two of the six are `v5only` in epubcheck's own schema.
+Attribute *values* are left unconstrained, the call already made for MathML
+and for `role`/`aria-*` — taking the names closes the gap in the safe
+direction, taking the value grammars would open a restrictive one.
+
+**Three more hand-written checks that duplicated a schema**: a missing
+`<metadata>`, a manifest `<item>` with a missing `id`/`href`/`media-type`, and
+a foreign-namespaced attribute in an EPUB 2 content document. Each was probed
+in both versions before its check came out — and the manifest-item one is a
+small illustration of why naming the missing attribute was worth doing, since
+the content model's message (`element "item" is missing the required attribute
+"media-type"`) now says strictly more than the hand-written one it replaces.
+That one also used to print a Rust `Option` through `{:?}` into user-facing
+text and into `params[0]`: `id=Some("img002")`.
+
+**The host character set was an allowlist and is now epubcheck's denylist —
+seventeen printable ASCII characters stopped being errors.** `,`, `!`, `$`,
+`&`, `'`, `(`, `)`, `*`, `+`, `;`, `=`, `~`, `^`, `|`, `{`, `}` and a backtick
+in a hostname were all RSC-020 here and are all clean in epubcheck, measured
+one URL per character against 5.3.0. The comma is the one its own corpus
+names: `url-host-unparseable-warning.xhtml` carries `https://w,w.example.com`
+with the comment "Host contains an invalid character (see issue #1034)" —
+epubcheck records that it *should* flag this, does not, and #1034 is still
+open. Reporting it anyway is a restrictive divergence, indistinguishable to
+anyone diffing the two tools from an error we invented.
+
+What it does reject is now the whole rule: a backslash, and — after the
+percent-decode — `@` and a space. Two gaps stay gaps on purpose, both false
+negatives: a non-numeric port and an unmatched bracket, which would mean
+modelling galimatias's port and IPv6 parsing, the inference this module
+already refuses to make.
+
+**A missing file named by both the manifest and a CSS `@import` was two
+findings.** epubcheck's RSC-001 is per publication *resource*, not per
+reference, so it reports once; the `@import` walk now leaves a declared target
+to the manifest and keeps its other two arms, which are about the reference.
+
+**The nav label rules were not scoped to the list.** epubcheck's contexts are
+`html:nav[@epub:type]//html:ol//html:a` and `…//html:ol//html:span`; ours
+walked every descendant of the nav, so an empty `<span>` in the nav's heading
+drew the span rule on top of the heading rule that already covers it.
+
+**Two of the failing tests were the point, not an obstacle.** The comma
+assertion and the CSS `@import` assertion both encoded our own stance rather
+than epubcheck's, and both had been passing for as long as the divergence
+existed. Checking an assertion against the oracle before treating it as a
+constraint is the rule that applies; both now assert the measured behaviour,
+with the characters epubcheck *does* reject asserted beside them so the new
+rule cannot drift into accepting everything.
+
+**CSS-030 was asking the wrong question, once per property.** epubcheck's
+condition is `!hasCSS` — the overlaid content document has no CSS at all — and
+it says so once. Ours asked whether each declared class had a *matching
+selector*, once per declared property, which was wrong in two ways measured
+one book per arrangement: a document whose stylesheet simply does not define
+the class is valid and we reported it (a false positive), and a document with
+no CSS at all drew two findings when both `media:active-class` and
+`media:playback-active-class` were declared.
+
+Fixing it needed a signal `doc_class_names` could not give: an empty entry
+means "found nothing" for an SVG and "no stylesheet" for an XHTML document.
+The three SVG style sources — an `xml-stylesheet` PI, a `<style>` element and
+an XHTML-namespaced `<link rel="stylesheet">` — are now enumerated in one
+place and report whether any was found. **The first attempt duplicated that
+detection at the call site, missed the `<link>` form, and turned a valid
+fixture red**; the family run is what caught it, one build later.
+
+**Nested `<dfn>` had a hand-coded check beside its Schematron rule**, blaming
+the outer element for containing one while `xhtml.sch`'s `no-dfn-in-dfn`
+blamed the inner one — as epubcheck's single `descendant-dfn-dfn` pattern
+does. EPUB 2 stays silent either way, probed both ways.
+
+**A hyperlink to a remote image is no longer reported.** `<a href>` pointing
+at a manifest item declared `image/*` drew RSC-006 from a content-document
+walk, on the reasoning that an image should be embedded rather than linked.
+epubcheck reports nothing of the kind: its fixture expects one RSC-006 and
+gets it from the manifest side, and in the arrangement where the manifest walk
+goes quiet — the image both hyperlinked and embedded — epubcheck still reports
+one, for the `<img>`. Both arrangements were probed before the walk came out.
+
+**An unclosed CSS block was reported twice, and the framing of it was the
+real defect.** This row had been written off as a granularity difference in
+styloria's error recovery. It was not: on `content-css-syntax-error` styloria
+reports exactly two errors, one per unclosed `{`, which is exactly what
+epubcheck reports. The third finding was ours — a
+`css.declaration.malformed_shape` raised on the rule that the first unclosed
+block had swallowed, since an unclosed `{` absorbs the next selector and
+braces and what is left does not parse as a declaration list. Declaration
+shapes are no longer second-guessed inside a block the parser has already
+called unterminated.
+
+**Calling it styloria's had sent the fix to the wrong repository.** Parity
+with epubcheck is a consumer's question — a CSS crate's job is to parse CSS
+well, not to match another tool's finding count — and this one belonged here
+the whole time. Worth remembering the next time a row looks like it belongs to
+a dependency: check what the dependency actually reported before deciding.
+
+Positions still differ and are left alone: epubcheck points at the token that
+got confused, or at end of file; we point at the `{` that was never closed,
+which is the one an author has to fix.
+
+**`schematron-error.xhtml` now agrees exactly, 43 findings against 43** - the
+largest remaining count gap, and it turned out to be three separate things
+whose totals had been cancelling each other out. Diffing the two reports
+*line by line* rather than by count is what separated them; by count it looked
+like a single +2 discrepancy.
+
+- **An IDREFS attribute is one finding, however many of its tokens fail.**
+  epubcheck's `idrefs-any` pattern asserts `every $idref in tokenize(...)
+  satisfies ...` from a rule contexted on the element, so `headers="th1 th2"`
+  naming two absent cells is one finding there and was two here. Seven
+  attributes go through that shape - `aria-describedby`, `aria-labelledby`,
+  `aria-controls`, `aria-flowto`, `aria-owns`, `output/@for` and `@headers` -
+  and the fixture exercises only the last, so all seven were changed. Every
+  failing token is still named, and they all reach `params`: matching
+  epubcheck's count is parity, matching its vagueness would not be.
+- **A stray `<area>` drew two errors.** HTML5 puts `area` in phrasing content
+  and leaves "must be inside a `map`" to prose, which epubcheck enforces with
+  a Schematron rule alone; our grammar restricted it to `map` as well, so the
+  content model and the Schematron rule both spoke. `area` now sits in
+  phrasing content in EPUB 3, matching `common.elem.phrasing |= area.elem`.
+  EPUB 2 is unchanged - XHTML 1.1 declares `area` only inside `map` and has no
+  Schematron rule to fall back on.
+- **A duplicate `id` in a content document was reported once, not once per
+  occurrence** - a false *negative*, and the only change in this whole run
+  that moved real books: seven shelf titles gained findings, and on the two
+  checked against epubcheck the duplicate counts then matched exactly. It also
+  disagreed with our own package-document rule, which had always reported
+  every occurrence. **Consumers keying on
+  `opf.content_document.duplicate_id` will see more findings of it than
+  before**, all at positions that were previously silent.
+- **`<bdo>` without `dir` is now reported**, epubcheck's `bdo-dir`. A real gap,
+  and it is here rather than in some later release only because the
+  line-by-line diff surfaced it: two of its findings were missing and one of
+  ours was extra, which a count comparison reads as "we are one over".
+
+**The RSC-001 trio stays open and is documented rather than chased.** When two
+manifest items share an `id`, epubcheck's manifest is keyed by that id, so the
+second entry hides the first and only the second item's missing file is
+reported; we check both and report both. Matching would mean reproducing an
+implementation artefact and dropping a finding that is true. Both books are
+invalid in both tools either way, and no book on the 415-title shelf has a
+duplicate manifest `id` at all.
+
+**Three rows are deliberately left open.** The SVG `<title>` pair is issue #94 —
+epubcheck's behaviour there is Jing's error-recovery internals, which are not
+readable from this checkout, and the real-book population is zero; the corpus
+fixtures are a better witness than the hand-written probes the issue records,
+and are noted there. The `epub:switch` pair is epubcheck reporting one message
+where we report two true ones (`element "epub:default" not allowed yet; missing
+required element "epub:case"`); merging them is engine surgery on a blame path
+that produces 8,992 findings on the local shelf, against a population of zero
+for this shape — the same trade #94 declines. The Content MathML row is
+mostly #94 as well: our own MathML walk already reports one finding per
+invalid subtree, exactly as epubcheck does, and the extra nine come from the
+grammar descending into a subtree it has just rejected. The shelf carries
+**zero** MathML findings, so this is fixture-only in both directions.
+
+**A missing required attribute is now named** (JSWolf, MobileRead #256).
+`element "meta" is missing a required attribute` left the author to work out
+which one, on an element whose entire attribute set is written on the line in
+front of them; it now reads `element "meta" is missing required attributes
+"content" and "name"`, as epubcheck's does. The commonest shape by far is an
+`<img>` with no `alt` — **3,434 of the 3,434 occurrences on the local
+405-book shelf** — which used to say nothing at all about `alt`.
+
+The names also reach `params`, after the element name, so a consumer can act on
+the finding without parsing the message text. `params[0]` is unchanged and
+still the element's local name; this is an additive tail, the same shape the
+`element_not_allowed` and `incomplete_content` kinds already used. The
+`missing_attribute` kind was the odd one out only because the engine never
+computed the names.
+
+Neither the corpus nor the shelf can see this class: the extra finding carries
+the same id at the same severity, so the corpus's "no other errors" comparison
+passes, and no book on the shelf refines metadata, declares a media overlay, or
+carries a non-ASCII directory. Both are unchanged by all five fixes; the new
+unit tests are the protection.
+
 ## [0.12.5] - 2026-08-27
 
 **The published corpus recall figure goes 595 → 603, and this time the
