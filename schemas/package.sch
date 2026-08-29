@@ -23,6 +23,34 @@
   <ns uri="http://www.idpf.org/2007/opf" prefix="opf"/>
   <ns uri="http://purl.org/dc/elements/1.1/" prefix="dc"/>
 
+  <!-- **This whole file is the EPUB 3 package schema.** epubcheck holds the
+       same line in its `OPFChecker.validatorMap`, which puts `package-30.sch`
+       behind `version(EPUBVersion.VERSION_3)`; its EPUB 2 package Schematron
+       (`schema/20/sch/opf.sch`) has exactly two rules, id uniqueness and the
+       duplicate `guide` reference, and both of ours live in Rust
+       (`check_duplicate_ids`, `check_guide_duplicates`).
+
+       So `crate::opf::check` runs this schema only when `is_epub3`. Before
+       that gate existed, 40 of these patterns fired on any EPUB 2 package
+       that happened to carry an `@property`, `@refines`, `<collection>` or
+       package `<link>` - constructs EPUB 2 does not have, where epubcheck
+       reports the grammar error and asks nothing further. Measured three
+       ways, one book each: a bad `rendition:layout` value, a dangling
+       `@refines`, and a `role` refining nothing all drew findings from us and
+       none from epubcheck.
+
+       **`opf-identifier-not-empty` was the exception and is why this was not
+       a blanket edit.** `dc:identifier` is an EPUB 2 element too and
+       epubcheck reports an empty one in *both* versions, so that rule moved
+       to Rust (`check_identifier_not_empty`) rather than going silent with
+       the rest. Any future rule that applies to both versions has to go the
+       same way, or into a second schema.
+
+       The `starts-with(, '3')` predicates left in some rules below
+       are now redundant. They are kept rather than rewritten because the
+       rewrite is churn with no behavioural gain and every context is a chance
+       to change a rule by accident. -->
+
   <!-- id uniqueness ("duplicate id ...", RSC-005) is NOT here: it lives in
        `check_duplicate_ids` in src/opf.rs, and this note exists so that
        reading this file does not leave you thinking the rule was forgotten.
@@ -164,13 +192,6 @@
        axis) - hand-coded in opf.rs instead (a plain child-index compare). -->
 
   <!-- 5.5.2 Metadata values -->
-
-  <pattern id="opf-identifier-not-empty">
-    <rule context="dc:identifier">
-      <assert test="string-length(normalize-space(.)) &gt; 0"
-        >dc:identifier must be a string with length at least 1</assert>
-    </rule>
-  </pattern>
 
   <!-- EPUB 3 only, exactly like dc:title below and for the same reason.
        `package-30.rnc` types it `datatype.string.nonempty`; EPUB 2's

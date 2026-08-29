@@ -2858,6 +2858,57 @@ fn decode_utf32(bytes: &[u8], big_endian: bool) -> String {
         .collect()
 }
 
+/// `dc:identifier` must not be empty - the one rule that had to leave
+/// `schemas/package.sch` when that file became EPUB 3 only.
+///
+/// It cannot go with the rest: `dc:identifier` is an EPUB 2 element as much
+/// as an EPUB 3 one, and epubcheck reports an empty one in **both** versions
+/// (measured one book each; at 2.0 the message comes from its `opf.rng`
+/// rather than a Schematron rule, but it is reported all the same). Gating
+/// the schema run without moving this would have traded a batch of invented
+/// errors for a missed one.
+///
+/// The message is unchanged from the pattern it replaces, and
+/// `normalize-space` is spelled the way the engine spells it, for the same
+/// reason [`check_duplicate_ids`] gives: identical output is what keeps the
+/// corpus a real check on a rule that has moved.
+fn check_identifier_not_empty(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+    for n in doc.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().name() == "identifier"
+            && n.tag_name().namespace() == Some(DC_ELEMENTS_NS)
+    }) {
+        let text: String = n
+            .descendants()
+            .filter(|t| t.is_text())
+            .filter_map(|t| t.text())
+            .collect();
+        if text.split_whitespace().next().is_none() {
+            // `push_full`, not `push_node`: the Schematron loop below pushes
+            // this way and carries **no** `element_path`, so pushing by node
+            // would have added a `data` object to `--format json` on a
+            // finding that never had one. Caught by diffing this build's
+            // JSON against the previous one rather than by any test - the
+            // same trap `check_duplicate_ids` documents.
+            // The slug the Schematron would have produced: `intern_rule` joins
+            // the prefix to the pattern id with hyphens replaced, so
+            // `opf-identifier-not-empty` became this. Keeping it is not
+            // cosmetic — `rule` is the key epubsana dispatches on, and a
+            // rule that quietly renames itself takes the matching fixer
+            // dark with nothing on either side reporting it.
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                "dc:identifier must be a string with length at least 1".to_string(),
+                opf_path,
+                Position::of(n),
+                "opf.package.opf_identifier_not_empty",
+                Vec::new(),
+            );
+        }
+    }
+}
+
 /// RSC-005: `id` attributes must be unique within the package document.
 ///
 /// Ported out of `schemas/package.sch`, which expressed it as
@@ -3794,8 +3845,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // Schematron output now gets line/column too (previously it was the
     // one documented family that couldn't).
     check_duplicate_ids(&doc, opf_path, report);
+    check_identifier_not_empty(&doc, opf_path, report);
+    // **EPUB 3 only.** See the header of `schemas/package.sch`: that file is
+    // the port of `package-30.sch`, which epubcheck puts behind
+    // `version(EPUBVersion.VERSION_3)` in `OPFChecker.validatorMap`.
     for (message, position, rule) in
         crate::schematron::run(&crate::schematron::package_schema(), &doc, "opf.package")
+            .into_iter()
+            .filter(|_| is_epub3)
     {
         report.push_full(
             RSC_005,
@@ -17403,6 +17460,86 @@ mod tests {
             gone.iter().filter(|id| **id == crate::ids::OPF_078).count() >= 2,
             "one per collection plus one for the publication: got {gone:?}"
         );
+    }
+
+    /// The package Schematron is EPUB 3's, and one rule in it was not.
+    ///
+    /// epubcheck puts `package-30.sch` behind
+    /// `version(EPUBVersion.VERSION_3)` in `OPFChecker.validatorMap`; its
+    /// EPUB 2 package Schematron has two rules, both of which live in Rust
+    /// here. Ours ran at any version, so an EPUB 2 package carrying an
+    /// `@property` or `@refines` - constructs EPUB 2 does not have, where
+    /// epubcheck reports the grammar error and asks nothing further -
+    /// collected findings from 40 patterns that had no business looking.
+    ///
+    /// **`dc:identifier` is the exception**, which is why the gate could not
+    /// be a blanket one: the element exists in both versions and epubcheck
+    /// reports an empty one in both, so that rule moved to Rust instead of
+    /// going silent with the rest. This test asserts the exception and the
+    /// rule together, because it is the pairing that is easy to get wrong.
+    #[test]
+    fn the_package_schematron_is_epub3s_except_the_one_rule_that_moved() {
+        let book = |version: &str, meta: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    {meta}
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            crate::validate_bytes(epub_with_opf(
+                Some(&opf),
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body><p>x</p></body></html>",
+            ))
+            .messages
+            .into_iter()
+            .filter(|m| {
+                m.rule.is_some_and(|r| {
+                    r.starts_with("opf.package.") && r != "opf.package.duplicate_id"
+                })
+            })
+            .map(|m| m.text)
+            .collect::<Vec<_>>()
+        };
+
+        // A rendition value and a dangling @refines: reported at 3.0 …
+        const BAD: &str = r##"<meta property="rendition:layout">bogus</meta>
+    <meta refines="#nosuch" property="role">aut</meta>"##;
+        let three = book("3.0", BAD);
+        assert!(
+            three.iter().any(|t| t.contains("rendition:layout"))
+                && three.iter().any(|t| t.contains("does not exist")),
+            "the schema still runs at 3.0: {three:?}"
+        );
+
+        // … and not at 2.0, where the attributes themselves are the error.
+        let two = book("2.0", BAD);
+        assert!(
+            !two.iter().any(|t| t.contains("rendition:layout")),
+            "no EPUB 3 property rule may fire on an EPUB 2 package: {two:?}"
+        );
+        assert!(
+            !two.iter().any(|t| t.contains("does not exist")),
+            "nor a @refines rule: {two:?}"
+        );
+
+        // The moved rule fires in BOTH versions, which is the whole reason it
+        // could not stay in the schema.
+        for version in ["2.0", "3.0"] {
+            let got = book(version, r#"<dc:identifier id="x2"></dc:identifier>"#);
+            assert!(
+                got.iter()
+                    .any(|t| t == "dc:identifier must be a string with length at least 1"),
+                "an empty dc:identifier is reported at {version}: {got:?}"
+            );
+        }
     }
 
     /// `data` and `poster` are references, but only on the element that owns
