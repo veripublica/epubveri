@@ -11035,18 +11035,28 @@ fn check_dictionaries(
         }
     };
 
+    // **Publication-level, and NOT conditional on there being no dictionary
+    // collections.** epubcheck has two OPF-078 sites: one per dictionary
+    // collection that carries no dictionary content (`checkDictCollection`),
+    // and this one in `OPFChecker30`:555, which asks only whether a
+    // publication identified as a dictionary has dictionary content anywhere.
+    // Ours sat inside the `collections.is_empty()` branch, so a book with
+    // collections never reached it: on
+    // `dictionary-collection-resource-missing-error.opf` - two collections,
+    // neither with dictionary content - epubcheck reports OPF-078 three times
+    // and we reported two. The third is this one.
+    if dictionary_marked_docs.is_empty() {
+        report.push_node(
+            OPF_078,
+            Severity::Error,
+            "no content document was found with dictionary content",
+            opf_path,
+            *pkg,
+            "opf.dictionary.no_dictionary_content",
+            Vec::new(),
+        );
+    }
     if dictionary_collections.is_empty() {
-        if dictionary_marked_docs.is_empty() {
-            report.push_node(
-                OPF_078,
-                Severity::Error,
-                "no content document was found with dictionary content",
-                opf_path,
-                *pkg,
-                "opf.dictionary.no_dictionary_content",
-                Vec::new(),
-            );
-        }
         check_languages(metadata, false, report);
 
         let candidates: Vec<_> = item_properties
@@ -11145,6 +11155,34 @@ fn check_dictionaries(
                         opf_path,
                         Position::of(link),
                     );
+                    // A second, different question, and epubcheck asks both:
+                    // OPF-081 is "the manifest does not declare this", and
+                    // RSC-007w is "the container does not hold it either".
+                    // Undeclared resources route through
+                    // `checkUndeclaredReference`, whose EPUB 3 link form is
+                    // the warning-level RSC-007w - the same id and severity
+                    // the package `<link>` site already emits, for the same
+                    // reason.
+                    //
+                    // Measured one book per cell: undeclared **and** missing
+                    // draws OPF-081 + RSC-007w there, undeclared but present
+                    // draws OPF-081 alone. So the existence test is the whole
+                    // condition, and it is not implied by the OPF-081.
+                    if !name_index.contains_key(&resolved) {
+                        report.push_node_attr(
+                            RSC_007W,
+                            Severity::Warning,
+                            format!(
+                                "reference to a resource missing from the publication: '{href}'"
+                            ),
+                            opf_path,
+                            link,
+                            attr_no_ns_node(link, "href")
+                                .expect("href was read from this element above"),
+                            "opf.dictionary.link_missing_resource",
+                            vec![href.to_string()],
+                        );
+                    }
                 }
                 Some((_, mt)) => {
                     let props = item_properties.get(&resolved).cloned().unwrap_or_default();
@@ -17293,6 +17331,77 @@ mod tests {
             !wrong_root.contains(&crate::ids::RSC_005),
             "and not as a schema error - the peek runs before any grammar: \
              got {wrong_root:?}"
+        );
+    }
+
+    /// The dictionary collection's two missing findings, both settled one
+    /// book per cell against 5.3.0.
+    ///
+    /// **RSC-007w beside OPF-081.** They answer different questions - the
+    /// manifest does not declare this, and the container does not hold it -
+    /// and epubcheck asks both. Undeclared *and* missing draws OPF-081 +
+    /// RSC-007w; undeclared but present draws OPF-081 alone, so the existence
+    /// test is the whole condition and is not implied by the OPF-081.
+    ///
+    /// **A third OPF-078, from the publication rather than a collection.**
+    /// epubcheck has two sites: one per dictionary collection lacking
+    /// dictionary content, and one in `OPFChecker30`:555 asking only whether
+    /// a publication identified as a dictionary has such content anywhere.
+    /// Ours was nested inside "there are no dictionary collections", so a
+    /// book that *has* collections never reached it - two collections, no
+    /// dictionary content, epubcheck 3 and us 2.
+    #[test]
+    fn a_dictionary_collection_link_reports_both_questions() {
+        let opf = |links: &str, extra_items: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language><dc:type>dictionary</dc:type>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>{extra_items}
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+  <collection role="dictionary">{links}</collection>
+</package>"#
+            )
+        };
+        let ids = |opf: String| {
+            crate::validate_bytes(epub_with_opf(
+                Some(&opf),
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body><p>x</p></body></html>",
+            ))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect::<Vec<_>>()
+        };
+
+        // Undeclared and absent: both questions are answered.
+        let gone = ids(opf(r#"<link href="nosuch.xhtml"/>"#, ""));
+        assert!(gone.contains(&crate::ids::OPF_081), "got {gone:?}");
+        assert!(gone.contains(&crate::ids::RSC_007W), "got {gone:?}");
+
+        // Undeclared but present in the container: OPF-081 alone.
+        // `OEBPS/meta.xml` is written by the shared helper and declared by no
+        // manifest here, so it is undeclared *and* on disk - the cell that
+        // separates the two questions.
+        let present = ids(opf(r#"<link href="meta.xml"/>"#, ""));
+        assert!(present.contains(&crate::ids::OPF_081), "got {present:?}");
+        assert!(
+            !present.contains(&crate::ids::RSC_007W),
+            "the file exists, so only the manifest question fails: got {present:?}"
+        );
+
+        // The publication-level OPF-078 fires even though a collection exists.
+        assert!(
+            gone.iter().filter(|id| **id == crate::ids::OPF_078).count() >= 2,
+            "one per collection plus one for the publication: got {gone:?}"
         );
     }
 
