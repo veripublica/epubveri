@@ -3512,10 +3512,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     let pkg = doc.root_element();
     if pkg.tag_name().name() != "package" {
+        // **OPF-001, not RSC-005.** This is one of the four reasons
+        // `PackageDocumentPeeker` fails to determine a version, and
+        // `OCFChecker`:420 reports all four under OPF-001 - here with
+        // `InvalidVersionException.PACKAGE_ELEMENT_NOT_FOUND`. The sibling
+        // reason we already had right is a missing `@version`; measured one
+        // book each, epubcheck gives OPF-001 alone for both and no schema
+        // error, because the peek happens before any grammar runs.
         report.push_node(
-            RSC_005,
+            OPF_001,
             Severity::Error,
-            "OPF root element is not <package>",
+            "the package element must be the first element in the package document",
             opf_path,
             pkg,
             "opf.package.wrong_root_element",
@@ -17221,6 +17228,72 @@ mod tests {
                 "{id} is OPFHandler30's; EPUB 2 reports the grammar error alone: got {two:?}"
             );
         }
+    }
+
+    /// Both reasons a package document can fail to yield a version are
+    /// OPF-001, and one of them used to be RSC-005.
+    ///
+    /// epubcheck determines the version by *peeking* at the package document
+    /// before any grammar runs (`PackageDocumentPeeker`), and `OCFChecker`
+    /// reports every failure of that peek as OPF-001 with the reason as its
+    /// parameter. Two of the four reasons are reachable from a well-formed
+    /// file: a missing `@version` (`VERSION_ATTRIBUTE_NOT_FOUND`) and a root
+    /// element that is not `<package>` (`PACKAGE_ELEMENT_NOT_FOUND`). We had
+    /// the first and gave the second a schema error, which is the wrong id on
+    /// an entirely real condition.
+    ///
+    /// Measured one book each: epubcheck reports OPF-001 **alone** for both,
+    /// with no RSC-005 beside it, which is what the peek-before-grammar order
+    /// predicts.
+    ///
+    /// The other two reasons are cascades behind a fatal - an unparseable OPF
+    /// leaves the peek with nothing to read - and we stop at the fatal
+    /// instead, as documented for the RSC-005 cascade generally.
+    #[test]
+    fn both_reachable_version_peek_failures_are_opf_001() {
+        let package = |root: &str, version: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<{root} xmlns="http://www.idpf.org/2007/opf"{version} unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</{root}>"#
+            )
+        };
+        let ids = |opf: String| {
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_opf(
+                Some(&opf),
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body><p>x</p></body></html>",
+            ))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+
+        assert!(
+            ids(package("package", "")).contains(&crate::ids::OPF_001),
+            "a package with no @version"
+        );
+        let wrong_root = ids(package("packageX", " version=\"3.0\""));
+        assert!(
+            wrong_root.contains(&crate::ids::OPF_001),
+            "a root element that is not <package>: got {wrong_root:?}"
+        );
+        assert!(
+            !wrong_root.contains(&crate::ids::RSC_005),
+            "and not as a schema error - the peek runs before any grammar: \
+             got {wrong_root:?}"
+        );
     }
 
     /// `data` and `poster` are references, but only on the element that owns
