@@ -162,17 +162,74 @@ fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
 /// `xlink:href` and plain `href` both, since SVG 2 allows the unprefixed
 /// form; a fragment-only value addresses this document and is not a
 /// container resource.
+/// The attributes an SVG element can hold a resource reference in, walked once
+/// so the two callers cannot drift apart: [`resource_refs`], which answers
+/// "was this resource referenced" for OPF-097, and
+/// [`check_resource_references`], which answers "does this reference resolve"
+/// for RSC-007. The second was missing entirely — a standalone SVG pointing at
+/// a file that is not in the container validated clean here and drew RSC-007
+/// from epubcheck.
+fn for_each_reference<'a>(
+    root: roxmltree::Node<'a, 'a>,
+    mut f: impl FnMut(roxmltree::Node<'a, 'a>, &'a str),
+) {
+    const XLINK: &str = "http://www.w3.org/1999/xlink";
+    for n in root.descendants().filter(|n| n.is_element()) {
+        for v in [n.attribute((XLINK, "href")), n.attr_no_ns("href")]
+            .into_iter()
+            .flatten()
+        {
+            f(n, v);
+        }
+    }
+}
+
+/// `RSC-007`: a reference from a **standalone** SVG document to something the
+/// container does not hold.
+///
+/// Normative in EPUB 2 and informative in EPUB 3 like the rest of the SVG
+/// family? **No** — measured, and this one is an error at both versions,
+/// because it is `ResourceReferencesChecker`'s question rather than the
+/// grammar's. One book per version.
+pub(crate) fn check_resource_references(
+    svg_root: roxmltree::Node,
+    path: &str,
+    base_dir: &str,
+    name_index: &std::collections::HashMap<String, String>,
+    report: &mut Report,
+) {
+    use crate::opf::{is_external, nfc, resolve};
+    for_each_reference(svg_root, |n, v| {
+        let v = v.trim();
+        if v.is_empty() || v.starts_with('#') || is_external(v) || crate::opf::is_remote_url(v) {
+            return;
+        }
+        let path_part = v.split('#').next().unwrap_or(v);
+        if path_part.is_empty() {
+            return;
+        }
+        if name_index.contains_key(&nfc(&resolve(base_dir, path_part))) {
+            return;
+        }
+        report.push_node(
+            RSC_007,
+            Severity::Error,
+            format!("references a missing resource '{v}'"),
+            path,
+            n,
+            "svg.reference_missing_resource",
+            vec![v.to_string()],
+        );
+    });
+}
+
 pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
     use crate::opf::{is_external, nfc, resolve};
-    const XLINK: &str = "http://www.w3.org/1999/xlink";
     let Ok(doc) = crate::ocf::parse_xml(svg_xml) else {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for n in doc.descendants().filter(|n| n.is_element()) {
-        for v in [n.attribute((XLINK, "href")), n.attr_no_ns("href")]
-            .into_iter()
-            .flatten()
+    for_each_reference(doc.root_element(), |_, v| {
         {
             let v = v.trim();
             // Remote targets come back unresolved, as the SMIL extractor's do
@@ -180,17 +237,17 @@ pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
             // caller keys them by the href as written.
             if crate::opf::is_remote_url(v) {
                 out.push(v.to_string());
-                continue;
+                return;
             }
             if v.is_empty() || v.starts_with('#') || is_external(v) {
-                continue;
+                return;
             }
             let path_part = v.split('#').next().unwrap_or(v);
             if !path_part.is_empty() {
                 out.push(nfc(&resolve(base_dir, path_part)));
             }
         }
-    }
+    });
     out
 }
 
@@ -1661,6 +1718,76 @@ pub(crate) fn check_required_attributes(
 
 #[cfg(test)]
 mod tests {
+
+    /// A **standalone** SVG's own references were resolved by nothing.
+    /// `resource_refs` existed, but only to answer "was this resource
+    /// referenced" for OPF-097; nothing asked whether the reference itself
+    /// resolves, so a book whose SVG points at a missing image validated clean
+    /// here and drew `RSC-007` from epubcheck.
+    ///
+    /// Error at **both** versions, measured one book each — this is
+    /// `ResourceReferencesChecker`'s question rather than the grammar's, so it
+    /// does not take the normative/informative split the rest of the SVG
+    /// family does.
+    ///
+    /// The two walks now share `for_each_reference` so they cannot drift, and
+    /// the fragment and remote arms are asserted because those are the shapes
+    /// a naive "does this file exist" check gets wrong.
+    #[test]
+    fn a_standalone_svg_reference_that_does_not_resolve_is_reported() {
+        use std::collections::HashMap;
+        let mut index = HashMap::new();
+        index.insert("EPUB/there.png".to_string(), "EPUB/there.png".to_string());
+        index.insert("EPUB/pic.svg".to_string(), "EPUB/pic.svg".to_string());
+
+        let refs = |body: &str| -> Vec<String> {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"
+                        xmlns:xlink="http://www.w3.org/1999/xlink"
+                        viewBox="0 0 10 10"><title>s</title>{body}</svg>"#
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_resource_references(
+                d.root_element(),
+                "EPUB/pic.svg",
+                "EPUB",
+                &index,
+                &mut report,
+            );
+            report
+                .messages
+                .iter()
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect()
+        };
+
+        assert_eq!(
+            refs(r#"<image xlink:href="missing.png" width="1" height="1"/>"#),
+            vec!["missing.png".to_string()]
+        );
+        assert!(
+            refs(r#"<image xlink:href="there.png" width="1" height="1"/>"#).is_empty(),
+            "a reference that resolves is silent"
+        );
+        // A fragment into this document is not a container reference, a remote
+        // one has no container path, and an empty href addresses the document
+        // itself. None of the three is a missing resource.
+        for body in [
+            r##"<use xlink:href="#z"/>"##,
+            r#"<image xlink:href="https://example.org/a.png" width="1" height="1"/>"#,
+            r#"<image xlink:href="" width="1" height="1"/>"#,
+        ] {
+            assert!(refs(body).is_empty(), "should be silent: {body}");
+        }
+        // The fragment is stripped before the lookup, so a resolvable target
+        // with one stays silent and an unresolvable one is still named whole.
+        assert!(refs(r##"<use xlink:href="there.png#z"/>"##).is_empty());
+        assert_eq!(
+            refs(r##"<use xlink:href="gone.png#z"/>"##),
+            vec!["gone.png#z".to_string()]
+        );
+    }
 
     /// **Five SVG attributes have a constrained value, and that is the whole
     /// datatype axis.** `schema/20/rng/svg/svg-datatypes.rng` declares 22

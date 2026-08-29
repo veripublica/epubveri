@@ -320,8 +320,14 @@ fn check_text(
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
+        // **RSC-007, not RSC-001.** epubcheck keeps the two apart: RSC-001 is
+        // a *declared* publication resource that is not in the container,
+        // RSC-007 is a **reference** to something that is not there. A SMIL
+        // `src` is a reference. Measured one book per site against 5.3.0, and
+        // the CSS `url()` site next door already had it right - which is what
+        // makes this a slip rather than a decision.
         report.push_node(
-            RSC_001,
+            RSC_007,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
@@ -405,7 +411,7 @@ fn check_audio(
     let resolved_nfc = nfc(&resolved);
     if !name_index.contains_key(&resolved_nfc) {
         report.push_node(
-            RSC_001,
+            RSC_007,
             Severity::Error,
             format!("references a missing resource '{src}'"),
             smil_path,
@@ -711,7 +717,14 @@ mod tests {
             <body><par id="p"><text src="missing.xhtml#t"/><audio src="missing.mp3" clipBegin="0s" clipEnd="1s"/></par></body>
         </smil>"#;
         let (findings, _) = run(smil, &HashMap::new(), &HashMap::new());
-        assert_eq!(findings, vec![RSC_001, RSC_001]);
+        // **RSC-007, not RSC-001** - this assertion carried the wrong id for
+        // as long as the sites did. epubcheck separates them: RSC-001 is a
+        // *declared* publication resource missing from the container, RSC-007
+        // is a **reference** to something that is not there, and a SMIL `src`
+        // is a reference. Measured one book per site against 5.3.0; the CSS
+        // `url()` site already used RSC-007, which is what showed this was a
+        // slip rather than a decision.
+        assert_eq!(findings, vec![RSC_007, RSC_007]);
     }
 
     #[test]

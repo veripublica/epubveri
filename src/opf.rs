@@ -9497,6 +9497,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // is really about - running it at 2.0 made a lowercase `viewbox` in a
         // real book our last false-positive candidate.
         crate::svg::check_vocabulary(d.root_element(), doc_path, is_epub3, report);
+        // **A standalone SVG's own references were resolved by nothing**
+        // (RSC-007). `svg::resource_refs` existed but only fed the
+        // "was this resource referenced" question for OPF-097; nothing asked
+        // whether the reference itself resolves. A book whose SVG points at a
+        // missing image validated clean here and drew RSC-007 from epubcheck.
+        crate::svg::check_resource_references(
+            d.root_element(),
+            doc_path,
+            &parent_dir(doc_path),
+            &name_index,
+            report,
+        );
         crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_content_model(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
