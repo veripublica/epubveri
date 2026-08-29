@@ -7356,21 +7356,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         vec![token.to_string()],
                     );
                 }
-                // "endnote" specifically is deprecated only when used
-                // *without* being nested inside its proper "endnotes"
-                // container - confirmed via two real fixtures: a
-                // standalone `<aside epub:type="endnote">` is deprecated,
-                // but the same value on a `<div>` nested inside a
-                // `<section epub:type="endnotes">` is the recommended,
-                // non-deprecated usage.
-                let endnote_exempt = token == "endnote"
-                    && n.ancestors().any(|a| {
-                        a.attribute((EPUB_NS, "type"))
-                            .is_some_and(|t| t.split_whitespace().any(|tok| tok == "endnotes"))
-                    });
+                // `endnote` used to be exempted here when nested inside its
+                // proper `endnotes` container, on the reading that this is
+                // the recommended usage and therefore not deprecated. That
+                // was inferred from fixture silence and is wrong: the
+                // inference came from `epubtype-valid.xhtml`, whose nested
+                // endnote draws "usage OPF-088 is reported 0 times" and "no
+                // errors or warnings" - and **OPF-086b is usage**, so that
+                // expectation says nothing about it either way. Asked
+                // directly, 5.3.0 reports OPF-086b for both shapes, bare and
+                // nested, at the same wording. There is no exemption.
                 if let Some((_, replacement)) =
                     crate::ssv::DEPRECATED.iter().find(|(t, _)| *t == token)
-                    && !endnote_exempt
                 {
                     // epubcheck reports a deprecated epub:type semantic as
                     // usage-level OPF-086b (the corpus'
@@ -22257,8 +22254,6 @@ mod tests {
     #[test]
     fn deprecated_epub_type_is_not_also_reported_as_unknown() {
         for term in crate::ssv::DEPRECATED.iter().map(|(t, _)| *t) {
-            // `endnote` inside an `endnotes` container is the recommended,
-            // non-deprecated usage - it has its own exemption.
             let body = format!("<p epub:type=\"{term}\">x</p>");
             let got = epub_type_findings(&body);
             assert!(
@@ -22272,6 +22267,36 @@ mod tests {
                 "'{term}' must still be reported as deprecated; got {got:?}"
             );
         }
+    }
+
+    /// `endnote` is deprecated wherever it appears, including inside its
+    /// own `endnotes` container - which is the *recommended* structure, and
+    /// which is exactly why this looked like an exemption and was coded as
+    /// one for a while.
+    ///
+    /// The exemption was inferred from fixture silence:
+    /// `epubtype-valid.xhtml` nests an endnote and expects "usage OPF-088 is
+    /// reported 0 times" plus "no errors or warnings". **OPF-086b is usage**,
+    /// so that scenario constrains it in neither direction - the silence was
+    /// read as permission. Asked directly, epubcheck 5.3.0 reports OPF-086b
+    /// on both shapes with identical wording.
+    ///
+    /// Kept as a test rather than a comment because the exemption is the
+    /// intuitive reading: recommended usage that is nevertheless deprecated
+    /// looks like a contradiction, and the next person to notice it will
+    /// want to "fix" it back.
+    #[test]
+    fn nested_endnote_is_deprecated_too() {
+        let nested = "<section epub:type=\"endnotes\"><h2>e</h2>\
+                      <div epub:type=\"endnote\">x</div></section>";
+        assert!(
+            epub_type_findings(nested)
+                .iter()
+                .any(|(r, id)| *r == "opf.content_document.deprecated_epub_type"
+                    && *id == crate::ids::OPF_086B),
+            "an endnote inside endnotes is still deprecated: {:?}",
+            epub_type_findings(nested)
+        );
     }
 
     /// The vocabulary gives these terms an HTML usage context of "Not
