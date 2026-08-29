@@ -159,27 +159,63 @@ fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
 /// loudly when one is missed. That is now twice. Before adding a reference
 /// kind, ask which per-source lists it must join.
 ///
-/// `xlink:href` and plain `href` both, since SVG 2 allows the unprefixed
-/// form; a fragment-only value addresses this document and is not a
-/// container resource.
-/// The attributes an SVG element can hold a resource reference in, walked once
-/// so the two callers cannot drift apart: [`resource_refs`], which answers
-/// "was this resource referenced" for OPF-097, and
+/// Walked once so the three callers cannot drift apart: [`resource_refs`],
+/// which answers "was this resource referenced" for OPF-097;
 /// [`check_resource_references`], which answers "does this reference resolve"
-/// for RSC-007. The second was missing entirely — a standalone SVG pointing at
-/// a file that is not in the container validated clean here and drew RSC-007
-/// from epubcheck.
+/// for RSC-007; and [`check_fragments`], which answers "does this fragment
+/// name a real id" for RSC-012.
+///
+/// # The set is exactly what epubcheck registers, and it is small
+///
+/// This used to be "every element's `xlink:href` or `href`", which is far
+/// wider than `OPSHandler`'s SVG dispatch and produced errors on markup
+/// epubcheck says nothing about. Five, measured one book each against 5.3.0,
+/// every one of them an RSC-007 we invented:
+/// `<textPath xlink:href="missing.svg#p">`, `<tref>` likewise, a gradient's
+/// `xlink:href`, and a **plain** `href` on `<use>` or `<image>`.
+///
+/// What it registers, and nothing else:
+///
+/// | construct | `Reference.Type` | dispatched by |
+/// |---|---|---|
+/// | `use:href` | `SVG_SYMBOL` | `checkSymbol` |
+/// | `image:href` | `IMAGE` | `checkImage` |
+/// | `a:href` | `HYPERLINK` | `checkHRef` |
+/// | `font-face-uri:href` | `FONT` | `checkSVGFontFaceURI` |
+/// | any element's `fill`/`stroke` | `SVG_PAINT` | `checkPaint` |
+///
+/// Two details of that dispatch are load-bearing and both were probed:
+///
+/// - **`xlink:href` only.** Every call site passes the namespace explicitly,
+///   so SVG 2's unprefixed `href` is not a reference to epubcheck at all —
+///   the same finding as issue #77 made about `<a>`, which turns out to be
+///   the general rule rather than an anchor quirk.
+/// - **`checkPaint` takes the value literally**: `startsWith("url(")` and
+///   `endsWith(")")`, so `fill="url(#a) red"` registers nothing. Probed.
+///
+/// `clip-path` and the `marker-*` properties look like paint references and
+/// are not dispatched, which is why they draw nothing. The callback receives
+/// the reference **already unwrapped** from `url(...)`.
 fn for_each_reference<'a>(
     root: roxmltree::Node<'a, 'a>,
     mut f: impl FnMut(roxmltree::Node<'a, 'a>, &'a str),
 ) {
     const XLINK: &str = "http://www.w3.org/1999/xlink";
     for n in root.descendants().filter(|n| n.is_element()) {
-        for v in [n.attribute((XLINK, "href")), n.attr_no_ns("href")]
-            .into_iter()
-            .flatten()
+        if n.tag_name().namespace() != Some(SVG_NS) {
+            continue;
+        }
+        if matches!(n.tag_name().name(), "use" | "image" | "a" | "font-face-uri")
+            && let Some(v) = n.attribute((XLINK, "href"))
         {
             f(n, v);
+        }
+        for attr in ["fill", "stroke"] {
+            if let Some(v) = n.attr_no_ns(attr)
+                && let Some(inner) = v.strip_prefix("url(").and_then(|r| r.strip_suffix(')'))
+            {
+                f(n, inner);
+            }
         }
     }
 }
@@ -814,6 +850,48 @@ fn is_valid_ncname(s: &str) -> bool {
 /// one id between two elements, reported once *per* colliding element -
 /// the same "per-element not per-pair" convention already used
 /// elsewhere in this project, e.g. NCX id duplication).
+/// `RSC-012`: a fragment in this SVG's own references that names no id in
+/// this document.
+///
+/// **Only same-document fragments**, which is what a standalone SVG almost
+/// always carries — `<use xlink:href="#rect">` and `fill="url(#grad)"`. A
+/// cross-document fragment is checked against the *other* document and is
+/// left to the caller that owns it; in the one probe that reached for it,
+/// epubcheck aborted on an RSC-011 before the fragment question was asked.
+///
+/// **This is the half [`check_resource_references`] could not do**, and the
+/// reason a first attempt at it was reverted (issue #130): walked over every
+/// `href` the set was far too wide, so we named references epubcheck does
+/// not register. With [`for_each_reference`] narrowed to the registered set,
+/// the same walk answers this question correctly — measured one book per
+/// construct, and the six that draw RSC-012 there now draw it here.
+pub(crate) fn check_fragments(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
+    let mut ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for n in svg_root.descendants().filter(|n| n.is_element()) {
+        if let Some(id) = n.attr_no_ns("id") {
+            ids.insert(id);
+        }
+    }
+    for_each_reference(svg_root, |n, v| {
+        let v = v.trim();
+        let Some(frag) = v.strip_prefix('#') else {
+            return;
+        };
+        if frag.is_empty() || ids.contains(frag) {
+            return;
+        }
+        report.push_node(
+            RSC_012,
+            Severity::Error,
+            format!("fragment identifier '{v}' does not resolve to an element in this document"),
+            path,
+            n,
+            "svg.fragment_missing_target",
+            vec![v.to_string()],
+        );
+    });
+}
+
 pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     let mut by_id: HashMap<&str, u32> = HashMap::new();
     for n in svg_root.descendants().filter(|n| n.is_element()) {
@@ -1853,6 +1931,124 @@ mod tests {
         ] {
             assert!(bad(body).is_empty(), "should be silent: {body}");
         }
+    }
+
+    /// The reference set is exactly the one `OPSHandler` registers, and it is
+    /// much smaller than "every `href` in the document" (issue #130).
+    ///
+    /// The wide walk this replaces produced five errors on markup epubcheck
+    /// says nothing about, each measured one book at a time against 5.3.0:
+    /// `<textPath xlink:href>`, `<tref xlink:href>`, a gradient's
+    /// `xlink:href`, and a **plain** `href` on `<use>` or `<image>`. The last
+    /// pair is issue #77's `<a>` finding turning out to be the general rule —
+    /// every SVG call site in epubcheck passes the xlink namespace
+    /// explicitly, so the unprefixed SVG 2 spelling is not a reference to it.
+    ///
+    /// Asserted as a whole set rather than case by case, because the failure
+    /// this guards against is the set quietly widening again.
+    #[test]
+    fn the_svg_reference_set_is_the_one_epubcheck_registers() {
+        use std::collections::HashMap;
+        let index: HashMap<String, String> = HashMap::new();
+        let named = |body: &str| -> Vec<String> {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"
+                        xmlns:xlink="http://www.w3.org/1999/xlink"
+                        viewBox="0 0 10 10"><title>s</title>{body}</svg>"#
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_resource_references(
+                d.root_element(),
+                "EPUB/pic.svg",
+                "EPUB",
+                &index,
+                &mut report,
+            );
+            report
+                .messages
+                .iter()
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect()
+        };
+
+        // Registered: the four xlink elements and the two paint properties.
+        for body in [
+            r#"<use xlink:href="gone.svg"/>"#,
+            r#"<image xlink:href="gone.svg"/>"#,
+            r#"<a xlink:href="gone.svg"><rect/></a>"#,
+            r#"<font-face-uri xlink:href="gone.svg"/>"#,
+            r#"<rect fill="url(gone.svg)"/>"#,
+            r#"<rect stroke="url(gone.svg)"/>"#,
+        ] {
+            assert_eq!(
+                named(body),
+                vec!["gone.svg".to_string()],
+                "registered: {body}"
+            );
+        }
+
+        // Not registered — every one of these was a false positive.
+        for body in [
+            r#"<text><textPath xlink:href="gone.svg"/></text>"#,
+            r#"<text><tref xlink:href="gone.svg"/></text>"#,
+            r#"<linearGradient xlink:href="gone.svg"/>"#,
+            r#"<use href="gone.svg"/>"#,
+            r#"<image href="gone.svg"/>"#,
+            r#"<rect clip-path="url(gone.svg)"/>"#,
+            r#"<line marker-start="url(gone.svg)"/>"#,
+            // `checkPaint` takes the value literally: it must be exactly
+            // `url(…)`, so a paint list registers nothing. Probed.
+            r#"<rect fill="url(gone.svg) red"/>"#,
+        ] {
+            assert!(named(body).is_empty(), "not registered: {body}");
+        }
+    }
+
+    /// RSC-012 on a same-document fragment that names no id, over that same
+    /// set — the half of issue #130 that was implemented and reverted.
+    ///
+    /// The revert was right: walked over every `href`, we reported two
+    /// references on `epubtype-valid.svg` where epubcheck reports one, the
+    /// extra being a `<textPath>`. Narrowing the set is what makes the check
+    /// correct rather than tuning the check itself.
+    #[test]
+    fn a_same_document_fragment_must_name_a_real_id() {
+        let frags = |body: &str| -> Vec<String> {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg"
+                        xmlns:xlink="http://www.w3.org/1999/xlink"
+                        viewBox="0 0 10 10"><title>s</title><rect id="here"/>{body}</svg>"#
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_fragments(d.root_element(), "EPUB/pic.svg", &mut report);
+            report
+                .messages
+                .iter()
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect()
+        };
+
+        assert_eq!(
+            frags(r##"<use xlink:href="#nosuch"/>"##),
+            vec!["#nosuch".to_string()]
+        );
+        assert_eq!(
+            frags(r##"<rect fill="url(#nosuch)"/>"##),
+            vec!["#nosuch".to_string()]
+        );
+        assert!(
+            frags(r##"<use xlink:href="#here"/>"##).is_empty(),
+            "a fragment that resolves is silent"
+        );
+        // The whole point of the narrowing: this one is not a reference.
+        assert!(
+            frags(r##"<text><textPath xlink:href="#nosuch"/></text>"##).is_empty(),
+            "a textPath fragment is not registered, so it is not checked"
+        );
+        // A cross-document fragment belongs to the other document.
+        assert!(frags(r##"<use xlink:href="other.svg#nosuch"/>"##).is_empty());
     }
 
     /// The required-attribute table, extended from seven elements to

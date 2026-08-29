@@ -9811,6 +9811,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         crate::svg::check_content_model(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
         crate::svg::check_ids(d.root_element(), doc_path, report);
+        crate::svg::check_fragments(d.root_element(), doc_path, report);
         crate::svg::check_link_labels(d.root_element(), doc_path, report);
         for fo in d.descendants().filter(|n| {
             n.is_element()
