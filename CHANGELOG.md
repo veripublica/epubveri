@@ -8,6 +8,158 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.13.2] - 2026-08-30
+
+**Thirteen changes, most of them from one sweep: clearing every unexamined row
+from the 981-book comparison against epubcheck.** That run diffs the two tools
+over epubcheck's own corpus, and an id only it reports is a gap on our side.
+Nine rows are closed here as code and four as recorded decisions — and the
+probing that settled them turned up five further defects nobody had listed,
+two of which were wrong errors on valid markup.
+
+The two false positives are the part worth reading. Neither reached a user;
+both were found by asking epubcheck about one book at a time.
+
+### An imported stylesheet is restricted, and we asked for a remedy that cannot work
+
+A remote `@import` fetches another stylesheet, which EPUB never permits, so
+epubcheck reports RSC-006 and stops. We reported it too — and added an OPF-014
+telling the author to declare `remote-resources` on the manifest item. That
+property licenses remote resources a reading system *may* fetch; it cannot
+license a stylesheet, so the advice named a fix that does not exist.
+
+Worse in a standalone `.css` file, where we were wrong in both directions at
+once: RSC-008 and OPF-014, neither of which epubcheck gives, and no RSC-006,
+which it does. The rule was already implemented for `<link rel="stylesheet">`
+and had simply never been stated at the other three sites. Eight cells,
+one book each:
+
+| where | epubcheck | epubveri, before |
+|---|---|---|
+| inline `<style>`, `@import https:` | RSC-006 | RSC-006 **+ OPF-014** |
+| standalone `.css`, `@import https:` | RSC-006 | **RSC-008 + OPF-014** |
+| `@import file:` | RSC-030 + RSC-006 | RSC-030 |
+| `<?xml-stylesheet href="file:…"?>` | RSC-030 + RSC-006 | RSC-030 |
+| `@font-face url(https:)` | OPF-014 + RSC-008 | same |
+| `<link rel=stylesheet https:>` | RSC-006 | same |
+| `<img src="file:…">` | RSC-030 + RSC-006 + OPF-014 | same |
+| `<a href="file:…">` | RSC-030 | same |
+
+The `file:` half is a second, independent defect. RSC-030 owns the *diagnosis*
+of a file URL, which is why our "is this remote" predicate answers no for one
+— but epubcheck asks the *restriction* question as well and reports both. Two
+questions, not one.
+
+### The EPUB 3 package rules were being applied to EPUB 2 books
+
+`schemas/package.sch` is a port of epubcheck's `package-30.sch`, and epubcheck
+puts that schema behind a version test: EPUB 2's package Schematron has
+exactly two rules, id uniqueness and the duplicate `guide` reference. Ours ran
+at any version. So an EPUB 2 package that happened to carry an `@property`,
+`@refines`, `<collection>` or package `<link>` — constructs EPUB 2 does not
+have, where epubcheck reports the grammar error and asks nothing further —
+collected findings from 40 patterns that had no business looking. Measured
+three ways, one book each: a bad `rendition:layout` value, a dangling
+`@refines`, and a `role` refining nothing all drew errors from us and none
+from epubcheck.
+
+The run is now gated on the version, and our output on such a book is a strict
+subset of epubcheck's.
+
+**One rule had to move rather than go silent.** `dc:identifier` is an EPUB 2
+element as much as an EPUB 3 one, and epubcheck reports an empty one in both
+versions, so the "must not be empty" rule moved into Rust instead — a blanket
+gate would have traded a batch of invented errors for a missed one. Its
+output, message, position, severity and rule key are byte-identical to the
+Schematron version it replaces, verified by diffing this build's JSON against
+the previous one at both versions.
+
+### Findings we were missing
+
+- **A `<video poster>` and an `<object data>` pointing at a missing or
+  undeclared file** drew nothing at all. Both were in the reference list and
+  then skipped from the existence check by a line with no comment behind it. A
+  missing video poster is ordinary markup. They are references only on the
+  element that owns them, and `poster` only in EPUB 3 — the EPUB 2 cell has to
+  stay silent, and does.
+- **OPF-025** — a `property` or `scheme` attribute carrying a list where one
+  value is allowed. The id had been declared in the source and never emitted
+  by any line, which meant the coverage matrix counted it as covered. It
+  suppresses the two shape checks beside it, as epubcheck's parser does.
+- **RSC-007w on a dictionary collection link**, beside the OPF-081. They are
+  different questions — the manifest does not declare this, and the container
+  does not hold it — and epubcheck asks both.
+- **A third OPF-078**: epubcheck asks whether a publication identified as a
+  dictionary has dictionary content *anywhere*, separately from asking it of
+  each collection. Ours could only be reached by a book with no collections at
+  all.
+- **`epub:type="endnote"` nested inside `endnotes`** is deprecated like any
+  other use of it. We had exempted it, on a reading of a fixture that expects
+  "no errors or warnings" — and OPF-086b is a *usage* message, so that
+  expectation says nothing about it either way. Asked directly, epubcheck
+  reports it for both shapes.
+- **A reference resolved through a remote `<base>`** no longer counts as
+  referencing the identically-named local file. It does not point into the
+  container at all, so the manifest item it appeared to use is in fact
+  referenced by nothing, and now says so.
+
+### Corrections to what we already reported
+
+- **OPF-047** (the OEBPS 1.2 notice) is **usage**, not a warning. Nothing
+  caught it because no fixture in epubcheck's suite mentions the id at all, so
+  nothing constrained its severity. At warning level we announced every legacy
+  package by default, where epubcheck says nothing without `-u`.
+- **A root element that is not `<package>`** is OPF-001, not a schema error.
+  epubcheck determines the version by peeking at the package document before
+  any grammar runs, and reports every failure of that peek under that id.
+- **Seventeen `epub:type` values we accepted are not in any vocabulary** —
+  `practice`, `question`, `answer`, the plural `learning-*` forms,
+  `seriespage`, `toc-brief`, `translator-note`, `ordinal` and the rest, all
+  draft EDUPUB leftovers the vocabulary's own change log records removing. Each
+  silenced an OPF-088 that epubcheck reports. The table is now exactly the 128
+  terms of the published vocabulary plus `region-based`, checked termwise
+  against two sources that agree.
+
+### OPF-014 points at the SVG, and says where the remedy is
+
+Reported on the MobileRead forum: an EPUB 3 whose cover page wraps an image in
+SVG without declaring the `svg` property. Both tools report it and both are
+right — the complaint was that the message talks about the OPF while pointing
+at the XHTML.
+
+A finding like this has two places and the document's root element is neither.
+The evidence is the `<svg>` element further down the file; the remedy is the
+`<item>` line in the package document. `<html>` carries no more information
+than epubcheck's own `-1/-1` — it only looks more precise. So the position now
+points at the construct that requires the property, and the message says where
+to write the declaration. On a real book's cover page the finding moves from
+line 1 to line 13, which is where the SVG actually is.
+
+The **path** deliberately does not move. It names the content document, as
+epubcheck's does, because that is what identifies which document is being
+talked about — and repair tools use it to find the manifest item whose href is
+that document.
+
+### Also
+
+- A `<guide>` reference's fragment now resolves, and a collection `<link>`'s
+  fragment with it.
+- References from a standalone SVG document are reported as RSC-007, and the
+  two media-overlay sites moved from RSC-001 to RSC-007 to match epubcheck,
+  which the neighbouring CSS site already did.
+
+### Not changed, on purpose
+
+- Two RSC-005s on OEBPS 1.2 packages come from a DTD we do not implement, which
+  remains the one documented gap in that format's support.
+- One RSC-026 depends on how epubcheck's URL library *recovers* from a
+  malformed URL: it reports "leaks outside the container" for
+  `https:/www.example.com` and not for `https:www.example.com`. Nothing in the
+  specification draws that line, and reproducing it means reproducing a
+  recovery algorithm we cannot read — the same boundary that leaves RSC-020
+  partial.
+- Two OPF-001s follow a fatal parse error, where we stop at the fatal.
+
 ## [0.13.1] - 2026-08-29
 
 **Seven false positives, and none of them was reaching anyone.** Every one is a
