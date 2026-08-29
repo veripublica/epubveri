@@ -1239,21 +1239,27 @@ mod tests {
         assert!(!ok(&three, cols_after), "EPUB 3 rejects columns after rows");
     }
 
-    /// #65: a rejected element nested inside another rejected element must
-    /// still be named. #60 fixed the flat-sibling case by taking the
-    /// `After(content, rest)` continuation; the issue's remaining half was
-    /// that nesting needs recovery to resume at more than one level.
+    /// **#65's premise was wrong, and this test used to encode it** (corrected
+    /// 2026-08-30, issue #94). It asserted that a rejected element nested
+    /// inside another rejected element "must still be named", and pinned the
+    /// counts 4, 2, 3. Three of those were our own behaviour, never a
+    /// measurement — the doc comment even said epubcheck reports "roughly
+    /// twice the number of elements present", read off counts without
+    /// checking *which* elements the messages named.
     ///
-    /// **Attempted reproduction 2026-08-04 and could not:** three shapes —
-    /// plain nesting, a `<nav>` inside an `<li>` inside a `<nav>`, and a body
-    /// whose every child is a rejected `<nav>` — all name every occurrence
-    /// that exists. epubcheck reports roughly twice the number of elements
-    /// present in the same files, which is its double-reporting inside an
-    /// invalid container, not us under-reporting. The issue's "five reported,
-    /// two by us" predates #60 and the `Block.model` body fix.
+    /// Read by position instead, one book each against 5.3.0:
     ///
-    /// Pinned rather than closed on a guess: if the recovery ever stops
-    /// descending again, this fails.
+    /// - `<nav><nav><p>a</p></nav></nav><p>x</p><nav><nav><p>b</p></nav></nav>`
+    ///   draws four messages, at columns 6, 19, 44 and 57. Only 6 and 44 are
+    ///   just past a `<nav>`; 19 and 57 are past the inner `<p>`. **Two navs
+    ///   are named, not four** — the other two messages are epubcheck
+    ///   repeating the pending error at a child boundary.
+    /// - `<nav><nav><nav><p>a</p></nav></nav></nav>` names **one**.
+    ///
+    /// That is the rule `rejected_subtree` implements: inside an element the
+    /// grammar defines nowhere, no child is blamed for its position. What
+    /// survives is the middle case below, and it is the boundary worth having
+    /// a test for.
     #[test]
     fn every_nested_rejected_element_is_named() {
         let doc = |b: &str| {
@@ -1270,22 +1276,28 @@ mod tests {
             .count()
         };
 
-        // Two levels, twice over: four <nav>, four reports.
+        // Two outer <nav>, two reports; the inner ones are inside an element
+        // with no model and are not blamed.
         assert_eq!(
             count("<nav><nav><p>a</p></nav></nav><p>x</p><nav><nav><p>b</p></nav></nav>"),
-            4,
+            2,
             "flat and nested together"
         );
-        // A rejected element buried inside a valid one inside a rejected one.
+        // **The boundary.** A valid intermediate resumes normal validation, so
+        // the inner `<nav>` is blamed after all: `<ol>` has a model of its
+        // own, and `<nav>` is not in `<li>`'s. epubcheck agrees — its four
+        // messages here include one just past the inner `<nav>` (column 19),
+        // which the all-nested shapes above do not have.
         assert_eq!(
             count("<nav><ol><li><nav><p>a</p></nav></li></ol></nav>"),
             2,
             "nesting through a valid intermediate"
         );
-        // Three levels deep.
+        // Three levels, one report: the outermost. epubcheck's second message
+        // sits past the `<p>`, not past a `<nav>`.
         assert_eq!(
             count("<nav><nav><nav><p>a</p></nav></nav></nav>"),
-            3,
+            1,
             "three levels"
         );
     }

@@ -24007,14 +24007,31 @@ mod tests {
         // here because it is the boundary the namespace test draws.
         assert_eq!(schema_errors("2.0", "<li><p>a</p><span>b</span></li>"), 1);
 
-        // #24's branch must survive: `<center>` has no model in the grammar,
-        // but it is in the XHTML namespace, which the grammar declares plenty
-        // of elements in - so the subtree is still walked and the obsolete
-        // `<font>` and `<s>` inside it are still named. Collapsing on "no
-        // model" rather than on "no namespace" would silence these two.
+        // **This asserted 3 and 3 was our own behaviour** (corrected
+        // 2026-08-30, issue #94). Handed exactly this markup, epubcheck
+        // reports the `center` and **nothing else**: `font` and `s` are
+        // obsolete too, so inside an element the grammar defines nowhere
+        // there is no model for them to break. The comment here used to say
+        // they "are still named", which was never measured.
+        //
+        // #24's branch does survive, for a different reason than this line
+        // claimed: its fixture puts the obsolete elements inside a `<p>`,
+        // which has a model of its own, so they are checked against it and
+        // reported. That is asserted next.
         assert_eq!(
             schema_errors("2.0", r#"<center><font size="2">a</font><s>b</s></center>"#),
-            3
+            1
+        );
+        // The shape #24 is actually about: the obsolete elements sit inside a
+        // `<p>`, whose model rejects them. Measured — epubcheck names
+        // `center`, `font`, `s`, `strike`, `u` and then `u` once more, its
+        // duplicate at the child boundary; we name the same five, once each.
+        assert_eq!(
+            schema_errors(
+                "2.0",
+                r#"<center><p>a <font/>, <s/>, <strike/>, <u/> b.</p></center>"#
+            ),
+            5
         );
     }
 

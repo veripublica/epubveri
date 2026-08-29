@@ -776,7 +776,7 @@ impl<'a> Env<'a> {
                             // so its subtree is still walked and the `<font>`
                             // buried inside it still reported.
                             if self.namespace_is_declared(ns) {
-                                let _ = self.children_deriv(&cur, n, blames, true);
+                                self.rejected_subtree(n, blames);
                             }
                         }
                     }
@@ -810,6 +810,62 @@ impl<'a> Env<'a> {
             }
         }
         cur
+    }
+
+    /// Walk the subtree of an element the grammar defines **nowhere**, blaming
+    /// nothing for being misplaced.
+    ///
+    /// This is the measured behaviour, not a simplification (issue #94).
+    /// Handed `<center>` — obsolete, so absent from `schema/20` entirely —
+    /// epubcheck blames **no** child of it for its position, whatever the
+    /// child is. It validates each child's *content* against that child's own
+    /// model and reports only what breaks there. Twelve shapes, one book each
+    /// against 5.3.0:
+    ///
+    /// - `<center><font/><s/></center>` — one message, for `center` alone;
+    ///   `font` and `s` are obsolete too, so there is no model to break.
+    /// - `<center><li>x</li></center>` and `<center><tr><td>x</td></tr></center>`
+    ///   — `li` and `tr` are real elements in a wildly wrong place and are
+    ///   **not** reported. Their content is legal for them, so nothing is.
+    /// - `<center><span><font/></span></center>` — the `font` is reported,
+    ///   against **span's inline model**, not the block model `center` sat in.
+    /// - `<center><center><font/></center></center>` — silence throughout: two
+    ///   elements with no model, so the walk never finds one to check against.
+    ///
+    /// Before this, the whole subtree was scored against the *enclosing*
+    /// pattern, which blamed every misplaced child and gave the survivors the
+    /// wrong `expected` list. That is issue #69's mistake one level in — the
+    /// `Some(model)` branch above was fixed for it and this branch was not.
+    ///
+    /// **Text is ignored**, as it was under the flag this replaces: the
+    /// container is gone, so its text cannot be "not allowed here" against a
+    /// model it was never going to satisfy.
+    ///
+    /// Splitting this out is also what issue #94 asked for before anyone
+    /// re-attempted it: the old `in_rejected` flag served this *and* a custom
+    /// element's transparent content, and the two are not interchangeable.
+    /// Suppressing on the shared flag silenced `<p><my-el><div/></my-el></p>`.
+    /// The custom-element path keeps `children_deriv(.., true)`; only this one
+    /// moved.
+    fn rejected_subtree<'d, 'i>(
+        &self,
+        parent: roxmltree::Node<'d, 'i>,
+        blames: &mut Vec<Blame<'d, 'i>>,
+    ) {
+        for n in parent.children().filter(|n| n.is_element()) {
+            let ns = n.tag_name().namespace().unwrap_or("");
+            let local = n.tag_name().name();
+            match self.element_model(ns, local) {
+                Some(model) => {
+                    let _ = self.child_deriv(&model, n, blames);
+                }
+                None => {
+                    if self.namespace_is_declared(ns) {
+                        self.rejected_subtree(n, blames);
+                    }
+                }
+            }
+        }
     }
 
     fn child_deriv<'d, 'i>(
