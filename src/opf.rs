@@ -478,11 +478,20 @@ pub(crate) fn is_remote_url(href: &str) -> bool {
     // general predicate safe here, and it is also how epubcheck arranges it
     // - the URL is remote either way, and the checks that care are only
     // asked about resources that must live in the container.
-    // `data:` is never remote (epubcheck's own first branch), and `file:`
-    // is RSC-030's alone: epubcheck reports that and stops, so treating it
-    // as a remote resource here added a second finding on top - caught by
-    // the `file-url-in-css-error` fixture, which expects RSC-030 and
-    // nothing else.
+    // `data:` is never remote (epubcheck's own first branch). `file:` is
+    // excluded here because RSC-030 owns the *diagnosis* - reporting it as a
+    // remote resource on top added a second finding, caught by the
+    // `file-url-in-css-error` fixture, which expects RSC-030 alone.
+    //
+    // **That is a fact about this predicate, not about `file:` generally,
+    // and it was read as the latter for a while.** epubcheck does ask the
+    // *restriction* question of a `file:` URL and reports RSC-006 beside the
+    // RSC-030 - measured on `@import`, `<?xml-stylesheet?>`, `<link
+    // rel=stylesheet>` and `<img src>`, one book each. Callers that ask "may
+    // this reference exist here at all" must therefore test
+    // `is_remote_url(u) || is_file_url(u)`; only the ones asking "is this a
+    // remote *resource*", in the RSC-008 and `remote-resources` sense, may
+    // rely on this returning false.
     if href.starts_with("data:") || is_file_url(href) {
         return false;
     }
@@ -8940,6 +8949,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .or_default()
                     .extend(inline_classes);
                 docs_with_css.insert(path.clone());
+                // Unlike a remote font/background image referenced via
+                // CSS (allowed, `resources-remote-font-in-css-valid`), a
+                // remote `@import` fetches another *stylesheet* - always
+                // restricted, same as a `<link rel="stylesheet">` (RSC-006
+                // instead of RSC-008), confirmed via the real
+                // `resources-remote-stylesheet-svg-import-error` fixture.
+                //
+                // `file:` joins them here even though `is_remote_url` says
+                // no: that predicate answers "is this a remote resource",
+                // and RSC-030 owning the `file:` diagnosis does not stop
+                // epubcheck asking the restriction question too. Measured -
+                // `@import url(file:example)` in an inline `<style>` draws
+                // RSC-030 **and** RSC-006 there, and drew only RSC-030 here.
+                let imports: std::collections::HashSet<String> =
+                    crate::css::import_targets(&sheet).into_iter().collect();
+                for u in &imports {
+                    if is_remote_url(u) || is_file_url(u) {
+                        restricted_remote_refs.insert(strip_url_fragment(u));
+                    }
+                }
                 for u in crate::css::stylesheet_urls(&sheet) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
@@ -8948,20 +8977,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if !is_external(&u) {
                         resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
                     }
-                    if is_remote_url(&u) {
+                    // **An import is not a remote-resources dependency.**
+                    // The property exists for remote resources a reading
+                    // system may fetch *with permission*; a remote stylesheet
+                    // may not be fetched at all, so declaring the property
+                    // cannot fix it and epubcheck never asks for it. It
+                    // reports RSC-006 alone, and we reported OPF-014 on top -
+                    // an error naming a remedy that does not exist. The same
+                    // line is already drawn for `<link>` a few hundred lines
+                    // up (`if tag != "link"`), for exactly this reason.
+                    if is_remote_url(&u) && !imports.contains(&u) {
                         has_remote.get_or_insert(node);
                         remote_refs.insert(strip_url_fragment(&u));
-                    }
-                }
-                // Unlike a remote font/background image referenced via
-                // CSS (allowed, `resources-remote-font-in-css-valid`), a
-                // remote `@import` fetches another *stylesheet* - always
-                // restricted, same as a `<link rel="stylesheet">` (RSC-006
-                // instead of RSC-008), confirmed via the real
-                // `resources-remote-stylesheet-svg-import-error` fixture.
-                for u in crate::css::import_targets(&sheet) {
-                    if is_remote_url(&u) {
-                        restricted_remote_refs.insert(strip_url_fragment(&u));
                     }
                 }
             }
@@ -9701,7 +9728,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 && p.target == "xml-stylesheet"
                 && let Some(href) = p.value.and_then(extract_pi_href)
             {
-                if is_remote_url(&href) {
+                // `file:` is restricted too, and RSC-030 does not absorb the
+                // question: epubcheck reports both on the same reference.
+                // Measured on its own `file-url-in-svg-content-error.svg`,
+                // where the PI and the `@import` each draw RSC-030 **and**
+                // RSC-006 and we gave only the first.
+                if is_remote_url(&href) || is_file_url(&href) {
                     report.push_node(
                         RSC_006,
                         Severity::Error,
@@ -9760,7 +9792,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .collect();
                 let sheet = styloria::Parser::parse_stylesheet(&css_text);
                 for import_url in crate::css::import_targets(&sheet) {
-                    if is_remote_url(&import_url) {
+                    if is_remote_url(&import_url) || is_file_url(&import_url) {
                         report.push_node(
                             RSC_006,
                             Severity::Error,
@@ -9797,7 +9829,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 })
                 && let Some(href) = n.attr_no_ns("href")
             {
-                if is_remote_url(href) {
+                if is_remote_url(href) || is_file_url(href) {
                     report.push_node(
                         RSC_006,
                         Severity::Error,
@@ -9985,6 +10017,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // `content-css-font-face-url-empty-error`, whose `src: url('')`
         // suddenly declared a remote resource. Probed: `data:` and `''` draw
         // no OPF-014 from epubcheck, so neither counts.
+        // Top-level `@import` targets, which are a different kind of
+        // reference from every other `url()` in the sheet: an imported
+        // stylesheet is *always* restricted, so a remote one is RSC-006 and
+        // neither RSC-008 nor the `remote-resources` property applies. The
+        // inline `<style>` path had this rule and this one did not, which is
+        // the per-source enumeration gap `CLAUDE.md` warns about - the same
+        // fact stated in one place and not its neighbour.
+        //
+        // Measured, one book each: a remote `@import` in a standalone sheet
+        // draws **RSC-006 alone** from epubcheck, where we drew RSC-008 *and*
+        // OPF-014 and no RSC-006 - wrong in both directions at once. The
+        // control is a remote `@font-face src`, where epubcheck does report
+        // OPF-014 and RSC-008 and we already agreed.
+        let imports: std::collections::HashSet<String> =
+            crate::css::import_targets(&sheet).into_iter().collect();
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
             // Consumed resources, for OPF-097 - a font is "used" if any
@@ -10008,7 +10055,25 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     vec![u.clone()],
                 );
             }
-            css_has_remote |= is_remote_url(&u) || u.trim_start().starts_with("file:");
+            if imports.contains(&u) {
+                // `file:` is restricted here too. `is_remote_url` answers
+                // "is this a remote resource" and says no for `file:`,
+                // because RSC-030 owns that diagnosis - but epubcheck asks
+                // the restriction question anyway, and reports both.
+                if is_remote_url(&u) || is_file_url(&u) {
+                    let bare = strip_url_fragment(&u);
+                    report.push_at_rule(
+                        RSC_006,
+                        Severity::Error,
+                        format!("remote resource '{bare}' is not allowed in this context"),
+                        path.clone(),
+                        "opf.content_document.remote_resource_restricted_context",
+                        vec![bare],
+                    );
+                }
+                continue;
+            }
+            css_has_remote |= is_remote_url(&u) || is_file_url(&u);
             if is_remote_url(&u) {
                 let u = strip_url_fragment(&u);
                 // A stylesheet asking for a remote font *is* a reference to
@@ -16947,6 +17012,76 @@ mod tests {
             "element_path follows the same node: {:?}",
             m.element_path.as_ref().map(|p| &p.path)
         );
+    }
+
+    /// A remote or `file:` stylesheet is *restricted*, and the two questions
+    /// that fact answers had drifted apart across four sites.
+    ///
+    /// An imported stylesheet may not be fetched at all, so RSC-006 is the
+    /// whole finding: `remote-resources` cannot license it, and there is no
+    /// manifest declaration that would help either. Every other `url()` in a
+    /// sheet - a font, a background image - is the opposite: allowed *with*
+    /// the property, so it draws OPF-014 and RSC-008.
+    ///
+    /// Measured one book per cell against 5.3.0. The three that were wrong:
+    /// an inline `<style>` `@import` drew our RSC-006 **plus** an OPF-014
+    /// epubcheck does not give; a standalone sheet's `@import` drew RSC-008
+    /// and OPF-014 and *no* RSC-006, i.e. wrong in both directions at once;
+    /// and a `file:` import drew RSC-030 alone where epubcheck adds RSC-006.
+    /// The `@font-face` control is the one that must keep its OPF-014, and it
+    /// is asserted here for that reason.
+    #[test]
+    fn a_remote_import_is_restricted_and_needs_no_property() {
+        fn ids(book: Vec<u8>) -> Vec<&'static str> {
+            let mut v: Vec<&'static str> = crate::validate_bytes(book)
+                .messages
+                .iter()
+                .map(|m| m.id)
+                // The shared helper's book carries an OPF-003 of its own
+                // (`OEBPS/meta.xml`, present so a metadata link can resolve);
+                // it is not what this test is about.
+                .filter(|id| *id != crate::ids::OPF_003)
+                .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        }
+        fn doc(head: &str) -> String {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title>{head}</head><body><p>x</p></body></html>"
+            )
+        }
+        use crate::ids::{CSS_028, OPF_014, RSC_006, RSC_008, RSC_030};
+
+        // Inline <style>: the import is restricted, and that is all.
+        assert_eq!(
+            ids(epub_with_ch1(&doc(
+                "<style>@import url(https://example.com/x.css);</style>"
+            ))),
+            vec![RSC_006],
+            "a remote @import needs no property - declaring one cannot license it"
+        );
+        // The control: a font is allowed *with* the property, so the property
+        // is demanded. Removing OPF-014 from imports must not touch this.
+        assert!(
+            ids(epub_with_ch1(&doc(
+                "<style>@font-face { font-family: F; src: url(https://example.com/f.otf) }</style>"
+            )))
+            .contains(&OPF_014),
+            "a remote font still requires remote-resources"
+        );
+        // `file:` is restricted as well: RSC-030 owns the diagnosis, not the
+        // restriction question.
+        assert_eq!(
+            ids(epub_with_ch1(&doc(
+                "<style>@import url(file:example);</style>"
+            ))),
+            vec![RSC_006, RSC_030],
+            "a file: import draws both, as epubcheck does"
+        );
+        let _ = (RSC_008, CSS_028);
     }
 
     /// `data` and `poster` are references, but only on the element that owns
