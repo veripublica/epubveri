@@ -2342,6 +2342,71 @@ fn check_guide_duplicates(doc: &roxmltree::Document, opf_path: &str, report: &mu
 /// with the guide left out; found by `compare` on a real book whose
 /// `<reference type="toc">` pointed at an id that lives in a *different*
 /// file, where our output for the whole package document was empty.
+/// `RSC-012`: a fragment in a `<collection><link href>` that the target
+/// document does not define.
+///
+/// Collection links were resolved for their *resource* and never for their
+/// fragment — three of the four RSC-012 rows left on the 981-book run were
+/// this, across the dictionary and preview collections. Measured with a
+/// target that exists: a resolving fragment is clean, a missing one is
+/// RSC-012, and a link with no fragment is clean.
+///
+/// Same two exemptions as the guide and content-document sites, and the same
+/// silence when the target cannot be read: whether a fragment resolves in a
+/// document we could not parse is unknown, and unknown is not a finding.
+fn check_collection_link_fragments(
+    pkg: &roxmltree::Node,
+    base_dir: &str,
+    ocf: &mut Ocf,
+    name_index: &HashMap<String, String>,
+    is_epub3: bool,
+    opf_path: &str,
+    report: &mut Report,
+) {
+    let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
+    for link in pkg
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "link")
+        .filter(|n| {
+            n.ancestors()
+                .skip(1)
+                .any(|a| a.is_element() && a.tag_name().name() == "collection")
+        })
+    {
+        let Some(href) = link.attr_no_ns("href").map(str::trim) else {
+            continue;
+        };
+        if is_external(href) {
+            continue;
+        }
+        let Some((path_part, frag)) = href.split_once('#') else {
+            continue;
+        };
+        if frag.is_empty() || frag.contains(['=', ':', '(']) {
+            continue;
+        }
+        let resolved = nfc(&resolve(base_dir, path_part));
+        if !id_cache.contains_key(&resolved) {
+            let ids = target_id_kinds(ocf, name_index, &resolved, is_epub3);
+            id_cache.insert(resolved.clone(), ids);
+        }
+        let Some(ids) = &id_cache[&resolved] else {
+            continue;
+        };
+        if !ids.contains_key(frag) {
+            report.push_node(
+                RSC_012,
+                Severity::Error,
+                format!("fragment identifier '{frag}' is not defined in '{resolved}'"),
+                opf_path,
+                link,
+                "opf.collection.link_fragment_not_defined",
+                vec![frag.to_string(), resolved.clone()],
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn check_guide_references(
     doc: &roxmltree::Document,
@@ -4969,6 +5034,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         &name_index,
         &items,
         &fallback_map,
+        is_epub3,
+        opf_path,
+        report,
+    );
+    check_collection_link_fragments(
+        &pkg,
+        &base_dir,
+        ocf,
+        &name_index,
         is_epub3,
         opf_path,
         report,
@@ -19903,6 +19977,100 @@ mod tests {
             "two content documents naming it, undeclared, are two faults"
         );
         assert_eq!(count(book("", &[("c1.xhtml", PLAIN)])), 0, "control");
+    }
+
+    /// A fragment in a `<collection><link href>` must resolve. Collection
+    /// links were resolved for their *resource* and never for their fragment,
+    /// which was three of the four RSC-012 rows left on the 981-book run.
+    ///
+    /// Measured against 5.3.0 with a target that **exists**, which is the part
+    /// the corpus fixtures cannot show: their wrapped books do not contain the
+    /// linked document at all, so epubcheck reports the fragment as undefined
+    /// on a file it never read, and we stay silent — unknown is not a finding,
+    /// the same stance the guide and content-document sites take.
+    #[test]
+    fn a_collection_link_fragment_must_resolve() {
+        fn book(link_href: &str) -> Vec<u8> {
+            use std::io::Write;
+            use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <dc:identifier id="uid">u</dc:identifier>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/>
+    <item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="nav"/><itemref idref="c1"/></spine>
+  <collection role="index"><link href="{link_href}"/></collection>
+</package>"#
+            );
+            const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="EPUB/package.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+            const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>n</title></head>\
+                <body><nav epub:type=\"toc\"><ol><li><a href=\"c1.xhtml\">c</a></li></ol>\
+                </nav></body></html>";
+            const C1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p id=\"real\">x</p></body></html>";
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (name, body) in [
+                    ("META-INF/container.xml", CONTAINER),
+                    ("EPUB/package.opf", opf.as_str()),
+                    ("EPUB/nav.xhtml", NAV),
+                    ("EPUB/c1.xhtml", C1),
+                ] {
+                    z.start_file(name, o).unwrap();
+                    z.write_all(body.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        }
+        let frags = |href: &str| {
+            crate::validate_bytes(book(href))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.collection.link_fragment_not_defined"))
+                .count()
+        };
+
+        assert_eq!(frags("c1.xhtml#real"), 0, "a fragment that resolves");
+        assert_eq!(frags("c1.xhtml#nosuch"), 1, "one that does not");
+        assert_eq!(frags("c1.xhtml"), 0, "no fragment at all");
+        // A CFI or media fragment is not an id reference - the same exemption
+        // the guide and content-document sites carry.
+        assert_eq!(frags("c1.xhtml#epubcfi(/6/4)"), 0, "a CFI is not an id");
+        assert_eq!(
+            frags("c1.xhtml#xywh=percent:5,5,15,15"),
+            0,
+            "nor a media fragment"
+        );
+        // The target does not exist: whether the fragment resolves is unknown,
+        // and unknown is not a finding.
+        assert_eq!(
+            frags("gone.xhtml#nosuch"),
+            0,
+            "unreadable target stays silent"
+        );
     }
 
     /// An EPUB 2 whose single content document is named `name`, referenced
