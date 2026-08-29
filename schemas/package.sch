@@ -196,8 +196,15 @@
     </rule>
   </pattern>
 
+  <!-- The `property` attribute is EPUB 3's; an EPUB 2 package document has
+       no such attribute, and epubcheck's 2.0 grammar rejects it outright
+       ("attribute 'property' not allowed here") without ever asking about
+       its value. So every rule keyed on it is scoped to version="3.*",
+       exactly as the dc:date, dc:title and dcterms:modified rules above are -
+       otherwise an EPUB 2 book carrying a stray `@property` collects findings
+       epubcheck does not report. Measured one book against 5.3.0. -->
   <pattern id="opf-meta-value-not-empty">
-    <rule context="opf:meta[@property]">
+    <rule context="opf:package[starts-with(@version, '3')]//opf:meta[@property]">
       <assert test="string-length(normalize-space(.)) &gt; 0"
         >a meta element's value must be a string with length at least 1</assert>
     </rule>
@@ -217,21 +224,21 @@
   <!-- 5.5.5 The meta element -->
 
   <pattern id="opf-meta-property-not-empty">
-    <rule context="opf:meta[@property]">
+    <rule context="opf:package[starts-with(@version, '3')]//opf:meta[@property]">
       <assert test="string-length(normalize-space(@property)) &gt; 0"
         >value of attribute "property" is invalid (must not be empty)</assert>
     </rule>
   </pattern>
 
   <pattern id="opf-meta-property-single-token">
-    <rule context="opf:meta[@property]">
+    <rule context="opf:package[starts-with(@version, '3')]//opf:meta[@property]">
       <assert test="not(contains(normalize-space(@property), ' '))"
         >only one value must be specified for the "property" attribute</assert>
     </rule>
   </pattern>
 
   <pattern id="opf-meta-scheme-single-token">
-    <rule context="opf:meta[@scheme]">
+    <rule context="opf:package[starts-with(@version, '3')]//opf:meta[@scheme]">
       <assert test="not(contains(normalize-space(@scheme), ' '))"
         >only one value must be specified for the "scheme" attribute</assert>
     </rule>

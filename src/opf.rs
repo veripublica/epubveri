@@ -1571,11 +1571,40 @@ fn is_well_formed_ncname_or_prefixed(value: &str) -> bool {
     }
 }
 
+/// Does this attribute value carry more than one whitespace-separated
+/// token, where the specification allows exactly one?
+///
+/// epubcheck's `VocabUtil.parseProperties` splits on whitespace with empty
+/// results omitted, and reports OPF-025 when the non-list form is handed
+/// more than one - so leading, trailing and repeated whitespace do not
+/// count, and an all-whitespace value is *no* tokens rather than a list.
+/// `split_whitespace` is that splitter exactly.
+fn single_value_required(value: &str) -> bool {
+    value.split_whitespace().count() > 1
+}
+
 /// Small per-`<meta>` checks that need their own dedicated code/severity
 /// rather than the uniform RSC-005/Error every Schematron finding gets:
 /// RSC-017 ("should use a fragment identifier") when `@refines` names a
-/// manifest item by href; OPF-027 when `@scheme` has no `prefix:` part;
-/// OPF-026 when `@property` isn't a well-formed (possibly prefixed) NCName.
+/// manifest item by href; OPF-025 when `@property` or `@scheme` carries a
+/// list where one value is allowed; OPF-027 when `@scheme` has no `prefix:`
+/// part; OPF-026 when `@property` isn't a well-formed (possibly prefixed)
+/// NCName.
+///
+/// **OPF-025 comes first and stops the others**, which is epubcheck's own
+/// shape rather than a choice: `VocabUtil.parseProperties` reports OPF-025
+/// and `return`s an empty set, so a value that is both a list and malformed
+/// draws the list error alone. Measured both ways - `scheme="foo bar"`
+/// (unprefixed) draws no OPF-027 there, `property="foo: bar:"` no OPF-026.
+///
+/// **All three are EPUB 3 only.** Their call sites are `OPFHandler30`'s, and
+/// `@property` is an EPUB 3 attribute: handed an EPUB 2 package carrying one,
+/// epubcheck's 2.0 grammar rejects the attribute and never asks about its
+/// value. Ungated, this function invented an OPF-027 on such a book, and the
+/// four `opf:meta` patterns in `package.sch` invented RSC-005s beside it -
+/// all now scoped, and our output on that book is a strict subset of
+/// epubcheck's. Note the ~26 *other* `opf:meta[@property]` patterns in that
+/// file are still unscoped and can fire the same way; see the issue.
 ///
 /// **The RSC-017 condition is narrow, and used not to be** (Doitsu,
 /// MobileRead #163). epubcheck's `opf.refines.by-fragment` resolves
@@ -1596,6 +1625,7 @@ fn is_well_formed_ncname_or_prefixed(value: &str) -> bool {
 fn check_meta_property_scheme_shape(
     doc: &roxmltree::Document,
     opf_path: &str,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     for n in doc
@@ -1632,7 +1662,20 @@ fn check_meta_property_scheme_shape(
         }
         if let Some(scheme_attr) = attr_no_ns_node(n, "scheme") {
             let scheme = scheme_attr.value().trim();
-            if !scheme.is_empty() && !scheme.contains(':') {
+            if is_epub3 && single_value_required(scheme) {
+                report.push_node_attr(
+                    OPF_025,
+                    Severity::Error,
+                    format!(
+                        "property value list '{scheme}' is not allowed; only one value must be specified"
+                    ),
+                    opf_path,
+                    n,
+                    scheme_attr,
+                    "opf.meta.scheme_value_list",
+                    vec![scheme.to_string()],
+                );
+            } else if is_epub3 && !scheme.is_empty() && !scheme.contains(':') {
                 report.push_node_attr(
                     OPF_027,
                     Severity::Error,
@@ -1645,9 +1688,23 @@ fn check_meta_property_scheme_shape(
                 );
             }
         }
-        if let Some(property) = n.attr_no_ns("property") {
-            let property = property.trim();
-            if !property.is_empty()
+        if let Some(property_attr) = attr_no_ns_node(n, "property") {
+            let property = property_attr.value().trim();
+            if is_epub3 && single_value_required(property) {
+                report.push_node_attr(
+                    OPF_025,
+                    Severity::Error,
+                    format!(
+                        "property value list '{property}' is not allowed; only one value must be specified"
+                    ),
+                    opf_path,
+                    n,
+                    property_attr,
+                    "opf.meta.property_value_list",
+                    vec![property.to_string()],
+                );
+            } else if is_epub3
+                && !property.is_empty()
                 && !property.contains(' ')
                 && !is_well_formed_ncname_or_prefixed(property)
             {
@@ -3482,7 +3539,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     check_lang_tags(&doc, opf_path, report);
     check_refines_cycles(&doc, opf_path, report);
     check_uuid_identifiers(&doc, opf_path, report);
-    check_meta_property_scheme_shape(&doc, opf_path, report);
     check_collection_roles(&doc, opf_path, report);
     check_guide_duplicates(&doc, opf_path, report);
     if let Some(bindings) = pkg
@@ -3582,6 +3638,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     };
     let is_epub3 = major == "3";
     let is_epub2 = !is_epub3;
+    // Called from here rather than beside its `check_*` siblings above
+    // because OPF-025 is `OPFHandler30`'s and needs the version, which is
+    // only settled here (the `-v` override reports PKG-001 on the way).
+    // Position in this function does not reach the output: the report is
+    // sorted into document order before it is rendered.
+    check_meta_property_scheme_shape(&doc, opf_path, is_epub3, report);
     // OPF-047: the package document is written in **OEBPS 1.2**, the pre-EPUB
     // format EPUB 2 replaced, kept legal for backwards compatibility. Detected
     // exactly as epubcheck does (`OPFHandler.startElement`): a `<package>`
@@ -17084,6 +17146,83 @@ mod tests {
         let _ = (RSC_008, CSS_028);
     }
 
+    /// OPF-025: `@property` and `@scheme` take one value, not a list - and
+    /// the id had been *declared and never emitted*, which is the dead-ID
+    /// trap running in the direction that inflates the coverage matrix
+    /// rather than the one that leaves a gap. `docs/COVERAGE.md` read the
+    /// constant and scored the row covered; only the RSC-005 from
+    /// `package.sch` was ever produced.
+    ///
+    /// Three properties, all measured one book each against 5.3.0:
+    ///
+    /// - both attributes draw it, alongside the schema's RSC-005;
+    /// - it **suppresses** OPF-026/OPF-027, because
+    ///   `VocabUtil.parseProperties` reports it and returns an empty set, so
+    ///   an unprefixed `scheme="foo bar"` draws no OPF-027 there;
+    /// - it is EPUB 3 only (`OPFHandler30`), and so are its two neighbours -
+    ///   an EPUB 2 package carrying `@property` gets the grammar error and
+    ///   nothing else.
+    #[test]
+    fn a_property_list_is_opf_025_and_stops_the_shape_checks() {
+        fn ids(is_epub3: bool, meta: &str) -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {meta}
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#,
+                if is_epub3 { "3.0" } else { "2.0" }
+            );
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_opf(
+                Some(&opf),
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body><p>x</p></body></html>",
+            ))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        }
+        use crate::ids::{OPF_025, OPF_026, OPF_027};
+
+        // Both attributes, and the list error suppresses the shape error.
+        let scheme = ids(
+            true,
+            r#"<meta property="dcterms:x" scheme="foo bar">v</meta>"#,
+        );
+        assert!(scheme.contains(&OPF_025), "got {scheme:?}");
+        assert!(
+            !scheme.contains(&OPF_027),
+            "the list error stops the unprefixed-scheme check, as epubcheck's \
+             parser returns empty: got {scheme:?}"
+        );
+        let property = ids(true, r#"<meta property="foo: bar:">v</meta>"#);
+        assert!(property.contains(&OPF_025), "got {property:?}");
+        assert!(!property.contains(&OPF_026), "got {property:?}");
+
+        // EPUB 2 knows none of the three: the attribute itself is the error.
+        let two = ids(
+            false,
+            r#"<meta property="foo bar" scheme="baz qux">v</meta>"#,
+        );
+        for id in [OPF_025, OPF_026, OPF_027] {
+            assert!(
+                !two.contains(&id),
+                "{id} is OPFHandler30's; EPUB 2 reports the grammar error alone: got {two:?}"
+            );
+        }
+    }
+
     /// `data` and `poster` are references, but only on the element that owns
     /// them - and `poster` only in EPUB 3. Both used to be skipped outright
     /// from the existence check, so a missing `<video poster>` or
@@ -18794,7 +18933,7 @@ mod tests {
             );
             let d = roxmltree::Document::parse(&opf).unwrap();
             let mut report = crate::report::Report::new();
-            super::check_meta_property_scheme_shape(&d, "OEBPS/content.opf", &mut report);
+            super::check_meta_property_scheme_shape(&d, "OEBPS/content.opf", true, &mut report);
             let sch = crate::schematron::load(crate::schematron::PACKAGE_SCH).unwrap();
             let mut ids: Vec<String> = report
                 .messages
