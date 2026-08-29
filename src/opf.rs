@@ -8264,9 +8264,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // *transitively* (e.g. via a local SVG file that itself embeds a
         // remote font) isn't traced, since this project has no SVG-
         // content parser. Named, accepted limitation.
-        let mut has_remote = false;
-        let mut has_script = false;
-        let mut has_svg = false;
+        // Not "does the document use this" but "where does it use it": the
+        // node whose presence makes the property required, which is what
+        // OPF-014 points at. See the report site below for why the root
+        // element was the wrong anchor.
+        let mut has_remote = None;
+        let mut has_script = None;
+        let mut has_svg = None;
         // Distinct from `has_svg`: epubcheck separates a property that is
         // *required* (the document contains SVG markup - OPF-014 if the
         // declaration is missing) from one that is merely *allowed* (the
@@ -8283,8 +8287,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // MathML *child* without its `math` root cannot occur, and a
         // reference to a MathML resource has no "allowed" half the way
         // `references_svg` does). Reported by Doitsu, MobileRead #138.
-        let mut has_mathml = false;
-        let mut has_switch = false;
+        let mut has_mathml = None;
+        let mut has_switch = None;
         let mut remote_refs: HashSet<String> = HashSet::new();
         let mut remote_link_refs: HashSet<String> = HashSet::new();
         // Remote references EPUB 3 never allows regardless of manifest
@@ -8558,7 +8562,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             // either way about the other restricted tags, so
                             // they are left as they are.
                             if tag != "link" {
-                                has_remote = true;
+                                has_remote.get_or_insert(node);
                             }
                             // `embed@src`/`input@src` were once missing from
                             // this set, and the omission cost twice over — no
@@ -8691,7 +8695,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if node.tag_name().name() == "switch"
                 && node.tag_name().namespace() == Some("http://www.idpf.org/2007/ops")
             {
-                has_switch = true;
+                has_switch.get_or_insert(node);
             }
             if matches!(node.tag_name().name(), "a" | "area") {
                 // An SVG `<a>` may use `xlink:href` instead of a bare
@@ -8807,7 +8811,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     || script_type.eq_ignore_ascii_case("application/javascript")
                     || script_type.eq_ignore_ascii_case("module")
                 {
-                    has_script = true;
+                    has_script.get_or_insert(node);
                 }
             }
             // Scripted content (OPF-014/015): epubcheck (OPSHandler30) marks
@@ -8826,17 +8830,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .attributes()
                     .any(|a| a.namespace().is_none() && a.name().starts_with("on"))
             {
-                has_script = true;
+                has_script.get_or_insert(node);
             }
             if node.tag_name().name() == "svg"
                 && node.tag_name().namespace() == Some("http://www.w3.org/2000/svg")
             {
-                has_svg = true;
+                has_svg.get_or_insert(node);
             }
             if node.tag_name().name() == "math"
                 && node.tag_name().namespace() == Some(crate::mathml::MATHML_NS)
             {
-                has_mathml = true;
+                has_mathml.get_or_insert(node);
             }
             if !references_svg {
                 for attr in node.attributes() {
@@ -8913,7 +8917,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
                     }
                     if is_remote_url(&u) {
-                        has_remote = true;
+                        has_remote.get_or_insert(node);
                         remote_refs.insert(strip_url_fragment(&u));
                     }
                 }
@@ -9059,7 +9063,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 crate::css::check_style_attribute(style, &path, advisory, is_epub3, report);
             }
         }
-        book_has_scripts |= has_script;
+        book_has_scripts |= has_script.is_some();
 
         // Content-model properties (remote-resources/scripted/svg/switch)
         // are an EPUB 3 manifest-item concept; EPUB 2 has no `properties`
@@ -9090,31 +9094,52 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             for (required, allowed, name, unused_id, unused_sev) in [
                 (
                     has_remote,
-                    has_remote,
+                    has_remote.is_some(),
                     "remote-resources",
                     OPF_018,
                     Severity::Warning,
                 ),
-                (has_script, has_script, "scripted", OPF_015, Severity::Error),
-                (has_mathml, has_mathml, "mathml", OPF_015, Severity::Error),
+                (
+                    has_script,
+                    has_script.is_some(),
+                    "scripted",
+                    OPF_015,
+                    Severity::Error,
+                ),
+                (
+                    has_mathml,
+                    has_mathml.is_some(),
+                    "mathml",
+                    OPF_015,
+                    Severity::Error,
+                ),
                 (
                     has_svg,
-                    has_svg || references_svg,
+                    has_svg.is_some() || references_svg,
                     "svg",
                     OPF_015,
                     Severity::Error,
                 ),
             ] {
                 let declared_here = declared_tokens.contains(&name);
-                if required && !declared_here {
+                // The position is the node that *requires* the property, not the
+                // document root. This finding has two places and the root is
+                // neither: the evidence is the <svg>/<math>/<script> element
+                // further down this file, and the remedy is the manifest item in
+                // the OPF. `<html>` carries no more information than epubcheck's
+                // own -1/-1 while looking more precise than it, so the remedy is
+                // stated in the message instead. `location` does NOT move: it is
+                // what epubcheck names, and a consumer keys on it to find the
+                // manifest item whose href is this document (issue #131).
+                if let (Some(evidence), false) = (required, declared_here) {
                     report.push_node(
                         OPF_014,
                         Severity::Error,
                         format!(
-                            "content document uses {name} but doesn't declare the \"{name}\" property"
+                            "content document uses {name} but doesn't declare the \"{name}\" property - add it to this document's manifest item in the OPF"
                         ),
                         path.clone(),
-                        d.root_element(),
+                        evidence,
                         "opf.content_document.property_used_undeclared",
                         vec![name.to_string()],
                     );
@@ -9127,7 +9152,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // OPF-018b (usage) instead of OPF-018 (warning) in that
                     // case, the same HAS_SCRIPTS downgrade as OPF-096b and
                     // RSC-006b. scripted/svg have no such variant.
-                    let (id, sev) = if name == "remote-resources" && has_script {
+                    let (id, sev) = if name == "remote-resources" && has_script.is_some() {
                         (OPF_018B, Severity::Usage)
                     } else {
                         (unused_id, unused_sev)
@@ -9143,13 +9168,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     );
                 }
             }
-            if has_switch && !declared_tokens.contains(&"switch") {
+            if let Some(evidence) = has_switch.filter(|_| !declared_tokens.contains(&"switch")) {
                 report.push_node(
                     OPF_014,
                     Severity::Error,
-                    "content document uses epub:switch but doesn't declare the \"switch\" property",
+                    "content document uses epub:switch but doesn't declare the \"switch\" property - add it to this document's manifest item in the OPF",
                     path.clone(),
-                    d.root_element(),
+                    evidence,
                     "opf.content_document.property_used_undeclared",
                     vec!["switch".to_string()],
                 );
@@ -9537,14 +9562,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // fixture where the SVG's own manifest item lacks the
         // "remote-resources" property.
         if is_epub3 {
-            let uses_remote_font = d.descendants().any(|n| {
+            let uses_remote_font = d.descendants().find(|n| {
                 n.is_element()
                     && n.tag_name().name() == "font-face-uri"
                     && n.attribute(("http://www.w3.org/1999/xlink", "href"))
                         .or_else(|| n.attr_no_ns("href"))
                         .is_some_and(is_remote_url)
             });
-            if uses_remote_font {
+            if let Some(evidence) = uses_remote_font {
                 let declared = item_properties
                     .get(doc_path.as_str())
                     .cloned()
@@ -9553,9 +9578,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     report.push_node(
                         OPF_014,
                         Severity::Error,
-                        "content document uses a remote font but doesn't declare the \"remote-resources\" property",
+                        "content document uses a remote font but doesn't declare the \"remote-resources\" property - add it to this document's manifest item in the OPF",
                         doc_path.clone(),
-                        d.root_element(),
+                        evidence,
                         "opf.content_document.property_used_undeclared",
                         vec!["remote-resources".to_string()],
                     );
@@ -10029,7 +10054,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             report.push_at_rule(
                 OPF_014,
                 Severity::Error,
-                "stylesheet uses a remote resource but doesn't declare the \"remote-resources\" property",
+                "stylesheet uses a remote resource but doesn't declare the \"remote-resources\" property - add it to this stylesheet's manifest item in the OPF",
                 path.clone(),
                 "opf.content_document.property_used_undeclared",
                 vec!["remote-resources".to_string()],
@@ -10427,22 +10452,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // (typically <audio src>) needs its own manifest item to
         // declare "remote-resources", same as a content document.
         if let Ok(smil_doc) = parse_xml(&smil_text) {
-            let has_remote_audio = smil_doc.descendants().any(|n| {
+            let has_remote_audio = smil_doc.descendants().find(|n| {
                 n.is_element()
                     && matches!(n.tag_name().name(), "audio" | "text")
                     && n.attr_no_ns("src").is_some_and(is_remote_url)
             });
-            if has_remote_audio
-                && !item_properties
+            if let Some(evidence) = has_remote_audio.filter(|_| {
+                !item_properties
                     .get(&overlay_path)
                     .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"))
-            {
+            }) {
                 report.push_node(
                     OPF_014,
                     Severity::Error,
-                    "media overlay uses a remote resource but doesn't declare the \"remote-resources\" property",
+                    "media overlay uses a remote resource but doesn't declare the \"remote-resources\" property - add it to this overlay's manifest item in the OPF",
                     path.clone(),
-                    smil_doc.root_element(),
+                    evidence,
                     "opf.content_document.property_used_undeclared",
                     vec!["remote-resources".to_string()],
                 );
@@ -16831,6 +16856,65 @@ mod tests {
         assert!(!is_detected_scripted(
             "<p><textarea></textarea><select><option>a</option></select></p>"
         ));
+    }
+
+    /// OPF-014 points at the construct that *requires* the property, not at
+    /// the content document's root element (issue #131, JSWolf on MobileRead
+    /// #264). Three things are asserted together because they are one
+    /// contract and the interesting one is invisible to a verdict:
+    ///
+    /// - `position` is the `<svg>` element - the evidence, the "why";
+    /// - `location` is still the **content document**, unmoved. epubsana's
+    ///   `fix.content_properties` uses it as the *key* to find the manifest
+    ///   item whose href is that document; pointed at the OPF instead, the
+    ///   fixer would find no such item and propose nothing - silently, with
+    ///   no test failing on either side;
+    /// - `params[0]` is still the bare token it writes into `properties`.
+    ///
+    /// The remedy ("add it to this document's manifest item") is carried in
+    /// the message text rather than by moving the path, which is the only
+    /// place it can go without breaking that key.
+    #[test]
+    fn opf_014_anchors_at_the_evidence_not_the_root() {
+        // The body is interpolated on the document's second line, so putting
+        // the <svg> on a line of its own makes the anchor observable: the
+        // root element is on line 2, the evidence on line 3.
+        let book = epub_declaring_props(
+            "",
+            "<p>before</p>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><rect/></svg>",
+        );
+        let report = crate::validate_bytes(book);
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::OPF_014 && m.params.first().is_some_and(|p| p == "svg"))
+            .expect("an undeclared svg property draws OPF-014");
+
+        let pos = m.position.expect("the finding carries a position");
+        assert_eq!(
+            (pos.line, pos.column),
+            (3, 1),
+            "the position is the <svg> element on line 3, not <html> on line 2"
+        );
+        assert_eq!(
+            m.location.as_deref(),
+            Some("OEBPS/ch1.xhtml"),
+            "location stays the content document - epubsana keys the manifest \
+             item lookup on it"
+        );
+        assert_eq!(m.params, vec!["svg".to_string()]);
+        assert!(
+            m.text.contains("manifest item in the OPF"),
+            "the remedy is stated in the message, since the path cannot move: {}",
+            m.text
+        );
+        assert!(
+            m.element_path
+                .as_ref()
+                .is_some_and(|p| p.path == "/h:html[1]/h:body[1]/svg:svg[1]"),
+            "element_path follows the same node: {:?}",
+            m.element_path.as_ref().map(|p| &p.path)
+        );
     }
 
     fn epub_with_ch1(ch1: &str) -> Vec<u8> {
