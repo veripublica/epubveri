@@ -12,9 +12,34 @@
 //! now derives from both tables rather than repeating them, so that
 //! particular contradiction cannot be stated.
 
-/// Non-deprecated SSV terms. Generously inclusive: every finding built on
-/// this is usage-level, so missing a real term (staying quiet) is far safer
-/// than flagging a legitimate one, hence biased toward inclusion.
+/// Non-deprecated SSV terms: the 114 of the published vocabulary, plus
+/// `region-based`, which the specification defines in the Region-Based
+/// Navigation document rather than here.
+///
+/// This table used to be "generously inclusive" - biased toward accepting
+/// anything that might be a term, on the grounds that every finding built
+/// on it is usage-level. That reasoning is right about the *cost* of a
+/// wrong entry and wrong about what an entry is: it is a claim that a term
+/// exists, and seventeen of them named terms no vocabulary defines
+/// (`practice`, `question`, `answer`, the plural `learning-*` forms,
+/// `seriespage`, `toc-brief`, `translator-note`, `ordinal` and the rest).
+/// The vocabulary's own change log dates their removal - "2025-06-25:
+/// Removed all the draft edupub terms, retaining only the terms that are
+/// referenced from DPUB-ARIA 1.1" - and every one of them silenced an
+/// OPF-088 that epubcheck reports.
+///
+/// Checked termwise against two sources that agree exactly, so a term may
+/// be added here only with a citation to one of them:
+///
+/// - the 114 terms of EPUB SSV 1.1;
+/// - epubcheck's content-document aggregate, `StructureVocab` +
+///   `DataNavVocab` + `DictVocab` + `IndexVocab` + `ComicsVocab`
+///   (`OPSHandler30`:69). Anything outside it falls through to
+///   `UncheckedVocab`, which accepts every name, so the OPF-088 is raised
+///   afterwards by the `toEnum()` that then throws (`OPSHandler30`:232).
+///
+/// Both come to 128: the 114, the 13 [`DEPRECATED`] terms, and
+/// `region-based`. This table plus [`DEPRECATED`] is now that same 128.
 ///
 /// Deprecated terms are deliberately *not* repeated here - see
 /// [`DEPRECATED`] and [`is_default_vocab_type`].
@@ -22,13 +47,10 @@ const KNOWN: &[&str] = &[
     "abstract",
     "acknowledgments",
     "afterword",
-    "answer",
-    "answers",
     "antonym-group",
     "appendix",
     "aside",
     "assessment",
-    "assessments",
     "backlink",
     "backmatter",
     "balloon",
@@ -63,7 +85,6 @@ const KNOWN: &[&str] = &[
     "foreword",
     "frontmatter",
     "fulltitle",
-    "fulltitlepage",
     "glossary",
     "glossdef",
     "glossref",
@@ -93,13 +114,7 @@ const KNOWN: &[&str] = &[
     "keyword",
     "landmarks",
     "learning-objective",
-    "learning-objectives",
-    "learning-outcome",
-    "learning-outcomes",
     "learning-resource",
-    "learning-resources",
-    "learning-standard",
-    "learning-standards",
     "list",
     "list-item",
     "loa",
@@ -108,7 +123,6 @@ const KNOWN: &[&str] = &[
     "lov",
     "noteref",
     "notice",
-    "ordinal",
     "other-credits",
     "page-list",
     "pagebreak",
@@ -121,19 +135,15 @@ const KNOWN: &[&str] = &[
     "phonetic-transcription",
     "phrase-group",
     "phrase-list",
-    "practice",
-    "practice-answer",
     "preamble",
     "preface",
     "prologue",
     "pullquote",
     "qna",
-    "question",
     "region-based",
     "revision-history",
     "sense-group",
     "sense-list",
-    "seriespage",
     "sound-area",
     "subtitle",
     "synonym-group",
@@ -145,11 +155,9 @@ const KNOWN: &[&str] = &[
     "title",
     "titlepage",
     "toc",
-    "toc-brief",
     "topic-sentence",
     "tran",
     "tran-info",
-    "translator-note",
     "volume",
 ];
 
@@ -316,6 +324,56 @@ mod tests {
             for t in &table {
                 assert!(seen.insert(*t), "'{t}' appears twice in {name}");
             }
+        }
+    }
+
+    /// The seventeen terms this table used to carry that no vocabulary
+    /// defines. They are asserted *absent* because the mistake that put
+    /// them here is the kind that gets repeated: each looks like a
+    /// plausible semantic, and accepting one is invisible - it produces
+    /// silence, not a wrong answer.
+    ///
+    /// Sources for the claim that they are not terms: they appear in
+    /// neither the 114 terms of the published vocabulary nor epubcheck's
+    /// five aggregated vocabularies, and epubcheck reports OPF-088 for
+    /// each. Most are EDUPUB or pre-3.2 draft leftovers; four are plurals
+    /// of terms that really do exist in the singular, which is why the
+    /// singular forms are asserted *present* on the same line.
+    #[test]
+    fn terms_no_vocabulary_defines_are_not_accepted() {
+        for t in [
+            "answer",
+            "answers",
+            "assessments",
+            "fulltitlepage",
+            "learning-objectives",
+            "learning-outcome",
+            "learning-outcomes",
+            "learning-resources",
+            "learning-standard",
+            "learning-standards",
+            "ordinal",
+            "practice",
+            "practice-answer",
+            "question",
+            "seriespage",
+            "toc-brief",
+            "translator-note",
+        ] {
+            assert!(
+                !is_default_vocab_type(t),
+                "'{t}' is in no vocabulary - epubcheck reports OPF-088 for it"
+            );
+        }
+        // The singulars are real and must stay, or removing the plurals
+        // would have cost four true terms.
+        for t in [
+            "learning-objective",
+            "learning-resource",
+            "assessment",
+            "halftitlepage",
+        ] {
+            assert!(is_default_vocab_type(t), "'{t}' is a real term");
         }
     }
 }
