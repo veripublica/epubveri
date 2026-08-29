@@ -8574,7 +8574,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if is_external(v) {
                         continue;
                     }
-                    if attr == "data" || attr == "poster" {
+                    // `data` and `poster` are references only on the element
+                    // that owns them, and this loop is attribute-keyed, so
+                    // the element test has to be made here - the same shape
+                    // as the `<link rel>` guard below. They used to be
+                    // skipped outright, with no comment and no scenario
+                    // behind it: the line arrived inside a 76-scenario
+                    // increment that had added both attributes for *remote*
+                    // detection, and nothing ever asked what it cost. It
+                    // cost RSC-007 and RSC-008 on every `<object data>` and
+                    // every `<video poster>` - a missing video poster is
+                    // ordinary markup, and we said nothing about it.
+                    //
+                    // Measured, one book per cell, against 5.3.0, and
+                    // corroborated in its source:
+                    //
+                    // - `data` is read only on `<object>`, in **both**
+                    //   versions (`OPSHandler.checkObject`,
+                    //   `OPSHandler30.endObject`);
+                    // - `poster` is read only on `<video>`, and only in
+                    //   `OPSHandler30.processVideo` - EPUB 2 has no video
+                    //   branch at all, and there epubcheck reports the
+                    //   grammar error alone.
+                    //
+                    // Placed after the remote handling above for the reason
+                    // the `<link>` guard states: only the existence question
+                    // is element-specific.
+                    if (attr == "data" && tag != "object")
+                        || (attr == "poster" && (tag != "video" || !is_epub3))
+                    {
                         continue;
                     }
                     // `resolve` already strips any "#fragment" - a
@@ -16911,6 +16939,68 @@ mod tests {
                 .is_some_and(|p| p.path == "/h:html[1]/h:body[1]/svg:svg[1]"),
             "element_path follows the same node: {:?}",
             m.element_path.as_ref().map(|p| &p.path)
+        );
+    }
+
+    /// `data` and `poster` are references, but only on the element that owns
+    /// them - and `poster` only in EPUB 3. Both used to be skipped outright
+    /// from the existence check, so a missing `<video poster>` or
+    /// `<object data>` target drew nothing at all.
+    ///
+    /// The cells were measured one book each against epubcheck 5.3.0 and
+    /// corroborated in its source (`OPSHandler.checkObject`,
+    /// `OPSHandler30.endObject`, `OPSHandler30.processVideo` - the EPUB 2
+    /// handler has no `video` branch). The EPUB 2 poster cell is the one that
+    /// must stay *silent*, and it is why this is a matrix rather than two
+    /// asserts: a version-blind fix invents a finding there.
+    #[test]
+    fn poster_and_data_are_references_on_their_own_element_only() {
+        fn missing(is_epub3: bool, body: &str) -> Vec<String> {
+            let doc = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            let book = if is_epub3 {
+                epub_with_ch1(&doc)
+            } else {
+                epub2_with_ch1(&doc)
+            };
+            let mut got: Vec<String> = crate::validate_bytes(book)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_007)
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect();
+            got.sort();
+            got
+        }
+
+        // Seen on the owning element, in the version that reads it.
+        assert_eq!(
+            missing(true, r#"<p><video poster="no.jpg"></video></p>"#),
+            vec!["no.jpg"],
+            "an EPUB 3 <video poster> is a reference"
+        );
+        assert_eq!(
+            missing(true, r#"<p><object data="no.pdf"></object></p>"#),
+            vec!["no.pdf"],
+            "an <object data> is a reference"
+        );
+        assert_eq!(
+            missing(false, r#"<p><object data="no.pdf"></object></p>"#),
+            vec!["no.pdf"],
+            "and in EPUB 2 too - OPSHandler.checkObject reads it as well"
+        );
+
+        // Not at 2.0 for poster, and not on an element that does not own it.
+        assert!(
+            missing(false, r#"<p><video poster="no.jpg"></video></p>"#).is_empty(),
+            "EPUB 2 has no video branch: epubcheck reports the grammar error alone"
+        );
+        assert!(
+            missing(true, r#"<p data="no.pdf" poster="no.jpg">x</p>"#).is_empty(),
+            "neither attribute is a reference on an element that does not own it"
         );
     }
 
