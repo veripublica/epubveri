@@ -3605,9 +3605,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         None | Some("") | Some(OEB12_PKG_NS)
     );
     if is_oeb12 {
+        // **Usage, not warning.** No fixture in epubcheck's suite expects
+        // OPF-047 at all - `grep -r OPF-047 src/test/` is empty - so nothing
+        // constrained the severity and this site had picked one. Its
+        // `DefaultSeverities` declares `Severity.USAGE`, and a live run over
+        // the two `opf-legacy-oebps12-mediatype-*` books prints
+        // `USAGE(OPF-047)`. At warning level we announced a legacy package by
+        // default where epubcheck says nothing without `-u`.
         report.push_at_pos(
             OPF_047,
-            Severity::Warning,
+            Severity::Usage,
             "package document uses legacy OEBPS 1.2 syntax, allowing backwards \
              compatibility",
             opf_path,
@@ -20391,6 +20398,31 @@ mod tests {
         // fixture its RSC-005.
         let typo = ids("http://www.ipdf.org/2007/opf");
         assert!(!typo.contains(&crate::ids::OPF_047), "got {typo:?}");
+    }
+
+    /// OPF-047 is **usage**, and nothing in epubcheck's suite says so - which
+    /// is why this is a test rather than a fixture.
+    ///
+    /// `grep -r OPF-047 src/test/` over epubcheck's whole test tree is empty:
+    /// no scenario expects the id at all, so none constrains its severity,
+    /// and this site had simply picked one. Two independent sources settle it
+    /// and agree - `DefaultSeverities.java` declares `Severity.USAGE`, and a
+    /// live 5.3.0 run over `opf-legacy-oebps12-mediatype-css-warning` prints
+    /// `USAGE(OPF-047)`.
+    ///
+    /// It matters more than a label now that usage is hidden by default: at
+    /// warning level we announced every legacy package to every user, where
+    /// epubcheck says nothing at all unless asked with `-u`.
+    #[test]
+    fn the_oebps12_notice_is_usage_not_a_warning() {
+        let m = crate::validate_bytes(epub_with_package_ns(
+            "http://openebook.org/namespaces/oeb-package/1.0/",
+        ))
+        .messages
+        .into_iter()
+        .find(|m| m.id == crate::ids::OPF_047)
+        .expect("a legacy OEBPS 1.2 package is announced");
+        assert_eq!(m.severity, crate::report::Severity::Usage);
     }
 
     /// OPF-038/OPF-039: the modern media types are the wrong ones inside an
