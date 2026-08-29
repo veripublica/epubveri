@@ -10,16 +10,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.13.2] - 2026-08-30
 
-**Fourteen changes, most of them from one sweep: clearing every unexamined row
+**Fifteen changes, most of them from one sweep: clearing every unexamined row
 from the 981-book comparison against epubcheck.** That run diffs the two tools
 over epubcheck's own corpus, and an id only it reports is a gap on our side.
 Nine rows are closed here as code and four as recorded decisions — and the
 probing that settled them turned up five further defects nobody had listed.
-Counting the SVG work below, **seven wrong errors on valid markup** are fixed
-here, none of which had reached a user.
+Counting the SVG and schema-recovery work below, **eight wrong errors on valid
+markup** are fixed here. Seven of them had never reached a user; the eighth had
+been shipping for a long time and is the most valuable thing in this release.
 
-The two false positives are the part worth reading. Neither reached a user;
-both were found by asking epubcheck about one book at a time.
+**Start with the schema-recovery fix**, further down: it is the only one of the
+eight that a user could have met, and on the local shelf it removes about
+2 000 wrong errors from nine real books. The rest were found by asking
+epubcheck about one hand-built book at a time, and had never reached anyone.
 
 ### An imported stylesheet is restricted, and we asked for a remedy that cannot work
 
@@ -140,6 +143,44 @@ The **path** deliberately does not move. It names the content document, as
 epubcheck's does, because that is what identifies which document is being
 talked about — and repair tools use it to find the manifest item whose href is
 that document.
+
+### Inside an element the grammar knows nowhere, no child is blamed (issue #94)
+
+**The one fix here that was reaching users.** An EPUB 2 book using HTML5
+elements — `<section>`, `<figure>`, `<nav>`, `<article>` — got errors on the
+*contents* of those elements as well as on the elements themselves. epubcheck
+reports the container and stops.
+
+The rule, read off its dispatch and confirmed on sixteen hand-built shapes:
+inside an element the grammar defines nowhere, epubcheck blames no child for
+its position, whatever the child is. It validates each child's *content*
+against that child's own model and reports only what breaks there. So
+`<center><li>x</li></center>` draws one error, not two; and in
+`<center><span><font/></span></center>` the `font` is reported against
+**span's** model, not against the block model `center` sat in.
+
+What that removes, on one real book (`Ekonomi Politikası`, EPUB 2, 119 figures):
+
+| element named | epubcheck | epubveri, before | after |
+|---|---|---|---|
+| `figure` | 119 | 57 | 57 |
+| `figcaption` | — | 32 | — |
+| `img` | — | 22 | — |
+| `i` | — | 4 | — |
+| `br` | — | 1 | — |
+
+epubcheck names only `figure`. Roughly **2 000 such errors across nine books**
+on the 415-book shelf, and every book checked now names exactly epubcheck's
+set of elements.
+
+This is the same mistake as an earlier fix one level in: a misplaced element's
+descendants were being scored against a model they were never in the scope of.
+That was corrected for elements the grammar *does* define and not for the ones
+it does not.
+
+Not fully closed: on one book two elements are still counted above epubcheck
+(`a` and `br`), both by less than before. Filed separately rather than guessed
+at.
 
 ### The SVG reference set is small and closed, and ours was neither (issue #130)
 
