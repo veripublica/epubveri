@@ -10,12 +10,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.13.2] - 2026-08-30
 
-**Thirteen changes, most of them from one sweep: clearing every unexamined row
+**Fourteen changes, most of them from one sweep: clearing every unexamined row
 from the 981-book comparison against epubcheck.** That run diffs the two tools
 over epubcheck's own corpus, and an id only it reports is a gap on our side.
 Nine rows are closed here as code and four as recorded decisions — and the
-probing that settled them turned up five further defects nobody had listed,
-two of which were wrong errors on valid markup.
+probing that settled them turned up five further defects nobody had listed.
+Counting the SVG work below, **seven wrong errors on valid markup** are fixed
+here, none of which had reached a user.
 
 The two false positives are the part worth reading. Neither reached a user;
 both were found by asking epubcheck about one book at a time.
@@ -139,6 +140,40 @@ The **path** deliberately does not move. It names the content document, as
 epubcheck's does, because that is what identifies which document is being
 talked about — and repair tools use it to find the manifest item whose href is
 that document.
+
+### The SVG reference set is small and closed, and ours was neither (issue #130)
+
+A standalone SVG's fragments — `<use xlink:href="#rect">`, `fill="url(#grad)"`
+— now resolve, and name the ones that point at nothing. This was implemented
+once before and reverted, because it reported references epubcheck does not.
+The reason turned out to be one level down: epubcheck registers exactly five
+kinds of reference from an SVG document, and we were walking every `href` in
+the file.
+
+| construct | registered as |
+|---|---|
+| `use@xlink:href` | symbol |
+| `image@xlink:href` | image |
+| `a@xlink:href` | hyperlink |
+| `font-face-uri@xlink:href` | font |
+| any element's `fill` / `stroke` | paint |
+
+`clip-path` and the `marker-*` properties look like paint references and are
+not registered; `textPath`, `tref` and the gradients are not registered at
+all. Thirteen constructs measured one book each, and the two tools now agree
+on all thirteen.
+
+**Narrowing the set removed five wrong errors that had nothing to do with
+fragments**, because the same walk also answers "does this reference resolve"
+and "was this resource referenced". A `<textPath>`, a `<tref>` or a gradient
+pointing at a missing file drew an error from us and nothing from epubcheck —
+and so did a **plain** `href` on `<use>` or `<image>`, since every SVG
+reference epubcheck reads is the `xlink:` spelling. That last point was known
+about `<a>` and turns out to be the general rule.
+
+Not covered: a fragment into *another* document. epubcheck checks it against
+that document; the one probe aimed at it hit a different error first, so the
+behaviour is unmeasured rather than known.
 
 ### Also
 
