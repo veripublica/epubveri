@@ -8566,7 +8566,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if !is_epub3 && attr == "src" && node.tag_name().name() == "script" {
                         continue;
                     }
-                    if !is_external(v) && is_resource_reference(node, attr) {
+                    // **Not under a remote base**, where this reference does not
+                    // point into the container at all - it resolves through
+                    // the base to a remote URL, and the identically-named
+                    // local file is referenced by nothing. Registering it
+                    // here answered OPF-097's "is this resource referenced"
+                    // with the wrong document's answer, so a manifest item
+                    // that really is unreferenced stayed silent. The branch
+                    // further down already says this in its own words for the
+                    // existence check; this is the same fact, one question
+                    // earlier. Measured on epubcheck's two
+                    // `*-base-url-remote-relative-path-error` books, where it
+                    // reports OPF-097 on the untouched `style.css` and we
+                    // reported nothing.
+                    if remote_base.is_none() && !is_external(v) && is_resource_reference(node, attr)
+                    {
                         resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
                     }
                     // RSC-026: the reference resolves above the container
@@ -17540,6 +17554,64 @@ mod tests {
                 "an empty dc:identifier is reported at {version}: {got:?}"
             );
         }
+    }
+
+    /// A reference resolved through a **remote** document base does not
+    /// reference the identically-named local file, and OPF-097 has to know
+    /// that.
+    ///
+    /// `<base href="http://example.org/">` plus `<link href="style.css">`
+    /// asks for `http://example.org/style.css`. The manifest's own
+    /// `EPUB/style.css` is then referenced by nothing - epubcheck says so,
+    /// and we did not, because the reference was registered as a local one
+    /// before the remote-base branch ever ran. The existence check further
+    /// down already drew this line in its own comment; this is the same fact
+    /// one question earlier.
+    ///
+    /// Measured on both of epubcheck's fixtures for it, the `<base>` and
+    /// `xml:base` spellings; our id sets now match theirs exactly.
+    #[test]
+    fn a_remote_base_does_not_reference_the_local_file() {
+        let opf = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css" href="meta.xml" media-type="text/css"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        let doc = |head: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title>{head}</head><body><p>x</p></body></html>"
+            )
+        };
+        let unreferenced = |head: &str| {
+            crate::validate_bytes(epub_with_opf(Some(opf), &doc(head)))
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::OPF_097 && m.text.contains("meta.xml"))
+        };
+
+        // Resolved locally, the manifest item is referenced.
+        assert!(
+            !unreferenced(r#"<link rel="stylesheet" href="meta.xml"/>"#),
+            "a local reference is a reference"
+        );
+        // Resolved through a remote base, it is not: the request goes to
+        // example.org and the container's copy is untouched.
+        assert!(
+            unreferenced(
+                r#"<base href="http://example.org/"/><link rel="stylesheet" href="meta.xml"/>"#
+            ),
+            "a remote base sends the reference elsewhere"
+        );
     }
 
     /// `data` and `poster` are references, but only on the element that owns
