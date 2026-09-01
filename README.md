@@ -91,7 +91,10 @@ deliberate compatibility choice, not a coincidence.
 
 If none of that describes you, but you just have one `.epub` file you're
 curious about, the command-line tool works fine for that too (see
-"Trying it out" below).
+"Trying it out" below) — and if you edit books in **Sigil** or **calibre**,
+there is a third-party plugin for each that runs epubveri for you without any
+of that. See
+[docs/USAGE.md](docs/USAGE.md#option-2-inside-sigil-or-calibre-a-plugin-does-it-for-you).
 
 ## Why two tools? epubveri finds, epubsana repairs
 
@@ -267,6 +270,15 @@ the gaps are listed as plainly as the coverage.
 > walkthrough — which file to download, how to get past the first-run
 > security prompt on macOS/Windows, how to run it, and how to read the
 > output — in **[docs/USAGE.md](docs/USAGE.md)**.
+
+> **Already using Sigil or calibre?** You can skip all of that. A third-party
+> plugin exists for each — [Sigil](https://www.mobileread.com/forums/showthread.php?t=374939),
+> [calibre's Edit Book](https://www.mobileread.com/forums/showthread.php?t=374940) —
+> which downloads and updates epubveri for you and shows the findings in the
+> editor. Both were written by the MobileRead member *Doitsu*, are GPL-3, and
+> are **not maintained by us**; report problems with them in those threads.
+> [docs/USAGE.md](docs/USAGE.md#option-2-inside-sigil-or-calibre-a-plugin-does-it-for-you)
+> has the detail, including why a plugin shows fewer findings by default.
 
 **Don't want to install Rust just to try it?** Pre-built binaries are
 attached to every [GitHub

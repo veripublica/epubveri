@@ -15,8 +15,9 @@ alternative to the official `epubcheck`.
 | You want to… | Use this | Install needed |
 |---|---|---|
 | Just check one book, right now | [In your browser](#option-1-in-your-browser-nothing-to-install) | None |
-| Check books regularly on your computer | [A downloaded program](#option-2-download-the-ready-to-run-program) | None (just download) |
-| Use it inside your own code | [The library / build from source](#option-3-for-developers) | Rust |
+| Edit books in **Sigil** or **calibre** | [A plugin for your editor](#option-2-inside-sigil-or-calibre-a-plugin-does-it-for-you) | The plugin — it fetches the rest |
+| Check books regularly on your computer | [A downloaded program](#option-3-download-the-ready-to-run-program) | None (just download) |
+| Use it inside your own code | [INTEGRATING.md](INTEGRATING.md) and the [README](../README.md) | Rust |
 
 ---
 
@@ -29,7 +30,42 @@ quickest way to try it.
 
 ---
 
-## Option 2: Download the ready-to-run program
+## Option 2: Inside Sigil or calibre (a plugin does it for you)
+
+If you edit books in **[Sigil](https://sigil-ebook.com/)** or in **calibre's
+Edit Book**, you do not need to download anything from this guide. There is a
+plugin for each. It fetches the epubveri program for you, keeps it up to date,
+and shows the findings inside the editor, beside the file they are about.
+
+| Editor | Plugin thread | Install it from |
+|---|---|---|
+| Sigil | [\[Plugin\] epubveri](https://www.mobileread.com/forums/showthread.php?t=374939) | Plugins → Manage Plugins → Add Plugin |
+| calibre (Edit Book) | [\[Editor Plugin\] epubveri](https://www.mobileread.com/forums/showthread.php?t=374940) | Preferences → Plugins → Load plugin from file |
+
+Both are also listed in the editors' own plugin lists — the [Sigil Plugin
+Index](https://www.mobileread.com/forums/showthread.php?t=247431) and
+calibre's [Index of plugins](https://www.mobileread.com/forums/showthread.php?t=118764).
+
+**Two things worth knowing before you install one.**
+
+- **They are not ours.** Both were written, unprompted, by the MobileRead
+  member *Doitsu*, and both are GPL-3. We do not maintain them and cannot fix
+  them, so questions and bug reports belong in the threads above. We have read
+  both plugins' source (September 2026) and reported what we found in those
+  same threads — which is the most we can honestly tell you about them.
+- **They show fewer findings than the program does.** Both hide
+  `usage`-severity messages and `--advisory` messages until you switch them on
+  in the plugin's preferences. If a book looks cleaner inside your editor than
+  it does on the command line, that is why, and nothing is broken.
+
+Everything below — picking an archive, getting past the first-run security
+prompt, typing commands — is about running epubveri yourself. If a plugin
+covers you, skip ahead to [Understanding the
+results](#understanding-the-results), which applies either way.
+
+---
+
+## Option 3: Download the ready-to-run program
 
 ### Step 1 — Download the right file
 
