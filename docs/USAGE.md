@@ -245,7 +245,8 @@ epubveri --format json -i my-book.epub
 > `--format json`, never the human output. The JSON is a documented, stable
 > contract, while the human text is free to change wording, order and spacing
 > between releases. Note that `-u` decides what the JSON contains too, so pass
-> it if your tool wants everything.
+> it if your tool wants everything — and filter in your own interface, or the
+> summary you show will describe your flags rather than the book.
 
 **A different order** — group by severity (the default) or walk the book in
 file order:

@@ -298,9 +298,11 @@ cargo build --release
 
 **Building a plugin or a tool on epubveri?** Start at
 **[docs/INTEGRATING.md](docs/INTEGRATING.md)** — what to parse, what is stable,
-the fields (`rule`, `element_path`, `violation_kind`) that exist for machines
-and never appear in the human report, which release archives are named what,
-and how often you should actually update. The envelope itself is specified
+the fields (`rule`, `element_path`, `violation_kind`, `advisory_basis`) that
+exist for machines and never appear in the human report, how to show findings
+to a person without making a valid book look broken, which release archive to
+pick and how to verify it, and how often you should actually update. It ends
+with a small worked example you can run. The envelope itself is specified
 in [FORMATS.md](https://github.com/veripublica/conventions/blob/main/FORMATS.md).
 
 The input is always given with `-i`; pass `-i` more than once to validate
@@ -582,7 +584,8 @@ This README is deliberately kept beginner-friendly.
 - **Validating a book by hand**, step by step, including which download to
   pick and what the output means — [`docs/USAGE.md`](./docs/USAGE.md).
 - **Building a plugin or a tool on epubveri** — what to parse, what is stable,
-  what only machines can see, and how often to update —
+  what only machines can see, how to present findings, how to verify the binary
+  you downloaded, and how often to update; with a worked example —
   [`docs/INTEGRATING.md`](./docs/INTEGRATING.md).
 - **How the validator works inside** — the module layout, the custom RELAX NG
   and XPath/Schematron engines built for this project, how the
