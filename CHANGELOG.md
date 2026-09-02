@@ -8,6 +8,129 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.13.3] - 2026-09-02
+
+**Two missed errors reported by a user, and ten wrong ones found while fixing
+them.** Doitsu's report (MobileRead #266) named an empty `dc:creator` and
+`<meta http-equiv>`; both are real and both are closed here. Neither resets the
+false-positive counter — a missed error harms nobody who has it. But looking at
+the two rules that were supposed to cover them turned up **ten false positives
+in rules that were already shipping**, and those are the part of this release a
+reader can actually meet.
+
+One of them is not rare: **`<meta http-equiv="content-type"
+content="text/html;charset=utf-8"/>`**, without the space, was an error here and
+is valid everywhere else. It occurs 860 times across the local 444-book shelf.
+
+### The encoding declaration's value was compared, not matched
+
+epubcheck asks this with one Schematron assertion,
+`matches(normalize-space(@content),'text/html;\s*charset=utf-8','i')`, and every
+part of that expression carries weight. We compared the raw attribute value to
+the single string `"text/html; charset=utf-8"`, case-insensitively — a
+different test in three ways at once: no whitespace normalization, no `\s*`, and
+anchored to the whole value.
+
+Seven spellings epubcheck accepts were errors here, one book each against 5.3.0:
+
+| `@content` | before | now |
+|---|---|---|
+| `text/html;charset=utf-8` | RSC-005 | accepted |
+| `text/html;  charset=utf-8` | RSC-005 | accepted |
+| `text/html;<TAB>charset=utf-8` | RSC-005 | accepted |
+| `  text/html; charset=utf-8` | RSC-005 | accepted |
+| `text/html; charset=utf-8  ` | RSC-005 | accepted |
+| `xxx text/html; charset=utf-8` | RSC-005 | accepted |
+| `text/html; charset=utf-8 xxx` | RSC-005 | accepted |
+
+The last two look wrong and are not: `matches()` asks whether the pattern occurs
+anywhere in the value, not whether it is the whole of it. The boundary is
+unchanged in the other direction — a space *before* the semicolon,
+`charset=utf8`, `application/xhtml+xml; charset=utf-8` and an empty value are
+still errors, as they are there.
+
+**The shelf could not see this, and the reason is worth keeping.** All 860
+occurrences of the unspaced spelling sit in EPUB 2 books, and this rule is EPUB
+3 only — of the seven EPUB 3 books on the shelf that carry `http-equiv` at all,
+every one spells the declaration the one way the old comparison accepted.
+
+### Measured
+
+632 tests, corpus 603/603 exact-ID with 0 false positives, `epubtests`
+byte-identical to the previous release, `diff-shelf.sh` unchanged over 444 real
+books, hostile clean. `compare` over all 981 corpus books: **899 agree on the ID
+set exactly**, with **one** id only we report — the documented CHK-008/RSC-001
+pair (issue #127) — against 830 and sixteen at the last recorded run.
+
+### NO-BREAK SPACE is not XML whitespace
+
+XML, XSD's `whiteSpace` facet and XPath's `normalize-space()` all mean exactly
+four characters: space, tab, CR and LF. Rust's `split_whitespace` means
+Unicode's whitespace class, which also swallows NO-BREAK SPACE — so a value
+containing nothing but `&#160;` read as empty here and did not there.
+
+Three more false positives, one book each: `<dc:title>&#160;</dc:title>`,
+`<dc:identifier>&#160;</dc:identifier>` and a `&#160;`-only `<meta property>`
+were all errors here and are all valid to epubcheck. The fix is in the XPath
+engine's `normalize-space()`, so every Schematron rule built on it moves with
+it, and in the one hand-coded sibling.
+
+Zero books on the 444-book shelf carry such a value, so this is a boundary fix
+rather than a visible one — but it is the shape that would have added a
+thirteenth false positive to the `dc:*` work below had it not been found first.
+
+### `<meta http-equiv>` was not checked at all
+
+Reported by Doitsu with four cases, of which we answered none: `http-equiv` was
+granted to **every** EPUB 3 element with **any** value. epubcheck asks three
+separate questions, and all three are now asked (measured one book each):
+
+- **it is a `<meta>` attribute, not a global one.** `<p http-equiv="refresh">`
+  is "attribute not allowed here";
+- **its value is one of five pragma directives**, case-insensitively —
+  `content-type`, `refresh`, `default-style`, `content-security-policy`,
+  `x-ua-compatible`. `foo` is an error, and so is the plausible-looking
+  `Content-Style-Type`;
+- **`@content` is then required.** A bare `<meta http-equiv="refresh"/>` is
+  "element "meta" missing required attribute "content"".
+
+`X-UA-Compatible` is **valid**, contrary to the first reading of the report:
+epubcheck's schema defines it as one of the five and accepts it. `<meta charset>`
+came along with it — the XML serialization permits `utf-8` in any case and
+nothing else.
+
+What is deliberately *not* copied is epubcheck's disjointness. It models
+`<meta>` as four alternatives that cannot mix, so `name` beside `http-equiv`, a
+`<meta name>` with no `@content`, or a bare `<meta/>` are errors there and are
+accepted here. Those are false negatives, measured and left: they are a
+different family from the reported one, and every extra restriction on the
+commonest element in a `<head>` carries its own false-positive risk.
+
+### All fifteen `dc:*` elements must be non-empty, not three
+
+`package-30.rnc` types every Dublin Core element `datatype.string.nonempty`.
+We had three of them — `dc:identifier`, `dc:title`, `dc:language` — so an empty
+`dc:creator`, the case Doitsu reported, drew nothing. The other twelve are now
+covered: `creator`, `contributor`, `publisher`, `description`, `subject`,
+`source`, `type`, `format`, `relation`, `coverage`, `rights` and `date`. An
+empty `dc:date` keeps its OPF-053 as well, which is what epubcheck does.
+
+EPUB 3 only, like its three siblings: EPUB 2's `opf20.rng` permits an empty
+value there, where the finding is OPF-072 at usage level and was already
+reported.
+
+Known and left, because closing it means reproducing epubcheck's error
+recovery rather than its rules: for a `dc:*` element containing a child
+element, epubcheck reports the rejected child *and* a second "incomplete;
+expected data". We report the child only. Our count is lower, never higher.
+
+### For consumers
+
+One new rule key, `opf.package.dc_value_not_empty`, whose `params[0]` is the
+element name (`dc:creator`) — the same shape `opf.metadata.empty_element` uses
+for the EPUB 2 half of the same question. Its findings are RSC-005 errors that
+were not reported at all before. No existing key, message or severity moves.
+
 ## [0.13.2] - 2026-08-30
 
 **Fifteen changes, most of them from one sweep: clearing every unexamined row
