@@ -18,6 +18,30 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Is `c` one of XML's four whitespace characters?
+///
+/// XML (and XSD's `whiteSpace` facet, and XPath's `normalize-space`) means
+/// exactly `#x20`, `#x9`, `#xD`, `#xA` — *not* Unicode's whitespace class.
+/// Rust's `char::is_whitespace` and `str::split_whitespace` mean the Unicode
+/// class, so they also swallow NO-BREAK SPACE and its relatives, and using
+/// them for an XML question makes a value look empty when it is not.
+///
+/// Measured against epubcheck 5.3.0, one book each: `<dc:title>&#160;</dc:title>`,
+/// a `&#160;`-only `<meta property>` and the same in `dc:identifier` are all
+/// **valid** there and were three false positives here.
+pub fn is_xml_space(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\r' | '\n')
+}
+
+/// XPath's `normalize-space()`: collapse runs of XML whitespace to a single
+/// space and trim the ends.
+pub fn normalize_xml_space(s: &str) -> String {
+    s.split(is_xml_space)
+        .filter(|t| !t.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Namespace-explicit attribute accessors for [`roxmltree::Node`].
 pub trait NodeExt<'a> {
     /// The value of the attribute with local name `name` and **no namespace**,

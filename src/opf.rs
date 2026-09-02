@@ -199,6 +199,32 @@ pub(crate) fn fallback_reaches_content_document(
     false
 }
 
+/// Does a `<meta http-equiv="content-type">` carry the content value the HTML5
+/// encoding declaration state requires?
+///
+/// epubcheck asks this with one Schematron assertion,
+/// `matches(normalize-space(@content),'text/html;\s*charset=utf-8','i')`
+/// (`epub-xhtml-30.sch`, pattern `encoding.decl.state`), and every part of
+/// that expression is load-bearing. We compared the raw value to
+/// `"text/html; charset=utf-8"` with `eq_ignore_ascii_case` instead, which is
+/// a *different* test and rejected seven spellings epubcheck accepts —
+/// measured one book each against 5.3.0: no space after the semicolon (the
+/// commonest spelling of all), two spaces, a tab, leading or trailing
+/// whitespace, and text before or after the declaration.
+///
+/// So: `normalize-space` first (collapse runs of *XML* whitespace to one space
+/// and trim — not Unicode's, see [`crate::xmlext::is_xml_space`]), then an
+/// *unanchored* case-insensitive search — `matches()` asks whether the pattern
+/// occurs anywhere in the value, not whether it is the whole of it.
+fn is_html_utf8_content_type(value: &str) -> bool {
+    let lower = crate::xmlext::normalize_xml_space(value).to_ascii_lowercase();
+    lower.match_indices("text/html;").any(|(i, m)| {
+        lower[i + m.len()..]
+            .trim_start_matches(' ')
+            .starts_with("charset=utf-8")
+    })
+}
+
 /// Directory portion of a container path ("OEBPS/x.opf" -> "OEBPS", "x.opf" -> "").
 fn parent_dir(path: &str) -> String {
     match path.rfind('/') {
@@ -2883,7 +2909,10 @@ fn check_identifier_not_empty(doc: &roxmltree::Document, opf_path: &str, report:
             .filter(|t| t.is_text())
             .filter_map(|t| t.text())
             .collect();
-        if text.split_whitespace().next().is_none() {
+        // XML whitespace, not Unicode's — see `xmlext::is_xml_space`. With
+        // `split_whitespace` a `&#160;`-only identifier read as empty and drew
+        // an error epubcheck does not give.
+        if text.split(crate::xmlext::is_xml_space).all(str::is_empty) {
             // `push_full`, not `push_node`: the Schematron loop below pushes
             // this way and carries **no** `element_path`, so pushing by node
             // would have added a `data` object to `--format json` on a
@@ -2904,6 +2933,60 @@ fn check_identifier_not_empty(doc: &roxmltree::Document, opf_path: &str, report:
                 Position::of(n),
                 "opf.package.opf_identifier_not_empty",
                 Vec::new(),
+            );
+        }
+    }
+}
+
+/// RSC-005 (EPUB 3 only): the other twelve Dublin Core metadata elements must
+/// not be empty either.
+///
+/// Reported by Doitsu, MobileRead #266, on `dc:creator`: epubcheck answers an
+/// empty one with `ERROR(RSC-005)` and we said nothing. It is not one element
+/// but a family — `package-30.rnc` types **all fifteen** `dc:*` elements
+/// `datatype.string.nonempty`, and three of them were already covered here
+/// (`dc:identifier` above, `dc:title` and `dc:language` in `package.sch`), so
+/// this closes the remaining twelve. Verified one book per element against
+/// epubcheck 5.3.0.
+///
+/// EPUB 3 only, exactly like its three siblings and for the reason
+/// `package.sch` records: EPUB 2's `opf20.rng` gives these elements
+/// `DC.metadata-common-content`, which permits an empty value. There an empty
+/// one is OPF-072 at usage level, which we already report.
+///
+/// `dc:date` is in the set and keeps its OPF-053 as well — epubcheck reports
+/// both on an empty date, measured.
+fn check_dc_values_not_empty(
+    doc: &roxmltree::Document,
+    opf_path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    if !is_epub3 {
+        return;
+    }
+    for n in doc.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().namespace() == Some(DC_ELEMENTS_NS)
+            // The three with a rule of their own already; reporting them here
+            // too would double the finding.
+            && !matches!(n.tag_name().name(), "identifier" | "title" | "language")
+    }) {
+        let text: String = n
+            .descendants()
+            .filter(|t| t.is_text())
+            .filter_map(|t| t.text())
+            .collect();
+        if text.split(crate::xmlext::is_xml_space).all(str::is_empty) {
+            let name = n.tag_name().name();
+            report.push_full(
+                RSC_005,
+                Severity::Error,
+                format!("dc:{name} must be a string with length at least 1"),
+                opf_path,
+                Position::of(n),
+                "opf.package.dc_value_not_empty",
+                vec![format!("dc:{name}")],
             );
         }
     }
@@ -3846,6 +3929,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // one documented family that couldn't).
     check_duplicate_ids(&doc, opf_path, report);
     check_identifier_not_empty(&doc, opf_path, report);
+    check_dc_values_not_empty(&doc, opf_path, is_epub3, report);
     // **EPUB 3 only.** See the header of `schemas/package.sch`: that file is
     // the port of `package-30.sch`, which epubcheck puts behind
     // `version(EPUBVersion.VERSION_3)` in `OPFChecker.validatorMap`.
@@ -7291,9 +7375,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         .is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
             }) {
                 let content = attr_no_ns_node(n, "content");
-                if !content
-                    .is_some_and(|a| a.value().eq_ignore_ascii_case("text/html; charset=utf-8"))
-                {
+                if !content.is_some_and(|a| is_html_utf8_content_type(a.value())) {
                     // Pin `@content` when there is one; a `<meta http-equiv>`
                     // with no `content` at all has no attribute to point at.
                     match content {
@@ -22698,6 +22780,201 @@ mod tests {
             0,
             "an empty dc:identifier is the schema's business, not OPF-072"
         );
+    }
+
+    /// `<meta http-equiv>`: three questions, all of them measured against
+    /// epubcheck 5.3.0 one book at a time. Doitsu's report (MobileRead #266)
+    /// named two of the four cases below; the grammar answered none of them,
+    /// because `http-equiv` was granted to every element with any value.
+    ///
+    /// Neither the corpus nor the shelf can hold this. The corpus's only
+    /// fixture is `http-equiv-valid.xhtml`, which is valid; and of 444 shelf
+    /// books, 153 carry `http-equiv` and every one of the 5 246 occurrences is
+    /// a well-formed `content-type`.
+    #[test]
+    fn meta_http_equiv_is_restricted_to_meta_and_to_five_directives() {
+        let errs = |ch1: &str| -> Vec<String> {
+            crate::validate_bytes(epub_with_ch1(ch1))
+                .messages
+                .iter()
+                .filter(|m| m.severity == crate::report::Severity::Error)
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        };
+        let doc = |head: &str, body: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title>{head}</head>\
+                 <body>{body}</body></html>"
+            )
+        };
+        // The five directives, case-insensitively, each with its `content`.
+        for v in [
+            "content-type",
+            "Content-Type",
+            "refresh",
+            "default-style",
+            "content-security-policy",
+            "X-UA-Compatible",
+        ] {
+            let content = if v.eq_ignore_ascii_case("content-type") {
+                "text/html; charset=utf-8"
+            } else {
+                "x"
+            };
+            let r = errs(&doc(
+                &format!("<meta http-equiv=\"{v}\" content=\"{content}\"/>"),
+                "<p>x</p>",
+            ));
+            assert!(r.is_empty(), "{v} should be accepted, got {r:?}");
+        }
+        // Anything else is not a directive — including the plausible-looking
+        // `Content-Style-Type`, which is one of the two Doitsu reported.
+        for v in ["foo", "Content-Style-Type"] {
+            let r = errs(&doc(
+                &format!("<meta http-equiv=\"{v}\" content=\"x\"/>"),
+                "<p>x</p>",
+            ));
+            assert_eq!(r.len(), 1, "{v} should be rejected, got {r:?}");
+            assert!(r[0].contains("http-equiv"), "got {r:?}");
+        }
+        // `@content` is required alongside it.
+        let r = errs(&doc("<meta http-equiv=\"refresh\"/>", "<p>x</p>"));
+        assert_eq!(r.len(), 1, "got {r:?}");
+        assert!(r[0].contains("content"), "got {r:?}");
+        // And it is a `<meta>` attribute, not a global one.
+        let r = errs(&doc("", "<p http-equiv=\"refresh\">x</p>"));
+        assert_eq!(r.len(), 1, "got {r:?}");
+        assert!(r[0].contains("http-equiv"), "got {r:?}");
+        // `<meta charset>` came with it: `utf-8` in any case, nothing else.
+        assert!(errs(&doc("<meta charset=\"UTF-8\"/>", "<p>x</p>")).is_empty());
+        assert_eq!(
+            errs(&doc("<meta charset=\"iso-8859-1\"/>", "<p>x</p>")).len(),
+            1
+        );
+    }
+
+    /// The encoding declaration's `@content`, which is a Schematron assertion
+    /// rather than a grammar rule: `matches(normalize-space(@content),
+    /// 'text/html;\s*charset=utf-8','i')`.
+    ///
+    /// We compared the raw value to one string with `eq_ignore_ascii_case`,
+    /// which is a different test in three ways at once — no whitespace
+    /// normalization, no `\s*`, and anchored. Seven spellings epubcheck
+    /// accepts were errors here, `text/html;charset=utf-8` among them: 860 of
+    /// the shelf's 5 246 occurrences are spelled exactly that way, and the
+    /// shelf still could not see it, because all 860 sit in EPUB 2 books and
+    /// this rule is EPUB 3 only.
+    #[test]
+    fn the_encoding_declaration_content_is_matched_the_way_epubcheck_matches_it() {
+        let errs = |content: &str| -> usize {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title>\
+                 <meta http-equiv=\"content-type\" content=\"{content}\"/></head>\
+                 <body><p>x</p></body></html>"
+            );
+            crate::validate_bytes(epub_with_ch1(&ch1))
+                .messages
+                .iter()
+                .filter(|m| m.severity == crate::report::Severity::Error)
+                .count()
+        };
+        for ok in [
+            "text/html; charset=utf-8",
+            "text/html;charset=utf-8",
+            "text/html;  charset=utf-8",
+            "  text/html; charset=utf-8",
+            "text/html; charset=utf-8  ",
+            "xxx text/html; charset=utf-8",
+            "text/html; charset=utf-8 xxx",
+            "TEXT/HTML; CHARSET=UTF-8",
+            "text/html;&#9;charset=utf-8",
+        ] {
+            assert_eq!(errs(ok), 0, "{ok:?} should be accepted");
+        }
+        // The boundary, also measured: a space *before* the semicolon is not
+        // in the pattern, and neither is any other charset or media type.
+        for bad in [
+            "text/html ; charset=utf-8",
+            "text/html; charset=utf8",
+            "application/xhtml+xml; charset=utf-8",
+            "",
+        ] {
+            assert_eq!(errs(bad), 1, "{bad:?} should be rejected");
+        }
+    }
+
+    /// RSC-005: all fifteen `dc:*` elements are `datatype.string.nonempty` in
+    /// EPUB 3, not just the three that had a rule here. Doitsu reported the
+    /// `dc:creator` case (MobileRead #266); the other eleven came with it.
+    ///
+    /// The NBSP case is the one worth keeping. `xsd:token` collapses **XML**
+    /// whitespace, and NO-BREAK SPACE is not one of the four — epubcheck
+    /// accepts a `&#160;`-only value. `str::split_whitespace` means Unicode's
+    /// class instead, so writing this the obvious way would have added a
+    /// thirteenth false positive while removing twelve false negatives; it had
+    /// in fact already added three, on `dc:title`, `dc:identifier` and
+    /// `<meta property>`, through the XPath engine's `normalize-space`.
+    #[test]
+    fn every_dc_element_must_be_non_empty_in_epub3() {
+        // `epub_with_metadata` builds a book with no navigation document, so
+        // one unrelated RSC-005 is always present; the filter is on the
+        // message the non-empty family shares, not on the id.
+        let rsc005 = |bytes: Vec<u8>| -> Vec<String> {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .filter(|m| {
+                    m.id == crate::ids::RSC_005
+                        && m.text.contains("must be a string with length at least 1")
+                })
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        };
+        for el in [
+            "creator",
+            "publisher",
+            "description",
+            "subject",
+            "source",
+            "type",
+            "format",
+            "contributor",
+            "relation",
+            "coverage",
+            "rights",
+            "date",
+        ] {
+            let r = rsc005(epub_with_metadata("3.0", &format!("<dc:{el}></dc:{el}>")));
+            assert_eq!(r.len(), 1, "dc:{el} empty, got {r:?}");
+            assert!(r[0].contains(&format!("dc:{el}")), "got {r:?}");
+            assert!(
+                rsc005(epub_with_metadata("3.0", &format!("<dc:{el}>x</dc:{el}>"))).is_empty(),
+                "dc:{el} with a value"
+            );
+        }
+        // Whitespace-only is empty; EPUB 2 is not this rule's business (it is
+        // OPF-072 there, at usage level, and is tested with it above).
+        assert_eq!(
+            rsc005(epub_with_metadata("3.0", "<dc:creator>  </dc:creator>")).len(),
+            1
+        );
+        assert!(
+            rsc005(epub_with_metadata("2.0", "<dc:creator></dc:creator>")).is_empty(),
+            "EPUB 2 gives OPF-072, not RSC-005"
+        );
+        // NO-BREAK SPACE is not XML whitespace: epubcheck accepts all four of
+        // these and so must we.
+        for m in [
+            "<dc:creator>\u{a0}</dc:creator>",
+            "<dc:title>\u{a0}</dc:title>",
+            "<dc:language>\u{a0}</dc:language>",
+            "<meta property=\"dcterms:x\">\u{a0}</meta>",
+        ] {
+            let r = rsc005(epub_with_metadata("3.0", m));
+            assert!(r.is_empty(), "{m} should be accepted, got {r:?}");
+        }
     }
 
     /// An EPUB 2 book whose whole `<metadata>` body is supplied by the test —

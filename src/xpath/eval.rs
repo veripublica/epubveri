@@ -538,7 +538,10 @@ fn eval_call<'a, 'input>(
             let s = arg(0)
                 .map(|v| v.to_string_value())
                 .unwrap_or_else(|| current_string_value(env));
-            Value::String(s.split_whitespace().collect::<Vec<_>>().join(" "))
+            // XML whitespace, not Unicode's: `split_whitespace` also splits on
+            // NO-BREAK SPACE, which made `string-length(normalize-space(.))`
+            // read 0 for a `&#160;`-only `dc:title` that epubcheck accepts.
+            Value::String(crate::xmlext::normalize_xml_space(&s))
         }
         "lower-case" => Value::String(
             arg(0)

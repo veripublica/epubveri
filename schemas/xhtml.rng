@@ -216,8 +216,36 @@
   <!-- <meta>/<link> are also legal directly in flow content in real-world
        usage (e.g. RDFa attributes on <link>/<meta> in <body>), so these are
        shared with phrasingChoiceNoTime, not head-only. -->
+  <!-- Doitsu, MobileRead #266: `http-equiv` was granted to every EPUB 3
+       element with any value at all, so all four of his cases passed in
+       silence. epubcheck asks three separate questions here and this define
+       now asks all three (measured one book each against 5.3.0):
+
+         - it is a `<meta>` attribute, not a global one. `<p http-equiv>`
+           is "attribute not allowed here", so the grant moved out of
+           `globalAttrsRest` and onto this element;
+         - its value is one of five pragma directives, case-insensitive
+           (`httpEquiv`, see `rng/datatype.rs`). `foo` and the plausible-
+           looking `Content-Style-Type` are both errors;
+         - `@content` is then REQUIRED - epubcheck answers a bare
+           `<meta http-equiv="refresh"/>` with "element \"meta\" missing
+           required attribute \"content\"".
+
+       The fourth of his cases, a `content-type` whose value is not the UTF-8
+       declaration, is a Schematron assertion rather than a grammar rule and
+       lives in `opf.rs` where epubcheck keeps it too.
+
+       What is deliberately NOT copied is epubcheck's disjointness: it models
+       `<meta>` as four alternatives that cannot mix, so `name` beside
+       `http-equiv`, or `charset` beside either, is an error there and is
+       accepted here; likewise `<meta name>` or `<meta itemprop>` with no
+       `@content`, and a bare `<meta/>`. Those are false negatives of ours,
+       measured and left: they are a different family from the reported one
+       and every extra restriction on the single commonest element in a head
+       is its own false-positive risk. -->
   <define name="metaEl">
-    <element name="meta"><ref name="globalAttrsCore"/>
+    <element name="meta">
+      <ref name="globalAttrsCoreNoContent"/>
       <!-- #33: found by the corpus fallout of excepting `name` from the
            wildcard for input's own rules - <meta name="viewport"
            content="..."> was relying entirely on the wildcard for `name`
@@ -227,8 +255,17 @@
       <!-- #36: found by the cutover itself - <meta charset="utf-8"> (the
            single most common `<meta>` shape in real EPUB 3 documents) was
            entirely wildcard-covered and had no explicit rule anywhere,
-           missed by every prior slice's recon. -->
-      <optional><attribute name="charset"><data type="string"/></attribute></optional>
+           missed by every prior slice's recon. The value is `utf-8` in the
+           XML serialization and nothing else - epubcheck's unrestricted
+           alternative is `HTMLonly`, i.e. `notAllowed` here. -->
+      <optional><attribute name="charset"><data type="metaCharset"/></attribute></optional>
+      <choice>
+        <group>
+          <attribute name="http-equiv"><data type="httpEquiv"/></attribute>
+          <attribute name="content"><data type="string"/></attribute>
+        </group>
+        <optional><attribute name="content"><data type="string"/></attribute></optional>
+      </choice>
     </element>
   </define>
   <!-- EPUB 3 (HTML5) <link>. The attribute list is epubcheck's own
@@ -400,11 +437,18 @@
        every `aria-*` is rejected, and RDFa survives except `about`,
        `content` and `datatype`. Neither line is one you would guess. -->
   <define name="html5OnlyGlobals">
+    <ref name="html5OnlyGlobalsNoContent"/>
+    <optional><attribute name="content"><data type="string"/></attribute></optional>
+  </define>
+
+  <!-- `content` is split out for exactly one caller: `metaEl` has to be able
+       to make it *required* alongside `http-equiv`, and an optional grant of
+       the same attribute in the same element pattern would swallow that. -->
+  <define name="html5OnlyGlobalsNoContent">
     <optional><attribute name="about"><data type="string"/></attribute></optional>
     <optional><attribute name="accesskey"><data type="token"/></attribute></optional>
     <optional><attribute name="autocapitalize"><data type="token"/></attribute></optional>
     <optional><attribute name="autofocus"><data type="token"/></attribute></optional>
-    <optional><attribute name="content"><data type="string"/></attribute></optional>
     <optional><attribute name="contenteditable"><data type="token"/></attribute></optional>
     <optional><attribute name="datatype"><data type="string"/></attribute></optional>
     <optional><attribute name="draggable"><data type="token"/></attribute></optional>
@@ -414,6 +458,12 @@
   <define name="globalAttrsCore">
     <ref name="identityAttrs"/>
     <ref name="html5OnlyGlobals"/>
+    <ref name="globalAttrsRest"/>
+  </define>
+
+  <define name="globalAttrsCoreNoContent">
+    <ref name="identityAttrs"/>
+    <ref name="html5OnlyGlobalsNoContent"/>
     <ref name="globalAttrsRest"/>
   </define>
 
@@ -748,15 +798,6 @@
          constraints - both are real value-level work out of #34's scope
          ("role token-value validation can be a follow-up", issue #34). -->
     <ref name="ariaAttrs"/>
-
-    <!-- #36: found by the cutover - <meta http-equiv="..." content="...">
-         is one of the two most common <meta> shapes in real EPUB 3
-         documents (the other, `name`, was already added in #33) and had
-         no explicit rule anywhere; confirmed against epubcheck's own
-         corpus fixture http-equiv-valid.xhtml. Kept here rather than on
-         metaEl specifically since http-equiv is meta-only in practice but
-         this mirrors how every other #36-discovered gap was fixed. -->
-    <optional><attribute name="http-equiv"><data type="string"/></attribute></optional>
 
     <!-- #36: ITS 2.0 (Internationalization Tag Set) attributes. Confirmed
          needed against epubcheck's own corpus fixture attrs-its-valid.xhtml

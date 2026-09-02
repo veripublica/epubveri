@@ -21,6 +21,19 @@ pub enum Datatype {
     /// there is no standard type with these bounds - so it carries a name of
     /// our own, used only by our own schemas.
     Html5Token,
+    /// `<meta http-equiv>`'s value: one of HTML5's five pragma directives,
+    /// matched case-insensitively. epubcheck spells this as five separate
+    /// `xsd:string { pattern = "[rR][eE][fF]..." }` alternatives, one per
+    /// directive, in `mod/epub-xhtml-inc.rnc`'s override of `meta.rnc` — the
+    /// comment there calls the letter-class spelling "an ugly hack" for
+    /// case-insensitiveness. Not an XSD built-in, so it carries a name of our
+    /// own, like `html5Token` above.
+    HttpEquiv,
+    /// `<meta charset>`'s value in the XML serialization: `utf-8`, matched
+    /// case-insensitively (`meta.rnc`'s `xsd:string { pattern = "[uU][tT][fF]-8" }`
+    /// under `XMLonly`; the unrestricted `string` alternative beside it is
+    /// `HTMLonly`, which epubcheck sets to `notAllowed`).
+    MetaCharset,
     IdRef,
     IdRefs,
     Language,
@@ -53,6 +66,8 @@ impl Datatype {
             "NCName" => NCName,
             "ID" => Id,
             "html5Token" => Html5Token,
+            "httpEquiv" => HttpEquiv,
+            "metaCharset" => MetaCharset,
             "IDREF" => IdRef,
             "IDREFS" => IdRefs,
             "language" => Language,
@@ -102,6 +117,10 @@ impl Datatype {
             Datatype::Name => is_name(&s),
             Datatype::NCName | Datatype::Id | Datatype::IdRef => is_ncname(&s),
             Datatype::Html5Token => !raw.is_empty() && !raw.chars().any(char::is_whitespace),
+            Datatype::HttpEquiv => HTTP_EQUIV_DIRECTIVES
+                .iter()
+                .any(|d| s.eq_ignore_ascii_case(d)),
+            Datatype::MetaCharset => s.eq_ignore_ascii_case("utf-8"),
             Datatype::IdRefs => !s.is_empty() && s.split(' ').all(is_ncname),
             Datatype::Language => is_language(&s),
             Datatype::Boolean => matches!(s.as_str(), "true" | "false" | "0" | "1"),
@@ -180,6 +199,21 @@ impl Datatype {
         }
     }
 }
+
+/// The five HTML5 pragma directives `<meta http-equiv>` may name. `content-type`
+/// is the one epubcheck adds for XHTML — HTML5 itself restricts the encoding
+/// declaration state to the HTML serialization, and `mod/epub-xhtml-inc.rnc`
+/// re-defines `meta.http-equiv.content-type.elem` without its `& HTMLonly` so
+/// that EPUB's XHTML may carry it too. Its `@content` then has its own,
+/// separate constraint, checked in `opf.rs` where epubcheck checks it (a
+/// Schematron assertion, not this grammar).
+const HTTP_EQUIV_DIRECTIVES: [&str; 5] = [
+    "content-type",
+    "refresh",
+    "default-style",
+    "content-security-policy",
+    "x-ua-compatible",
+];
 
 fn bool_val(s: &str) -> Option<bool> {
     match s {
