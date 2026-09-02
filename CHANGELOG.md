@@ -160,6 +160,12 @@ read off the root start tag, so its absence is knowledge rather than ignorance.
 Zero of the 444 shelf books have a malformed OPF, so no instrument here could
 have found this. It took a user's file.
 
+One message improved from the same file, where the two outputs sat side by
+side on the same line: an empty `<ol>` in a navigation document now reads
+`element "ol" incomplete; missing required element "li"`, as epubcheck's does
+and as its own `<li>` sibling already did. Same id, same position, same count —
+it simply said less than it knew.
+
 ### For consumers
 
 One new rule key, `opf.package.dc_value_not_empty`, whose `params[0]` is the

@@ -116,6 +116,12 @@ fn check_li(li: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
 }
 
 /// An `<ol>` (top-level or nested) must have at least one `<li>`.
+///
+/// The message names what is missing, like its `<li>` sibling above and like
+/// epubcheck: `element "ol" incomplete; missing required element "li"`. It said
+/// only the first half until DNSB's file (MobileRead #268) put the two outputs
+/// side by side - the same finding on the same line, ours telling the author
+/// less about it.
 fn check_ol(ol: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
     let lis: Vec<_> = ol
         .children()
@@ -125,7 +131,7 @@ fn check_ol(ol: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
         report.push_node(
             RSC_005,
             Severity::Error,
-            "element \"ol\" incomplete",
+            "element \"ol\" incomplete; missing required element \"li\"",
             path,
             ol,
             "navdoc.ol.empty",
