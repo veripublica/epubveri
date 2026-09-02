@@ -10,13 +10,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.13.3] - 2026-09-02
 
-**Two missed errors reported by a user, and ten wrong ones found while fixing
-them.** Doitsu's report (MobileRead #266) named an empty `dc:creator` and
-`<meta http-equiv>`; both are real and both are closed here. Neither resets the
-false-positive counter — a missed error harms nobody who has it. But looking at
-the two rules that were supposed to cover them turned up **ten false positives
-in rules that were already shipping**, and those are the part of this release a
-reader can actually meet.
+**Two missed errors reported by a user, and eleven wrong ones found while
+fixing them and one other report.** Doitsu's report (MobileRead #266) named an
+empty `dc:creator` and `<meta http-equiv>`; both are real and both are closed
+here. Neither resets the false-positive counter — a missed error harms nobody
+who has it. But looking at the two rules that were supposed to cover them turned
+up **ten false positives in rules that were already shipping**, and DNSB's
+attached files (#268) turned up an eleventh. Those are the part of this release
+a reader can actually meet.
 
 One of them is not rare: **`<meta http-equiv="content-type"
 content="text/html;charset=utf-8"/>`**, without the space, was an error here and
@@ -56,11 +57,12 @@ every one spells the declaration the one way the old comparison accepted.
 
 ### Measured
 
-632 tests, corpus 603/603 exact-ID with 0 false positives, `epubtests`
+633 tests, corpus 603/603 exact-ID with 0 false positives, `epubtests`
 byte-identical to the previous release, `diff-shelf.sh` unchanged over 444 real
 books, hostile clean. `compare` over all 981 corpus books: **899 agree on the ID
 set exactly**, with **one** id only we report — the documented CHK-008/RSC-001
-pair (issue #127) — against 830 and sixteen at the last recorded run.
+pair (issue #127) — against 830 and sixteen at the last recorded run. Over the
+five malformed-OPF fixtures alone, agreement went from one to three.
 
 ### NO-BREAK SPACE is not XML whitespace
 
@@ -123,6 +125,40 @@ Known and left, because closing it means reproducing epubcheck's error
 recovery rather than its rules: for a `dc:*` element containing a child
 element, epubcheck reports the rejected child *and* a second "incomplete;
 expected data". We report the child only. Our count is lower, never higher.
+
+### A fatal OPF was told its unique-identifier matched nothing
+
+DNSB reported a disagreement (MobileRead #268) with two output files, and the
+files themselves were the first finding: his EPUB 3 export has an **unclosed
+`<spine>`**, epubcheck gives the same `FATAL(RSC-016)` on it that we do, and the
+two `.txt` files had been produced from different states of the book. Repaired
+with one `</spine>`, the two tools agree exactly — same five findings, same ids,
+same files.
+
+What his file did show is ours. Beside the fatal we reported `OPF-030: package
+unique-identifier 'BookId' does not match any dc:identifier id`, on an OPF whose
+`<dc:identifier id="BookId">` sits four lines above the fault. A fatal leaves us
+with no tree, so the recovery added in 0.13.0 (issue #126) resolved the
+`unique-identifier` against an **empty** identifier list — and an empty list
+after a fatal means "the parse stopped", not "the book declares none". We were
+asserting absence from ignorance.
+
+epubcheck answers it by stream position: it reports OPF-030 only where its
+handler had not yet passed a matching `<dc:identifier>` start tag. We now decide
+the same question from how far our parser got — does the `unique-identifier`
+value appear anywhere in the bytes read before the fault. That needs no
+namespace resolution, so it is not the second parser the recovery was written to
+avoid, and it errs toward silence. Eight books measured against 5.3.0, one per
+fatal position, and it agrees with epubcheck on all eight, including both of
+epubcheck's own malformed-OPF fixtures, where the fault sits above the
+identifier and OPF-030 is correct.
+
+The missing-attribute half is untouched and still runs after a fatal: RSC-005,
+OPF-048 and OPF-030 together when `@unique-identifier` is absent. That one is
+read off the root start tag, so its absence is knowledge rather than ignorance.
+
+Zero of the 444 shelf books have a malformed OPF, so no instrument here could
+have found this. It took a user's file.
 
 ### For consumers
 

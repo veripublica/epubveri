@@ -3430,13 +3430,30 @@ fn normalize_opus(mt: &str) -> &str {
 /// report what does not resolve. Returns the identifier's text when it does.
 ///
 /// Shared by the normal path and the fatal-recovery one below, which is the
-/// point: epubcheck runs **all three** of these findings after a fatal parse
-/// error, not just OPF-030, because all three depend on nothing but the root
-/// element's start tag. Measured on a fatal OPF with no `unique-identifier`:
-/// RSC-005, OPF-048 and OPF-030 together.
+/// point: two of these three findings depend on nothing but the root element's
+/// start tag, so they survive a fatal parse error exactly as they do in
+/// epubcheck. Measured on a fatal OPF with no `unique-identifier`: RSC-005,
+/// OPF-048 and OPF-030 together.
+///
+/// `report_unresolved` is the third one's guard, and it exists because we got
+/// this wrong. After a fatal the caller has **no** `dc:identifier` elements —
+/// not because the book has none, but because the parse never reached them —
+/// and reporting "does not match any dc:identifier id" on that basis is
+/// asserting absence from ignorance. DNSB met it (MobileRead #268) on a book
+/// whose `<dc:identifier id="BookId">` sits four lines above the fault.
+///
+/// epubcheck answers it by stream position: it reports OPF-030 only when the
+/// handler had not yet passed a matching `<dc:identifier>` start tag. Measured
+/// one book per fatal position — no OPF-030 when the fault is below the
+/// identifier, OPF-030 when the fault is above it, and OPF-030 when the id
+/// genuinely resolves to nothing.
+///
+/// The caller decides, from the bytes the parser actually got through; see the
+/// fatal path in [`check`].
 fn check_unique_identifier(
     pkg: roxmltree::Node,
     identifiers: &[roxmltree::Node],
+    report_unresolved: bool,
     opf_path: &str,
     pos: Position,
     report: &mut Report,
@@ -3455,7 +3472,7 @@ fn check_unique_identifier(
                             .collect::<String>(),
                     );
                 }
-                None => {
+                None if report_unresolved => {
                     report.push_full(
                         OPF_030,
                         Severity::Error,
@@ -3468,6 +3485,9 @@ fn check_unique_identifier(
                         vec![uid.to_string()],
                     );
                 }
+                // The parse stopped somewhere the identifier may well have
+                // been. Say nothing rather than something false.
+                None => {}
             }
         }
         None => {
@@ -3566,6 +3586,24 @@ fn recover_root_start_tag(xml: &str) -> Option<(usize, &str)> {
     None
 }
 
+/// The byte offset of a 1-based line/column, the inverse of [`line_col_at`] —
+/// used to find how far the parser got before it gave up, in text there is no
+/// document for.
+fn offset_at(xml: &str, pos: Position) -> usize {
+    let mut off = 0usize;
+    for (i, line) in xml.split_inclusive('\n').enumerate() {
+        if i + 1 == pos.line as usize {
+            return off
+                + line
+                    .char_indices()
+                    .nth(pos.column.saturating_sub(1) as usize)
+                    .map_or(line.len(), |(b, _)| b);
+        }
+        off += line.len();
+    }
+    xml.len()
+}
+
 /// Line/column of a byte offset in text we could not parse, so there is no
 /// document to ask.
 fn line_col_at(xml: &str, off: usize) -> Position {
@@ -3614,25 +3652,57 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // **The package's identity survives a fatal, and epubcheck keeps
             // it** (issue #126). Reading as a stream, epubcheck has already
             // passed the root start tag when the document falls apart, so the
-            // three findings that depend on nothing else still run: RSC-005
-            // and OPF-048 for a missing `unique-identifier`, and OPF-030 for
-            // one that cannot resolve. We had no tree at all and said nothing.
+            // findings that depend on nothing else still run: RSC-005 and
+            // OPF-048 for a missing `unique-identifier`. We had no tree at all
+            // and said nothing.
             //
             // Recovered rather than re-parsed: `recover_root_start_tag` finds
             // the start tag lexically and hands it back to roxmltree as a
-            // self-closing document, so no XML rule is re-implemented. The
-            // identifier list is empty by construction - the metadata is
-            // exactly what the fatal cost us - which is the same state a
-            // package with no `<metadata>` is in, and reaches the same three
-            // findings through the same function.
+            // self-closing document, so no XML rule is re-implemented.
+            //
+            // The identifier list is empty by construction, and `false` says
+            // so: it is what the fatal cost us, NOT what the book declares.
+            // This used to be conflated with "a package with no `<metadata>`",
+            // which is a different state and is why a book with a perfectly
+            // good `<dc:identifier>` was told its unique-identifier matched
+            // none - see `check_unique_identifier`.
             if let Some((off, tag)) = recover_root_start_tag(&text) {
                 let selfclosed = format!("{}/>", tag.trim_end_matches('>').trim_end_matches('/'));
                 if let Ok(stub) = roxmltree::Document::parse(&selfclosed) {
                     let root = stub.root_element();
                     if root.tag_name().name() == "package" {
+                        // Whether OPF-030 may be claimed is decided here, from
+                        // how far the parser got: the identifier list is empty
+                        // because the parse stopped, so an unresolved
+                        // `unique-identifier` is not knowledge unless the bytes
+                        // it *did* read could not have declared it.
+                        //
+                        // The test is deliberately the crudest one that is
+                        // still true - does the uid appear ANYWHERE in the body
+                        // the parser got through. It needs no prefix
+                        // resolution, so it is not the second parser
+                        // `recover_root_start_tag` exists to avoid, and it errs
+                        // toward silence: a chance occurrence of the string
+                        // suppresses a finding rather than inventing one.
+                        //
+                        // Eight books measured against epubcheck 5.3.0 - the
+                        // fault above, inside and below `<metadata>`, with the
+                        // uid resolving and not, plus the two corpus fixtures
+                        // `conformance-xml-malformed-error` and
+                        // `conformance-xml-undeclared-namespace-error`, whose
+                        // faults both sit above the identifier. This agrees
+                        // with epubcheck on all eight.
+                        let read_to = offset_at(&text, Position::of_parse_error(&e));
+                        let body_start = (off + tag.len()).min(read_to);
+                        let body = &text[body_start..read_to];
+                        let report_unresolved = !root
+                            .attr_no_ns("unique-identifier")
+                            .map(str::trim)
+                            .is_some_and(|uid| body.contains(uid));
                         check_unique_identifier(
                             root,
                             &[],
+                            report_unresolved,
                             opf_path,
                             line_col_at(&text, off),
                             report,
@@ -5339,7 +5409,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
             .collect();
         package_identifier_text =
-            check_unique_identifier(pkg, &identifiers, opf_path, Position::of(pkg), report);
+            check_unique_identifier(pkg, &identifiers, true, opf_path, Position::of(pkg), report);
     }
     // A media-overlay attribute's target item must itself be a Media
     // Overlay Document (application/smil+xml).
@@ -20720,10 +20790,11 @@ mod tests {
 
     /// A fatal XML error leaves us with no tree, but the package's identity is
     /// still in the bytes — and epubcheck keeps it, because it reads as a
-    /// stream and had already passed the root start tag. All three findings
-    /// that depend on nothing but that tag still run there: RSC-005 and
-    /// OPF-048 for a missing `unique-identifier`, OPF-030 for one that cannot
-    /// resolve. We said nothing (issue #126).
+    /// stream and had already passed the root start tag. The findings that
+    /// depend on nothing but that tag still run there: RSC-005 and OPF-048 for
+    /// a missing `unique-identifier`. We said nothing (issue #126). What does
+    /// **not** run is OPF-030 for a uid that appears not to resolve — see the
+    /// test below and `check_unique_identifier`.
     ///
     /// The recovery is lexical and bounded; the attribute lexing is handed
     /// back to roxmltree. These are the shapes that would break a naive scan.
@@ -20784,6 +20855,118 @@ mod tests {
                 .expect("root found");
         let p = super::line_col_at("<?xml version=\"1.0\"?>\n\n  <package a=\"b\">", off);
         assert_eq!((p.line, p.column), (3, 3));
+    }
+
+    /// After a fatal parse error the `dc:identifier` list is empty because the
+    /// parse stopped, not because the book declares none — so OPF-030 for an
+    /// unresolved `unique-identifier` must not be asked.
+    ///
+    /// DNSB reported it (MobileRead #268) with two output files that looked
+    /// like a disagreement and were not: his EPUB 3 export has an unclosed
+    /// `<spine>`, epubcheck gives the same FATAL RSC-016 on it, and the two
+    /// `.txt` files had been produced from different states of the book.
+    /// What the file did show is ours: an OPF-030 saying the
+    /// `unique-identifier` matched no `dc:identifier` id, on an OPF whose
+    /// `<dc:identifier id="BookId">` sits four lines above the fault.
+    ///
+    /// The missing-attribute half is a different question and still runs:
+    /// `@unique-identifier` is read off the root start tag, so its absence is
+    /// knowledge, not ignorance. Both halves measured against epubcheck 5.3.0,
+    /// one book per fatal position.
+    #[test]
+    fn a_fatal_opf_does_not_claim_the_unique_identifier_is_unresolved() {
+        let ids = |opf: &str| -> Vec<&'static str> {
+            const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                <body><p>x</p></body></html>";
+            let mut v = crate::validate_bytes(epub_with_opf(Some(opf), CH1))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect::<Vec<_>>();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        const META: &str = r#"<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="BookId">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>"#;
+        // DNSB's shape: the `<spine>` is never closed.
+        let broken = format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" \
+             unique-identifier=\"BookId\">\n  {META}\n  <spine><itemref idref=\"ch1\"/>\n</package>"
+        );
+        let r = ids(&broken);
+        assert!(
+            r.contains(&crate::ids::RSC_016),
+            "the fatal is reported: {r:?}"
+        );
+        assert!(
+            !r.contains(&crate::ids::OPF_030),
+            "the identifier is there, four lines above the fault: {r:?}"
+        );
+        // The control: the same fault with no `unique-identifier` at all still
+        // draws all three, because that attribute is on the recovered tag.
+        let no_uid = broken.replace(" unique-identifier=\"BookId\"", "");
+        let r = ids(&no_uid);
+        for id in [
+            crate::ids::RSC_016,
+            crate::ids::RSC_005,
+            crate::ids::OPF_048,
+            crate::ids::OPF_030,
+        ] {
+            assert!(r.contains(&id), "expected {id}, got {r:?}");
+        }
+        // The other side of the discrimination, and the reason this is a test
+        // of *how far the parser got* rather than a blanket suppression: same
+        // fault, but a `unique-identifier` the readable bytes cannot have
+        // declared. OPF-030 is right there and epubcheck still gives it.
+        let r = ids(&broken.replace(
+            "unique-identifier=\"BookId\"",
+            "unique-identifier=\"NoSuchId\"",
+        ));
+        assert!(
+            r.contains(&crate::ids::OPF_030),
+            "nothing we read declares NoSuchId: {r:?}"
+        );
+        // ...and with the fault *above* the identifier, which is the shape of
+        // epubcheck's own `conformance-xml-malformed-error` fixture.
+        let fault_first = broken
+            .replace(
+                "<spine><itemref idref=\"ch1\"/>\n",
+                "<spine><itemref idref=\"ch1\"/></spine>\n",
+            )
+            .replace(
+                "<metadata xmlns:dc=",
+                "<metadata></package><metadata xmlns:dc=",
+            );
+        let r = ids(&fault_first);
+        assert!(r.contains(&crate::ids::RSC_016), "got {r:?}");
+        assert!(
+            r.contains(&crate::ids::OPF_030),
+            "the parse stopped above the identifier: {r:?}"
+        );
+        // And a well-formed OPF still resolves the question properly, in both
+        // directions — this is not "OPF-030 is gone".
+        let ok = broken.replace(
+            "<itemref idref=\"ch1\"/>\n",
+            "<itemref idref=\"ch1\"/></spine>\n",
+        );
+        assert!(!ids(&ok).contains(&crate::ids::OPF_030));
+        assert!(
+            ids(&ok.replace(
+                "unique-identifier=\"BookId\"",
+                "unique-identifier=\"NoSuchId\""
+            ))
+            .contains(&crate::ids::OPF_030)
+        );
     }
 
     /// A leaking URL that the manifest **declares** and a content document
