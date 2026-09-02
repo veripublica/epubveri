@@ -188,6 +188,7 @@ pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not
 pub const ADV_003: &str = "ADV-003"; // a CSS type selector names an element no vocabulary defines (usage, #28)
 pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)
 pub const ADV_009: &str = "ADV-009"; // two sibling nav entries land on one document, no fragment (usage, MobileRead #195)
+pub const ADV_010: &str = "ADV-010"; // an EPUB 2 manifest resource nothing references (usage, MobileRead #221)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

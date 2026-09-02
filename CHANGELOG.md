@@ -166,12 +166,64 @@ side on the same line: an empty `<ol>` in a navigation document now reads
 and as its own `<li>` sibling already did. Same id, same position, same count —
 it simply said less than it knew.
 
+### ADV-010: an EPUB 2 manifest resource nothing draws, applies or loads
+
+JSWolf asked for "a warning for any images not being used" (MobileRead #221).
+It turns out not to be a missing check but a missing *version*: epubcheck's
+OPF-097 asks exactly that question, and asks it of EPUB 3 books only. We match
+it there exactly — five reference shapes probed one book each, `img src`, CSS
+`background-image`, `link rel=stylesheet`, `link rel=icon`, `link rel=Preview`,
+and the two tools agree on all five. On an EPUB 2 book **neither tool says
+anything**, which is why the check looked missing to JSWolf and present to
+Doitsu: they validate different versions and both were right about their own
+books.
+
+Reporting where epubcheck is silent is the restrictive direction, so this is
+opt-in behind `--advisory`, carries an id of ours rather than epubcheck's, and
+**never moves the verdict or the exit code** — verified across all 444 shelf
+books, where not one changes its exit code with the flag on.
+
+It gets its own id rather than reusing OPF-097 for a concrete reason: OPF-097
+is `usage` severity and usage is hidden unless you pass `-u`, so reusing it
+would have required *both* flags. `ADV-*` findings are shown by `--advisory`
+alone.
+
+**Measured before it was written**, by removing the version gate and counting
+over the shelf:
+
+- **90 of 362 EPUB 2 books (25%), 197 findings.** Median one per book; 64 of
+  the 90 have exactly one. It discriminates — an advisory that fires on nearly
+  every book teaches people never to pass the flag.
+- **143 of the 197 verified by hand**, one at a time: 138 of the file names
+  occur nowhere else in the book at all. Four of the five that did are true
+  findings anyway — three books declare a second, dead `cover.jpg` beside the
+  real one, and one declares `on_D.jpg` while its page draws `on_D_fmt.jpeg`.
+- The 143rd is a `<link rel="Preview">` Word artefact, and **epubcheck reports
+  OPF-097 for that shape too**. So the wording here is chosen to be true of it
+  as well: nothing *draws, applies or loads* the file.
+- The `<meta name="cover">` target is **not** exempt, and that was counted
+  rather than assumed: 6 of 143, 4%. Nothing draws those either, the EPUB 3
+  path does not exempt `properties="cover-image"`, and neither does epubcheck.
+
+Not restricted to images, though images are 128 of the 143 — a dead stylesheet
+or an orphan XHTML is the same question with the same accuracy.
+
+**One limit worth stating plainly:** both editor plugins run with `--advisory`
+off by default, so this reaches a plugin user only if they switch it on.
+
 ### For consumers
 
-One new rule key, `opf.package.dc_value_not_empty`, whose `params[0]` is the
+Two new rule keys. `opf.package.dc_value_not_empty`, whose `params[0]` is the
 element name (`dc:creator`) — the same shape `opf.metadata.empty_element` uses
-for the EPUB 2 half of the same question. Its findings are RSC-005 errors that
-were not reported at all before. No existing key, message or severity moves.
+for the EPUB 2 half of the same question; its findings are RSC-005 errors that
+were not reported at all before. And
+`opf.manifest_item.never_referenced_epub2`, carrying ADV-010 with the href in
+`params[0]`; it is deliberately *not* the EPUB 3 site's
+`opf.manifest_item.never_referenced`, so a consumer can tell our advisory from
+epubcheck's finding without reading the version. It appears only under
+`--advisory`.
+
+No existing key, message or severity moves.
 
 ## [0.13.2] - 2026-08-30
 

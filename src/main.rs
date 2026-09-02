@@ -73,7 +73,10 @@ OPTIONS:
                                      descriptor names, a type selector naming
                                      no known element, an EPUB 2 package
                                      written in EPUB 3, two NCX navigation
-                                     entries landing on one document.
+                                     entries landing on one document, an
+                                     EPUB 2 manifest resource nothing draws,
+                                     applies or loads (epubcheck asks this
+                                     of EPUB 3 books only, as OPF-097).
                            Off by default; neither ever affects the verdict or
                            the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
@@ -853,7 +856,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            9,
+            10,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

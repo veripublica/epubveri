@@ -10500,9 +10500,59 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // factually true; what to do about it is the author's call, which is why
     // this is usage and not advice.
     //
-    // EPUB 3 only - the rule lives in epubcheck's EPUB-3 checker, and there
-    // is no EPUB 2 counterpart.
-    if is_epub3 {
+    // **EPUB 3 by default; EPUB 2 only with `--advisory`, under ADV-010.**
+    //
+    // epubcheck's rule lives in its EPUB-3 checker and has no EPUB 2
+    // counterpart, so an EPUB 2 book gets no answer from either tool. JSWolf
+    // asked for exactly that answer (MobileRead #221, "a warning for any images
+    // not being used"), and the reason his request looked unmet while Doitsu
+    // saw the check working is simply that they validate different versions -
+    // both were right about their own books.
+    //
+    // Reporting where epubcheck is silent is the *restrictive* direction, which
+    // is indistinguishable from a false positive to anyone diffing the two
+    // tools, so it goes behind the flag and carries an id of ours rather than
+    // epubcheck's. It never moves the verdict or the exit code.
+    //
+    // **The evidence, measured over the 444-book shelf on 2026-09-02 by
+    // removing this gate and counting**, because an advisory that cries wolf is
+    // worse than none:
+    //
+    //   - 90 of 362 EPUB 2 books (25%) would draw at least one, 197 findings
+    //     in all. Median one per book; 64 of the 90 have exactly one. Two
+    //     outliers, 19 and 51. So it discriminates - contrast the "outdated
+    //     features" idea that fired on 113 of 115 books and was dropped for it.
+    //   - 143 of those 197 were verified by hand, one at a time: does the file
+    //     name occur anywhere in any XHTML, CSS, SVG, NCX, SMIL, JS or XML file
+    //     in the book? **138 do not occur at all.** Four of the five that did
+    //     are true findings anyway - three books declare a *second*, dead
+    //     `cover.jpg` beside the real one, and one declares `on_D.jpg` while
+    //     its page draws `on_D_fmt.jpeg` (the name matched an `alt` attribute).
+    //   - The 143rd is a `<link href="../Misc/preview.wmf" rel="Preview"/>`, a
+    //     Word-export artefact. **epubcheck reports OPF-097 for that shape
+    //     too**, measured - five reference shapes probed one book each
+    //     (`img src`, CSS `background-image`, `link rel=stylesheet`,
+    //     `link rel=icon`, `link rel=Preview`) and we agree on all five. So it
+    //     is epubcheck's definition of "referenced", not a divergence.
+    //
+    // The wording below is therefore chosen to be true in that case as well:
+    // a `rel="Preview"` link is a reference in markup, but nothing draws,
+    // applies or loads the file. That is the bar an advisory has to clear -
+    // is the finding factually true in **every** case it fires - and it is not
+    // a precision rate, which would only be a fact about this shelf.
+    //
+    // Not restricted to images, though images are 128 of the 143: it is the
+    // same question with the same accuracy, and a dead stylesheet or an orphan
+    // XHTML is worth the same line.
+    //
+    // **The `<meta name="cover">` target is NOT exempt, and that was measured
+    // rather than assumed**: it is the likeliest "that is wrong" reaction, so
+    // it was counted - 6 of the 143, 4%. The finding is true of them too
+    // (nothing draws the file; the reading system uses it as a thumbnail), the
+    // EPUB 3 path does not exempt `properties="cover-image"` either, and
+    // neither does epubcheck. Exempting here for 4% would make the two paths
+    // disagree about the same book for no measured gain.
+    if is_epub3 || advisory {
         // **The overlays' own references, folded in before the question is
         // asked.** The comment below always claimed the SMIL's audio/text
         // targets were "collected by the overlay pass" — they were not, and
@@ -10590,7 +10640,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         .attr_no_ns("properties")
                         .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
                     let mt = item.attr_no_ns("media-type").unwrap_or_default();
-                    if !is_nav
+                    // The remote half stays EPUB 3 only. In EPUB 2 nothing
+                    // may be remote at all, so such an item is already an
+                    // error; adding an advisory beside it would point at the
+                    // wrong half of the author's problem.
+                    if is_epub3
+                        && !is_nav
                         && mt != "application/x-dtbncx+xml"
                         && !remote_resource_refs.contains(href)
                     {
@@ -10685,17 +10740,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 {
                     continue;
                 }
-                report.push_node(
-                    OPF_097,
-                    Severity::Usage,
-                    format!(
-                        "'{href}' is declared in the manifest, but no content document references it"
-                    ),
-                    opf_path,
-                    item,
-                    "opf.manifest_item.never_referenced",
-                    vec![href.to_string()],
-                );
+                if is_epub3 {
+                    report.push_node(
+                        OPF_097,
+                        Severity::Usage,
+                        format!(
+                            "'{href}' is declared in the manifest, but no content document references it"
+                        ),
+                        opf_path,
+                        item,
+                        "opf.manifest_item.never_referenced",
+                        vec![href.to_string()],
+                    );
+                } else {
+                    // Its own id and its own rule key: this is our finding,
+                    // not epubcheck's, and a consumer must be able to tell
+                    // them apart without reading the version.
+                    report.push_node(
+                        ADV_010,
+                        Severity::Usage,
+                        format!(
+                            "'{href}' is declared in the manifest, but no document draws, applies or loads it"
+                        ),
+                        opf_path,
+                        item,
+                        "opf.manifest_item.never_referenced_epub2",
+                        vec![href.to_string()],
+                    );
+                }
             }
         }
     }
@@ -20967,6 +21039,92 @@ mod tests {
             ))
             .contains(&crate::ids::OPF_030)
         );
+    }
+
+    /// ADV-010: an EPUB 2 manifest resource nothing draws, applies or loads.
+    ///
+    /// JSWolf asked for it on MobileRead (#221). It is not a new check — it is
+    /// OPF-097's question, which epubcheck asks of EPUB 3 books only, asked of
+    /// an EPUB 2 book as well. That is the *restrictive* direction, so it is
+    /// opt-in behind `--advisory`, carries an id of ours rather than
+    /// epubcheck's, and never moves the verdict.
+    ///
+    /// The measurements that justified it are in the check's own comment. What
+    /// this pins is the wiring, which is where it could go wrong silently:
+    /// EPUB 3 must keep saying OPF-097 (not ADV-010) and must keep needing
+    /// `-u` rather than `--advisory`; EPUB 2 must say nothing at all without
+    /// the flag; and neither may move the verdict.
+    #[test]
+    fn an_unused_epub2_manifest_resource_is_adv_010_behind_the_flag() {
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        // `meta.xml` is written into every one of these books, so declaring it
+        // in the manifest gives a real file that nothing references.
+        let opf = |ver: &str, extra_item: &str, extra_meta: &str| {
+            let modified = if ver.starts_with('3') {
+                "<meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>"
+            } else {
+                ""
+            };
+            let nav = if ver.starts_with('3') {
+                "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>"
+            } else {
+                ""
+            };
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{modified}{extra_meta}
+  </metadata>
+  <manifest>
+    {nav}
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    {extra_item}
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        const EXTRA: &str = "<item id=\"extra\" href=\"meta.xml\" media-type=\"application/xml\"/>";
+        let run = |ver: &str, advisory: bool, extra_item: &str| {
+            let opts = crate::Options {
+                advisory,
+                ..Default::default()
+            };
+            crate::validate_bytes_with_options(
+                epub_with_opf(Some(&opf(ver, extra_item, "")), CH1),
+                &opts,
+            )
+        };
+        let ids =
+            |r: &crate::report::Report, id: &str| r.messages.iter().filter(|m| m.id == id).count();
+
+        // EPUB 2, the flag on: exactly one ADV-010 and no OPF-097.
+        let r = run("2.0", true, EXTRA);
+        assert_eq!(ids(&r, crate::ids::ADV_010), 1, "{:?}", r.messages);
+        assert_eq!(ids(&r, crate::ids::OPF_097), 0);
+        assert!(r.messages.iter().any(|m| m.id == crate::ids::ADV_010
+            && m.rule == Some("opf.manifest_item.never_referenced_epub2")
+            && m.severity == crate::report::Severity::Usage));
+        // ...and it does not move the verdict. That is the promise the whole
+        // family rests on: a book that passes epubcheck passes epubveri.
+        assert_eq!(r.errors(), run("2.0", false, EXTRA).errors());
+        assert_eq!(r.fatals(), 0);
+
+        // EPUB 2 without the flag: silent.
+        assert_eq!(ids(&run("2.0", false, EXTRA), crate::ids::ADV_010), 0);
+        // EPUB 2 with nothing spare declared: silent either way.
+        assert_eq!(ids(&run("2.0", true, ""), crate::ids::ADV_010), 0);
+
+        // EPUB 3 is untouched — still OPF-097, and the flag is not what
+        // reveals it there.
+        let r3 = run("3.0", true, EXTRA);
+        assert_eq!(ids(&r3, crate::ids::OPF_097), 1, "{:?}", r3.messages);
+        assert_eq!(ids(&r3, crate::ids::ADV_010), 0, "the id must not change");
+        assert_eq!(ids(&run("3.0", false, EXTRA), crate::ids::OPF_097), 1);
     }
 
     /// A leaking URL that the manifest **declares** and a content document
