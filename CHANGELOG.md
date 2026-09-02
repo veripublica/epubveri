@@ -55,15 +55,6 @@ occurrences of the unspaced spelling sit in EPUB 2 books, and this rule is EPUB
 3 only — of the seven EPUB 3 books on the shelf that carry `http-equiv` at all,
 every one spells the declaration the one way the old comparison accepted.
 
-### Measured
-
-633 tests, corpus 603/603 exact-ID with 0 false positives, `epubtests`
-byte-identical to the previous release, `diff-shelf.sh` unchanged over 444 real
-books, hostile clean. `compare` over all 981 corpus books: **899 agree on the ID
-set exactly**, with **one** id only we report — the documented CHK-008/RSC-001
-pair (issue #127) — against 830 and sixteen at the last recorded run. Over the
-five malformed-OPF fixtures alone, agreement went from one to three.
-
 ### NO-BREAK SPACE is not XML whitespace
 
 XML, XSD's `whiteSpace` facet and XPath's `normalize-space()` all mean exactly
@@ -210,6 +201,44 @@ or an orphan XHTML is the same question with the same accuracy.
 
 **One limit worth stating plainly:** both editor plugins run with `--advisory`
 off by default, so this reaches a plugin user only if they switch it on.
+
+### The two editor plugins are named in our own documentation at last
+
+Doitsu's Sigil and calibre plugins had been in both official indexes since
+2026-08-20, and our own docs never mentioned either — a reader who does not use
+a terminal was told to pick one of eight archives and get past a first-run
+security prompt. `USAGE.md` now offers the plugins as **Option 2**, before the
+work they let a reader skip, and the README names them twice.
+
+Two things it says plainly, because a link would otherwise read as an
+endorsement: **the plugins are not ours** (Doitsu's, GPL-3, bug reports to his
+forum threads; our only claim is that we read both sources and reported what we
+found), and **both hide `usage` and `--advisory` by default**, so a reader whose
+book looks cleaner in the editor than on the command line knows why.
+
+`INTEGRATING.md` roughly doubled in the same pass, from reading both plugin
+sources in full. Six of the nine things that pass found were our documentation's
+fault rather than theirs — `-u` gated at fetch time makes the summary describe
+the flag instead of the book; `tool_version` is already in the envelope, so
+neither plugin needed to spawn `epubveri -V`; our own buried advice pointed at
+`musl` where both plugins pick `gnu`; `data.advisory_basis` was documented only
+in the WASM section; `location` is a full path; and **exit code 2 has three
+shapes where we had documented one** — a bad command line answers on stderr,
+while a missing file and an unnameable input both return a full envelope with
+stderr *empty*. The rule is now published: parse stdout first, fall back to
+stderr only when there is no envelope. There is also a recipe for verifying a
+downloaded archive against `SHA256SUMS.txt`, run against v0.13.2 in both
+directions — neither plugin verifies what it downloads, so 0.12.4's checksums
+and attestation were reaching nobody.
+
+### Measured
+
+633 tests, corpus 603/603 exact-ID with 0 false positives, `epubtests`
+byte-identical to the previous release, `diff-shelf.sh` unchanged over 444 real
+books, hostile clean. `compare` over all 981 corpus books: **899 agree on the ID
+set exactly**, with **one** id only we report — the documented CHK-008/RSC-001
+pair (issue #127) — against 830 and sixteen at the last recorded run. Over the
+five malformed-OPF fixtures alone, agreement went from one to three.
 
 ### For consumers
 
