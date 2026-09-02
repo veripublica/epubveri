@@ -69,6 +69,7 @@ function validate(
   bytes: Uint8Array,
   profile?: string | null,
   advisory?: boolean | null,
+  epubVersion?: string | null,
 ): Report;
 function version(): string;
 ```
@@ -88,12 +89,22 @@ epubcheck has no verdict on, in two families, both at `usage` severity:
   yet, so it becomes an ordinary error the day it catches up (today: the EPUB 3.4 rules).
 - **`ADV-*`** — no specification says anything, but the book is still probably wrong
   (unknown CSS property and descriptor names, a type selector naming no known element, an
-  EPUB 2 package written in EPUB 3, two navigation entries landing on one document).
+  EPUB 2 package written in EPUB 3, two navigation entries landing on one document, an
+  EPUB 2 manifest resource nothing draws, applies or loads).
 
 It is **off by default**: leaving the argument out, or passing `false`/`undefined`,
 produces a byte-identical report, so existing two-argument callers are unaffected. Neither
 family ever affects `status` — a book that passes epubcheck passes epubveri, with or
 without the flag.
+
+### Forcing a version
+
+`epubVersion` mirrors the CLI `-v` flag — pass `"2"`, `"2.0"`, `"3"` or `"3.0"` to validate
+against that version whatever the book declares, or `undefined`/`null` to judge it as what
+it declares. On a disagreement `PKG-001` reports it and the **requested** version wins, so
+forcing a 3.0 book to 2.0 produces a long report. That is epubcheck's own behaviour, so a
+ported invocation means the same thing in both tools. Unrecognized values behave like
+`undefined`, as an unknown `profile` name does.
 
 ### Two differences from the CLI
 

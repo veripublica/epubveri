@@ -249,6 +249,15 @@ never touches the corresponding module at all.
 
 ### Support
 
+- **`envelope.rs`** — the machine-readable JSON envelope (`--format
+  json`), which is a published contract rather than an output format:
+  the WASM bindings return the same per-input shape, and epubsana
+  consumes it. `docs/INTEGRATING.md` documents it field by field.
+- **`xmlext.rs`** — the small extension trait that pins down
+  *namespace-less* attribute access, because `roxmltree`'s bare-`&str`
+  lookup matches by local name and so also matches `xml:lang` for
+  `lang`. Also holds XML's own whitespace predicate, which is four
+  characters and not Unicode's class.
 - **`report.rs`** — the `Report`/`Message`/`Severity` types every check
   writes into. Deliberately simple: a flat `Vec<Message>`, no early
   termination.
@@ -315,7 +324,7 @@ even slightly unusual").
 
 There are three distinct layers, answering three different questions:
 
-1. **`cargo test`** (170 tests as of this writing) — ordinary Rust unit
+1. **`cargo test`** (634 tests as of this writing) — ordinary Rust unit
    tests scattered across the modules above, each testing one specific
    function or rule in isolation with a small hand-built input. Answers
    "does this one piece of logic do what I think it does."
@@ -327,8 +336,9 @@ There are three distinct layers, answering three different questions:
    core mechanisms work at all," as a fast sanity check — it doesn't
    need epubcheck's real corpus (see below) to run, so it's the
    quickest thing to run after a change.
-3. **`cargo run --release --bin corpus`** (from the `harness/`
-   directory, or `cd harness && cargo run --release --bin corpus`) —
+3. **`cargo run --release -p epubveri-harness --bin corpus`** (the
+   harness is a separate workspace member, so it needs naming; `cd
+   harness && cargo run --release --bin corpus` does the same) —
    the real accuracy measurement. epubcheck ships its own test suite as
    Cucumber `.feature` files, each describing one specific test book
    and the exact error/warning it's supposed to produce (or that it

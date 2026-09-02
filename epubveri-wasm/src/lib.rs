@@ -354,6 +354,55 @@ mod tests {
         );
     }
 
+    /// A tripwire, the same one `main.rs` carries for `--help` and for the
+    /// same reason: this crate's `README.md` **enumerates** the advisory
+    /// families in prose, it is what npm publishes as the package page, and
+    /// nothing links that prose to `ids.rs`.
+    ///
+    /// It had already gone stale once — `ADV-010` shipped while the README
+    /// still listed four `ADV-*` checks — and nothing could have caught it,
+    /// because a stale README breaks no check, changes no verdict and no
+    /// instrument reads it. The CLI's copy of this problem has had a guard
+    /// since 0.9.25; this one had none.
+    ///
+    /// When it fails, an advisory check was added or removed. Describe it in
+    /// the README's "Advisory checks" section, then update the count.
+    #[test]
+    fn a_new_advisory_check_must_be_described_in_this_crates_readme() {
+        let declared: Vec<&str> = include_str!("../../src/ids.rs")
+            .lines()
+            .filter_map(|l| {
+                let t = l.trim();
+                t.strip_prefix("pub const ADV_")
+                    .or_else(|| t.strip_prefix("pub const NEXT_"))
+            })
+            .filter_map(|l| l.split('"').nth(1))
+            .collect();
+        assert_eq!(
+            declared.len(),
+            10,
+            "the advisory families changed ({declared:?}) — describe the new \
+             check in README.md's \"Advisory checks\" section, then update \
+             this count"
+        );
+        // The count means nothing if the section it guards has gone.
+        let readme = include_str!("../README.md");
+        let section = readme
+            .split("### Advisory checks")
+            .nth(1)
+            .expect("README documents the advisory checks");
+        assert!(
+            section.contains("`NEXT-*`") && section.contains("`ADV-*`") && section.len() > 200,
+            "the advisory section should still describe both families"
+        );
+        // ...and the signature block has to keep every parameter the binding
+        // takes. `epub_version` was absent from it for four releases.
+        assert!(
+            readme.contains("epubVersion?: string | null"),
+            "README's validate() signature must list every parameter"
+        );
+    }
+
     /// Nothing is filtered here, whatever the CLI's human report does with
     /// usage findings — this is a machine interface.
     #[test]
