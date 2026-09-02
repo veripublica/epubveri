@@ -128,7 +128,7 @@ same files.
 
 What his file did show is ours. Beside the fatal we reported `OPF-030: package
 unique-identifier 'BookId' does not match any dc:identifier id`, on an OPF whose
-`<dc:identifier id="BookId">` sits four lines above the fault. A fatal leaves us
+`<dc:identifier id="BookId">` is on line 4 and the fault on line 20. A fatal leaves us
 with no tree, so the recovery added in 0.13.0 (issue #126) resolved the
 `unique-identifier` against an **empty** identifier list — and an empty list
 after a fatal means "the parse stopped", not "the book declares none". We were

@@ -3440,7 +3440,7 @@ fn normalize_opus(mt: &str) -> &str {
 /// not because the book has none, but because the parse never reached them —
 /// and reporting "does not match any dc:identifier id" on that basis is
 /// asserting absence from ignorance. DNSB met it (MobileRead #268) on a book
-/// whose `<dc:identifier id="BookId">` sits four lines above the fault.
+/// whose `<dc:identifier id="BookId">` is on line 4 and the fault on line 20.
 ///
 /// epubcheck answers it by stream position: it reports OPF-030 only when the
 /// handler had not yet passed a matching `<dc:identifier>` start tag. Measured
@@ -20939,7 +20939,7 @@ mod tests {
     /// `.txt` files had been produced from different states of the book.
     /// What the file did show is ours: an OPF-030 saying the
     /// `unique-identifier` matched no `dc:identifier` id, on an OPF whose
-    /// `<dc:identifier id="BookId">` sits four lines above the fault.
+    /// `<dc:identifier id="BookId">` is on line 4 and the fault on line 20.
     ///
     /// The missing-attribute half is a different question and still runs:
     /// `@unique-identifier` is read off the root start tag, so its absence is
@@ -20982,7 +20982,7 @@ mod tests {
         );
         assert!(
             !r.contains(&crate::ids::OPF_030),
-            "the identifier is there, four lines above the fault: {r:?}"
+            "the identifier is declared well above the fault: {r:?}"
         );
         // The control: the same fault with no `unique-identifier` at all still
         // draws all three, because that attribute is on the recovered tag.
