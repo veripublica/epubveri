@@ -237,8 +237,13 @@ the line puts it back for free.
 is valid but unusual, or a place where a tool could have done better. A reader
 who meets one styled like an error concludes their book is broken, and that has
 happened on the forum more than once. Give it its own colour and its own word.
-Whether to show them at all by default is your call — both plugins we have read
-default them off.
+Whether to show them at all by default is your call, and both answers are in
+the wild: the two independently written plugins we have read default them
+**off**, and the two we ship default them **on** with every line labelled and
+each advisory carrying the sentence that keeps it from reading as the two
+tools disagreeing. Hiding them is defensible; hiding them *silently* is not —
+if a switch shortens the report, say so and say where the switch is, or a
+quiet report is indistinguishable from a clean book.
 
 **A `fatal` means findings are missing.** It stops whatever was being read —
 one document, or the container itself — so nothing after it in that unit was

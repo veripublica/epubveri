@@ -33,30 +33,62 @@ quickest way to try it.
 ## Option 2: Inside Sigil or calibre (a plugin does it for you)
 
 If you edit books in **[Sigil](https://sigil-ebook.com/)** or in **calibre's
-Edit Book**, you do not need to download anything from this guide. There is a
-plugin for each. It fetches the epubveri program for you, keeps it up to date,
-and shows the findings inside the editor, beside the file they are about.
+Edit Book**, you do not need to download anything from this guide. A plugin
+fetches the epubveri program for you, keeps it up to date, and shows the
+findings inside the editor, beside the file they are about.
 
-| Editor | Plugin thread | Install it from |
+**There are two plugins for each editor**, and they are not the same thing.
+
+### Ours
+
+[**veripublica/epubveri-plugins**](https://github.com/veripublica/epubveri-plugins),
+GPL-3, written and maintained by us. Install the zip from
+[Releases](https://github.com/veripublica/epubveri-plugins/releases) — the tag
+says which editor it is for.
+
+| Editor | Release | Install it from |
 |---|---|---|
-| Sigil | [\[Plugin\] epubveri](https://www.mobileread.com/forums/showthread.php?t=374939) | Plugins → Manage Plugins → Add Plugin |
-| calibre (Edit Book) | [\[Editor Plugin\] epubveri](https://www.mobileread.com/forums/showthread.php?t=374940) | Preferences → Plugins → Load plugin from file |
+| Sigil | [`sigil-v0.1.1`](https://github.com/veripublica/epubveri-plugins/releases/tag/sigil-v0.1.1) | Plugins → Manage Plugins → Add Plugin |
+| calibre (Edit Book) | [`calibre-v0.1.0`](https://github.com/veripublica/epubveri-plugins/releases/tag/calibre-v0.1.0) | Preferences → Plugins → Load plugin from file |
 
-Both are also listed in the editors' own plugin lists — the [Sigil Plugin
-Index](https://www.mobileread.com/forums/showthread.php?t=247431) and
-calibre's [Index of plugins](https://www.mobileread.com/forums/showthread.php?t=118764).
+They verify the epubveri binary against the release's `SHA256SUMS.txt` before
+running it, and again before every later run. **They show every finding by
+default**, each line labelled, so a book gets the same report in the editor as
+on the command line. In calibre you can turn the usage notes and the advisory
+findings off in *Preferences → Plugins → epubveri → Customize*; Sigil offers a
+plugin no settings screen at all, so its plugin shows everything.
 
-**Two things worth knowing before you install one.**
+**They are new.** The Sigil one was first released on 2 September 2026 and has
+been run on macOS, Windows and Linux; the calibre one on 3 September 2026, and
+**only on macOS, only on calibre 9.14**. Bugs go to
+[their issue tracker](https://github.com/veripublica/epubveri-plugins/issues).
 
-- **They are not ours.** Both were written, unprompted, by the MobileRead
-  member *Doitsu*, and both are GPL-3. We do not maintain them and cannot fix
-  them, so questions and bug reports belong in the threads above. We have read
-  both plugins' source (September 2026) and reported what we found in those
-  same threads — which is the most we can honestly tell you about them.
-- **They show fewer findings than the program does.** Both hide
-  `usage`-severity messages and `--advisory` messages until you switch them on
-  in the plugin's preferences. If a book looks cleaner inside your editor than
-  it does on the command line, that is why, and nothing is broken.
+### Doitsu's
+
+Written, unprompted and before ours, by the MobileRead member *Doitsu*; also
+GPL-3. **They have been in people's hands far longer than ours have**, and they
+are the ones listed in the editors' own plugin lists — the [Sigil Plugin
+Index](https://www.mobileread.com/forums/showthread.php?t=247431) and calibre's
+[Index of plugins](https://www.mobileread.com/forums/showthread.php?t=118764).
+
+| Editor | Plugin thread |
+|---|---|
+| Sigil | [\[Plugin\] epubveri](https://www.mobileread.com/forums/showthread.php?t=374939) |
+| calibre (Edit Book) | [\[Editor Plugin\] epubveri](https://www.mobileread.com/forums/showthread.php?t=374940) |
+
+**We do not maintain them and cannot fix them**, so questions and bug reports
+belong in those threads. They **hide `usage`-severity and `--advisory`
+messages until you switch them on** in the plugin's preferences, so a book can
+look cleaner inside your editor than it does on the command line. Nothing is
+broken when that happens.
+
+### Which one
+
+If you already have one that works, keep it. Ours is worth trying if you want
+every finding without configuring anything, or if you want the thing you are
+running to be maintained by the people who write epubveri. Doitsu's is the
+safer bet on a platform ours has not been run on yet — which today means
+Windows and Linux for calibre.
 
 Everything below — picking an archive, getting past the first-run security
 prompt, typing commands — is about running epubveri yourself. If a plugin
