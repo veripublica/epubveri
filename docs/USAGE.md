@@ -48,8 +48,8 @@ says which editor it is for.
 
 | Editor | Release | Install it from |
 |---|---|---|
-| Sigil | [`sigil-v0.1.1`](https://github.com/veripublica/epubveri-plugins/releases/tag/sigil-v0.1.1) | Plugins → Manage Plugins → Add Plugin |
-| calibre (Edit Book) | [`calibre-v0.1.0`](https://github.com/veripublica/epubveri-plugins/releases/tag/calibre-v0.1.0) | Preferences → Plugins → Load plugin from file |
+| Sigil | [`sigil-v0.3.0`](https://github.com/veripublica/epubveri-plugins/releases/tag/sigil-v0.3.0) | Plugins → Manage Plugins → Add Plugin |
+| calibre (Edit Book) | [`calibre-v0.3.0`](https://github.com/veripublica/epubveri-plugins/releases/tag/calibre-v0.3.0) | Preferences → Plugins → Load plugin from file |
 
 They verify the epubveri binary against the release's `SHA256SUMS.txt` before
 running it, and again before every later run. **They show every finding by
