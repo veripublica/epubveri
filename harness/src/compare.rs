@@ -67,19 +67,76 @@ fn epubcheck_ids(out: &str) -> BTreeMap<String, usize> {
     m
 }
 
-fn epubveri_ids(path: &Path) -> BTreeMap<String, usize> {
+/// Where epubcheck stopped reading each document, from its own FATAL lines.
+///
+/// **A comparison that ignores this manufactures false-positive candidates.**
+/// A fatal makes the document unparseable *for epubcheck*, which then reports
+/// nothing else in it — while we keep going, deliberately: resolving the
+/// bundled entity list rather than escalating to a fatal is the whole point
+/// of the `&nbsp;` divergence (`docs/COVERAGE.md`, RSC-016), and 0.7.13 exists
+/// because a fatal costs every other finding in the file.
+///
+/// So everything we say past that line is *uncomparable*, not surplus. On one
+/// real book (issue #133) that difference was 39 findings sitting in an issue
+/// for ten days as an undiagnosed false-positive candidate: epubcheck took a
+/// fatal at line 578 of a 2 444-line document, and once its blind region was
+/// excluded the two tools agreed exactly, 244 to 244 and 24 to 24.
+///
+/// The mirror of this was already known on the other side — 18 RSC-012 "only
+/// epubcheck reports" that were fragments into a document its own fatal had
+/// dropped before indexing. Same artefact, other direction.
+fn epubcheck_stopped_at(out: &str, book: &Path) -> BTreeMap<String, u32> {
+    // A fatal with no position stops the document just as completely, so it
+    // is recorded at line 0 — everything we have to say about that file is
+    // then past it.
+    let re =
+        Regex::new(r"(?m)^FATAL\([A-Z]+[-_][0-9]+[a-z]?\): (.+?)(?:\((\d+),(\d+)\))?: ").unwrap();
+    let prefix = format!("{}/", book.display());
+    let mut m: BTreeMap<String, u32> = BTreeMap::new();
+    for c in re.captures_iter(out) {
+        let path = &c[1];
+        // epubcheck prints the book path it was given, then the OCF-relative
+        // name. Our `location` is the second half alone.
+        let Some(rel) = path
+            .strip_prefix(&prefix)
+            .or_else(|| path.split_once(".epub/").map(|(_, r)| r))
+        else {
+            continue;
+        };
+        let line = c.get(2).and_then(|g| g.as_str().parse().ok()).unwrap_or(0);
+        let slot = m.entry(rel.to_string()).or_insert(u32::MAX);
+        *slot = (*slot).min(line);
+    }
+    m
+}
+
+/// Our findings by id, with anything epubcheck could not have seen set aside.
+///
+/// Returns (counted, set aside) so the caller can say what it excluded. A
+/// silent exclusion would be the same mistake in the other direction.
+fn epubveri_ids(
+    path: &Path,
+    stopped: &BTreeMap<String, u32>,
+) -> (BTreeMap<String, usize>, BTreeMap<String, usize>) {
     let mut m = BTreeMap::new();
+    let mut past = BTreeMap::new();
     match epubveri::validate_path(path) {
         Ok(report) => {
             for msg in &report.messages {
-                *m.entry(canon_id(msg.id)).or_insert(0) += 1;
+                let blind = msg
+                    .location
+                    .as_deref()
+                    .and_then(|loc| stopped.get(loc))
+                    .is_some_and(|&cut| msg.position.is_none_or(|p| p.line > cut));
+                let bucket = if blind { &mut past } else { &mut m };
+                *bucket.entry(canon_id(msg.id)).or_insert(0) += 1;
             }
         }
         Err(e) => {
             eprintln!("  epubveri could not read {}: {e}", path.display());
         }
     }
-    m
+    (m, past)
 }
 
 fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
@@ -151,6 +208,10 @@ fn main() {
     // what prompted collecting it here, since the counts were already being
     // gathered and thrown away.
     let mut count_gaps: Vec<(String, String, usize, usize)> = Vec::new();
+    // Books where epubcheck gave up on a document part-way and we did not.
+    // Reported rather than merely excluded: a silent exclusion is the same
+    // kind of blindness it exists to correct.
+    let mut blind: Vec<(String, String, usize)> = Vec::new();
 
     for book in &books {
         let name = book.file_name().unwrap().to_string_lossy().to_string();
@@ -177,7 +238,13 @@ fn main() {
             }
         };
         let theirs = epubcheck_ids(&ec_out);
-        let ours = epubveri_ids(book);
+        let stopped = epubcheck_stopped_at(&ec_out, book);
+        let (ours, past) = epubveri_ids(book, &stopped);
+        if !past.is_empty() {
+            let n: usize = past.values().sum();
+            let where_: Vec<String> = stopped.iter().map(|(f, l)| format!("{f}:{l}")).collect();
+            blind.push((name.clone(), where_.join(", "), n));
+        }
 
         let mine: Vec<&String> = ours.keys().filter(|k| !theirs.contains_key(*k)).collect();
         let hers: Vec<&String> = theirs.keys().filter(|k| !ours.contains_key(*k)).collect();
@@ -260,6 +327,18 @@ fn main() {
             println!("  {id:<9} ours {ours_n:>5}  epubcheck {theirs_n:>5}   {book}");
         }
         println!("  ({} in total)\n", count_gaps.len());
+    }
+
+    if !blind.is_empty() {
+        println!("--- documents epubcheck abandoned (its own FATAL) ---");
+        println!("  Our findings past that point are set aside above: epubcheck");
+        println!("  stopped reading, so they are uncomparable, not surplus.");
+        let shown = if verbose { blind.len() } else { 15 };
+        for (book, at, n) in blind.iter().take(shown) {
+            let book: String = book.chars().take(44).collect();
+            println!("  {n:>5} set aside   {at:<34} {book}");
+        }
+        println!("  ({} book(s) in total)\n", blind.len());
     }
 
     println!(
