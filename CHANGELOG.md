@@ -8,6 +8,28 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`role` on `<body>` is checked against the four values epubcheck allows.**
+  Doitsu, MobileRead 374286 #279: `<body epub:type="cover" role="doc-cover">`
+  draws `RSC-005` from epubcheck and drew nothing from us. It does now, with
+  the same id at the same place.
+
+  **This is the only element whose `role` *value* is constrained, and that is
+  deliberate.** epubcheck assembles `role` as a closed per-element enum across
+  the 1 739 lines of `mod/html5/aria.rnc`; taking that whole surface means
+  risking a wrong error on someone's accessibility markup, which is a worse
+  thing to be wrong about than most. `body.attrs` in `mod/html5/meta.rnc` is a
+  four-value enum that can be read rather than guessed, so this one site is
+  implemented and the rest stay value-permissive — the same partial shape as
+  RSC-020.
+
+  Nothing changed on real books: of 474 shelf books, 52 use `role` at all and
+  exactly one puts it on `<body>` — and that one is EPUB 2, where `role` is
+  rejected outright already. The rule is held by its tests, not by the shelf.
+
 ## [0.13.3] - 2026-09-02
 
 **Two missed errors reported by a user, and eleven wrong ones found while

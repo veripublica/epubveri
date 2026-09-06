@@ -24309,6 +24309,64 @@ mod tests {
         );
     }
 
+    /// `role` on `<body>` is a closed four-value enum, and it is the ONLY
+    /// element whose role value we constrain.
+    ///
+    /// Doitsu, MobileRead 374286 #279: `<body epub:type="cover"
+    /// role="doc-cover">` draws RSC-005 from epubcheck and nothing from us.
+    /// epubcheck assembles `role` per element across the 1 739 lines of
+    /// `mod/html5/aria.rnc`, and that whole surface is deliberately not ours;
+    /// `body.attrs` in `mod/html5/meta.rnc` is a closed enum that can be read
+    /// rather than guessed, which is why this one site is implemented.
+    ///
+    /// **The tests are the only thing holding this.** Measured over the
+    /// 474-book shelf: 52 books use `role` at all and exactly one puts it on
+    /// `<body>` — and that book is EPUB 2, where `role` is rejected wholesale
+    /// anyway (#66). So the shelf cannot see this rule in either direction,
+    /// and `diff-shelf.sh` reported "no change" for precisely that reason.
+    #[test]
+    fn role_on_body_is_the_one_role_value_we_constrain() {
+        let body = |version: &str, attrs: &str, inner: &str| {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>t</title></head>\
+                 <body {attrs}>{inner}</body></html>"
+            );
+            crate::validate_bytes(epub_declaring(version, "application/xhtml+xml", &ch1, ""))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+
+        assert_eq!(
+            body("3.0", "role=\"doc-cover\"", "<p>x</p>"),
+            1,
+            "the reported case"
+        );
+        for ok in ["application", "document", "none", "presentation"] {
+            assert_eq!(
+                body("3.0", &format!("role=\"{ok}\""), "<p>x</p>"),
+                0,
+                "{ok} is one of the four epubcheck names"
+            );
+        }
+        assert_eq!(
+            body("3.0", "", "<p role=\"doc-noteref\">x</p>"),
+            0,
+            "role elsewhere stays value-permissive - narrowing it everywhere \
+             is the surface we decided not to take"
+        );
+        assert_eq!(
+            body("2.0", "role=\"document\"", "<p>x</p>"),
+            1,
+            "EPUB 2 rejects role outright (#66) and this must not have \
+             loosened it"
+        );
+    }
+
     /// Every rule below is one epubcheck runs only for EPUB 3, and every one
     /// of them used to fire on an EPUB 2 book too.
     ///

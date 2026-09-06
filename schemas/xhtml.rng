@@ -350,7 +350,7 @@
   </define>
 
   <define name="bodyEl">
-    <element name="body"><ref name="globalAttrs"/><ref name="bodyOnlyEvents"/><ref name="flowContent"/></element>
+    <element name="body"><ref name="bodyAttrs"/><ref name="bodyOnlyEvents"/><ref name="flowContent"/></element>
   </define>
 
   <!-- #36 cutover: the <body>-only window/document lifecycle events
@@ -459,12 +459,23 @@
     <ref name="identityAttrs"/>
     <ref name="html5OnlyGlobals"/>
     <ref name="globalAttrsRest"/>
+    <ref name="ariaRole"/>
   </define>
 
   <define name="globalAttrsCoreNoContent">
     <ref name="identityAttrs"/>
     <ref name="html5OnlyGlobalsNoContent"/>
     <ref name="globalAttrsRest"/>
+    <ref name="ariaRole"/>
+  </define>
+
+  <!-- `globalAttrsCore` with the one narrowed attribute. Only `<body>` uses
+       it; see `ariaRoleBody`. -->
+  <define name="globalAttrsCoreBodyRole">
+    <ref name="identityAttrs"/>
+    <ref name="html5OnlyGlobals"/>
+    <ref name="globalAttrsRest"/>
+    <ref name="ariaRoleBody"/>
   </define>
 
   <!-- Identical to `globalAttrsCore` but for the two datatypes above. -->
@@ -528,8 +539,43 @@
        Not proof of absence, and recorded as such: the owner's call was to
        match epubcheck now and fix from a real report if one arrives, which is
        how every other false positive in this project has been found. -->
-  <define name="ariaAttrs">
+  <!-- `role` is split out of `ariaAttrs` so that ONE element can narrow it.
+
+       epubcheck assembles `role` as a closed per-element enum across the
+       1 739 lines of `mod/html5/aria.rnc`, and that whole surface is
+       deliberately not ours (see the note above `ariaAttrs`: being wrong
+       there means telling an author their accessibility markup invalidates
+       their book). **`body` is the one place we do implement it**, because
+       Doitsu reported it (MobileRead 374286 #279), the rule is a closed
+       four-value enum readable straight out of `mod/html5/meta.rnc`'s
+       `body.attrs`, and the population is measurable: 52 of 474 shelf books
+       use `role` at all and exactly **one** puts it on `<body>`.
+
+       Everything else keeps the permissive value. That is deliberately
+       partial, in the same shape as RSC-020: implement what epubcheck
+       actually reports and can be verified against it, rather than coding to
+       a specification we would be guessing at. -->
+  <define name="ariaRole">
     <optional><attribute name="role"><data type="string"/></attribute></optional>
+  </define>
+
+  <!-- `mod/html5/meta.rnc`, `body.attrs`: role on <body> is one of
+       application / landmark.document / presentation (which admits `none`)
+       / implicit.document. epubcheck's own message names the four. -->
+  <define name="ariaRoleBody">
+    <optional>
+      <attribute name="role">
+        <choice>
+          <value>application</value>
+          <value>document</value>
+          <value>none</value>
+          <value>presentation</value>
+        </choice>
+      </attribute>
+    </optional>
+  </define>
+
+  <define name="ariaAttrs">
     <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-busy"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
@@ -900,6 +946,17 @@
 
   <define name="globalAttrs">
     <ref name="globalAttrsCore"/>
+    <optional>
+      <attribute name="epub:type">
+        <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>
+      </attribute>
+    </optional>
+    <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
+  </define>
+
+  <!-- `globalAttrs` for `<body>` alone: identical but for `role`. -->
+  <define name="bodyAttrs">
+    <ref name="globalAttrsCoreBodyRole"/>
     <optional>
       <attribute name="epub:type">
         <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>
