@@ -24367,6 +24367,67 @@ mod tests {
         );
     }
 
+    /// The `role` value must be one of the 111 names epubcheck's schema
+    /// declares, and `<html>` may not carry `role` at all.
+    ///
+    /// Two layers, and only the first is ours: epubcheck checks that the
+    /// token is a known ARIA/DPUB-ARIA name, *and* which of them each element
+    /// may carry. Probed across 17 elements on 2026-09-07, the token layer
+    /// accounts for 15 of the 16 disagreements and `<html>` for the
+    /// sixteenth; the per-element sets are broad enough that `<p
+    /// role="doc-cover">` passes epubcheck too. So the cheap layer is nearly
+    /// all of the value, and the expensive one stays out — see the note on
+    /// `ariaRole` in `schemas/xhtml.rng`.
+    ///
+    /// **Held by these tests alone.** All 15 role values across the 474-book
+    /// shelf are valid names and no book puts `role` on `<html>`, so
+    /// `diff-shelf.sh` cannot see either rule.
+    #[test]
+    fn role_values_come_from_a_closed_vocabulary() {
+        let count = |version: &str, html_attrs: &str, inner: &str| {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\" {html_attrs}>\
+                 <head><title>t</title></head><body>{inner}</body></html>"
+            );
+            crate::validate_bytes(epub_declaring(version, "application/xhtml+xml", &ch1, ""))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+
+        assert_eq!(count("3.0", "", "<p role=\"ZZZ\">x</p>"), 1, "not a role");
+        assert_eq!(
+            count("3.0", "", "<p role=\"doc-noteref\">x</p>"),
+            0,
+            "a DPUB-ARIA name"
+        );
+        assert_eq!(
+            count("3.0", "", "<p role=\"button\">x</p>"),
+            0,
+            "an ARIA name"
+        );
+        assert_eq!(
+            count("3.0", "", "<p role=\"doc-cover\">x</p>"),
+            0,
+            "epubcheck accepts this too - the per-element layer is not ours, \
+             and this asserts that we did NOT take it"
+        );
+        assert_eq!(
+            count("3.0", "", "<p role=\"doc-noteref button\">x</p>"),
+            1,
+            "role is a single token in XHTML, not a list - epubcheck rejects \
+             this pair as well"
+        );
+        assert_eq!(
+            count("3.0", "role=\"document\"", "<p>x</p>"),
+            1,
+            "epubcheck: attribute \"role\" not allowed here, on <html>"
+        );
+    }
+
     /// Every rule below is one epubcheck runs only for EPUB 3, and every one
     /// of them used to fire on an EPUB 2 book too.
     ///

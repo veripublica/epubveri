@@ -50,7 +50,7 @@
 
   <define name="htmlEl">
     <element name="html">
-      <ref name="globalAttrs"/>
+      <ref name="htmlAttrs"/>
       <ref name="headEl"/>
       <ref name="bodyEl"/>
     </element>
@@ -469,6 +469,16 @@
     <ref name="ariaRole"/>
   </define>
 
+  <!-- `<html>` carries the aria-* states but NOT `role`: epubcheck answers
+       `attribute "role" not allowed here` and names aria-* among what it
+       expects, so this is an attribute-list difference rather than a value
+       one. The one element of seventeen probed that rejects role outright. -->
+  <define name="globalAttrsCoreNoRole">
+    <ref name="identityAttrs"/>
+    <ref name="html5OnlyGlobals"/>
+    <ref name="globalAttrsRest"/>
+  </define>
+
   <!-- `globalAttrsCore` with the one narrowed attribute. Only `<body>` uses
        it; see `ariaRoleBody`. -->
   <define name="globalAttrsCoreBodyRole">
@@ -555,8 +565,142 @@
        partial, in the same shape as RSC-020: implement what epubcheck
        actually reports and can be verified against it, rather than coding to
        a specification we would be guessing at. -->
+  <!-- The role token vocabulary: every `attribute role { string "…" }` in
+       epubcheck's `schema/30`, extracted rather than transcribed — 111 names,
+       39 of them DPUB-ARIA `doc-*`.
+
+       **This is the value layer only.** epubcheck also restricts *which* of
+       the 111 each element may carry, and that per-element layer is still not
+       ours: `<p role="doc-cover">` and `<div role="doc-noteref">` are wrong
+       there and accepted here. Measured 2026-09-07 over 17 elements, the
+       vocabulary layer is what catches 15 of the 16 disagreements; the
+       per-element sets are mostly permissive, so the cheap half is nearly all
+       of the value.
+
+       **`role` is a single token in XHTML, not a list** — epubcheck rejects
+       `role="doc-noteref button"`, so this is `<value>` and not a `<list>`.
+       Its `string` datatype does not normalise whitespace either.
+
+       Zero shelf impact, measured before writing: of 474 books, 52 use `role`
+       and all 15 distinct values they carry are in this list. -->
   <define name="ariaRole">
-    <optional><attribute name="role"><data type="string"/></attribute></optional>
+    <optional>
+      <attribute name="role">
+        <choice>
+          <value>alert</value>
+          <value>alertdialog</value>
+          <value>application</value>
+          <value>article</value>
+          <value>banner</value>
+          <value>button</value>
+          <value>cell</value>
+          <value>checkbox</value>
+          <value>columnheader</value>
+          <value>combobox</value>
+          <value>complementary</value>
+          <value>contentinfo</value>
+          <value>definition</value>
+          <value>dialog</value>
+          <value>directory</value>
+          <value>doc-abstract</value>
+          <value>doc-acknowledgments</value>
+          <value>doc-afterword</value>
+          <value>doc-appendix</value>
+          <value>doc-backlink</value>
+          <value>doc-biblioentry</value>
+          <value>doc-bibliography</value>
+          <value>doc-biblioref</value>
+          <value>doc-chapter</value>
+          <value>doc-colophon</value>
+          <value>doc-conclusion</value>
+          <value>doc-cover</value>
+          <value>doc-credit</value>
+          <value>doc-credits</value>
+          <value>doc-dedication</value>
+          <value>doc-endnote</value>
+          <value>doc-endnotes</value>
+          <value>doc-epigraph</value>
+          <value>doc-epilogue</value>
+          <value>doc-errata</value>
+          <value>doc-example</value>
+          <value>doc-footnote</value>
+          <value>doc-foreword</value>
+          <value>doc-glossary</value>
+          <value>doc-glossref</value>
+          <value>doc-index</value>
+          <value>doc-introduction</value>
+          <value>doc-noteref</value>
+          <value>doc-notice</value>
+          <value>doc-pagebreak</value>
+          <value>doc-pagelist</value>
+          <value>doc-part</value>
+          <value>doc-preface</value>
+          <value>doc-prologue</value>
+          <value>doc-pullquote</value>
+          <value>doc-qna</value>
+          <value>doc-subtitle</value>
+          <value>doc-tip</value>
+          <value>doc-toc</value>
+          <value>document</value>
+          <value>feed</value>
+          <value>figure</value>
+          <value>form</value>
+          <value>graphics-document</value>
+          <value>graphics-object</value>
+          <value>graphics-symbol</value>
+          <value>grid</value>
+          <value>gridcell</value>
+          <value>group</value>
+          <value>heading</value>
+          <value>img</value>
+          <value>link</value>
+          <value>list</value>
+          <value>listbox</value>
+          <value>listitem</value>
+          <value>log</value>
+          <value>main</value>
+          <value>marquee</value>
+          <value>math</value>
+          <value>menu</value>
+          <value>menubar</value>
+          <value>menuitem</value>
+          <value>menuitemcheckbox</value>
+          <value>menuitemradio</value>
+          <value>navigation</value>
+          <value>none</value>
+          <value>note</value>
+          <value>option</value>
+          <value>presentation</value>
+          <value>progressbar</value>
+          <value>radio</value>
+          <value>radiogroup</value>
+          <value>region</value>
+          <value>row</value>
+          <value>rowgroup</value>
+          <value>rowheader</value>
+          <value>scrollbar</value>
+          <value>search</value>
+          <value>searchbox</value>
+          <value>separator</value>
+          <value>slider</value>
+          <value>spinbutton</value>
+          <value>status</value>
+          <value>switch</value>
+          <value>tab</value>
+          <value>table</value>
+          <value>tablist</value>
+          <value>tabpanel</value>
+          <value>term</value>
+          <value>textbox</value>
+          <value>timer</value>
+          <value>toolbar</value>
+          <value>tooltip</value>
+          <value>tree</value>
+          <value>treegrid</value>
+          <value>treeitem</value>
+        </choice>
+      </attribute>
+    </optional>
   </define>
 
   <!-- `mod/html5/meta.rnc`, `body.attrs`: role on <body> is one of
@@ -946,6 +1090,17 @@
 
   <define name="globalAttrs">
     <ref name="globalAttrsCore"/>
+    <optional>
+      <attribute name="epub:type">
+        <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>
+      </attribute>
+    </optional>
+    <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
+  </define>
+
+  <!-- `globalAttrs` for `<html>` alone: identical but with no `role`. -->
+  <define name="htmlAttrs">
+    <ref name="globalAttrsCoreNoRole"/>
     <optional>
       <attribute name="epub:type">
         <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>

@@ -30,6 +30,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   exactly one puts it on `<body>` — and that one is EPUB 2, where `role` is
   rejected outright already. The rule is held by its tests, not by the shelf.
 
+- **A `role` value must be one of the 111 names epubcheck's schema declares,
+  and `<html>` may not carry `role` at all.** Found while asking whether the
+  `<body>` fix above was enough: probed across 17 elements, epubcheck rejected
+  an invented role token on 16 of them and we accepted it on 15. It does not
+  any more.
+
+  The vocabulary is extracted from `schema/30` rather than transcribed — 111
+  names, 39 of them DPUB-ARIA `doc-*`. `role` is a single token in XHTML and
+  not a list: epubcheck rejects `role="doc-noteref button"`, and so do we.
+
+  **The per-element layer is still not ours, deliberately.** epubcheck also
+  restricts *which* of the 111 each element may carry, and that is the 1 739
+  lines this stays out of; `<p role="doc-cover">` is wrong there and accepted
+  here. The measurement is what made the split worth taking: the token layer
+  accounts for 15 of the 16 disagreements and the per-element sets are
+  otherwise broad, so the cheap half is nearly all of the value.
+
+  Again no change on real books, and again checked rather than assumed: all 15
+  distinct role values across the shelf are valid names, and no book puts
+  `role` on `<html>`.
+
 ## [0.13.3] - 2026-09-02
 
 **Two missed errors reported by a user, and eleven wrong ones found while
