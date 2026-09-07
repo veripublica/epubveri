@@ -200,7 +200,21 @@ const ANN: &[Ann] = &[
          Population: 0 of 415 shelf books have a duplicate manifest `id`. \
          Seen on `attr-id-duplicate-error.opf`, \
          `attr-id-duplicate-with-spaces-error.opf` and \
-         `xml-id-duplicate-error.opf`."),
+         `xml-id-duplicate-error.opf`. \
+         **A second shape, and the one to know if you are diffing the two \
+         tools: on `legacy-ncx-toc-attribute-not-ncx-error.opf` we report \
+         RSC-001 and epubcheck reports CHK-008 for the same missing file.** \
+         Ours names the fault; theirs names their own internal skip \
+         (`Error encountered while processing an item …; skip other checks`). \
+         **epubcheck's own answer for this fault is RSC-001** - remove the \
+         spine `toc` attribute and it says `File \"contents.xhtml\" could not \
+         be found.`, exactly as we do. What changes it is the `toc`: the \
+         NCXChecker epubcheck builds over a non-NCX context throws, the \
+         `catch (IllegalStateException)` at `OPFChecker`:400 reports CHK-008, \
+         and that marks the item handled, suppressing the RSC-001 its \
+         resource pass would otherwise raise. So the two ids describe one \
+         fact and the informative one is ours. Three-arm experiment and the \
+         reason it is not matched in issue #127."),
     ("RSC-005", Some("partial"),
         "XHTML content model is real (EPUB 2 XHTML 1.1 grammar + EPUB 3 HTML5 \
          grammar + Schematron nesting/IDREF rules + closed per-element \
