@@ -691,6 +691,124 @@ mod tests {
         assert!(fatals.is_empty(), "document is valid; got {fatals:?}");
     }
 
+    /// The same book with the navigation document's `<body>` replaced.
+    ///
+    /// The nav's own content model had no route into these tests before:
+    /// `epub3_with` varies `ch1.xhtml` and `epub3_with_container` the
+    /// container, and neither reaches `navdoc`.
+    fn epub3_with_nav(nav_body: &str) -> Vec<u8> {
+        const OPF: &str = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const CH1: &str = r#"<?xml version="1.0"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>x</p></body></html>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let nav = format!(
+            "<?xml version=\"1.0\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" \
+             xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>T</title></head>\n\
+             <body>{nav_body}</body></html>"
+        );
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, data) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", OPF),
+                ("OEBPS/nav.xhtml", nav.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+            ] {
+                z.start_file(name, opts).unwrap();
+                z.write_all(data.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// A `toc` nav so the book is otherwise well formed, plus whatever
+    /// `page_list` says.
+    fn nav_with_page_list(page_list: &str) -> String {
+        format!(
+            "<nav epub:type=\"toc\"><ol><li><a href=\"ch1.xhtml\">C</a></li></ol></nav>\
+             <nav epub:type=\"page-list\"><ol>{page_list}</ol></nav>"
+        )
+    }
+
+    fn nav_li_findings(page_list: &str) -> Vec<String> {
+        let report = crate::validate_bytes(epub3_with_nav(&nav_with_page_list(page_list)));
+        report
+            .messages
+            .iter()
+            .filter(|m| m.rule.is_some_and(|r| r.starts_with("navdoc.li.")))
+            .map(|m| m.text.clone())
+            .collect()
+    }
+
+    /// Doitsu, MobileRead 374286 #281: an empty `<li>` in a `page-list` nav
+    /// drew nothing from us and `element "li" incomplete` from epubcheck.
+    #[test]
+    fn an_empty_nav_li_is_reported() {
+        assert_eq!(
+            nav_li_findings("<li></li>"),
+            vec!["element \"li\" incomplete; expected element \"a\" or \"span\"".to_string()]
+        );
+    }
+
+    /// Whitespace is not a label either, and epubcheck says the same thing
+    /// about it as about nothing at all - measured, not assumed.
+    #[test]
+    fn a_whitespace_only_nav_li_is_reported() {
+        assert_eq!(
+            nav_li_findings("<li>   </li>"),
+            vec!["element \"li\" incomplete; expected element \"a\" or \"span\"".to_string()]
+        );
+    }
+
+    /// Text where the label should be draws **two** findings from epubcheck,
+    /// one for the text and one for the label still being absent. Asserting
+    /// the pair rather than "at least one" is deliberate: a single-message
+    /// version of this fix would pass a presence check.
+    #[test]
+    fn a_text_only_nav_li_reports_the_text_and_the_missing_label() {
+        let found = nav_li_findings("<li>bare text</li>");
+        assert_eq!(found.len(), 2, "expected both findings; got {found:?}");
+        assert!(found.iter().any(|t| t.starts_with("text not allowed here")));
+        assert!(
+            found
+                .iter()
+                .any(|t| t.starts_with("element \"li\" incomplete"))
+        );
+    }
+
+    /// The control, and the one that can fail in the other direction: a
+    /// well-formed entry must stay silent. Without it nothing here would
+    /// notice the fix firing on every book in the world.
+    #[test]
+    fn a_well_formed_nav_li_is_silent() {
+        assert!(nav_li_findings("<li><a href=\"ch1.xhtml\">1</a></li>").is_empty());
+    }
+
     /// Builds a minimal EPUB 3 whose `ch1.xhtml` body is `body` - a
     /// manifest-declared, spine-referenced resource, so the checks actually
     /// read it, which is what the resource-limit fixtures below need.

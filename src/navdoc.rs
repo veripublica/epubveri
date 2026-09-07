@@ -72,6 +72,44 @@ fn check_hidden_attrs(doc: &roxmltree::Document, path: &str, report: &mut Report
 fn check_li(li: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
     let children: Vec<_> = li.children().filter(|c| c.is_element()).collect();
     let Some(label) = children.first() else {
+        // No element child at all, so there is no label. This returned
+        // silently until Doitsu reported it (MobileRead 374286 #281):
+        // `<li></li>` inside a `page-list` nav drew nothing from us and
+        // `element "li" incomplete` from epubcheck.
+        //
+        // **Widening the report is what found the rest of the class.** His
+        // case was the empty one; probing the boundary showed epubcheck also
+        // rejects whitespace-only (same single message) and text-only — and
+        // for text it gives *two*, one for the text standing where the label
+        // should be and one for the label still being absent. All four shapes
+        // fell through this one `return`.
+        if let Some(text) = li
+            .children()
+            .find(|c| c.is_text() && c.text().is_some_and(|t| !t.trim().is_empty()))
+        {
+            // One per `<li>`, which is what epubcheck gives. Several text
+            // runs with no element between them needs a comment or a PI to
+            // split them, and the second run is the same mistake as the
+            // first.
+            report.push_node_text(
+                RSC_005,
+                Severity::Error,
+                "text not allowed here; expected element \"a\" or \"span\"",
+                path,
+                text,
+                "navdoc.li.stray_text",
+                Vec::new(),
+            );
+        }
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "element \"li\" incomplete; expected element \"a\" or \"span\"",
+            path,
+            li,
+            "navdoc.li.missing_label",
+            Vec::new(),
+        );
         return;
     };
     let label_name = label.tag_name().name();
