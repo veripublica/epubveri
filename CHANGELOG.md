@@ -8,6 +8,30 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.13.5] - 2026-09-07
+
+### Fixed
+
+- **A navigation `<li>` with no label is an error, and three shapes of it were
+  silent.** Doitsu, MobileRead 374286 #281: `<li></li>` inside a `page-list`
+  nav draws `RSC-005 element "li" incomplete; expected element "a" or "span"`
+  from epubcheck and drew nothing here.
+
+  One line was responsible — the check collected an `<li>`'s element children
+  and returned quietly when there were none — so **every `<li>` without an
+  element child fell through it**. Probing past the reported case is what
+  showed the size of that: epubcheck rejects a whitespace-only `<li>` with the
+  same message, and a text-only one with **two**, `text not allowed here` for
+  the text standing where the label belongs and `element "li" incomplete` for
+  the label still being absent. All four shapes now agree with epubcheck —
+  five findings to its five on a book carrying all of them, same ids, same
+  messages.
+
+  Neither instrument here could have found it: the 981-scenario corpus is
+  unchanged either way, and no book on the reference shelf has a label-less
+  `<li>` in a nav. It took a user's book, which is where every gap of this
+  kind has come from.
+
 ## [0.13.4] - 2026-09-07
 
 ### Fixed
