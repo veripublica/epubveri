@@ -8,6 +8,58 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Four emptiness checks called a NO-BREAK SPACE empty, and epubcheck does
+  not — two of them at a severity that decides the verdict.** Raised by
+  epubsana from a reading of this source; settled here against epubcheck 5.3.0,
+  one book per site, a single `&#160;` as the whole content:
+
+  | site | id | severity | epubcheck | us, before |
+  |---|---|---|---|---|
+  | `<dc:title>` empty | `OPF-055` | warning | silent | reported |
+  | any `<dc:*>` empty | `OPF-072` | usage | silent | reported |
+  | NCX `<navLabel><text>` | `NCX-006` | usage | silent | reported |
+  | content document `<title>` | `RSC-005` | **error** | silent | reported |
+
+  Rust's `str::trim` strips the Unicode `White_Space` set, which includes
+  `U+00A0`; XML's whitespace is four characters and does not. So an element
+  holding one NBSP is empty to us and has content to epubcheck — a book it
+  passes and we, in the `RSC-005` row, called invalid.
+
+  **This was a half-finished migration rather than an oversight, which is the
+  part worth keeping.** `xmlext::is_xml_space` already existed, and its
+  docstring already described this exact trap with its own measurement of three
+  sites it had fixed. Four more kept reading `trim`, and nothing connected them:
+  the helper was available, correct, documented, and not used. The predicate now
+  has a name of its own — `is_xml_blank` — so the question "is this element
+  empty" has one spelling to grep for rather than being re-decided per site.
+
+  **One predicate serves both of epubcheck's mechanisms, and that is exact
+  rather than close enough.** Its Java handler asks `String.trim()`, stripping
+  everything at or below `U+0020`; its Schematron asks `normalize-space()`,
+  stripping the four XML whitespace characters. The two sets differ only in the
+  C0 controls, and XML 1.0's `Char` production forbids every one of those except
+  tab, CR and LF — so on any document that parses, they cannot disagree.
+
+  Neither instrument here could see it: the 981-scenario corpus is unchanged
+  (100% exact-ID recall, 0 false positives) and the 474-book shelf reports **no
+  change per book**, because not one of those books holds an NBSP-only element.
+  The fixtures and epubcheck's own answers are the whole evidence.
+
+  A unit test pins the divergence in both directions. It also pins `U+FEFF` as
+  *not* one of these — it was removed from Unicode's `White_Space` in 4.0.1, so
+  `trim` leaves it standing too and it was never a false positive. The test's
+  first draft asserted the opposite.
+
+### For consumers
+
+No rule key, message or severity moves. Findings disappear in one shape only:
+an element whose entire content is non-XML whitespace is no longer reported
+empty, so a repair whose population came from that finds nothing there now.
+
 ## [0.13.6] - 2026-09-09
 
 ### Fixed

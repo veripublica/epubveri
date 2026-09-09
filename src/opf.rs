@@ -4470,7 +4470,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter(|t| t.is_text())
                     .filter_map(|t| t.text())
                     .collect();
-                if text.trim().is_empty() {
+                if crate::xmlext::is_xml_blank(&text) {
                     let name = n.tag_name().name();
                     report.push_at_pos(
                         OPF_055,
@@ -4564,7 +4564,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter(|t| t.is_text())
                     .filter_map(|t| t.text())
                     .collect();
-                if text.trim().is_empty() {
+                if crate::xmlext::is_xml_blank(&text) {
                     let name = n.tag_name().name();
                     report.push_full(
                         OPF_072,
@@ -7268,7 +7268,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter(|n| n.is_text())
                     .filter_map(|n| n.text())
                     .collect();
-                if text.trim().is_empty() {
+                if crate::xmlext::is_xml_blank(&text) {
                     report.push_node(
                         RSC_005,
                         Severity::Error,

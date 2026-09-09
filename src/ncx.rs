@@ -569,7 +569,7 @@ fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Rep
         .filter(|n| n.is_text())
         .filter_map(|n| n.text())
         .collect();
-    if text.trim().is_empty() {
+    if crate::xmlext::is_xml_blank(&text) {
         report.push_full(
             NCX_006,
             Severity::Usage,

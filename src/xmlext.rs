@@ -33,6 +33,31 @@ pub fn is_xml_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\r' | '\n')
 }
 
+/// Is `s` empty once XML whitespace is discounted — the question
+/// "does this element have any content"?
+///
+/// Use this rather than `str::trim().is_empty()` for anything epubcheck also
+/// decides. Rust's `trim` strips Unicode `White_Space`, which includes
+/// NO-BREAK SPACE; an element holding one NBSP is then empty here and **not
+/// empty there**, so we invent a finding on a book epubcheck passes.
+///
+/// **One predicate serves both of epubcheck's mechanisms, and that is not an
+/// approximation.** Its Java handler asks `String.trim().length() < 1`, which
+/// strips everything at or below `U+0020`; its Schematron asks
+/// `normalize-space()`, which strips exactly the four XML whitespace
+/// characters. Those two sets differ only in the C0 controls — and XML 1.0's
+/// `Char` production forbids every one of them except tab, CR and LF, so on
+/// any document that parses at all the two agree exactly.
+///
+/// Measured against epubcheck 5.3.0, one book per site, a single `&#160;` as
+/// the whole content: `<dc:title>` (OPF-055), any `<dc:*>` (OPF-072), an NCX
+/// `<navLabel><text>` (NCX-006) and a content document's `<title>` (RSC-005)
+/// are all **valid** there and were four false positives here — two of them
+/// at a severity that decides the verdict.
+pub fn is_xml_blank(s: &str) -> bool {
+    s.split(is_xml_space).all(str::is_empty)
+}
+
 /// XPath's `normalize-space()`: collapse runs of XML whitespace to a single
 /// space and trim the ends.
 pub fn normalize_xml_space(s: &str) -> String {
@@ -497,4 +522,46 @@ mod text_path_tests {
     }
 
     const XHTML_NS_FOR_TEST: &str = "http://www.w3.org/1999/xhtml";
+
+    /// `is_xml_blank` exists because `str::trim` answers a different question,
+    /// and the difference is a false positive on a book epubcheck passes.
+    ///
+    /// The NO-BREAK SPACE row is the whole point: Rust calls it whitespace and
+    /// XML does not, so `"\u{a0}".trim().is_empty()` is `true` and this is
+    /// `false`. Four sites read `trim` when this shipped — `<dc:title>`
+    /// (OPF-055), any `<dc:*>` (OPF-072), an NCX `<navLabel><text>` (NCX-006)
+    /// and a content document's `<title>` (RSC-005) — and two of those decide
+    /// the verdict.
+    #[test]
+    fn xml_blankness_is_not_unicode_blankness() {
+        // Empty by both readings.
+        for s in ["", " ", "\t", "\r\n", "  \t \n "] {
+            assert!(is_xml_blank(s), "{s:?} is XML whitespace only");
+            assert!(s.trim().is_empty(), "...and Rust agrees here");
+        }
+        // Not empty by either. `U+FEFF` is here rather than below because it
+        // is *not* Unicode whitespace — it was removed from `White_Space` in
+        // Unicode 4.0.1 — so `trim` leaves it standing too and it was never
+        // one of these false positives. Asserted so that nobody re-adds it to
+        // the divergence list by intuition, as this test's first draft did.
+        for s in ["x", " a ", "\u{a0}x", "\u{feff}"] {
+            assert!(!is_xml_blank(s), "{s:?} has content");
+            assert!(
+                !s.trim().is_empty(),
+                "{s:?} is not Unicode whitespace either"
+            );
+        }
+        // The divergence itself, asserted in both directions so that a future
+        // change to either side has to say so out loud.
+        for s in ["\u{a0}", "\u{a0}\u{a0}", " \u{a0} ", "\u{2003}", "\u{2009}"] {
+            assert!(
+                !is_xml_blank(s),
+                "{s:?} is not XML whitespace, so epubcheck reads it as content"
+            );
+            assert!(
+                s.trim().is_empty(),
+                "{s:?} is Unicode whitespace — this is exactly the trap"
+            );
+        }
+    }
 }
