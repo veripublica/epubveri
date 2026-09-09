@@ -8716,6 +8716,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // itself would instead silence it for EPUB 2 entirely,
                     // which is a rule the format really has.
                     if !is_epub3 && attr == "src" && node.tag_name().name() == "script" {
+                        // ...but the reference is still *registered*, because
+                        // "does any document load this file" is our own
+                        // question here rather than epubcheck's. At EPUB 2 it
+                        // is answered by ADV-010, which epubcheck does not
+                        // have at all, so there is no parity to preserve by
+                        // staying silent — only a false positive to make.
+                        // Skipping the insert alongside the checks told
+                        // Doitsu that three scripts his `ch1.xhtml` loads
+                        // with `<script src="../js/*.js">` were drawn,
+                        // applied or loaded by nothing (MobileRead #284).
+                        // One `continue` was serving two questions; only one
+                        // of them is epubcheck's.
+                        if remote_base.is_none() && !is_external(v) {
+                            resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+                        }
                         continue;
                     }
                     // **Not under a remote base**, where this reference does not
@@ -21125,6 +21140,100 @@ mod tests {
         assert_eq!(ids(&r3, crate::ids::OPF_097), 1, "{:?}", r3.messages);
         assert_eq!(ids(&r3, crate::ids::ADV_010), 0, "the id must not change");
         assert_eq!(ids(&run("3.0", false, EXTRA), crate::ids::OPF_097), 1);
+    }
+
+    /// A `<script src>` in an **EPUB 2** book loads its target, and ADV-010
+    /// has to know that (Doitsu, MobileRead #284: three scripts his
+    /// `ch1.xhtml` loads were each reported as drawn, applied or loaded by
+    /// nothing).
+    ///
+    /// The defect was one `continue` serving two questions. epubcheck's EPUB 2
+    /// `OPSHandler` registers no reference for an HTML `<script src>`, so a
+    /// missing target draws no RSC-007 there and we skip the existence check
+    /// to match — but the skip took the `resource_refs` insert with it, and
+    /// *that* half answers a question epubcheck does not ask at EPUB 2 at all.
+    /// There was no parity to preserve by staying silent, only a false
+    /// positive to make.
+    ///
+    /// So this pins both halves, because fixing one by breaking the other is
+    /// exactly what the shape invites: the reference is **registered**, and
+    /// the existence check is still **skipped**.
+    #[test]
+    fn an_epub2_script_src_is_a_reference_but_not_an_existence_check() {
+        let opf = |item: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    {item}
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        // `meta.xml` is a real file in every one of these books, so declaring
+        // it gives a target that exists and that only the script loads.
+        const ITEM: &str = "<item id=\"js\" href=\"meta.xml\" media-type=\"text/javascript\"/>";
+        let ch1 = |head: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title>{head}</head>\
+                 <body><p>x</p></body></html>"
+            )
+        };
+        let run = |item: &str, head: &str| {
+            let opts = crate::Options {
+                advisory: true,
+                ..Default::default()
+            };
+            crate::validate_bytes_with_options(epub_with_opf(Some(&opf(item)), &ch1(head)), &opts)
+        };
+        let ids =
+            |r: &crate::report::Report, id: &str| r.messages.iter().filter(|m| m.id == id).count();
+
+        // The report: the document loads it, so nothing is unreferenced.
+        // A directory hop is in the path because Doitsu's was
+        // (`src="../js/util.js"`), and resolution is where this could fail
+        // for a second, unrelated reason.
+        let loaded = run(
+            ITEM,
+            "<script type=\"text/javascript\" src=\"../OEBPS/meta.xml\"></script>",
+        );
+        assert_eq!(
+            ids(&loaded, crate::ids::ADV_010),
+            0,
+            "a loaded script is referenced: {:?}",
+            loaded.messages
+        );
+
+        // The control, without which the assertion above passes on a book
+        // that never asked the question. Same book, script removed.
+        let orphan = run(ITEM, "");
+        assert_eq!(
+            ids(&orphan, crate::ids::ADV_010),
+            1,
+            "{:?}",
+            orphan.messages
+        );
+
+        // And the parity the skip exists for, still skipped: epubcheck
+        // registers no reference for an EPUB 2 HTML `<script src>`, so a
+        // target that is not in the container draws nothing.
+        let missing = run(
+            "",
+            "<script type=\"text/javascript\" src=\"nosuch.js\"></script>",
+        );
+        assert_eq!(
+            ids(&missing, crate::ids::RSC_007),
+            0,
+            "EPUB 2 asks no existence question of a script src: {:?}",
+            missing.messages
+        );
     }
 
     /// A leaking URL that the manifest **declares** and a content document

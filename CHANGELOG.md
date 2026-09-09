@@ -8,6 +8,38 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `<script src>` in an EPUB 2 book loads its target, and `ADV-010` did not
+  know it.** Doitsu, MobileRead 374286 #284: a book whose `ch1.xhtml` carries
+  `<script src="../js/util.js">` and two more drew three advisories saying
+  nothing draws, applies or loads those files.
+
+  One `continue` was serving two questions. epubcheck's EPUB 2 handler
+  registers no reference for an HTML `<script src>` — a missing target draws no
+  `RSC-007` there — and we skip that existence check to match; the skip took
+  the reference *registration* with it. But "does any document load this file"
+  is `ADV-010`'s question, and epubcheck does not ask it of an EPUB 2 book at
+  all, so there was no parity to preserve by staying silent, only a false
+  positive to make. The reference is now registered and the existence check is
+  still skipped, with a test pinning both halves.
+
+  Probing the rest of the class rather than only the reported shape: fourteen
+  reference spellings in one EPUB 2 book — `img@src`, `object@data`,
+  `video@poster`, `audio`/`source`/`track`/`embed`/`iframe`/`input@src`,
+  `link rel=stylesheet`, a CSS `url()`, MathML `altimg` and an SVG
+  `image@xlink:href` — and `<script src>` was the only one missing.
+
+  Nothing here could have found it, and that is measured rather than assumed:
+  the 981-scenario corpus is unchanged (100% exact-ID recall, 0 false
+  positives), the reference shelf is unchanged to the finding (212 `ADV-010`
+  across 100 books, identical in both builds), and the reason is that **of its
+  474 books only 6 carry a `<script src>` at all, and none of the 390 EPUB 2
+  ones does**. Without the flag the two tools already agreed exactly on
+  Doitsu's book — both silent.
+
 ## [0.13.5] - 2026-09-07
 
 ### Fixed
