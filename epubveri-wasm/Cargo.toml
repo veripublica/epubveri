@@ -37,6 +37,40 @@ serde = { version = "1", features = ["derive"] }
 # unmaintained (its last release was Apr 2025), advising tsify. Same version
 # number, same `js` feature, same `#[tsify(…)]` attribute, so the move is the
 # import path and this line.
+#
+# **Held at 0.5.6 in `Cargo.lock`, not by this range — `cargo update` will move
+# it again, so read this before letting it. Pin BOTH halves:
+# `cargo update -p tsify --precise 0.5.6` then the same for `tsify-macros`.
+# Pinning `tsify` alone changes nothing, because the macro is what emits the
+# deprecated reference.** (Two `-p` flags in one invocation is a usage error,
+# and it exits without touching the lock — check the lock, not the exit.)
+#
+# What 0.5.7+ costs: it deprecates `#[tsify(into_wasm_abi)]`, which `src/lib.rs`
+# uses on `Report`, and CI runs clippy with `-D warnings`. The deprecation's
+# headline is a memory leak and it does not describe us — the leak is on the
+# `from_wasm_abi` side, which this crate never uses (our input is `&[u8]`), and
+# tsify's own changelog says the direction we use "panics rather than leaks", on
+# a path unreachable for a struct of owned `String`/`usize`/`Vec`. No removal is
+# planned.
+#
+# What 0.5.7+ buys, measured 2026-09-10 by building the package both ways and
+# diffing `epubveri_wasm.d.ts`: **the TypeScript types are identical, but 0.5.6
+# escapes quotes and apostrophes inside the generated doc comments** — we
+# currently publish `Lowercase severity: \"fatal\" | \"error\"` and
+# `epubveri\'s` to npm. Cosmetic, editor-visible, and not a regression; fixed by
+# 0.5.7 (@samkearney).
+#
+# Three ways to take it, none free, which is why it is scheduled rather than
+# done: migrate to `Ts<T>` (upstream's answer; the generated TypeScript is
+# unchanged, but `validate` becomes `Result<Ts<Report>, JsError>` and the 23
+# binding tests can no longer read the returned report — they would need the
+# body extracted into a plain `fn`); wrap `Report` in a private `mod` with an
+# inner `#![allow(deprecated)]` (verified to work, and it is the *only* allow
+# that reaches the derive's nested anonymous const — an item-level one does
+# not); or a crate-wide allow, which would also hide genuine deprecations.
+#
+# Whichever is chosen, note that a `///` comment on `Report` is copied verbatim
+# into the published `.d.ts`. Keep the reasoning in `//` comments.
 tsify = { version = "0.5", features = ["js"] }
 
 # Test-only. The binding's shape has to be checked against a real report, and

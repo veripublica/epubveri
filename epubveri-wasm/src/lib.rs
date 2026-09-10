@@ -28,6 +28,37 @@ use wasm_bindgen::prelude::*;
 /// One EPUB's validation result — the envelope's `inputs[i]` object without
 /// `path`/`error` (a wasm caller has no path, and in-memory bytes are always
 /// readable, so there is no unprocessable/`"error"` case here).
+//
+// NB: everything below is a `//` comment, not `///`, on purpose — a doc comment
+// on this struct is copied verbatim into the published `.d.ts` and reaches npm
+// consumers in their editor. Internal reasoning does not belong there.
+//
+// **`into_wasm_abi` is deprecated upstream, and `tsify` is held at 0.5.6 in
+// `Cargo.lock` because of it (tsify 0.5.7, its issue #65).** The deprecation is
+// written around a *memory leak*, and
+// that leak is on the **`from_wasm_abi`** side, which this crate does not use:
+// deserializing bad input from JavaScript cannot report failure at the ABI
+// boundary, so it ends in `wasm_bindgen::throw_str`, which skips destructors.
+// Our only input is `&[u8]`, handled by wasm-bindgen itself.
+//
+// The direction we do use fails differently — tsify's own changelog:
+// *"`into_wasm_abi` panics rather than leaks on failure"* — and that panic is
+// unreachable for this type, whose every field is owned `String`/`usize`/
+// `Vec` with no serializer that can fail. Upstream states the attributes still
+// work and plans no removal.
+//
+// The replacement, `Ts<T>`, would leave the generated TypeScript **identical**
+// (`WasmDescribe for Ts<T>` forwards to `T::JsType::describe()`), so this is a
+// Rust-side signature choice, not a consumer-visible one. Revisit it if this
+// crate ever takes a structured value *from* JavaScript — that is the case the
+// wrapper exists for, and the moment the pin should be lifted.
+//
+// The pin is not a muzzle: 0.5.7+ makes the attribute a `deprecated` warning,
+// CI runs `-D warnings`, and an `#[allow(deprecated)]` on this item does
+// **not** reach it — the reference lives in a nested anonymous const the
+// derive generates. A private `mod` with an inner `#![allow(deprecated)]` DOES
+// scope it (measured 2026-09-10), so the pin is a choice rather than the only
+// option — see the Cargo.toml note for what 0.5.8 actually buys and costs.
 #[derive(Serialize, Tsify)]
 #[tsify(into_wasm_abi)]
 pub struct Report {
