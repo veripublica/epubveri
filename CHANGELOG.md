@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.14.0] - 2026-09-10
 
 Adopts **veripublica conventions 0.5.0**. A **breaking** release in the library
 API — the CLI's output gains keys but loses none, and no message ID, severity or
