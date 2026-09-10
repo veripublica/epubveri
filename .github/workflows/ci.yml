@@ -10,6 +10,22 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # **The toolchain is pinned, and bumping it is a commit.** This job used to
+  # take whatever stable `ubuntu-latest` happened to ship, which meant a Rust
+  # release could turn CI red with nothing of ours having changed — the one
+  # input to this build that moved on someone else's schedule. `Cargo.lock` is
+  # committed for exactly this reason; the compiler had no equivalent.
+  #
+  # The cost is real and accepted: pinning also means we stop learning that a
+  # new stable breaks us until someone raises this line. That is the same
+  # trade as a lockfile, and the same answer — move it deliberately, with the
+  # test suite as the evidence, rather than discovering it mid-release.
+  #
+  # Bump this the way a dependency is bumped: raise it, let the run go green,
+  # commit. It does not have to track the newest stable.
+  RUST_VERSION: "1.98.1"
+
 jobs:
   check:
     runs-on: ubuntu-latest
@@ -17,11 +33,16 @@ jobs:
       - name: Check out
         uses: actions/checkout@v5
 
-      # ubuntu-latest ships stable Rust + rustfmt/clippy; we only add the
-      # wasm target for the smoke builds below. (The styloria dependency now
-      # comes from crates.io, so there's no sibling checkout to wire up.)
-      - name: Add wasm target
-        run: rustup target add wasm32-unknown-unknown
+      # Done with `rustup` rather than a toolchain action on purpose: rustup is
+      # already on the runner, and this repo would rather not take another
+      # action into the supply chain for something a two-line `run` does (see
+      # the audit job below for how much thought the one action here costs).
+      - name: Install the pinned toolchain
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal \
+            --component rustfmt,clippy --target wasm32-unknown-unknown
+          rustup default "$RUST_VERSION"
+          rustc -V && cargo -V
 
       - name: Format (cargo fmt --check)
         run: cargo fmt --all --check
@@ -58,6 +79,45 @@ jobs:
       - name: Build epubveri-wasm for wasm32
         run: cargo build -p epubveri-wasm --target wasm32-unknown-unknown --locked
 
+  # **The published MSRV, actually tested.** `rust-version` in Cargo.toml is a
+  # promise on crates.io — cargo refuses to resolve a dependency that needs
+  # more, and a user on an older toolchain reads it as "this will build". It
+  # was declared and nothing verified it, so it was an unverified claim of
+  # exactly the kind this project keeps catching elsewhere.
+  #
+  # **The version is read out of Cargo.toml rather than written here**, which
+  # is the whole point: a hard-coded number would be a second declaration free
+  # to drift from the first, reproducing the defect one layer down. Raise
+  # `rust-version` and this job tests the new floor on the next push; nothing
+  # else to edit.
+  #
+  # `check` rather than `test`: the promise is that the crate *compiles* on
+  # that toolchain. Dev-dependencies and the test harness are ours, not a
+  # consumer's, and holding them to the floor would tighten the promise past
+  # what it says.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Read the declared MSRV
+        id: msrv
+        run: |
+          v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          test -n "$v" || { echo "no rust-version in Cargo.toml"; exit 1; }
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "declared MSRV: $v"
+
+      - name: Install it
+        run: |
+          rustup toolchain install "${{ steps.msrv.outputs.version }}" --profile minimal
+          rustup default "${{ steps.msrv.outputs.version }}"
+          rustc -V
+
+      - name: Compile at the floor
+        run: cargo check --workspace --locked
+
   # Supply chain. Split from `check` on purpose: this job's result depends on
   # the RustSec advisory database, not on our commit, so it can turn red
   # without anything here changing - and when it does, that is news rather
@@ -88,11 +148,15 @@ jobs:
       # would change the declared runtime and not a line of running code.
       # Re-verify that hash before pinning - their `main` may have moved.
       #
-      # Scope note: today's tree is clean of *vulnerabilities* but carries one
-      # unmaintained-crate warning, and warnings do not fail this job - only
-      # an actual advisory does. That is the intent: an unmaintained
-      # dependency is a thing to plan around, a vulnerability is a thing to
-      # stop for.
+      # Scope note: warnings do not fail this job - only an actual advisory
+      # does. That is the intent: an unmaintained dependency is a thing to plan
+      # around, a vulnerability is a thing to stop for.
+      #
+      # ("today's tree ... carries one unmaintained-crate warning" was true
+      # when written and is not now - the 2026-09-09 run reports "No
+      # vulnerabilities were found / No warnings were found", the warning
+      # having left with the move off `tsify-next`. Read it off a run rather
+      # than off this comment.)
       - name: Audit dependencies
         uses: rustsec/audit-check@v2
         with:

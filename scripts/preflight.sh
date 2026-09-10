@@ -74,6 +74,17 @@ grep -q "^## \[$VERSION\]" CHANGELOG.md \
 echo "  note: read \`git log v<prev>..HEAD\` against the CHANGELOG section by eye —"
 echo "        0.9.2 shipped with its biggest item (the hostile suite) unmentioned."
 
+# Not a check, because it lives in another repository and needs the network.
+# It is here because an epubveri release is now a change to *running plugin
+# code*: all three fetch the binary from our releases, and their three
+# `client/binary.py` files are byte-identical, so one break hits all three at
+# once without a plugin release. Their own unit suites cannot see it — they
+# build their own envelope fixtures, so a real envelope can change shape under
+# a green suite.
+echo "  note: run the plugin gate before the tag and after it —"
+echo "        ../epubveri-plugins/scripts/verify-release.py --local \"\$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/release/epubveri\""
+echo "        ../epubveri-plugins/scripts/verify-release.py --published   # once the assets exist"
+
 # ------------------------------------------------------------------ hygiene --
 head_ "Tree hygiene"
 
@@ -133,8 +144,12 @@ head_ "Build gates (what CI runs)"
 # Cargo.lock, and this is the publish guard's exact command.
 check "cargo test --workspace --locked" cargo test --workspace --locked
 check "cargo fmt --check" cargo fmt --check
-check "cargo clippy --workspace --all-targets -- -D warnings" \
-  cargo clippy --workspace --all-targets -- -D warnings
+# `--all-features --locked` added 2026-09-10 to match `ci.yml` exactly. They
+# had drifted apart, and in the direction that matters least helpfully: the
+# pre-flight — the thing that runs *before* the irreversible upload — was the
+# looser of the two, so a lint CI would catch could reach a tagged commit.
+check "cargo clippy --workspace --all-targets --all-features --locked -- -D warnings" \
+  cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 check "wasm32-unknown-unknown build" \
   cargo build --release -p epubveri-wasm --target wasm32-unknown-unknown
 # Added 2026-08-22: nothing ran rustdoc, here or in CI, so a doc link to a
@@ -144,6 +159,26 @@ check "wasm32-unknown-unknown build" \
 # harness header got caught pretending to be Rust.
 check "cargo doc (no broken links)" \
   env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+
+# The published MSRV, checked here as well as in CI — because this is the
+# promise that reaches crates.io, and crates.io is the irreversible step this
+# whole script exists for. CI's `msrv` job runs on the push to main, which
+# races the tag; this runs before either.
+#
+# The floor is read from Cargo.toml rather than written here, for the same
+# reason the CI job reads it: a second copy of the number is a second thing to
+# drift. A missing toolchain is a `skip`, not a failure — it is a fact about
+# this machine, not about the release — but the line says so out loud, because
+# a check that quietly does not run is worse than one that is absent.
+MSRV=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+if [ -z "$MSRV" ]; then
+  bad "no rust-version in Cargo.toml — the MSRV promise is unverifiable"
+elif rustup run "$MSRV" rustc -V >/dev/null 2>&1; then
+  check "compiles at the declared MSRV ($MSRV)" \
+    rustup run "$MSRV" cargo check --workspace --locked
+else
+  skip "MSRV $MSRV not installed here — \`rustup toolchain install $MSRV\` (CI still gates it)"
+fi
 
 # ----------------------------------------------------------------- package --
 head_ "Package contents"
