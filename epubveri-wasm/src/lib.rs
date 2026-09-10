@@ -70,29 +70,39 @@ pub struct Report {
 }
 
 /// Small aggregate counts, mirroring the envelope's per-input `summary`
-/// exactly — same singular key names, and `fatal`/`info`/`usage` omitted when
-/// zero, as the CLI envelope emits them.
+/// exactly — same singular key names, and **every counter present, including
+/// zero**.
 ///
 /// **These counts are never filtered**, unlike the CLI's, where `-u` decides
 /// what the output contains and the counts describe the output. This binding
 /// has no such flag: it is a machine interface and always returns everything,
 /// so its counts always describe the whole report.
+///
+/// That is also why there is **no `suppressed` member** here, and why its
+/// absence is the correct statement rather than a gap: under FORMATS §1.4 an
+/// absent marker means *no format-level filter was in effect*, which is
+/// permanently true of this binding. If a filter is ever added here, the marker
+/// comes with it.
+//
+// The counters became unconditional in 0.14.0, tracking the CLI envelope.
+// FORMATS §1.4 does not reach a library — conventions recorded that silence as
+// deliberate — so this moved on **our own promise**, not on the rule: the
+// sentence above claims this type mirrors the CLI envelope, that envelope
+// changed, and a binding that promises to mirror follows what it names. The
+// citable form is "a binding that mirrors an envelope follows it", never
+// "FORMATS binds library interfaces".
 #[derive(Serialize, Tsify)]
 pub struct Summary {
-    #[serde(rename = "fatal", skip_serializing_if = "is_zero")]
+    #[serde(rename = "fatal")]
     pub fatals: usize,
     #[serde(rename = "error")]
     pub errors: usize,
     #[serde(rename = "warning")]
     pub warnings: usize,
-    #[serde(rename = "info", skip_serializing_if = "is_zero")]
+    #[serde(rename = "info")]
     pub infos: usize,
-    #[serde(rename = "usage", skip_serializing_if = "is_zero")]
+    #[serde(rename = "usage")]
     pub usages: usize,
-}
-
-fn is_zero(n: &usize) -> bool {
-    *n == 0
 }
 
 /// One finding, in the shared item shape (FORMATS.md §1.3).

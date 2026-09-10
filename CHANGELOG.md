@@ -8,6 +8,67 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+Adopts **veripublica conventions 0.5.0**. A **breaking** release in the library
+API — the CLI's output gains keys but loses none, and no message ID, severity or
+position moves. The corpus is unchanged (603/603 exact-ID, 0 false positives on
+355 clean cases) and all 474 shelf books report identically.
+
+### Added
+
+- **Every `summary` counter is emitted, including zero** (FORMATS §1.4).
+  `fatal`, `info` and `usage` were omitted when zero, which turned *"the key is
+  absent"* into *"this book has no usage findings"* — a false statement rather
+  than an ambiguous one. A clean book now reports all five.
+- **`summary.suppressed`** — an array of severity names recording that a
+  format-level filter was in effect, absent when none was. Without `-u` it reads
+  `["usage"]`.
+  - It records **the gate, not the outcome**: it is present whether or not the
+    filter removed anything, because it answers *can I trust this counter?*
+  - A named severity may be **incompletely represented**. With `--advisory` and
+    without `-u`, the `ADV-*`/`NEXT-*` findings are emitted (usage-severity,
+    exempt by ID) while every other usage finding is withheld — so `"usage": 1`
+    and `"suppressed": ["usage"]` appear together, and both are true.
+  - It is a **reserved non-counter member**. Never sum a summary's values.
+  - An input that could not be read carries no summary and therefore no marker;
+    its `status` already says the counters do not exist.
+- **`envelope::Outcome`** — the `applied | skipped | proposed` set as a type
+  rather than as prose in three doc comments. `Item::outcome` was a
+  `&'static str` on a `pub` field, so any spelling passed. epubveri emits only
+  `finding` items and never constructs one; what the type buys is that this
+  implementation can no longer violate the set by accident.
+
+### Changed — breaking (library only)
+
+- **`Envelope::for_tool` takes the convention key** as a required parameter.
+  FORMATS §1.1 now says the stability key is asserted by the emitting tool about
+  itself; previously this crate's constant was stamped into every envelope built
+  on the shared skeleton, including another tool's, so a routine dependency bump
+  would have made that tool claim a version it had not implemented. The
+  parameter is required rather than defaulted on purpose: the compile error is
+  the notification.
+- **`Input::from_report` takes the suppressed severities.** Required for the
+  same reason — a caller that has filtered is exactly the caller who would not
+  remember to set the marker afterwards.
+- **`Item::fix` and `Item::operation` take `impl Into<Outcome>`.** A tool with
+  its own outcome type keeps it and writes one `From`; a shared type would make
+  two vocabularies identical by fiat, while a conversion makes the place they
+  meet something the compiler forces you to update.
+- **`epubveri-wasm`'s summary counters are unconditional too.** FORMATS §1.4
+  does not reach a library — conventions recorded that silence as deliberate —
+  so this follows the binding's own documented promise to mirror the CLI
+  envelope, not the rule. It gains no `suppressed`: the binding never filters,
+  and under §1.4 an absent marker is the correct statement about it.
+  - TypeScript consumers: `fatal`, `info` and `usage` change from optional to
+    always present. `summary.usage ?? 0` is unaffected.
+
+### Not included
+
+- **`reverted`** is accepted by conventions (#31) and deliberately not yet in
+  FORMATS, because its emitter is unstarted. The declared set stays three
+  members; it arrives with the batch that carries the mechanism.
+
 ## [0.13.7] - 2026-09-09
 
 ### Fixed

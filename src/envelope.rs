@@ -1,6 +1,6 @@
 //! The `--format json` machine envelope — the veripublica shared output format
 //! ([FORMATS.md](https://github.com/veripublica/conventions/blob/main/FORMATS.md),
-//! convention v0.4). One JSON object per run: a top-level verdict plus one
+//! convention v0.5). One JSON object per run: a top-level verdict plus one
 //! `Input` object per `-i`, each carrying its own findings.
 //!
 //! **This module is the veripublica family's reference implementation of the
@@ -31,9 +31,18 @@ use serde::Serialize;
 
 use crate::report::{Message, Report};
 
-/// The convention's stability key, emitted verbatim (FORMATS.md §1.1): compare
-/// with string equality, there is nothing finer to parse.
-const CONVENTION: &str = "0.4";
+/// **epubveri's own** stability key, emitted verbatim (FORMATS.md §1.1):
+/// compare with string equality, there is nothing finer to parse.
+///
+/// It is deliberately not visible to [`Envelope::for_tool`], which takes the
+/// key as a required parameter instead. FORMATS §1.1 (conventions 0.5.0): *"the
+/// key is asserted by the emitting tool about itself: a shared implementation
+/// takes it from the tool rather than stamping its own"*. Until 0.14.0 this
+/// constant reached epubsana's envelopes through the shared skeleton, so a
+/// routine `epubveri` bump would have made their output claim a convention
+/// version they had not implemented. A defaulted parameter would have preserved
+/// exactly that; the compile error is the notification.
+const CONVENTION: &str = "0.5";
 
 /// The whole run: exactly one of these is printed to stdout in `json` mode.
 /// Generic over the tool-owned `summary` (`S`) and item `data` (`D`) slots
@@ -66,13 +75,21 @@ impl<S, D> Envelope<S, D> {
     /// unprocessable input → `error`; else any input with findings →
     /// `problems`; else `ok`).
     ///
-    /// `tool`/`tool_version` are passed in — the reference types belong to no
-    /// single tool. `dry_run` defaults to `false` and `summary` is the caller's;
-    /// set the public fields directly for a transformer that needs them.
-    /// epubveri itself uses the [`Envelope::new`] shorthand.
+    /// `tool`/`tool_version`/`convention` are passed in — the reference types
+    /// belong to no single tool, and **the stability key is the caller's
+    /// assertion about itself** (FORMATS §1.1), never this crate's. `dry_run`
+    /// defaults to `false` and `summary` is the caller's; set the public fields
+    /// directly for a transformer that needs them. epubveri itself uses the
+    /// [`Envelope::new`] shorthand.
+    ///
+    /// Pass the key your tool has *implemented*, which is not always the newest
+    /// one published: raising an `epubveri` dependency is not the same event as
+    /// adopting a convention release, and conflating the two is the defect this
+    /// parameter exists to prevent.
     pub fn for_tool(
         tool: &'static str,
         tool_version: &'static str,
+        convention: &'static str,
         summary: Option<S>,
         inputs: Vec<Input<S, D>>,
     ) -> Self {
@@ -86,7 +103,7 @@ impl<S, D> Envelope<S, D> {
         Envelope {
             tool,
             tool_version,
-            convention: CONVENTION,
+            convention,
             status,
             summary,
             dry_run: false,
@@ -102,7 +119,7 @@ impl Envelope<Summary, Data> {
     ///
     /// [`for_tool`]: Envelope::for_tool
     pub fn new(inputs: Vec<Input>) -> Self {
-        Self::for_tool("epubveri", crate::VERSION, None, inputs)
+        Self::for_tool("epubveri", crate::VERSION, CONVENTION, None, inputs)
     }
 }
 
@@ -129,18 +146,28 @@ pub struct Input<S = Summary, D = Data> {
 impl Input<Summary, Data> {
     /// An input that produced a verdict: `ok`/`problems` by the error-and-above
     /// threshold, with its findings.
-    pub fn from_report(path: String, report: &Report) -> Self {
+    /// `suppressed` names the severities a format-level filter was in effect
+    /// for — see [`Summary::suppressed`] for why it is an argument rather than
+    /// something set afterwards. Pass `&[]` for an unfiltered run.
+    pub fn from_report(path: String, report: &Report, suppressed: &[&'static str]) -> Self {
         Input {
             path,
             status: if report.is_valid() { "ok" } else { "problems" },
             error: None,
             output: None,
-            summary: Some(Summary::of(report)),
+            summary: Some(Summary::of(report, suppressed)),
             items: report.messages.iter().map(Item::finding_of).collect(),
         }
     }
 
     /// An input that could not be read at all: `error`, no verdict.
+    ///
+    /// **No summary, and therefore no `suppressed` marker — this is conformant,
+    /// not a gap** (FORMATS §1.4): an input that produced no report carries
+    /// neither, because its `status` already says the counters do not exist. An
+    /// earlier draft of that rule would have obliged five zero counters here,
+    /// making an input that was never opened byte-identical in the counter block
+    /// to a clean book.
     pub fn from_error(path: String, error: String) -> Self {
         Input {
             path,
@@ -170,29 +197,110 @@ impl Input<Summary, Data> {
 ///
 /// Counts describe **what the output contains**, not what the validator found:
 /// without `-u` the usage count is 0, as epubcheck's `nUsage` is. The library
-/// is where a complete count lives.
+/// is where a complete count lives — and [`suppressed`] is what tells a consumer
+/// which of these two it is holding.
+///
+/// **Every counter is emitted, including zero** (FORMATS §1.4, conventions
+/// 0.5.0): a counter over a closed set the specification declares reports every
+/// member the tool has a concept of, and `report::Severity` has exactly these
+/// five. Until 0.14.0 `fatal`, `info` and `usage` were omitted at zero, which
+/// turned *"the key is absent"* into *"this book has no usage findings"* — a
+/// false statement rather than an ambiguous one.
+///
+/// [`suppressed`]: Summary::suppressed
 #[derive(Serialize)]
 pub struct Summary {
-    #[serde(rename = "fatal", skip_serializing_if = "is_zero")]
+    #[serde(rename = "fatal")]
     pub fatals: usize,
     #[serde(rename = "error")]
     pub errors: usize,
     #[serde(rename = "warning")]
     pub warnings: usize,
-    #[serde(rename = "info", skip_serializing_if = "is_zero")]
+    #[serde(rename = "info")]
     pub infos: usize,
-    #[serde(rename = "usage", skip_serializing_if = "is_zero")]
+    #[serde(rename = "usage")]
     pub usages: usize,
+    /// The severities a format-level filter was in effect for (FORMATS §1.4) —
+    /// **the gate, not the outcome**: it is set whether or not the filter
+    /// removed anything on this run. Absent (no key) when empty, which means no
+    /// filter was in effect and every item the run produced is present.
+    ///
+    /// It is a **completeness** marker rather than a "something is hidden" flag:
+    /// it answers *can I trust these counters?* A severity named here may be
+    /// **incompletely** represented — with `--advisory` and no `-u`, epubveri
+    /// emits its `ADV-*`/`NEXT-*` findings (which are usage-severity and exempt
+    /// by ID) while withholding every other usage finding, so a non-zero `usage`
+    /// count sits beside `suppressed: ["usage"]` and both are true.
+    ///
+    /// A **reserved non-counter member** of this object: summing a summary's
+    /// values was never safe, and this makes it plainly unsafe.
+    #[serde(skip_serializing_if = "<[&str]>::is_empty")]
+    pub suppressed: Vec<&'static str>,
 }
 
 impl Summary {
-    fn of(report: &Report) -> Self {
+    /// The counts for one report, qualified by the severities a format-level
+    /// filter was in effect for.
+    ///
+    /// `suppressed` is a **required** argument rather than a defaulted field on
+    /// purpose. FORMATS §1.4 forbids dodging the marker, and a caller that has
+    /// filtered is exactly the caller who will not remember to set it
+    /// afterwards; making it impossible to build the object without answering
+    /// the question is the same instrument as `for_tool`'s convention key.
+    fn of(report: &Report, suppressed: &[&'static str]) -> Self {
         Summary {
             fatals: report.fatals(),
             errors: report.errors(),
             warnings: report.warnings(),
             infos: report.infos(),
             usages: report.usages(),
+            suppressed: suppressed.to_vec(),
+        }
+    }
+}
+
+/// A transformer item's `outcome` — the closed set FORMATS §1.3 declares
+/// (`applied | skipped | proposed`), as a type rather than as a doc comment.
+///
+/// **Why this is an enum.** The set was previously prose in three comments here
+/// and a `&'static str` on the wire, so `"revert"`, `"Applied"` or `"propsed"`
+/// all passed. FORMATS §1.4 keys a counter rule on this set, and a set enforced
+/// by nothing is an honour system. epubveri emits only `finding` items and so
+/// never constructs one; the value is that *our* implementation can no longer
+/// violate the set by accident, which is a narrower claim than the rule itself
+/// and the only one the type earns.
+///
+/// **A tool keeps its own vocabulary.** [`Item::fix`] and [`Item::operation`]
+/// take `impl Into<Outcome>`, so a repairer with its own `Outcome` writes one
+/// `From` and passes its own value (epubsana's request, 2026-09-10). Their
+/// reason is the better one: a shared type makes two vocabularies identical by
+/// fiat, while a conversion makes the *place they meet* a thing the compiler
+/// forces you to update. That guarantee holds only while such a `From` is a
+/// wildcard-free `match` — a `_ =>` arm turns the build error back into
+/// silence, the same trap `violation_kind` carries.
+///
+/// `reverted` is **not** here: conventions accepted it (#31) and deliberately
+/// did not ship the text, because its emitter (epubsana#7) is unstarted. It
+/// arrives with the batch that carries the mechanism.
+#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Outcome {
+    /// The change was made.
+    Applied,
+    /// Presented and not done.
+    Skipped,
+    /// No decision exists yet — a dry run.
+    Proposed,
+}
+
+impl Outcome {
+    /// The lowercase spelling the envelope uses — the same string `Serialize`
+    /// emits, exposed for a human report or a log line.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Outcome::Applied => "applied",
+            Outcome::Skipped => "skipped",
+            Outcome::Proposed => "proposed",
         }
     }
 }
@@ -206,11 +314,14 @@ impl Summary {
 pub struct Item<D = Data> {
     #[serde(rename = "type")]
     pub kind: &'static str,
-    /// Transformer-only (§1.3): `applied | skipped | proposed` — required on a
-    /// `fix`/`operation` item, never present on a `finding`. Absent (no key)
-    /// when `None`.
+    /// Transformer-only (§1.3): required on a `fix`/`operation` item, never
+    /// present on a `finding`. Absent (no key) when `None`.
+    ///
+    /// Typed rather than a string **because this field is `pub`** — typing only
+    /// the constructors would leave a struct literal free to put any spelling
+    /// here, which is the hole [`Outcome`] exists to close.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub outcome: Option<&'static str>,
+    pub outcome: Option<Outcome>,
     /// The finding/target code (e.g. epubveri's epubcheck-compatible `RSC-005`,
     /// or a repairer's `addresses_id`). A `String`: a verifier's are compile-
     /// time constants, but a transformer's may be built at runtime.
@@ -257,12 +368,13 @@ impl<D> Item<D> {
     }
 
     /// A `fix` item (a repairer applied/declined/proposed a fix to a finding):
-    /// `outcome` (`applied|skipped|proposed`) is required.
+    /// [`Outcome`] is required. Takes `impl Into<Outcome>`, so a tool with its
+    /// own outcome type passes its own value through one `From`.
     // A shared item genuinely has this many fields (FORMATS.md §1.3); grouping
     // them would be an artificial abstraction for a reference type.
     #[allow(clippy::too_many_arguments)]
     pub fn fix(
-        outcome: &'static str,
+        outcome: impl Into<Outcome>,
         code: String,
         rule: Option<&'static str>,
         severity: &'static str,
@@ -273,7 +385,7 @@ impl<D> Item<D> {
     ) -> Self {
         Item {
             kind: "fix",
-            outcome: Some(outcome),
+            outcome: Some(outcome.into()),
             code,
             rule,
             severity,
@@ -285,10 +397,11 @@ impl<D> Item<D> {
     }
 
     /// An `operation` item (a transformer performed a change not tied to a
-    /// finding): `outcome` (`applied|skipped|proposed`) is required.
+    /// finding): [`Outcome`] is required, the same `impl Into<Outcome>` as
+    /// [`Item::fix`].
     #[allow(clippy::too_many_arguments)]
     pub fn operation(
-        outcome: &'static str,
+        outcome: impl Into<Outcome>,
         code: String,
         rule: Option<&'static str>,
         severity: &'static str,
@@ -299,7 +412,7 @@ impl<D> Item<D> {
     ) -> Self {
         Item {
             kind: "operation",
-            outcome: Some(outcome),
+            outcome: Some(outcome.into()),
             code,
             rule,
             severity,
@@ -391,10 +504,6 @@ pub struct Data {
     pub violation_kind: Option<&'static str>,
 }
 
-fn is_zero(n: &usize) -> bool {
-    *n == 0
-}
-
 fn is_false(b: &bool) -> bool {
     !*b
 }
@@ -424,6 +533,7 @@ mod tests {
                 warnings: 0,
                 infos: 0,
                 usages: 0,
+                suppressed: Vec::new(),
             }),
             items: vec![],
         };
@@ -432,10 +542,89 @@ mod tests {
     }
 
     #[test]
+    fn every_counter_is_present_at_zero_and_suppressed_is_not_a_counter() {
+        // FORMATS §1.4: a counter over a closed set reports every member the
+        // tool has a concept of, including zero. `Severity` has exactly five,
+        // so a clean book carries five counters — never three, which is what
+        // `skip_serializing_if = "is_zero"` produced before 0.14.0 and which
+        // read as "this book has no usage findings".
+        let clean = Summary::of(&Report::new(), &[]);
+        let v = serde_json::to_value(&clean).unwrap();
+        assert_eq!(
+            key_set(&v),
+            ["error", "fatal", "info", "usage", "warning"],
+            "all five counters, and no `suppressed` key on an unfiltered run"
+        );
+        for k in ["fatal", "error", "warning", "info", "usage"] {
+            assert_eq!(v[k], 0, "{k} must be present as 0, not absent");
+        }
+    }
+
+    #[test]
+    fn suppressed_records_the_gate_not_the_outcome() {
+        // The marker is set by the filter being *in effect*, not by anything
+        // having been removed — a clean book under `-u`-off says so too, which
+        // is the whole point of a completeness marker. If this ever becomes
+        // count-derived, this test is what fails.
+        let nothing_to_hide = Summary::of(&Report::new(), &["usage"]);
+        let v = serde_json::to_value(&nothing_to_hide).unwrap();
+        assert_eq!(v["suppressed"], serde_json::json!(["usage"]));
+        assert_eq!(v["usage"], 0, "nothing was withheld, and it is still gated");
+    }
+
+    #[test]
+    fn a_filtered_input_carries_the_marker_and_an_unreadable_one_carries_no_summary() {
+        // The two halves of FORMATS §1.4's "omission may not dodge the marker":
+        // an input that produced a report under a filter MUST carry it, and one
+        // that produced no report carries neither it nor a summary — its
+        // `status` already says the counters do not exist.
+        let reported = Input::from_report("book.epub".into(), &Report::new(), &["usage"]);
+        let v = serde_json::to_value(&reported).unwrap();
+        assert_eq!(v["summary"]["suppressed"], serde_json::json!(["usage"]));
+
+        let unreadable = Input::<Summary, Data>::from_error("dir".into(), "is a directory".into());
+        let v = serde_json::to_value(&unreadable).unwrap();
+        assert!(
+            v.get("summary").is_none(),
+            "an input that produced no report manufactures no counters"
+        );
+    }
+
+    #[test]
+    fn a_foreign_outcome_reaches_the_wire_through_from() {
+        // The shape epubsana asked for: their enum stays theirs, one `From` is
+        // the meeting point, and the wire spelling is ours. A wildcard-free
+        // match in that `From` is what makes a new member a build error there.
+        #[derive(Clone, Copy)]
+        enum TheirOutcome {
+            Skipped,
+        }
+        impl From<TheirOutcome> for Outcome {
+            fn from(o: TheirOutcome) -> Self {
+                match o {
+                    TheirOutcome::Skipped => Outcome::Skipped,
+                }
+            }
+        }
+        let item: Item = Item::fix(
+            TheirOutcome::Skipped,
+            "OPF-002".into(),
+            None,
+            "error",
+            None,
+            None,
+            "declined".into(),
+            None,
+        );
+        let v = serde_json::to_value(&item).unwrap();
+        assert_eq!(v["outcome"], "skipped", "lowercase, as §1.3 declares");
+    }
+
+    #[test]
     fn clean_envelope_omits_top_level_summary_and_dry_run() {
         // epubveri passes `summary: None` and never a dry run, so neither key
         // appears (skip-if-none / skip-if-false).
-        let env: Envelope = Envelope::for_tool("epubveri", "1.2.3", None, vec![]);
+        let env: Envelope = Envelope::for_tool("epubveri", "1.2.3", "0.5", None, vec![]);
         let v = serde_json::to_value(&env).unwrap();
         assert_eq!(
             key_set(&v),
@@ -464,7 +653,7 @@ mod tests {
         // The transformer shape a repairer (epubsana) builds: `type: "fix"`
         // with a required `outcome`, unconstructible without one.
         let item: Item = Item::fix(
-            "applied",
+            Outcome::Applied,
             "OPF-002".into(),
             None,
             "error",

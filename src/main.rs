@@ -1,4 +1,4 @@
-//! Thin CLI for epubveri, following the **veripublica CLI convention v0.4**
+//! Thin CLI for epubveri, following the **veripublica CLI convention v0.5**
 //! (<https://github.com/veripublica/conventions>).
 //!
 //! epubveri is a *verifier*: it reads inputs and reports, writing no files and
@@ -92,7 +92,7 @@ EXIT CODES:
     1   every input was processed; at least one has errors.
     2   the tool could not run: a usage error, or an input that could not be read.
 
-Conforms to veripublica conventions v0.4.";
+Conforms to veripublica conventions v0.5.";
 
 /// Both spellings epubcheck accepts for each version, normalized to the bare
 /// major so the library never has to parse a version string. `None` means the
@@ -471,13 +471,28 @@ fn run(
         .collect();
 
     if format == "json" {
+        // **The gate, recorded** (FORMATS §1.4, conventions 0.5.0). `-u` off
+        // means a format-level filter was in effect for `usage`, whether or not
+        // it removed anything from this particular book: `suppressed` answers
+        // "can I trust this counter?", not "was something hidden". So it is
+        // derived from the flag, never from a before/after count.
+        //
+        // Note the case this gets right and a count would get wrong: with
+        // `--advisory` and no `-u` the ADV-*/NEXT-* findings are emitted (they
+        // are usage-severity and exempt by ID in `shown_to_a_reader`) while
+        // every other usage finding is withheld — so a non-zero `usage` count
+        // sits beside `suppressed: ["usage"]`, and both statements are true.
+        // §1.4 calls this "incompletely represented" and expects exactly this.
+        let suppressed = suppressed_gate(usage);
         // One JSON object on stdout; an unreadable input is described *inside*
         // it (status "error"), not on stderr.
         let envelope = epubveri::envelope::Envelope::new(
             results
                 .into_iter()
                 .map(|(path, r)| match r {
-                    Ok(report) => epubveri::envelope::Input::from_report(path.clone(), &report),
+                    Ok(report) => {
+                        epubveri::envelope::Input::from_report(path.clone(), &report, suppressed)
+                    }
                     Err(e) => epubveri::envelope::Input::from_error(path.clone(), e),
                 })
                 .collect(),
@@ -515,6 +530,23 @@ fn run(
 /// inert, which is the failure mode this project keeps having to undo. They
 /// are shown whenever they are present, because `--advisory` has already
 /// decided that — the library does not emit them otherwise.
+/// The severities a format-level filter is in effect for, for `suppressed`
+/// (FORMATS §1.4). **A function of the flag alone — deliberately not of the
+/// report.**
+///
+/// `suppressed` is a completeness marker, not a "something was hidden" flag: it
+/// answers *can I trust this counter?*, and the answer is no whenever the filter
+/// is on, including on a book that had no usage findings to withhold. Deriving
+/// it from a before/after count would make it lie in both directions — silent on
+/// a clean book that was nonetheless gated, and unable to describe the
+/// `--advisory` case, where usage findings are both emitted and withheld at once.
+///
+/// Its counterpart is [`shown_to_a_reader`], which applies the same gate per
+/// item; this names it per run.
+fn suppressed_gate(usage: bool) -> &'static [&'static str] {
+    if usage { &[] } else { &["usage"] }
+}
+
 fn shown_to_a_reader(m: &epubveri::report::Message, usage: bool) -> bool {
     m.severity != epubveri::report::Severity::Usage
         || usage
@@ -729,6 +761,21 @@ mod tests {
     /// which is what actually protects a consumer like epubsana that dispatches
     /// repairs on findings below error severity. That boundary has its own
     /// test.
+    /// The marker tracks the gate, not the outcome — see [`suppressed_gate`].
+    #[test]
+    fn the_suppressed_marker_is_a_function_of_the_flag_alone() {
+        assert_eq!(
+            suppressed_gate(false),
+            ["usage"],
+            "-u off is a gate on usage"
+        );
+        assert!(suppressed_gate(true).is_empty(), "-u on withholds nothing");
+        // Nothing else is ever gated: `--advisory`, `--profile` and `-v` change
+        // which findings are *produced*, which §1.4 says is asking a narrower
+        // question rather than suppressing an answer.
+        assert_eq!(suppressed_gate(false).len(), 1);
+    }
+
     #[test]
     fn the_usage_filter_reaches_every_format_and_the_counts_follow() {
         use epubveri::report::{Report, Severity};

@@ -59,13 +59,13 @@ One JSON object per run. Trimmed from a real run:
 {
   "tool": "epubveri",
   "tool_version": "0.13.2+254ab72",
-  "convention": "0.4",
+  "convention": "0.5",
   "status": "problems",
   "inputs": [
     {
       "path": "book.epub",
       "status": "problems",
-      "summary": { "error": 1, "warning": 0, "usage": 1 },
+      "summary": { "fatal": 0, "error": 1, "warning": 0, "info": 0, "usage": 1 },
       "items": [
         {
           "type": "finding",
@@ -99,6 +99,29 @@ The envelope itself is a shared, cross-tool format, specified in
 [**FORMATS.md**](https://github.com/veripublica/conventions/blob/main/FORMATS.md).
 The `convention` field names the version of that spec. Read it for the parts
 this page does not repeat.
+
+**Every counter is always present, including zero.** The example above is a
+`-u` run; without `-u` the same book reports `"usage": 0` and adds a
+`"suppressed": ["usage"]` member saying so:
+
+```json
+"summary": { "fatal": 0, "error": 1, "warning": 0, "info": 0, "usage": 0,
+             "suppressed": ["usage"] }
+```
+
+`suppressed` names the severities a **format-level filter was in effect** for —
+whether or not it removed anything on this run. It answers *can I trust this
+counter?*, so treat it as a completeness marker rather than a "something is
+hidden" flag, and note two consequences:
+
+- **A named severity may be partly present.** With `--advisory` and without
+  `-u`, epubveri emits its `ADV-*`/`NEXT-*` findings (usage-severity, exempt by
+  ID) while withholding every other usage finding — so `"usage": 1` and
+  `"suppressed": ["usage"]` appear together and both are true.
+- **It is not a counter.** Never sum a summary's values.
+
+An input that could not be read carries **no** summary at all, and therefore no
+marker: its `status` is `"error"` and there are no counters to qualify.
 
 **`tool_version` is the version that produced this report — do not run
 `epubveri -V` to find it.** Every envelope carries it, so a tool that already

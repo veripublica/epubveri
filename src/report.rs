@@ -4,7 +4,7 @@ use std::fmt;
 
 /// Severity of a diagnostic, in rank order, mirroring epubcheck's five-value
 /// vocabulary — the same set the shared machine format reserves (FORMATS.md
-/// §1.3, conventions v0.4). `Fatal` means processing of the input stopped;
+/// §1.3, conventions v0.5). `Fatal` means processing of the input stopped;
 /// `Usage` is an advisory that sits *below* `Info` — surfaced, never a failure.
 /// Only `Error` and `Fatal` cross the valid/invalid line (see [`Report::is_valid`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -667,7 +667,7 @@ impl Report {
         self.count(Severity::Usage)
     }
 
-    /// Valid = no `error`- or `fatal`-severity findings (conventions v0.4 §6's
+    /// Valid = no `error`- or `fatal`-severity findings (conventions v0.5 §6's
     /// verifier threshold). Warnings, info and usage findings are reported but
     /// never make a book invalid.
     pub fn is_valid(&self) -> bool {
@@ -811,7 +811,7 @@ mod tests {
 
     use super::*;
 
-    // The migration trap (conventions v0.4 §6, unfold note): the valid/invalid
+    // The migration trap (conventions v0.5 §6, unfold note): the valid/invalid
     // line is error-AND-above. A warning-only book is valid; the moment a fatal
     // appears the book is invalid — and a fatal is never miscounted as an error.
     #[test]
