@@ -69,7 +69,10 @@ Nothing here changes a finding, an ID, a severity or a position. It is in the
 notes because it moved the code that produces them, and a reader deciding
 whether to take this release deserves to know what else came with it.
 
-- **Rust 1.98.0 → 1.98.1, and 18 dependency patch updates.** `flate2`
+- **The toolchain this is built with moved, 1.98.0 → 1.98.1, and 18
+  dependency patch updates came with it.** That is *our* compiler, not yours:
+  the minimum this crate asks of you is still `rust-version = "1.88"` and did
+  not move in this release. `flate2`
   1.1.9 → 1.1.10 changed its deflate backend and dropped `miniz_oxide` and
   `adler2` from the tree entirely — that is the zip decompression path, so it
   was measured rather than trusted: the corpus is unchanged (603/603 exact-ID,
@@ -88,11 +91,12 @@ whether to take this release deserves to know what else came with it.
   shipped, so a Rust release could turn the build red with no commit of ours —
   `Cargo.lock` is committed for exactly that reason and the compiler had no
   equivalent.
-- **The published MSRV is now tested rather than only declared.**
-  `rust-version = "1.88"` is a promise on crates.io and nothing verified it. It
-  is honest — the whole workspace compiles at 1.88 — and a CI job and the
-  pre-flight both check it now, reading the number out of `Cargo.toml` so the
-  test and the promise cannot drift apart.
+- **The published MSRV is now tested rather than only declared — and it is
+  unchanged at 1.88.** `rust-version = "1.88"` is a promise on crates.io and
+  nothing verified it. It is honest — the whole workspace compiles at 1.88 —
+  and a CI job and the pre-flight both check it now, reading the number out of
+  `Cargo.toml` so the test and the promise cannot drift apart. **Nothing in
+  this release asks you for a newer Rust.**
 - **A roxmltree limitation is documented where it lands** (their issue #112,
   open since 2023). `range()` covers only the first run of a text node that
   mixes CDATA with plain text, which can shorten the `foreignObject`
