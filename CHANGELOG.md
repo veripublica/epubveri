@@ -63,6 +63,43 @@ position moves. The corpus is unchanged (603/603 exact-ID, 0 false positives on
   - TypeScript consumers: `fatal`, `info` and `usage` change from optional to
     always present. `summary.usage ?? 0` is unaffected.
 
+### Changed — dependencies, toolchain and build gates
+
+Nothing here changes a finding, an ID, a severity or a position. It is in the
+notes because it moved the code that produces them, and a reader deciding
+whether to take this release deserves to know what else came with it.
+
+- **Rust 1.98.0 → 1.98.1, and 18 dependency patch updates.** `flate2`
+  1.1.9 → 1.1.10 changed its deflate backend and dropped `miniz_oxide` and
+  `adler2` from the tree entirely — that is the zip decompression path, so it
+  was measured rather than trusted: the corpus is unchanged (603/603 exact-ID,
+  0 false positives on 355 clean cases) and all **474 reference books report
+  byte-identically**.
+- **`tsify` is deliberately held at 0.5.6.** 0.5.7 deprecates the attribute the
+  wasm bindings use, and CI runs `-D warnings`. The deprecation's headline is a
+  memory leak and it does not describe this crate: the leak is on the
+  `from_wasm_abi` side, which the bindings never use, and upstream's own
+  changelog says the direction they do use panics rather than leaks — on a path
+  unreachable for a struct of owned `String`/`usize`/`Vec`. What 0.5.7 does buy
+  is real but cosmetic (0.5.6 escapes quotes inside the generated TypeScript
+  doc comments), so it is scheduled rather than closed. The reasoning is beside
+  the dependency in `epubveri-wasm/Cargo.toml`.
+- **CI pins its toolchain.** It previously took whatever stable the runner
+  shipped, so a Rust release could turn the build red with no commit of ours —
+  `Cargo.lock` is committed for exactly that reason and the compiler had no
+  equivalent.
+- **The published MSRV is now tested rather than only declared.**
+  `rust-version = "1.88"` is a promise on crates.io and nothing verified it. It
+  is honest — the whole workspace compiles at 1.88 — and a CI job and the
+  pre-flight both check it now, reading the number out of `Cargo.toml` so the
+  test and the promise cannot drift apart.
+- **A roxmltree limitation is documented where it lands** (their issue #112,
+  open since 2023). `range()` covers only the first run of a text node that
+  mixes CDATA with plain text, which can shorten the `foreignObject`
+  reconstruction in `svg.rs`. Not worked around, and the comment carries the
+  measurement: 0 of 474 reference books contain a `<foreignObject>` at all, and
+  no epubcheck fixture puts CDATA inside one.
+
 ### Not included
 
 - **`reverted`** is accepted by conventions (#31) and deliberately not yet in
