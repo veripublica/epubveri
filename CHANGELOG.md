@@ -63,40 +63,34 @@ position moves. The corpus is unchanged (603/603 exact-ID, 0 false positives on
   - TypeScript consumers: `fatal`, `info` and `usage` change from optional to
     always present. `summary.usage ?? 0` is unaffected.
 
-### Changed — dependencies, toolchain and build gates
+### Changed — dependencies and the minimum Rust
 
-Nothing here changes a finding, an ID, a severity or a position. It is in the
-notes because it moved the code that produces them, and a reader deciding
-whether to take this release deserves to know what else came with it.
+Nothing here changes a finding, an ID, a severity or a position.
 
-- **The toolchain this is built with moved, 1.98.0 → 1.98.1, and 18
-  dependency patch updates came with it.** That is *our* compiler, not yours:
-  the minimum this crate asks of you is still `rust-version = "1.88"` and did
-  not move in this release. `flate2`
-  1.1.9 → 1.1.10 changed its deflate backend and dropped `miniz_oxide` and
-  `adler2` from the tree entirely — that is the zip decompression path, so it
-  was measured rather than trusted: the corpus is unchanged (603/603 exact-ID,
-  0 false positives on 355 clean cases) and all **474 reference books report
-  byte-identically**.
-- **`tsify` is deliberately held at 0.5.6.** 0.5.7 deprecates the attribute the
-  wasm bindings use, and CI runs `-D warnings`. The deprecation's headline is a
-  memory leak and it does not describe this crate: the leak is on the
-  `from_wasm_abi` side, which the bindings never use, and upstream's own
-  changelog says the direction they do use panics rather than leaks — on a path
-  unreachable for a struct of owned `String`/`usize`/`Vec`. What 0.5.7 does buy
-  is real but cosmetic (0.5.6 escapes quotes inside the generated TypeScript
-  doc comments), so it is scheduled rather than closed. The reasoning is beside
-  the dependency in `epubveri-wasm/Cargo.toml`.
-- **CI pins its toolchain.** It previously took whatever stable the runner
-  shipped, so a Rust release could turn the build red with no commit of ours —
-  `Cargo.lock` is committed for exactly that reason and the compiler had no
-  equivalent.
-- **The published MSRV is now tested rather than only declared — and it is
-  unchanged at 1.88.** `rust-version = "1.88"` is a promise on crates.io and
-  nothing verified it. It is honest — the whole workspace compiles at 1.88 —
-  and a CI job and the pre-flight both check it now, reading the number out of
-  `Cargo.toml` so the test and the promise cannot drift apart. **Nothing in
-  this release asks you for a newer Rust.**
+- **The minimum Rust is unchanged at 1.88 — and it is now tested rather than
+  only declared.** `rust-version = "1.88"` is the only version contract this
+  crate has with you, it was a promise on crates.io that nothing verified, and
+  it turned out to be honest: the whole workspace compiles at 1.88. A CI job
+  and the release pre-flight both build at that floor now, and both read the
+  number out of `Cargo.toml` so the test and the promise cannot drift apart.
+  - The job exists *because* CI stopped tracking whatever stable the runner
+    happened to ship and now pins a version. A pinned CI is reproducible, but
+    it also means nothing exercises the floor by accident any more, so the
+    floor needs a build of its own. (Which version we pin is our business and
+    not a requirement on you; it is in `ci.yml` for anyone curious.)
+- **18 dependency patch updates**, one of which changes what you compile:
+  `flate2` 1.1.9 → 1.1.10 switched its deflate backend and dropped
+  `miniz_oxide` and `adler2` from the tree entirely. That is the zip
+  decompression path, so it was measured rather than trusted — the corpus is
+  unchanged (603/603 exact-ID, 0 false positives on 355 clean cases) and all
+  **474 reference books report byte-identically**.
+- **`tsify` is deliberately held at 0.5.6** and the reasoning sits beside the
+  dependency in `epubveri-wasm/Cargo.toml`. 0.5.7 deprecates the attribute the
+  wasm bindings use, and its headline is a memory leak that does not describe
+  this crate: the leak is on the `from_wasm_abi` side, which the bindings never
+  use. What 0.5.7 does buy is real but cosmetic — 0.5.6 escapes quotes inside
+  the generated TypeScript doc comments — so it is scheduled rather than
+  closed.
 - **A roxmltree limitation is documented where it lands** (their issue #112,
   open since 2023). `range()` covers only the first run of a text node that
   mixes CDATA with plain text, which can shorten the `foreignObject`
