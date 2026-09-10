@@ -1038,6 +1038,24 @@ pub(crate) fn check_foreign_object(
         return;
     };
     let last = fo.children().next_back().unwrap_or(first);
+    // **Known upstream limitation, measured 2026-09-10 and deliberately not
+    // worked around: roxmltree's `range()` covers only the first run of a text
+    // node that mixes CDATA with plain text** (RazrFalcon/roxmltree#112, open
+    // since 2023-11 against 0.21.1). Probed directly: `abc<![CDATA[XYZ]]>`
+    // yields a range covering `abc` alone, and `<![CDATA[XYZ]]>abc` one
+    // covering the CDATA alone — a CDATA-only node is correct.
+    //
+    // What that costs here: if foreignObject's **first or last direct child**
+    // is such a mixed node, this slice loses its tail. It cannot produce a
+    // malformed slice — the cut always falls on a run boundary, never inside
+    // markup — so the reparse below still succeeds and what is lost is
+    // character data, which in flow content is almost always permitted anyway.
+    //
+    // Population: **0 of 474 shelf books contain `<foreignObject>` at all**,
+    // and no epubcheck fixture puts CDATA inside one. So the fix would be
+    // reconstructing the inner text by hand for a shape nothing here can
+    // exercise, and the test protecting it would be its only user. Re-price it
+    // if a real book ever arrives with one.
     let inner = &text[first.range().start..last.range().end];
 
     // Every *prefixed* namespace binding from the real document's root
