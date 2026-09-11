@@ -10,11 +10,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.14.2] - 2026-09-11
 
-**Ten false positives, found by someone else's library: 2,798 books exported
-from Apple Books by ibook2epub 2.3.0 and checked with both tools.** Their run
-put epubveri at epubcheck's verdict on 2,757 of 2,798 books (98.5%), and traced
-every disagreement to the markup that caused it. Fixed here are **33 of the 34
-books epubveri wrongly rejected**, and eleven of its twelve named defects.
+**Eleven false positives and fifteen missed findings, from someone else's
+library: 2,798 books exported from Apple Books by ibook2epub 2.3.0 and checked
+with both tools.** Their run put epubveri at epubcheck's verdict on 2,757 of
+2,798 books (98.5%), and traced every disagreement to the markup that caused
+it. Fixed here are **33 of the 34 books epubveri wrongly rejected**, eleven of
+its twelve named false positives and fifteen of its eighteen named misses.
+
+Of the four rows not fixed: one false positive does not reproduce in any
+spelling and needs the book; one miss is a recorded decision this project has
+already priced (the galimatias boundary on URL validity); and two turn out not
+to be gaps at all — an NCX whose `playOrder` values are all zero already draws
+the same finding from both tools.
+
+**Two false positives of our own came out of reading those rules**, neither in
+the report: a bare `<!DOCTYPE html>` on a package document drew HTM-009 where
+epubcheck is silent, and a pure legacy EPUB 2 package drew three "Required
+metadata is missing" errors and an OPF-030 that epubcheck does not give.
 
 Every one was settled against the specification before the code moved, because
 epubcheck can be wrong too — and twice the specification said something it does
