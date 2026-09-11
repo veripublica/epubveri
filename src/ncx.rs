@@ -110,7 +110,7 @@ pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &m
     check_play_order_sequence(&d, ncx_path, report);
     check_page_target_uniqueness(&d, ncx_path, report);
     check_multi_lang_siblings(&d, ncx_path, report);
-    check_schema(&d, ncx_path, report);
+    check_schema(&d, ncx_xml, ncx_path, report);
 }
 
 /// Every `id` attribute anywhere in the NCX must be a valid XML NCName
@@ -599,7 +599,38 @@ fn check_empty_text(container: roxmltree::Node, ncx_path: &str, report: &mut Rep
 /// route closes nine of the format's ~27 constraints and leaves the rest to
 /// arrive one forum report at a time — the same per-source shape that cost us
 /// the `<guide>` fragment gap.
-fn check_schema(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
+/// Does this NCX's document type declaration resolve to the NCX 2005-1 DTD?
+///
+/// It matters because that DTD declares `version` as
+/// `CDATA #FIXED "2005-1"` (`ncx-2005-1.dtd`:76), and a `#FIXED` default is
+/// **supplied by the processor** when the attribute is absent (XML 1.0
+/// §3.3.2). So `<ncx xmlns="...">` under that doctype has a `version` in its
+/// infoset; our parser does not read external DTDs, so the grammar saw it
+/// missing and reported an attribute the document effectively has.
+///
+/// Measured against epubcheck 5.3.0, one book per doctype spelling, all with
+/// `version` absent:
+///
+/// | doctype | epubcheck |
+/// |---|---|
+/// | `PUBLIC "-//NISO//DTD ncx 2005-1//EN" "…/ncx-2005-1.dtd"` | silent |
+/// | `SYSTEM "…/ncx-2005-1.dtd"` | HTM-004, no missing-attribute error |
+/// | `PUBLIC "-//W3C//DTD XHTML 1.1//EN" …` | missing-attribute error |
+/// | `<!DOCTYPE ncx>` | missing-attribute error |
+///
+/// So either identifier resolves it and anything else does not — which is why
+/// this matches both, and why **no doctype at all still reports**: there is no
+/// DTD to supply anything, and both tools agree it is missing.
+fn dtd_supplies_version(ncx_xml: &str) -> bool {
+    let Some(dt) = ncx_xml.find("<!DOCTYPE") else {
+        return false;
+    };
+    let decl = &ncx_xml[dt..];
+    let decl = &decl[..decl.find('>').map_or(decl.len(), |e| e + 1)];
+    decl.contains("-//NISO//DTD ncx 2005-1//EN") || decl.contains("ncx-2005-1.dtd")
+}
+
+fn check_schema(doc: &roxmltree::Document, ncx_xml: &str, ncx_path: &str, report: &mut Report) {
     // `navPoint`'s own content model stays owned by `check_nav_point_model`
     // above, whose three messages were measured shape-by-shape against
     // epubcheck (#79) and name the fault far better than a grammar can:
@@ -625,8 +656,19 @@ fn check_schema(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) 
         .filter_map(|m| m.element_path.as_ref().map(|p| p.path.clone()))
         .collect();
 
+    // The NCX DTD supplies `version` when it is declared, so the grammar's
+    // "missing the required attribute" blame is about an attribute the
+    // document has. Skipped here rather than made `<optional>` in the
+    // grammar: a rule that moves between engines drifts its `element_path`
+    // and its rule slug invisibly, and *without* a doctype the grammar is
+    // still the one that has to report this.
+    let dtd_version = dtd_supplies_version(ncx_xml);
+
     let grammar = crate::rng::ncx_grammar();
     for blame in crate::rng::validate_node_report(&grammar, doc.root_element()) {
+        if dtd_version && is_missing_ncx_version(&blame) {
+            continue;
+        }
         if is_nav_point_content_model(&blame)
             && let Some(np) = nav_point_of(blame.node())
         {
@@ -637,6 +679,20 @@ fn check_schema(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) 
         }
         crate::opf::push_blame(report, ncx_path, "ncx.schema_violation", &blame);
     }
+}
+
+/// The root `<ncx>` reported as missing `version`, and nothing else. Narrow on
+/// purpose: a different missing attribute, or the same one on another element,
+/// is not what the DTD defaults.
+fn is_missing_ncx_version(blame: &crate::rng::Blame) -> bool {
+    use crate::rng::{Blame, ElementFault};
+    matches!(
+        blame,
+        Blame::Element(n, ElementFault::MissingAttribute(missing))
+            if n.tag_name().name() == "ncx"
+                && missing.iter().all(|a| a == "version")
+                && !missing.is_empty()
+    )
 }
 
 /// The grammar blames `check_nav_point_model` also produces: the `navPoint`
@@ -779,6 +835,36 @@ pub(crate) fn check_duplicate_targets(
 
 #[cfg(test)]
 mod tests {
+
+    /// The `#FIXED` default only exists when there is a DTD to read it from.
+    ///
+    /// Every row measured against epubcheck 5.3.0 with `version` absent from
+    /// the `<ncx>` element; see [`super::dtd_supplies_version`] for the table.
+    /// The shelf cannot protect this: 200 of its 463 NCX files carry the NISO
+    /// doctype and **not one of them omits `version`**, so the branch runs
+    /// constantly and never decides anything there.
+    #[test]
+    fn only_the_ncx_dtd_supplies_the_fixed_version() {
+        let niso = r#"<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">"#;
+        let sysonly = r#"<!DOCTYPE ncx SYSTEM "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">"#;
+        let xhtml = r#"<!DOCTYPE ncx PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">"#;
+        for (doctype, want) in [
+            (niso, true),
+            (sysonly, true),
+            (xhtml, false),
+            ("<!DOCTYPE ncx>", false),
+            ("", false),
+        ] {
+            let xml = format!(
+                "<?xml version=\"1.0\"?>\n{doctype}\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\"/>"
+            );
+            assert_eq!(
+                super::dtd_supplies_version(&xml),
+                want,
+                "doctype: {doctype}"
+            );
+        }
+    }
     use super::*;
 
     /// Reports (rule, line) for every finding, so a test can assert *which*

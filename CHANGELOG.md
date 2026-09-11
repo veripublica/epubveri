@@ -10,19 +10,34 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.14.2] - 2026-09-11
 
-**Three false positives, found by someone else's library: 2,798 books exported
+**Eight false positives, found by someone else's library: 2,798 books exported
 from Apple Books by ibook2epub 2.3.0 and checked with both tools.** Their run
 put epubveri at epubcheck's verdict on 2,757 of 2,798 books (98.5%), and traced
-every disagreement to the markup that caused it. The three fixed here are the
-three largest: they account for **26 of the 34 books epubveri wrongly rejected**.
+every disagreement to the markup that caused it. Fixed here are **31 of the 34
+books epubveri wrongly rejected**.
+
+Every one was settled against the specification before the code moved, because
+epubcheck can be wrong too — and twice the specification said something it does
+not. HTML names an **ASCII** case-insensitive comparison for `lang`/`xml:lang`
+where epubcheck folds with XPath's Unicode `lower-case()`; and `javascript:` is
+in epubcheck's registered-scheme list but not in IANA's registry at all. Where
+the two differ we implemented the rule and then checked the direction, so no
+book that passes epubcheck fails here.
 
 Read the shelf numbers below as the reason these survived, not as reassurance.
-Our own 474-book shelf contains **zero** books with any of the three
-constructs — no `kindle:`-style link, no `lang`/`xml:lang` pair differing only
-in case, no whitespace-only navigation label — so every instrument here was
-green throughout. The corpus is still 603/603 exact-ID with 0 false positives on
-355 clean cases, and all 474 shelf books report identically, which now means
-only that nothing else broke.
+Our own 474-book shelf holds **zero** books with any of these constructs — no
+`kindle:`-style link, no `lang`/`xml:lang` pair differing only in case, no
+whitespace-only navigation label, no manifest href carrying a fragment, no NCX
+missing its `version` — so every instrument here was green throughout. The
+corpus is still 603/603 exact-ID with 0 false positives on 355 clean cases, and
+all 474 shelf books report identically, which now means only that nothing else
+broke.
+
+One row of that report could **not** be reproduced and is not fixed: "spaces
+around a URL" drawing RSC-020 on `<a href=" http://… ">`. Neither the markup as
+given nor a manifest href with surrounding spaces produces anything from
+0.14.1 — that case was fixed in 0.7.2, on patrik's MobileRead report. It needs
+the book.
 
 ### Fixed
 
@@ -68,6 +83,44 @@ only that nothing else broke.
   - Neither side is trimmed any more. XML attribute-value normalization does not
     strip, so `lang=" en"` beside `xml:lang="en"` really is a mismatch;
     epubcheck reports it and the trim used to swallow it.
+- **`<a>` is transparent, so at flow level it takes flow content
+  (RSC-005).** `<a href="..."><div>...</div></a>` was rejected, and `<p>` and
+  `<ul>` inside an `<a>` came from the same line. 3 books. epubcheck models
+  HTML's transparency with two grammar variants, `a.elem.phrasing` and
+  `a.elem.flow` (`mod/html5/phrase.rnc`:9-18); our `a` was the one transparent
+  element still pinned to phrasing content, where `ins`, `del`, `canvas`,
+  `noscript`, `object` and `map` already took flow.
+  - The cost is stated rather than hidden: inside a `<p>`, epubcheck still
+    rejects `<a><div>` and we no longer will. That is this grammar's own
+    documented trade — "STRICT on vocabulary, PERMISSIVE on nesting" — and an
+    unknown element inside an `<a>` is still an error.
+- **A fragment now names an element by its decoded value (RSC-012).**
+  `<a href="glossary.xhtml#Vi%C3%A8le">` pointing at `id="Vièle"` was reported
+  as dangling. HTML's "find a potential indicated element" percent-decodes the
+  fragment before comparing it with an `id`. A genuinely dangling
+  percent-encoded fragment is still reported.
+- **Only the elements that address a resource are followed (RSC-007).** A
+  leftover OPF `<reference type="thumbimagestandard" href="$00001"/>` sitting in
+  an XHTML `<head>` drew an RSC-007 for a file that does not exist, on top of
+  the RSC-005 that already says the element does not belong there. The
+  attribute walk read `src`/`href`/`data`/`poster`/`altimg`/`cite` from *every*
+  element; epubcheck dispatches on the element first (`OPSHandler`:240-283,
+  `OPSHandler30`:340-444), and that dispatch is now a table.
+- **An NCX that declares its DTD no longer needs `version` spelled out
+  (RSC-005).** `ncx-2005-1.dtd`:76 declares it `CDATA #FIXED "2005-1"`, and a
+  `#FIXED` default is supplied by the processor when the attribute is absent
+  (XML 1.0 §3.3.2); our parser does not read external DTDs, so the grammar
+  reported an attribute the document effectively has. 1 book, changing verdict.
+  - **The boundary is measured, not assumed**: the default applies when the
+    doctype resolves the NCX DTD by *either* its public or its system
+    identifier, and not when it names another DTD, is bare, or is absent — four
+    doctype spellings, one book each. With no doctype at all both tools still
+    report it.
+- **OPF-091 no longer reaches an EPUB 2 package, and exempts remote items.**
+  `OPFChecker30.checkItem`:122 asks `!item.isRemote() && fragment != null`, and
+  that method **overrides `OPFChecker.checkItem` without delegating to
+  `super`** — this project's own test for an EPUB-3-only rule. Both halves were
+  ungated.
 - **A navigation label made of a no-break space is no longer "must contain
   text" (RSC-005).** 3 books, 2 changing verdict. epubcheck's assertion
   normalizes with XPath's `normalize-space()`, which strips exactly space, tab,

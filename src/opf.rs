@@ -262,6 +262,74 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+/// Does this element address a resource with this attribute?
+///
+/// **The attribute name alone is not the question, and reading it that way
+/// followed markup that is not a link.** A leftover OPF `<reference
+/// type="thumbimagestandard" href="$00001"/>` sitting in an XHTML `<head>` drew
+/// an RSC-007 for a file that does not exist, on top of the RSC-005 that
+/// already says the element does not belong there. epubcheck reports only the
+/// RSC-005, because it never asks a `<reference>` about its `href` at all.
+///
+/// epubcheck dispatches on the element and then reads the one attribute that
+/// element addresses its resource with - `OPSHandler`:240-283 for the EPUB 2
+/// set and `OPSHandler30`:340-444 for the EPUB 3 additions. This is that
+/// dispatch as a table, and it is deliberately the union of both versions: the
+/// version gates that matter are applied further down, at the checks
+/// themselves.
+///
+/// SVG's `<image>`, `<use>` and `<font-face-uri>` address their targets with
+/// `xlink:href` and are handled before this loop; SVG's `<a>` shares the name.
+fn element_takes_url_attr(element: &str, attr: &str) -> bool {
+    match attr {
+        "href" => matches!(element, "a" | "area" | "link"),
+        "src" => matches!(
+            element,
+            "img"
+                | "iframe"
+                | "script"
+                | "audio"
+                | "video"
+                | "track"
+                | "source"
+                | "embed"
+                | "input"
+        ),
+        "data" => element == "object",
+        "poster" => element == "video",
+        "cite" => matches!(element, "blockquote" | "q" | "ins" | "del"),
+        "altimg" => element == "math",
+        _ => false,
+    }
+}
+
+/// The element an href's fragment identifies, as a lookup key.
+///
+/// A fragment names an element by its **decoded** value: HTML's "find a
+/// potential indicated element" percent-decodes the fragment and UTF-8-decodes
+/// the result before comparing it with an `id`. So
+/// `<a href="glossary.xhtml#Vi%C3%A8le">` points at `id="Vièle"`, and comparing
+/// the raw fragment made that a dangling RSC-012 on a link that resolves -
+/// found in an external 2,798-book run, where epubcheck is silent.
+///
+/// Borrowed unless there is something to decode, since almost no fragment has
+/// a `%` in it.
+///
+/// **Only the lookup is decoded.** The message and `params` keep what the
+/// document wrote, which is what a reader has to find in the file.
+///
+/// The one fragment lookup that deliberately does *not* use this is the
+/// package document's `<link href="#id">` (OPF-098), which resolves an IDREF
+/// into the manifest rather than an element in a content document. Decoding
+/// there would make us report more, not less, and no book has asked.
+fn frag_key(frag: &str) -> std::borrow::Cow<'_, str> {
+    if frag.contains('%') {
+        std::borrow::Cow::Owned(percent_decode(frag))
+    } else {
+        std::borrow::Cow::Borrowed(frag)
+    }
+}
+
 /// Unicode NFC normalization, so href and ZIP entry names compare equal
 /// regardless of precomposed/decomposed form.
 pub(crate) fn nfc(s: &str) -> String {
@@ -2495,7 +2563,7 @@ fn check_collection_link_fragments(
         let Some(ids) = &id_cache[&resolved] else {
             continue;
         };
-        if !ids.contains_key(frag) {
+        if !ids.contains_key(frag_key(frag).as_ref()) {
             report.push_node(
                 RSC_012,
                 Severity::Error,
@@ -2666,7 +2734,7 @@ fn check_guide_references(
                 let Some(ids) = &id_cache[&resolved] else {
                     continue;
                 };
-                if !ids.contains_key(frag) {
+                if !ids.contains_key(frag_key(frag).as_ref()) {
                     report.push_node(
                         missing_fragment_id(items, &resolved),
                         Severity::Error,
@@ -2837,7 +2905,7 @@ fn check_ncx_content_fragments(
         let Some(ids) = &id_cache[&resolved] else {
             continue;
         };
-        if !ids.contains_key(frag) {
+        if !ids.contains_key(frag_key(frag).as_ref()) {
             report.push_node(
                 missing_fragment_id(items, &resolved),
                 Severity::Error,
@@ -4849,7 +4917,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     vec![href.to_string()],
                 );
             }
-            if href.contains('#') {
+            // EPUB 3 only, and remote items are exempt. epubcheck asks
+            // `!item.isRemote() && item.getURL().fragment() != null` in
+            // `OPFChecker30.checkItem`:122 - a method that **overrides
+            // `OPFChecker.checkItem` without delegating to `super`**, which is
+            // this project's own test for an EPUB-3-only rule (`--bin
+            // versions`). Both halves were ungated here.
+            //
+            // What an EPUB 2 book gets instead is not this id: measured on one
+            // book, epubcheck reads the whole `ch2.xhtml#g` as a filename and
+            // reports RSC-001 for the file it cannot find, plus OPF-003 for the
+            // real file nothing declares.
+            if is_epub3 && !is_remote_url(href) && href.contains('#') {
                 report.push_at_pos(
                     OPF_091,
                     Severity::Error,
@@ -8120,7 +8199,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let Some(target_ids) = &frag_id_cache[&target_nfc] else {
                     continue;
                 };
-                if !target_ids.contains_key(frag) {
+                if !target_ids.contains_key(frag_key(frag).as_ref()) {
                     report.push_node(
                         missing_fragment_id(&items, &target_nfc),
                         Severity::Error,
@@ -8150,7 +8229,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // document order only, and the two non-hyperlink reference
                 // kinds (`<use xlink:href>`, `fill`/`stroke="url(#…)"`) are
                 // not collected here at all.
-                if let Some(&(_, kind)) = target_ids.get(frag)
+                if let Some(&(_, kind)) = target_ids.get(frag_key(frag).as_ref())
                     && kind != IdKind::Generic
                 {
                     report.push_at_pos(
@@ -8247,7 +8326,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let Some(target_ids) = &frag_id_cache[&target_nfc] else {
                     continue;
                 };
-                let Some(&(_, kind)) = target_ids.get(frag) else {
+                let Some(&(_, kind)) = target_ids.get(frag_key(frag).as_ref()) else {
                     report.push_node(
                         RSC_012,
                         Severity::Error,
@@ -8755,6 +8834,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let svg_anchor =
                 node.tag_name().name() == "a" && node.tag_name().namespace() == Some(SVG_NS);
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
+                if !element_takes_url_attr(node.tag_name().name(), attr) {
+                    continue;
+                }
                 let value = if svg_anchor && attr == "href" {
                     node.attribute(("http://www.w3.org/1999/xlink", "href"))
                 } else {
@@ -10947,7 +11029,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let Some(target_ids) = &id_cache[target] else {
                     continue;
                 };
-                if !target_ids.contains_key(frag) {
+                if !target_ids.contains_key(frag_key(frag).as_ref()) {
                     report.push_at_rule(
                         RSC_012,
                         Severity::Error,
@@ -10976,7 +11058,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let Some(target_ids) = &id_cache[target] else {
                     continue;
                 };
-                if let Some(&(_, kind)) = target_ids.get(frag)
+                if let Some(&(_, kind)) = target_ids.get(frag_key(frag).as_ref())
                     && !RefKind::OverlayText.accepts(kind)
                 {
                     report.push_at_rule(
@@ -19610,6 +19692,143 @@ mod tests {
         // do differ. epubcheck agrees - `lower-case(" en") = lower-case("en")`
         // is false - and the trim this rule used to do swallowed it.
         assert_eq!(fires("<p lang=\" en\" xml:lang=\"en\">x</p>"), 1);
+    }
+
+    /// `a` is transparent: at flow level it takes flow content.
+    ///
+    /// The grammar gave it `phrasingContent`, which made an `<a>` wrapping a
+    /// `<div>`, a `<p>` or a `<ul>` an RSC-005 epubcheck does not report.
+    /// Measured one book per shape against 5.3.0.
+    #[test]
+    fn a_is_transparent_at_flow_level() {
+        let rsc005 = |body: &str| -> usize {
+            let doc = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            crate::validate_bytes(epub_with_ch1(&doc))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        for body in [
+            r#"<a href="x.xhtml"><div>x</div></a>"#,
+            r#"<a href="x.xhtml"><p>x</p></a>"#,
+            r#"<a href="x.xhtml"><ul><li>x</li></ul></a>"#,
+            r#"<div><a href="x.xhtml"><div>x</div></a></div>"#,
+        ] {
+            assert_eq!(rsc005(body), 0, "transparent at flow level: {body}");
+        }
+        // The vocabulary is still strict, which is what this grammar polices
+        // instead of nesting: an element HTML does not have is still an error
+        // inside an `<a>`.
+        assert!(
+            rsc005(r#"<a href="x.xhtml"><nosuchelement>x</nosuchelement></a>"#) > 0,
+            "an unknown element inside an anchor is still reported"
+        );
+    }
+
+    /// A fragment names an element by its decoded value, and only the lookup
+    /// is decoded.
+    #[test]
+    fn a_fragment_is_matched_after_percent_decoding() {
+        assert_eq!(super::frag_key("Vi%C3%A8le"), "Vièle");
+        assert_eq!(super::frag_key("plain"), "plain");
+        // Borrowed when there is nothing to decode, owned when there is.
+        assert!(matches!(
+            super::frag_key("plain"),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        // A stray `%` that is not an escape survives rather than eating the
+        // rest of the fragment.
+        assert_eq!(super::frag_key("50%more"), "50%more");
+    }
+
+    /// Which element addresses a resource with which attribute — epubcheck's
+    /// dispatch as a table.
+    ///
+    /// The shape that prompted it: a leftover OPF `<reference href="$00001"/>`
+    /// in an XHTML `<head>` was followed as a link and drew an RSC-007 for a
+    /// file that does not exist.
+    #[test]
+    fn only_the_elements_that_address_resources_are_followed() {
+        use super::element_takes_url_attr as takes;
+        for (el, attr) in [
+            ("a", "href"),
+            ("area", "href"),
+            ("link", "href"),
+            ("img", "src"),
+            ("iframe", "src"),
+            ("script", "src"),
+            ("audio", "src"),
+            ("video", "src"),
+            ("track", "src"),
+            ("source", "src"),
+            ("embed", "src"),
+            ("input", "src"),
+            ("object", "data"),
+            ("video", "poster"),
+            ("blockquote", "cite"),
+            ("q", "cite"),
+            ("ins", "cite"),
+            ("del", "cite"),
+            ("math", "altimg"),
+        ] {
+            assert!(takes(el, attr), "{el}/{attr} addresses a resource");
+        }
+        for (el, attr) in [
+            ("reference", "href"), // the OPF leftover in an XHTML head
+            ("p", "href"),
+            ("div", "src"),
+            ("span", "cite"),
+            ("a", "src"),    // `a` has no src
+            ("img", "href"), // nor img an href
+            ("p", "poster"),
+            ("object", "poster"),
+        ] {
+            assert!(!takes(el, attr), "{el}/{attr} is not a resource reference");
+        }
+    }
+
+    /// OPF-091 is EPUB 3 only: `OPFChecker30.checkItem` overrides
+    /// `OPFChecker.checkItem` **without delegating to `super`**, so an EPUB 2
+    /// package never reaches it. Remote items are exempt on both versions.
+    ///
+    /// Paired on purpose — gating a rule is easy to overshoot into never
+    /// firing at all, and the shelf cannot tell: **0 of its 474 books declare
+    /// a manifest item whose href carries a fragment.**
+    #[test]
+    fn opf_091_is_epub3_only_and_exempts_remote_items() {
+        let opf = |version: &str, href: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="x1" href="{href}" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#
+            )
+        };
+        let fires = |version: &str, href: &str| {
+            opf_ids_of(&opf(version, href), &[crate::ids::OPF_091]).len()
+        };
+        assert_eq!(fires("3.0", "ch1.xhtml#frag"), 1, "EPUB 3 still reports it");
+        assert_eq!(fires("2.0", "ch1.xhtml#frag"), 0, "EPUB 2 never reaches it");
+        assert_eq!(
+            fires("3.0", "https://example.org/x.xhtml#frag"),
+            0,
+            "a remote item is exempt"
+        );
     }
 
     /// OPF-005 (#50): a prefix declaration ending in a name with no URI.

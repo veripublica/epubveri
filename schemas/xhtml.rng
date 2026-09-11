@@ -1508,7 +1508,28 @@
       <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
       <optional><attribute name="ping"><data type="string"/></attribute></optional>
       <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
-      <ref name="phrasingContent"/>
+      <!-- `a` is TRANSPARENT in HTML: its content model is its parent's, so
+           at flow level it takes flow content. epubcheck models that with two
+           variants, `a.elem.phrasing` (`a.inner.phrasing`) and `a.elem.flow`
+           (`a.inner.transparent.flow`), in mod/html5/phrase.rnc:9-18.
+
+           This said `phrasingContent`, which made `<a href="..."><div>...</div></a>`
+           at flow level an RSC-005 that epubcheck does not report - 3 books of
+           an external 2,798-book run, and `<p>` and `<ul>` inside an `<a>` came
+           out of the same line (measured, one book each).
+
+           One pool rather than two variants, on this grammar's own stated
+           design a few hundred lines down: "STRICT on vocabulary, PERMISSIVE
+           on nesting". `a` was the exception - every other transparent element
+           here already takes `flowContent`: `ins`, `del`, `canvas`, `noscript`,
+           `object`, `map`.
+
+           The cost is stated rather than hidden: inside a `<p>`, epubcheck
+           still rejects `<a><div>` and we no longer will. That is a false
+           negative on a defect nobody is harmed by not hearing about, traded
+           for a false positive on valid markup - the direction this project
+           ships. -->
+      <ref name="flowContent"/>
     </element>
   </define>
 
