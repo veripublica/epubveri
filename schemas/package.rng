@@ -12,6 +12,21 @@
   does not false-positive on the wide variety of valid real-world packages.
   Finer constraints (required dc metadata, vocabularies, refines) are handled by
   the hand-coded checks today and will move to Schematron later.
+
+  One exception to "allows any attributes": `id`, `idref`, `toc` and `fallback`
+  are typed. An XML `id` is an NCName — no spaces, no commas, no apostrophes,
+  no colon, and it may not start with a digit — and both `opf20.rng` and
+  `package-30.rnc` type them (`xsd:ID`/`xsd:IDREF`). They were plain strings
+  here until 2026-09-11, so `<item id="King,_Stephen_-_Gerald's_Game51">` was
+  accepted; an external 2,798-book run found 4 such books, 2 of them changing
+  verdict. Seven values probed against epubcheck 5.3.0, one book each, on both
+  versions.
+
+  Only the *lexical* half is here. `ID`'s uniqueness is a separate question and
+  stays with the hand-coded duplicate-id checks.
+
+  Nothing on the 474-book shelf moves: of **55,913** `id`/`idref` values in its
+  474 packages, every one is already a valid XML name.
 -->
 <grammar xmlns="http://relaxng.org/ns/structure/1.0"
          xmlns:dc="http://purl.org/dc/elements/1.1/"
@@ -32,7 +47,7 @@
             <choice>
               <element name="item">
                 <ref name="anyAttributes"/>
-                <attribute name="id"><data type="string"/></attribute>
+                <attribute name="id"><data type="ID"/></attribute>
                 <attribute name="href"><data type="string"/></attribute>
                 <attribute name="media-type"><data type="string"/></attribute>
               </element>
@@ -46,7 +61,7 @@
             <choice>
               <element name="itemref">
                 <ref name="anyAttributes"/>
-                <attribute name="idref"><data type="string"/></attribute>
+                <attribute name="idref"><data type="IDREF"/></attribute>
               </element>
               <ref name="foreignElement"/>
             </choice>
@@ -124,7 +139,7 @@
         <name>dc:coverage</name>
         <name>dc:rights</name>
       </choice>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional>
         <attribute name="dir">
           <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
@@ -145,7 +160,7 @@
         <name>dc:type</name>
         <name>dc:format</name>
       </choice>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <text/>
     </element>
   </define>
@@ -300,7 +315,7 @@
     <element name="package">
       <attribute name="version"><data type="string"/></attribute>
       <optional><attribute name="unique-identifier"><data type="string"/></attribute></optional>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <interleave>
         <element name="metadata"><ref name="metadataContent-epub2"/></element>
         <element name="manifest">
@@ -320,8 +335,8 @@
                MobileRead #148 output diff and confirmed against epubcheck
                locally. `toc`'s *requiredness* is deliberately not encoded
                here; a missing one is reported by its own check. -->
-          <optional><attribute name="id"><data type="string"/></attribute></optional>
-          <optional><attribute name="toc"><data type="string"/></attribute></optional>
+          <optional><attribute name="id"><data type="ID"/></attribute></optional>
+          <optional><attribute name="toc"><data type="IDREF"/></attribute></optional>
           <oneOrMore>
             <choice>
               <ref name="itemrefEl-epub2"/>
@@ -422,7 +437,7 @@
         <name>dc:source</name>
         <name>dc:subject</name>
       </choice>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
       <text/>
     </element>
@@ -435,7 +450,7 @@
         <name>dc:creator</name>
         <name>dc:contributor</name>
       </choice>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
       <optional><attribute name="opf:file-as"><data type="string"/></attribute></optional>
       <optional><attribute name="opf:role"><data type="string"/></attribute></optional>
@@ -447,7 +462,7 @@
   <define name="dcIdentifier-epub2">
     <element>
       <name>dc:identifier</name>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="xsi:type"><data type="string"/></attribute></optional>
       <optional><attribute name="opf:scheme"><data type="string"/></attribute></optional>
       <text/>
@@ -462,7 +477,7 @@
         <name>dc:type</name>
         <name>dc:format</name>
       </choice>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="xsi:type"><data type="string"/></attribute></optional>
       <text/>
     </element>
@@ -472,7 +487,7 @@
   <define name="dcDate-epub2">
     <element>
       <name>dc:date</name>
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="xsi:type"><data type="string"/></attribute></optional>
       <optional><attribute name="opf:event"><data type="string"/></attribute></optional>
       <text/>
@@ -485,7 +500,7 @@
        is exactly what epubcheck reports on such a book. -->
   <define name="metaEl-epub2">
     <element name="meta">
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
       <optional><attribute name="scheme"><data type="string"/></attribute></optional>
       <attribute name="name"><data type="string"/></attribute>
@@ -498,10 +513,10 @@
        it is EPUB 3's, and only the EPUB 3 handler parses it. -->
   <define name="itemEl-epub2">
     <element name="item">
-      <attribute name="id"><data type="string"/></attribute>
+      <attribute name="id"><data type="ID"/></attribute>
       <attribute name="href"><data type="string"/></attribute>
       <attribute name="media-type"><data type="string"/></attribute>
-      <optional><attribute name="fallback"><data type="string"/></attribute></optional>
+      <optional><attribute name="fallback"><data type="IDREF"/></attribute></optional>
       <optional><attribute name="fallback-style"><data type="string"/></attribute></optional>
       <optional><attribute name="required-namespace"><data type="string"/></attribute></optional>
       <optional><attribute name="required-modules"><data type="string"/></attribute></optional>
@@ -511,8 +526,8 @@
 
   <define name="itemrefEl-epub2">
     <element name="itemref">
-      <optional><attribute name="id"><data type="string"/></attribute></optional>
-      <attribute name="idref"><data type="string"/></attribute>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <attribute name="idref"><data type="IDREF"/></attribute>
       <optional>
         <attribute name="linear"><choice><value>yes</value><value>no</value></choice></attribute>
       </optional>

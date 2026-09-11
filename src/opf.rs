@@ -19703,6 +19703,61 @@ mod tests {
         assert_eq!(fires("<p lang=\" en\" xml:lang=\"en\">x</p>"), 1);
     }
 
+    /// An `id` in a package document is an XML name, on both versions.
+    ///
+    /// `opf20.rng` and `package-30.rnc` both type it (`xsd:ID`), so no space,
+    /// comma, apostrophe or colon, and no leading digit. Seven values probed
+    /// against epubcheck 5.3.0, one book each.
+    ///
+    /// The shelf cannot protect this either: **all 55,913 `id`/`idref` values
+    /// in its 474 packages are already valid XML names**.
+    #[test]
+    fn a_package_id_is_an_xml_name() {
+        let opf = |version: &str, id: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="{id}" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="{id}"/></spine>
+</package>"#
+            )
+        };
+        // The EPUB 2 book draws one RSC-005 of its own - this builder's spine
+        // has no `toc` - so each version is measured against its own baseline
+        // rather than against zero.
+        let count = |version: &str, id: &str| -> usize {
+            const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                               <head><title>t</title></head><body><p>x</p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(&opf(version, id)), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        for version in ["2.0", "3.0"] {
+            let baseline = count(version, "item-1");
+            assert_eq!(
+                count(version, "_x.y"),
+                baseline,
+                "_x.y is a valid XML name ({version})"
+            );
+            for bad in ["King,_Stephen", "Geralds_Game'51", "1abc", "a b", "a:b"] {
+                assert!(
+                    count(version, bad) > baseline,
+                    "{bad} is not an XML name ({version})"
+                );
+            }
+        }
+    }
+
     /// EPUB 2's Dublin Core elements each take their own attribute list
     /// (`opf20.rng`), and the differences are load-bearing: `opf:file-as` is
     /// legal on `dc:creator` and an error on `dc:title`; `xml:lang` is legal on

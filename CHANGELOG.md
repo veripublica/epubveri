@@ -167,6 +167,18 @@ the book.
 
 ### Added
 
+- **A package document's `id`, `idref`, `toc` and `fallback` are now typed.**
+  An XML `id` is an NCName — no space, comma, apostrophe or colon, and no
+  leading digit — and both `opf20.rng` and `package-30.rnc` type them
+  (`xsd:ID`/`xsd:IDREF`). They were plain strings here, so
+  `<item id="King,_Stephen_-_Gerald's_Game51">` was accepted: 4 books of the
+  external run, 2 of them changing verdict. Seven values probed against 5.3.0
+  on both versions, one book each.
+  - Only the lexical half. `ID`'s uniqueness stays with the hand-coded
+    duplicate-id checks, which already own it.
+  - Nothing on the shelf moves, and this one was checked before the change
+    rather than after: of **55,913** `id`/`idref` values in its 474 packages,
+    every one is already a valid XML name.
 - **EPUB 2's Dublin Core elements now carry their own attribute lists.** The
   same report's largest false *negative*: 9 books where epubcheck errors and we
   said nothing. `opf20.rng` gives the fifteen `dc:*` elements five different
