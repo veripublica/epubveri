@@ -885,15 +885,101 @@ pub(crate) fn check_opf_doctype(text: &str, opf_path: &str, report: &mut Report)
         .split(|c: char| c.is_whitespace() || c == '>' || c == '[')
         .next()
         .unwrap_or("");
-    if root_name != "package" {
+    let (public_id, system_id) = doctype_ids(text);
+
+    // **The gate is "does it declare an identifier at all", and it was
+    // missing.** `DeclarationHandler`:76 enters this check only when
+    // `publicId != null || systemId != null`, so a bare `<!DOCTYPE html>` on a
+    // package document says nothing there and drew HTM-009 here - a false
+    // positive nobody had reported, found while closing the miss below.
+    if public_id.is_none() && system_id.is_none() {
+        return;
+    }
+    // OEB 1.2's package DTD is the one legacy spelling epubcheck lets through,
+    // and either identifier may be absent. Anything else - including a
+    // correct root name with somebody else's DTD, which is what an external
+    // 2,798-book run caught us accepting - is HTM-009.
+    const OEB12_PUBLIC: &str = "+//ISBN 0-9673008-1-9//DTD OEB 1.2 Package//EN";
+    const OEB12_SYSTEM: &str = "http://openebook.org/dtds/oeb-1.2/oebpkg12.dtd";
+    let allowed = root_name == "package"
+        && public_id.is_none_or(|p| p == OEB12_PUBLIC)
+        && system_id.is_none_or(|s| s == OEB12_SYSTEM);
+    if !allowed {
         report.push_at_pos(
             HTM_009,
             Severity::Error,
-            format!("OPF document's DOCTYPE root '{root_name}' does not match <package>"),
+            format!("the OPF document's DOCTYPE '{root_name}' is not a legacy OEB 1.2 package"),
             opf_path,
             Position::of_offset(text, offset_in(text, root_name)),
         );
     }
+}
+
+/// The PUBLIC and SYSTEM identifiers of a `<!DOCTYPE …>`, if it has them.
+///
+/// `PUBLIC "pub" "sys"` yields both; `SYSTEM "sys"` yields the system one
+/// alone; a bare `<!DOCTYPE name>` yields neither. Quoting may be single or
+/// double, as XML allows.
+fn doctype_ids(text: &str) -> (Option<&str>, Option<&str>) {
+    let Some(doctype) = extract_doctype(text) else {
+        return (None, None);
+    };
+    // Stop at an internal subset, whose contents may hold quotes of their own.
+    let head = doctype.split_once('[').map_or(doctype, |(h, _)| h);
+    let quoted = |from: usize| -> Option<(&str, usize)> {
+        let rest = &head[from..];
+        let q = rest.find(['"', '\''])?;
+        let delim = rest[q..].chars().next()?;
+        let body = &rest[q + delim.len_utf8()..];
+        let end = body.find(delim)?;
+        Some((
+            &body[..end],
+            from + q + delim.len_utf8() + end + delim.len_utf8(),
+        ))
+    };
+    if let Some(i) = head.find("PUBLIC") {
+        let Some((public_id, after)) = quoted(i + "PUBLIC".len()) else {
+            return (None, None);
+        };
+        return (Some(public_id), quoted(after).map(|(s, _)| s));
+    }
+    if let Some(i) = head.find("SYSTEM") {
+        return (None, quoted(i + "SYSTEM".len()).map(|(s, _)| s));
+    }
+    (None, None)
+}
+
+/// HTM-004 on an NCX whose DOCTYPE is not the NCX 2005-1 one.
+///
+/// `DeclarationHandler`:99-107, for `application/x-dtbncx+xml` at EPUB 2:
+/// the PUBLIC identifier must be exactly `-//NISO//DTD ncx 2005-1//EN`, and
+/// only then is the SYSTEM identifier compared with the DAISY URL. Either
+/// mismatch is HTM-004, and an absent identifier counts as a mismatch — but
+/// **no DOCTYPE at all says nothing**, because the handler fires on the
+/// declaration.
+///
+/// Four spellings measured against epubcheck 5.3.0, one book each: the exact
+/// pair is silent; the XHTML 1.1 identifiers, a `SYSTEM`-only declaration and
+/// a bare `<!DOCTYPE ncx>` are each HTM-004; and no declaration is silent.
+pub(crate) fn check_ncx_doctype(text: &str, ncx_path: &str, report: &mut Report) {
+    const NCX_PUBLIC: &str = "-//NISO//DTD ncx 2005-1//EN";
+    const NCX_SYSTEM: &str = "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd";
+    let Some(doctype) = extract_doctype(text) else {
+        return;
+    };
+    let (public_id, system_id) = doctype_ids(text);
+    if public_id == Some(NCX_PUBLIC) && system_id == Some(NCX_SYSTEM) {
+        return;
+    }
+    report.push_full(
+        HTM_004,
+        Severity::Error,
+        "the NCX's DOCTYPE is not the NCX 2005-1 one",
+        ncx_path,
+        Position::of_offset(text, offset_in(text, doctype)),
+        "htm.doctype.ncx_unrecognized",
+        Vec::new(),
+    );
 }
 
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
@@ -1664,6 +1750,102 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
 
 #[cfg(test)]
 mod tests {
+
+    /// `doctype_ids` reads the two identifiers, in every spelling XML allows.
+    #[test]
+    fn doctype_identifiers_are_read() {
+        fn ids(t: &str) -> (Option<&str>, Option<&str>) {
+            super::doctype_ids(t)
+        }
+        assert_eq!(
+            ids(r#"<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://x/ncx.dtd">"#),
+            (
+                Some("-//NISO//DTD ncx 2005-1//EN"),
+                Some("http://x/ncx.dtd")
+            )
+        );
+        assert_eq!(
+            ids(r#"<!DOCTYPE ncx SYSTEM "http://x/ncx.dtd">"#),
+            (None, Some("http://x/ncx.dtd"))
+        );
+        assert_eq!(ids("<!DOCTYPE ncx>"), (None, None));
+        assert_eq!(ids("<html/>"), (None, None));
+        assert_eq!(
+            ids("<!DOCTYPE p PUBLIC 'pub' 'sys'>"),
+            (Some("pub"), Some("sys"))
+        );
+        assert_eq!(ids(r#"<!DOCTYPE p PUBLIC "pub">"#), (Some("pub"), None));
+        // An internal subset may hold quotes of its own; they are not ids.
+        assert_eq!(ids(r#"<!DOCTYPE p [<!ENTITY x "y">]>"#), (None, None));
+    }
+
+    /// The NCX takes the NCX 2005-1 DOCTYPE or none at all.
+    ///
+    /// Measured against epubcheck 5.3.0, one book per spelling. The shelf
+    /// cannot protect it: of its 463 NCX files, 263 carry no doctype and the
+    /// other 200 carry exactly this pair - **none carries a third thing.**
+    #[test]
+    fn the_ncx_takes_its_own_doctype_or_none() {
+        let fires = |doctype: &str| -> usize {
+            let text = format!(
+                "<?xml version=\"1.0\"?>\n{doctype}\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\"/>"
+            );
+            let mut r = crate::report::Report::default();
+            super::check_ncx_doctype(&text, "toc.ncx", &mut r);
+            r.messages.len()
+        };
+        assert_eq!(
+            fires(
+                r#"<!DOCTYPE ncx PUBLIC "-//NISO//DTD ncx 2005-1//EN" "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">"#
+            ),
+            0
+        );
+        assert_eq!(fires(""), 0, "no doctype says nothing");
+        for bad in [
+            r#"<!DOCTYPE ncx PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">"#,
+            r#"<!DOCTYPE ncx SYSTEM "http://www.daisy.org/z3986/2005/ncx-2005-1.dtd">"#,
+            "<!DOCTYPE ncx>",
+        ] {
+            assert_eq!(fires(bad), 1, "{bad}");
+        }
+    }
+
+    /// A package document's DOCTYPE is judged only when it declares an
+    /// identifier - and the missing gate was a false positive of ours.
+    ///
+    /// `DeclarationHandler`:76 enters the check on `publicId != null ||
+    /// systemId != null`, so a bare `<!DOCTYPE html>` on a package document is
+    /// silent in epubcheck and used to draw HTM-009 here. Measured, one book
+    /// per spelling. Population on the shelf is zero in both directions: all
+    /// 474 package documents carry no doctype at all.
+    #[test]
+    fn a_package_doctype_is_judged_only_when_it_names_a_dtd() {
+        let fires = |doctype: &str| -> usize {
+            let text = format!(
+                "<?xml version=\"1.0\"?>\n{doctype}\n<package xmlns=\"http://www.idpf.org/2007/opf\"/>"
+            );
+            let mut r = crate::report::Report::default();
+            super::check_opf_doctype(&text, "package.opf", &mut r);
+            r.messages.len()
+        };
+        assert_eq!(fires(""), 0, "no doctype");
+        assert_eq!(fires("<!DOCTYPE package>"), 0, "no identifier to judge");
+        assert_eq!(fires("<!DOCTYPE html>"), 0, "no identifier to judge");
+        assert_eq!(
+            fires(
+                r#"<!DOCTYPE package PUBLIC "+//ISBN 0-9673008-1-9//DTD OEB 1.2 Package//EN" "http://openebook.org/dtds/oeb-1.2/oebpkg12.dtd">"#
+            ),
+            0,
+            "the one legacy spelling"
+        );
+        assert_eq!(
+            fires(
+                r#"<!DOCTYPE package PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">"#
+            ),
+            1,
+            "the right root with somebody else's DTD"
+        );
+    }
     use super::*;
 
     fn run_raw(text: &str) -> Vec<&'static str> {

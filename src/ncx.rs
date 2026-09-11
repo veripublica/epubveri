@@ -8,7 +8,22 @@ use crate::ids::*;
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
-pub(crate) fn check(ncx_xml: &str, ncx_path: &str, package_uid: &str, report: &mut Report) {
+pub(crate) fn check(
+    ncx_xml: &str,
+    ncx_path: &str,
+    package_uid: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    // **HTM-004 on the NCX is EPUB 2 only**, and the corpus caught the missing
+    // gate within the hour. `DeclarationHandler`:58 splits on the version: at
+    // 2.0 a non-matching NCX doctype is HTM-004, at 3.0 the same declaration
+    // is OPF-073, which we already report. Ungated, this added an HTM-004 on
+    // top of it - `xml-external-identifier-bad-mediatype-error` and
+    // `-disallowed-error` both expect OPF-073 "and nothing else".
+    if !is_epub3 {
+        crate::htm::check_ncx_doctype(ncx_xml, ncx_path, report);
+    }
     let d = match crate::ocf::parse_xml(ncx_xml) {
         Ok(d) => d,
         Err(e) => {

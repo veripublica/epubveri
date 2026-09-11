@@ -167,6 +167,25 @@ the book.
 
 ### Added
 
+- **An irregular DOCTYPE on the NCX or the package document is now reported
+  (HTM-004, HTM-009).** 2 books of the external run, 1 changing verdict.
+  `DeclarationHandler`:58-107 wants the NCX's PUBLIC identifier to be exactly
+  `-//NISO//DTD ncx 2005-1//EN` and only then compares the SYSTEM one; a
+  package document's declaration is allowed only as the legacy OEB 1.2 package
+  pair. No declaration at all says nothing on either.
+  - **HTM-004 on the NCX is EPUB 2 only, and the corpus caught the missing
+    gate.** At 3.0 the same declaration is OPF-073, which we already report, so
+    ungated this added a second finding on two fixtures that expect OPF-073
+    "and nothing else". The version split is in the same handler and was read
+    past the first time.
+  - **A false positive of ours went with it, found while reading the rule
+    rather than from any report.** epubcheck judges a package document's
+    doctype only when it declares an identifier (`publicId != null || systemId
+    != null`), so a bare `<!DOCTYPE html>` there is silent — and drew HTM-009
+    here, because our check looked at the root name alone.
+  - Neither direction is shelf-visible, measured rather than assumed: of 463
+    NCX files, 263 carry no doctype and 200 carry exactly the NISO pair, none a
+    third thing; and all 474 package documents carry no doctype at all.
 - **EPUB 3's `<metadata>` holds Dublin Core elements, `<meta>` and `<link>`,
   and nothing else.** `<meta xmlns="" name="BNContentKind" content="book"/>`
   was accepted here and is RSC-005 in epubcheck — 1 book of the external run,

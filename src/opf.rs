@@ -6337,7 +6337,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // familiar shape where a precondition for one check
                         // takes unrelated ones down with it.
                         if let Some(uid_text) = &package_identifier_text {
-                            crate::ncx::check(&ncx_text, ncx_path, uid_text, report);
+                            crate::ncx::check(&ncx_text, ncx_path, uid_text, is_epub3, report);
                         }
                         if let Ok(ncx_doc) = parse_xml(&ncx_text) {
                             check_ncx_content_fragments(
