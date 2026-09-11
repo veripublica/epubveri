@@ -3373,8 +3373,8 @@ Our own history is the evidence: ADV-009 was first *rejected* on its rate, and
 shipped only once a structural fact settled it — `<content>` is mandatory in
 `navPoint`, so a section heading has nowhere to point but its first child's
 document. That holds in every library, not just this one. The statistic misled;
-the structure decided. `CLAUDE.md` now records all three wrong turns that
-candidate took, including two of its own numbers that were wrong.
+the structure decided. All three wrong turns that candidate took are on
+record here, including two of its own numbers that were wrong.
 
 ## [0.9.27] - 2026-08-21
 
@@ -3505,7 +3505,7 @@ plugin or an ingestion pipeline actually uses:
 | epubveri | **191 ms** | **~70 s** |
 
 About ten times faster, reaching the same verdict. **The reason is not JVM
-startup, which is the thing both this README and `CLAUDE.md` had been implying.**
+startup, which is what this project's own notes had been implying.**
 epubcheck's launch is 70 ms of that 2013 — a little over 3% — and the rest is
 the validation work. Our own process startup is 6 ms, from timing 385 books in
 one process (68.9 s) against one process per book (71.3 s). So the honest claim
