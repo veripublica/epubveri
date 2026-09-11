@@ -886,7 +886,7 @@ mod tests {
     /// elements were named rather than just how many.
     fn run_at(ncx: &str) -> Vec<(Option<&'static str>, u32)> {
         let mut report = Report::new();
-        check(ncx, "toc.ncx", "uid", &mut report);
+        check(ncx, "toc.ncx", "uid", false, &mut report);
         report
             .messages
             .iter()
@@ -1298,7 +1298,7 @@ mod tests {
 
     fn run(ncx: &str, uid: &str) -> Vec<&'static str> {
         let mut report = Report::new();
-        check(ncx, "toc.ncx", uid, &mut report);
+        check(ncx, "toc.ncx", uid, false, &mut report);
         report.messages.iter().map(|m| m.id).collect()
     }
 
@@ -1375,7 +1375,7 @@ mod tests {
     /// said rather than only how many were said.
     fn texts_for(ncx: &str) -> Vec<String> {
         let mut report = Report::new();
-        check(ncx, "toc.ncx", "uid", &mut report);
+        check(ncx, "toc.ncx", "uid", false, &mut report);
         report.messages.iter().map(|m| m.text.clone()).collect()
     }
 
