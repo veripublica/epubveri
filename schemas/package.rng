@@ -117,7 +117,8 @@
         <choice>
           <ref name="dcFull-epub3"/>
           <ref name="dcIdOnly-epub3"/>
-          <ref name="nonDcElement"/>
+          <ref name="otherDcElement"/>
+          <ref name="metaOrLinkEl-epub3"/>
         </choice>
       </zeroOrMore>
     </mixed>
@@ -165,10 +166,42 @@
     </element>
   </define>
 
-  <!-- Any element that is not one of the fifteen: still fully permissive. -->
-  <define name="nonDcElement">
+  <!-- EPUB 3 `<metadata>` holds the fifteen Dublin Core elements, `<meta>` and
+       `<link>`, and **nothing else** - `opf.metadata.content = opf.dc.elems &
+       opf.meta* & opf.link*` (`package-30.rnc`:20). Not "foreign elements are
+       allowed here", which is the natural assumption and is wrong: probed
+       against epubcheck 5.3.0, a properly namespaced `<x:thing
+       xmlns:x="http://example.org/x">` is RSC-005 there, and so are
+       `<meta xmlns="" name="BNContentKind" content="book"/>` and a
+       no-namespace `<BNContentKind>`. The last of those is what an external
+       2,798-book run found us accepting, 1 book and a verdict.
+
+       **EPUB 2 is the opposite and stays loose**: `opf20.rng` has
+       `OPF20.any-other-element`, and all four shapes above are clean there in
+       both tools - measured the same way. So this constrains the EPUB 3 model
+       only.
+
+       What is tightened here is the *namespace*, not the vocabulary: an
+       unrecognized element in the DC namespace is still accepted, keeping the
+       deliberate split recorded above ("which dc elements may appear is a
+       separate question"). epubcheck would reject one; closing that is its own
+       change with its own evidence.
+
+       0 of the shelf's 74 EPUB 3 packages - and 0 of its 390 EPUB 2 ones -
+       carry a metadata child that is not a dc element, a `<meta>` or a
+       `<link>`. -->
+  <define name="metaOrLinkEl-epub3">
     <element>
-      <anyName>
+      <choice><name>meta</name><name>link</name></choice>
+      <ref name="looseContent"/>
+    </element>
+  </define>
+
+  <!-- A DC-namespace element that is not one of the fifteen: still fully
+       permissive, on the split described above. -->
+  <define name="otherDcElement">
+    <element>
+      <nsName ns="http://purl.org/dc/elements/1.1/">
         <except>
           <name>dc:title</name>
           <name>dc:source</name>
@@ -186,7 +219,7 @@
           <name>dc:type</name>
           <name>dc:format</name>
         </except>
-      </anyName>
+      </nsName>
       <ref name="looseContent"/>
     </element>
   </define>

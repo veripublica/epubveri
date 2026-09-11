@@ -167,6 +167,25 @@ the book.
 
 ### Added
 
+- **EPUB 3's `<metadata>` holds Dublin Core elements, `<meta>` and `<link>`,
+  and nothing else.** `<meta xmlns="" name="BNContentKind" content="book"/>`
+  was accepted here and is RSC-005 in epubcheck — 1 book of the external run,
+  changing verdict. `opf.metadata.content = opf.dc.elems & opf.meta* &
+  opf.link*` (`package-30.rnc`:20) admits no foreign elements at all.
+  - **"Foreign elements are allowed in metadata" is the natural assumption and
+    it is wrong**, which an existing test of ours asserted as fact. Probed
+    against 5.3.0: a properly namespaced `<x:thing xmlns:x="…">` is rejected
+    there too, as is a no-namespace element. The test now asserts the
+    measurement, and the old case is the reason to check an assertion against
+    the oracle before treating it as a constraint on a change.
+  - **EPUB 2 is the opposite and is untouched**: `opf20.rng` has
+    `OPF20.any-other-element`, and all of these shapes are clean there in both
+    tools.
+  - The *namespace* is what tightened, not the vocabulary: an unrecognized
+    element in the DC namespace is still accepted here, keeping a split this
+    schema recorded deliberately. epubcheck rejects one; closing that is its
+    own change.
+  - 0 of the shelf's 74 EPUB 3 packages carry such a child.
 - **A package document's `id`, `idref`, `toc` and `fallback` are now typed.**
   An XML `id` is an NCName — no space, comma, apostrophe or colon, and no
   leading digit — and both `opf20.rng` and `package-30.rnc` type them

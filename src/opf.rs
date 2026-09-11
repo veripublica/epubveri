@@ -19341,14 +19341,28 @@ mod tests {
                 "date id",
                 format!(r#"{base}<dc:date id="d">2020</dc:date>"#),
             ),
-            // `<meta>`, `<link>` and foreign metadata stay unconstrained.
+            // `<meta>` and `<link>` stay unconstrained.
+            ("meta", format!(r#"{base}<meta name="cover" content="c"/>"#)),
             (
-                "foreign metadata element",
-                format!(r#"{base}<foo xmlns="http://example.com/" bar="baz">x</foo>"#),
+                "link",
+                format!(r#"{base}<link rel="record" href="http://example.org/r"/>"#),
             ),
         ] {
             assert_eq!(count(metadata), 0, "EPUB 3 must accept: {label}");
         }
+
+        // **A foreign element in EPUB 3 metadata is NOT accepted**, and this
+        // case used to assert the opposite - "foreign metadata stays
+        // unconstrained" - which was our own stance rather than epubcheck's.
+        // `opf.metadata.content = opf.dc.elems & opf.meta* & opf.link*`
+        // (`package-30.rnc`:20) admits nothing else, and 5.3.0 handed this
+        // exact markup back as `element "foo" not allowed anywhere`.
+        assert!(
+            count(format!(
+                r#"{base}<foo xmlns="http://example.com/" bar="baz">x</foo>"#
+            )) > 0,
+            "EPUB 3 metadata holds dc elements, meta and link, and nothing else"
+        );
     }
 
     /// #63: an EPUB 2 package document is checked against opf20's closed
