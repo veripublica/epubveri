@@ -8,6 +8,55 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.14.1] - 2026-09-11
+
+Two defects in OPF-090's suggested replacement, both found by auditing the
+message against EPUB 3.3 and RFC 8081 directly rather than against epubcheck.
+Both have a measured population of **zero** on the 474-book shelf, so only a
+reading of the contract could have found either: the corpus is unchanged
+(603/603 exact-ID, 0 false positives on 355 clean cases), all 474 shelf books
+report identically, and all **50** OPF-090 findings on the shelf keep the
+`params[1]` they had.
+
+### Fixed
+
+- **`params[1]` no longer carries `font/(ttf|otf)`, which is not a media type.**
+  The message may still name it — it is a useful hint to a person — but
+  `params[1]` is a machine-readable instruction that a repairer writes into the
+  manifest verbatim, and that string is not something any tool can write. It is
+  now omitted when there is no single answer, leaving `params` at one entry.
+  Reached only through `application/font-sfnt`, which appears on none of the
+  shelf's 591 font manifest items.
+- **A preferred spelling the resource's own bytes rule out is no longer named.**
+  RFC 8081 registers a magic-number list with each font media type, and
+  `font/ttf`'s is `0x00010000` alone — so an `OTTO` (CFF-outline) font is
+  `font/ttf` under no reading. Where the signature contradicts the candidate,
+  OPF-090 now reports the type as non-preferred and names no replacement, rather
+  than issuing an instruction that would be wrong to follow.
+  - **`application/font-sfnt` is the one row the bytes can settle.** EPUB 3.3
+    lists it on *both* the TrueType and the OpenType row, so the table names no
+    preferred type and epubcheck guesses from the file extension. That guess now
+    yields to the signature when the signature decides: only `font/otf` admits
+    `OTTO`. A `.ttf`-named CFF font gets `font/otf`, not `font/ttf`.
+
+### Unchanged, and deliberately
+
+- **`application/vnd.ms-opentype` on a TrueType-outline font still resolves to
+  `font/otf`** — reported as a defect (issue #135, from MobileRead 374799 #21),
+  and it is not one. EPUB 3.3 puts that spelling on the OpenType row and nowhere
+  else, and names `font/otf` as that row's preferred type; RFC 8081 gives
+  `font/otf` both `0x00010000` and `OTTO` as magic numbers with "Restrictions on
+  usage: None"; and the OpenType specification says an OpenType font containing
+  TrueType outlines "should use the value of 0x00010000 for sfntVersion". The
+  file is an OpenType font, so the declaration was accurate to begin with and
+  the replacement is a row lookup in the spec's own table rather than a
+  preference of ours. Measured on the 47 shelf fonts the report names: all 47
+  carry `OS/2` (required by OpenType, not by Apple's TrueType) and 35 carry
+  `GSUB`+`GPOS`. Across all 591 font items there is **no** case where a
+  declaration is genuinely contradicted by its file.
+- **No font-content check was added.** One would report all 47 of those files,
+  every one of them legitimately labelled.
+
 ## [0.14.0] - 2026-09-10
 
 Adopts **veripublica conventions 0.5.0**. A **breaking** release in the library

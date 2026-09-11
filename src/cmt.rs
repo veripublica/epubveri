@@ -100,6 +100,88 @@ pub(crate) fn is_audio_video_or_font(mt: &str) -> bool {
         || base == "application/vnd.ms-opentype"
 }
 
+/// What a font resource's own bytes say it is, read from the four-byte
+/// signature RFC 8081 registers as each font media type's magic number.
+///
+/// The bytes rule spellings **out**, not in, and that asymmetry is the whole
+/// reason this type exists. `font/ttf`'s magic-number list is `0x00010000`
+/// alone, so an `OTTO` file is `font/ttf` under no reading; but `font/otf`'s
+/// own list carries *both* `0x00010000` and `OTTO`, and the OpenType
+/// specification says an OpenType font containing TrueType outlines "should
+/// use the value of 0x00010000 for sfntVersion". So a `glyf`-outline font
+/// declared `application/vnd.ms-opentype` is not mislabelled — EPUB 3.3 puts
+/// that spelling on the OpenType row and nowhere else, and names `font/otf`
+/// as that row's preferred type. See issue #135, where the opposite was
+/// argued and measured: all 47 shelf fonts it names carry `OS/2` (required by
+/// OpenType, not by Apple's TrueType) and 35 of them `GSUB`+`GPOS`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum FontSignature {
+    /// sfnt with TrueType (`glyf`) outlines: `0x00010000`, or Apple's `true`.
+    Glyf,
+    /// sfnt with CFF outlines: `OTTO`.
+    Cff,
+    /// WOFF 1.0: `wOFF`.
+    Woff1,
+    /// WOFF 2.0: `wOF2`.
+    Woff2,
+    /// An sfnt collection: `ttcf`. RFC 8081 gives it `font/collection`, which
+    /// EPUB's Core Media Types table does not list at all — so no preferred
+    /// spelling we could name admits it.
+    Collection,
+}
+
+/// The font signature of `bytes`, if they carry one.
+pub(crate) fn font_signature(bytes: &[u8]) -> Option<FontSignature> {
+    match bytes.get(..4)? {
+        [0x00, 0x01, 0x00, 0x00] | b"true" => Some(FontSignature::Glyf),
+        b"OTTO" => Some(FontSignature::Cff),
+        b"wOFF" => Some(FontSignature::Woff1),
+        b"wOF2" => Some(FontSignature::Woff2),
+        b"ttcf" => Some(FontSignature::Collection),
+        _ => None,
+    }
+}
+
+/// Whether RFC 8081's magic-number list for `mt` admits `sig`.
+fn signature_admits(mt: &str, sig: FontSignature) -> bool {
+    use FontSignature::*;
+    match mt {
+        "font/ttf" => sig == Glyf,
+        "font/otf" => sig == Glyf || sig == Cff,
+        "font/woff" => sig == Woff1,
+        "font/woff2" => sig == Woff2,
+        // Not a font type; its file's signature has no bearing.
+        _ => true,
+    }
+}
+
+/// Whether the resource's own bytes can bear on [`preferred_media_type`]'s
+/// answer for `mt`. Keeps the two script rows from reading a file for
+/// nothing — the caller pays a container read for every `true` here.
+pub(crate) fn signature_can_decide(mt: &str) -> bool {
+    matches!(
+        base_media_type(mt),
+        "application/font-sfnt"
+            | "application/vnd.ms-opentype"
+            | "application/font-woff"
+            | "application/x-font-ttf"
+    )
+}
+
+/// What OPF-090 should say about a non-preferred Core Media Type.
+///
+/// Two fields because they answer to different readers. `text` goes into the
+/// message a person reads; `media_type` is the machine-readable `params[1]`
+/// a repairer acts on, and it is `None` whenever there is no single media
+/// type to name.
+pub(crate) struct Preferred {
+    /// What the message names. May be the two-way hint `font/(ttf|otf)`,
+    /// which is not a media type.
+    pub(crate) text: &'static str,
+    /// The one media type a tool may write, when the answer is one type.
+    pub(crate) media_type: Option<&'static str>,
+}
+
 /// The preferred spelling of a non-preferred Core Media Type, for OPF-090.
 ///
 /// Requested by Doitsu on MobileRead: epubcheck names the replacement
@@ -108,31 +190,64 @@ pub(crate) fn is_audio_video_or_font(mt: &str) -> bool {
 /// non-preferred, which tells the reader they have a problem and not what to
 /// do about it.
 ///
-/// Ported from `OPFChecker30.getPreferredMediaType`, including its two
-/// oddities, because the point is to say what epubcheck says:
+/// The table is EPUB 3.3's §3.2 Core Media Types table read directly — each
+/// non-preferred spelling appears on exactly one row, and "the first one is
+/// the preferred media type" — which is also what
+/// `OPFChecker30.getPreferredMediaType` implements, so parity and
+/// conformance agree on every row it has. Two places they do not:
 ///
-/// - `application/font-sfnt` is ambiguous and resolved by the file
-///   extension, falling back to naming both when it is neither.
-/// - `text/javascript` prefers `application/javascript`, which is the
-///   opposite of what WHATWG settled on later. epubcheck's table is the
-///   authority here, not current practice.
+/// - **`application/font-sfnt` sits on *both* the TrueType and the OpenType
+///   row**, so the table names no single answer and epubcheck guesses from
+///   the file extension. We keep that guess, but let the file's own bytes
+///   overrule it where RFC 8081 settles the question: only `font/otf` admits
+///   `OTTO`.
+/// - **`application/x-font-ttf` is in no EPUB table at all** (0 occurrences in
+///   the spec text). It is epubcheck's own extension to the Core Media Type
+///   set, in the permissive direction, and we follow it.
 ///
-/// Every entry in [`NON_PREFERRED`] has a row, and nothing else does.
-pub(crate) fn preferred_media_type(mt: &str, href: &str) -> Option<&'static str> {
-    match base_media_type(mt) {
-        "application/font-sfnt" => Some(if href.ends_with(".ttf") {
-            "font/ttf"
-        } else if href.ends_with(".otf") {
-            "font/otf"
-        } else {
-            "font/(ttf|otf)"
-        }),
-        "application/vnd.ms-opentype" => Some("font/otf"),
-        "application/font-woff" => Some("font/woff"),
-        "application/x-font-ttf" => Some("font/ttf"),
-        "text/javascript" | "application/ecmascript" => Some("application/javascript"),
-        _ => None,
+/// Whatever the row says, a spelling the resource's own signature rules out
+/// is never named — a wrong machine instruction is worse than none.
+pub(crate) fn preferred_media_type(
+    mt: &str,
+    href: &str,
+    sig: Option<FontSignature>,
+) -> Option<Preferred> {
+    let single = |m: &'static str| Preferred {
+        text: m,
+        media_type: Some(m),
+    };
+    let candidate = match base_media_type(mt) {
+        "application/font-sfnt" => match sig {
+            // The one case where the bytes decide a row the spec leaves open.
+            Some(FontSignature::Cff) => single("font/otf"),
+            // Both rows admit `glyf`, so we are back to epubcheck's guess.
+            Some(FontSignature::Glyf) | None => {
+                if href.ends_with(".ttf") {
+                    single("font/ttf")
+                } else if href.ends_with(".otf") {
+                    single("font/otf")
+                } else {
+                    Preferred {
+                        text: "font/(ttf|otf)",
+                        media_type: None,
+                    }
+                }
+            }
+            // WOFF, WOFF2 and collections: neither row's type admits them.
+            Some(_) => return None,
+        },
+        "application/vnd.ms-opentype" => single("font/otf"),
+        "application/font-woff" => single("font/woff"),
+        "application/x-font-ttf" => single("font/ttf"),
+        "text/javascript" | "application/ecmascript" => single("application/javascript"),
+        _ => return None,
+    };
+    if let (Some(m), Some(s)) = (candidate.media_type, sig)
+        && !signature_admits(m, s)
+    {
+        return None;
     }
+    Some(candidate)
 }
 
 #[cfg(test)]

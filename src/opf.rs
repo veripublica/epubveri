@@ -4886,13 +4886,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // "non-preferred" on its own leaves the reader to guess.
                 // `params` stays additive - [0] is still the declared type,
                 // and the preferred one is appended.
-                let preferred = crate::cmt::preferred_media_type(mt, href);
+                //
+                // The font rows are answered against the resource's own
+                // signature, not just its declared type: EPUB 3.3 puts
+                // `application/font-sfnt` on two rows at once, and RFC 8081
+                // gives each preferred spelling a magic-number list that can
+                // rule a candidate out. Read only for the rows where it can
+                // decide - the two script rows would pay a container read
+                // for nothing. See issue #135.
+                let sig = if crate::cmt::signature_can_decide(mt) && !is_remote_url(href) {
+                    name_index
+                        .get(&nfc(&resolve(&base_dir, href)))
+                        .and_then(|n| ocf.read_content(n))
+                        .as_deref()
+                        .and_then(crate::cmt::font_signature)
+                } else {
+                    None
+                };
+                let preferred = crate::cmt::preferred_media_type(mt, href, sig);
                 let mut params = vec![mt.to_string()];
-                let text = match preferred {
+                let text = match &preferred {
                     Some(p) => {
-                        params.push(p.to_string());
+                        // Only a real media type reaches `params[1]`, which a
+                        // repairer writes into the manifest verbatim.
+                        // `font/(ttf|otf)` is a hint to a human and is not a
+                        // media type, so it stays in the message alone.
+                        if let Some(m) = p.media_type {
+                            params.push(m.to_string());
+                        }
+                        let named = p.text;
                         format!(
-                            "media-type '{mt}' is a non-preferred (but valid) Core Media Type; '{p}' is preferred"
+                            "media-type '{mt}' is a non-preferred (but valid) Core Media Type; '{named}' is preferred"
                         )
                     }
                     None => {
@@ -25110,30 +25134,229 @@ mod tests {
     /// oddities carried over from `OPFChecker30.getPreferredMediaType`:
     /// `application/font-sfnt` resolves by file extension and names both
     /// when it is neither, and `text/javascript` prefers
-    /// `application/javascript` — the opposite of what WHATWG settled on
-    /// later, but what epubcheck says.
+    /// `application/javascript` — which is the opposite of what WHATWG
+    /// settled on later, but is *also* what EPUB 3.3's own table says, since
+    /// its scripts row reads `application/javascript`,
+    /// `application/ecmascript`, `text/javascript` in that order and "the
+    /// first one is the preferred media type". Parity and conformance agree
+    /// here; only WHATWG dissents, and it is not the authority for a package
+    /// document.
     #[test]
     fn opf_090_names_the_preferred_media_type() {
         use crate::cmt::preferred_media_type as p;
-        assert_eq!(p("application/vnd.ms-opentype", "f.otf"), Some("font/otf"));
-        assert_eq!(p("application/font-woff", "f.woff"), Some("font/woff"));
-        assert_eq!(p("application/x-font-ttf", "f.ttf"), Some("font/ttf"));
-        assert_eq!(p("text/javascript", "f.js"), Some("application/javascript"));
+        let t = |mt, href| p(mt, href, None).map(|x| x.text);
+        assert_eq!(t("application/vnd.ms-opentype", "f.otf"), Some("font/otf"));
+        assert_eq!(t("application/font-woff", "f.woff"), Some("font/woff"));
+        assert_eq!(t("application/x-font-ttf", "f.ttf"), Some("font/ttf"));
+        assert_eq!(t("text/javascript", "f.js"), Some("application/javascript"));
         assert_eq!(
-            p("application/ecmascript", "f.js"),
+            t("application/ecmascript", "f.js"),
             Some("application/javascript")
         );
-        assert_eq!(p("application/font-sfnt", "f.ttf"), Some("font/ttf"));
-        assert_eq!(p("application/font-sfnt", "f.otf"), Some("font/otf"));
-        assert_eq!(p("application/font-sfnt", "f.bin"), Some("font/(ttf|otf)"));
+        assert_eq!(t("application/font-sfnt", "f.ttf"), Some("font/ttf"));
+        assert_eq!(t("application/font-sfnt", "f.otf"), Some("font/otf"));
+        assert_eq!(t("application/font-sfnt", "f.bin"), Some("font/(ttf|otf)"));
         // A preferred type has no replacement to suggest.
-        assert_eq!(p("font/otf", "f.otf"), None);
+        assert_eq!(t("font/otf", "f.otf"), None);
 
         // Every non-preferred type has a row, so the message can never say
         // "non-preferred" without saying what to use instead.
         for mt in crate::cmt::NON_PREFERRED {
-            assert!(p(mt, "f.bin").is_some(), "{mt} has no preferred spelling");
+            assert!(
+                p(mt, "f.bin", None).is_some(),
+                "{mt} has no preferred spelling"
+            );
         }
+    }
+
+    /// `params[1]` is a machine-readable instruction — a repairer writes it
+    /// into the manifest — so it carries a media type or nothing at all.
+    /// `font/(ttf|otf)` is neither a media type nor a thing a tool can write,
+    /// and it used to go into `params` alongside the message. Population on
+    /// the 474-book shelf is zero (`application/font-sfnt` appears on none of
+    /// its 591 font items), which is why only a reading of the contract could
+    /// find it. Issue #135.
+    #[test]
+    fn opf_090_params_never_carry_a_non_media_type() {
+        use crate::cmt::preferred_media_type as p;
+        let two_way = p("application/font-sfnt", "f.bin", None).unwrap();
+        assert_eq!(two_way.text, "font/(ttf|otf)");
+        assert_eq!(two_way.media_type, None);
+        // Everything else names one type, and says the same thing twice.
+        for (mt, href) in [
+            ("application/vnd.ms-opentype", "f.otf"),
+            ("application/font-woff", "f.woff"),
+            ("application/x-font-ttf", "f.ttf"),
+            ("text/javascript", "f.js"),
+            ("application/font-sfnt", "f.ttf"),
+        ] {
+            let got = p(mt, href, None).unwrap();
+            assert_eq!(got.media_type, Some(got.text), "{mt}");
+        }
+    }
+
+    /// A spelling the resource's own signature rules out is never named.
+    ///
+    /// The asymmetry is the point, and it is the opposite of the one issue
+    /// #135 reported: RFC 8081 gives `font/otf` *both* `0x00010000` and
+    /// `OTTO` as magic numbers, so a `glyf`-outline font declared
+    /// `application/vnd.ms-opentype` keeps its `font/otf` answer — EPUB 3.3
+    /// puts that spelling on the OpenType row and names `font/otf` as that
+    /// row's preferred type. `font/ttf`'s list is `0x00010000` alone, so it
+    /// is the direction that can be wrong.
+    #[test]
+    fn opf_090_never_names_a_type_the_bytes_rule_out() {
+        use crate::cmt::FontSignature::*;
+        use crate::cmt::preferred_media_type as p;
+        let t = |mt, href, sig| p(mt, href, Some(sig)).map(|x| x.text);
+
+        // Unchanged by the bytes: the reported case, and its CFF sibling.
+        assert_eq!(
+            t("application/vnd.ms-opentype", "f.ttf", Glyf),
+            Some("font/otf")
+        );
+        assert_eq!(
+            t("application/vnd.ms-opentype", "f.otf", Cff),
+            Some("font/otf")
+        );
+        // Ruled out: `font/ttf` admits no `OTTO`, and no font row admits WOFF2.
+        assert_eq!(t("application/x-font-ttf", "f.ttf", Cff), None);
+        assert_eq!(t("application/font-woff", "f.woff", Woff2), None);
+        assert_eq!(t("application/vnd.ms-opentype", "f.otf", Collection), None);
+        // `application/font-sfnt` is on both rows, so the bytes decide the one
+        // case the table leaves open — and the extension no longer overrules
+        // them.
+        assert_eq!(t("application/font-sfnt", "f.ttf", Cff), Some("font/otf"));
+        assert_eq!(t("application/font-sfnt", "f.ttf", Glyf), Some("font/ttf"));
+        assert_eq!(t("application/font-sfnt", "f.woff", Woff1), None);
+        // A script row has no signature to consult and is unaffected.
+        assert_eq!(
+            t("text/javascript", "f.js", Glyf),
+            Some("application/javascript")
+        );
+    }
+
+    /// The signature must actually be read *from the container* — the unit
+    /// tests above hand `preferred_media_type` a signature, so none of them
+    /// can tell whether the call site ever opens the file. Four items, one
+    /// per answer shape, each with real font bytes behind it.
+    #[test]
+    fn opf_090_reads_the_font_from_the_container() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        const OPF: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="c1" href="a.xhtml" media-type="application/xhtml+xml"/>
+    <item id="f1" href="cff-named-ttf.ttf" media-type="application/font-sfnt"/>
+    <item id="f2" href="glyf.ttf" media-type="application/vnd.ms-opentype"/>
+    <item id="f3" href="cff.ttf" media-type="application/x-font-ttf"/>
+    <item id="f4" href="glyf.bin" media-type="application/font-sfnt"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#;
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+            <body><nav epub:type=\"toc\"><ol><li><a href=\"a.xhtml\">c</a></li></ol></nav></body></html>";
+        const DOC: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let glyf: &[u8] = b"\x00\x01\x00\x00rest-of-the-font";
+        let cff: &[u8] = b"OTTOrest-of-the-font";
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER.as_bytes()),
+                ("OEBPS/content.opf", OPF.as_bytes()),
+                ("OEBPS/nav.xhtml", NAV.as_bytes()),
+                ("OEBPS/a.xhtml", DOC.as_bytes()),
+                ("OEBPS/cff-named-ttf.ttf", cff),
+                ("OEBPS/glyf.ttf", glyf),
+                ("OEBPS/cff.ttf", cff),
+                ("OEBPS/glyf.bin", glyf),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        let msgs = crate::validate_bytes(buf).messages;
+        let got: Vec<(String, Vec<String>)> = msgs
+            .iter()
+            .filter(|m| m.id == crate::ids::OPF_090)
+            .map(|m| (m.text.clone(), m.params.clone()))
+            .collect();
+        assert_eq!(got.len(), 4, "one per non-preferred item: {got:?}");
+
+        // f1: `.ttf` name, CFF bytes. The extension says `font/ttf`; RFC 8081
+        // says only `font/otf` admits `OTTO`, and the bytes win. This is the
+        // assertion that fails if the call site never opens the file.
+        assert!(
+            got[0].0.ends_with("'font/otf' is preferred"),
+            "{:?}",
+            got[0]
+        );
+        assert_eq!(got[0].1, ["application/font-sfnt", "font/otf"]);
+
+        // f2: the case issue #135 reported. `glyf` outlines under the
+        // OpenType spelling stay on the OpenType row, and keep `font/otf`.
+        assert!(
+            got[1].0.ends_with("'font/otf' is preferred"),
+            "{:?}",
+            got[1]
+        );
+        assert_eq!(got[1].1, ["application/vnd.ms-opentype", "font/otf"]);
+
+        // f3: `font/ttf` admits no `OTTO`, so nothing is named at all —
+        // rather than an instruction a tool would be wrong to follow.
+        assert!(got[2].0.ends_with("Core Media Type"), "{:?}", got[2]);
+        assert_eq!(got[2].1, ["application/x-font-ttf"]);
+
+        // f4: both rows admit `glyf` and the name decides neither, so the
+        // message keeps the two-way hint and `params` stays at one entry.
+        assert!(
+            got[3].0.ends_with("'font/(ttf|otf)' is preferred"),
+            "{:?}",
+            got[3]
+        );
+        assert_eq!(got[3].1, ["application/font-sfnt"]);
+    }
+
+    /// The signature reader, against every magic number RFC 8081 registers.
+    #[test]
+    fn font_signature_reads_the_registered_magic_numbers() {
+        use crate::cmt::FontSignature::*;
+        use crate::cmt::font_signature as s;
+        assert_eq!(s(b"\x00\x01\x00\x00rest"), Some(Glyf));
+        assert_eq!(s(b"true"), Some(Glyf));
+        assert_eq!(s(b"OTTO...."), Some(Cff));
+        assert_eq!(s(b"wOFF...."), Some(Woff1));
+        assert_eq!(s(b"wOF2...."), Some(Woff2));
+        assert_eq!(s(b"ttcf...."), Some(Collection));
+        // Not a font, and too short to be one: both are "no answer", never a
+        // wrong one. The obfuscated fonts on the shelf land here — 36 of 591.
+        assert_eq!(s(b"<svg"), None);
+        assert_eq!(s(b"\x00\x01"), None);
+        assert_eq!(s(b""), None);
     }
 
     /// OPF-037 is EPUB 2 only, and this one was found by `--bin versions`
