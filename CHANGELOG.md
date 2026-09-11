@@ -167,6 +167,29 @@ the book.
 
 ### Added
 
+- **Five CSS misses, and the one that needed a second reading of the rule.**
+  - **A `url()` is a registered reference and now answers the three questions
+    every other one does**: RSC-033 for a query component in a relative URL
+    (`src: url("../fonts/x.eot?v=4.4.0")`, which is how Font Awesome ships),
+    RSC-008 for a target in the container that the manifest does not declare,
+    and RSC-032 for a target that is not a Core Media Type and whose fallback
+    chain reaches none.
+    - **RSC-032 exempts font references, and reading the rule as "any CSS
+      `url()`" invented one per `@font-face src` on 67 shelf books.**
+      `ResourceReferencesChecker::checkFallbacks`:297 switches on the
+      reference *type* and handles only IMAGE, AUDIO, VIDEO and GENERIC; a
+      FONT falls to `default: break`. Every one of those 67 books declares its
+      fonts `application/x-font-ttf`, which is not a Core Media Type and which
+      epubcheck says nothing about. With the exemption the shelf moves by one
+      book — a genuine RSC-008 epubcheck also reports.
+  - **`@font-face` is `@font-face` wherever it sits (CSS-028).** The top-level
+    walk ran the `@font-face` checks and the nested one did not, so
+    `@media all { @font-face { … } }` skipped all of them. A conditional group
+    is a container, not a different language.
+  - **A style rule must have a selector (CSS-008).** A stray `{ … }` after a
+    complete rule parses as a qualified rule with an empty prelude; the
+    declarations inside are fine and nothing asked whether anything selected
+    them.
 - **Four more package-level misses, and a false positive found while measuring
   them.**
   - **An empty `src` on an NCX `<content>` is a reference to the NCX itself

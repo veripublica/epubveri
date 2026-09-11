@@ -10578,6 +10578,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // OPF-014 and RSC-008 and we already agreed.
         let imports: std::collections::HashSet<String> =
             crate::css::import_targets(&sheet).into_iter().collect();
+        // **A font reference is exempt from the fallback rule**, and reading
+        // that rule as "any CSS url()" cost 67 shelf books an invented
+        // RSC-032 apiece. `ResourceReferencesChecker::checkFallbacks`:297
+        // switches on the reference *type* and handles only IMAGE, AUDIO,
+        // VIDEO and GENERIC - a FONT falls to `default: break`. So a
+        // `@font-face src` pointing at a font declared
+        // `application/x-font-ttf` (not a Core Media Type, and what Calibre
+        // writes) is silent there, and every one of those 67 books has one.
+        let font_srcs: std::collections::HashSet<String> =
+            crate::css::font_face_src_urls_spanned(&css_text)
+                .into_iter()
+                .map(|s| s.node)
+                .collect();
         let mut css_has_remote = false;
         for u in crate::css::stylesheet_urls(&sheet) {
             // Consumed resources, for OPF-097 - a font is "used" if any
@@ -10600,6 +10613,63 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     "css.url.malformed_relative_url",
                     vec![u.clone()],
                 );
+            }
+            // **Three questions epubcheck asks of every registered reference,
+            // and a `url()` is one - we asked none of them here.** All three
+            // came out of an external 2,798-book run, one book each against
+            // 5.3.0:
+            //
+            //   - RSC-033, a query component in a relative URL:
+            //     `src: url("../fonts/x.eot?v=4.4.0")`, which is how
+            //     Font Awesome ships;
+            //   - RSC-008, a target present in the container and absent from
+            //     the manifest, which is a different fault from "no such file"
+            //     and carries a different id;
+            //   - RSC-032, a target whose declared media type is not a Core
+            //     Media Type and whose fallback chain reaches none - the same
+            //     pair of predicates the guide reference above uses.
+            if !is_external(&u) {
+                let bare = strip_url_fragment(&u);
+                if bare.contains('?') {
+                    report.push_at_rule(
+                        RSC_033,
+                        Severity::Error,
+                        format!("URL '{u}' must not have a query string"),
+                        path.clone(),
+                        "css.url.query_string",
+                        vec![u.clone()],
+                    );
+                }
+                let target = nfc(&resolve(&dir, bare.trim()));
+                match items.iter().find(|(_, (p, _))| nfc(p) == target) {
+                    None => {
+                        if name_index.contains_key(&target) {
+                            report.push_at_rule(
+                                RSC_008,
+                                Severity::Error,
+                                format!("URL '{u}' is not declared in the manifest"),
+                                path.clone(),
+                                "css.url.undeclared_resource",
+                                vec![u.clone()],
+                            );
+                        }
+                    }
+                    Some((id, (_, mt))) => {
+                        if !font_srcs.contains(&u)
+                            && !crate::cmt::is_core_media_type(mt)
+                            && !crate::foreign::fallback_reaches_core(id, &items, &fallback_map)
+                        {
+                            report.push_at_rule(
+                                RSC_032,
+                                Severity::Error,
+                                format!("URL '{u}' targets a foreign resource with no fallback"),
+                                path.clone(),
+                                "css.url.foreign_resource_no_fallback",
+                                vec![u.clone()],
+                            );
+                        }
+                    }
+                }
             }
             if imports.contains(&u) {
                 // `file:` is restricted here too. `is_remote_url` answers

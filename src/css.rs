@@ -295,6 +295,23 @@ pub(crate) fn check(
             spanned::Rule::Qualified(q) => {
                 collect_urls_spanned(&q.prelude, &mut urls);
                 collect_urls_spanned(&q.block.node.values, &mut urls);
+                // A style rule with no selector at all - a stray `{ … }` after
+                // a complete rule. CSS Syntax parses it as a qualified rule
+                // with an empty prelude, and Selectors requires at least one
+                // selector, so epubcheck reports CSS-008 (measured, one book).
+                // We were silent: the declarations inside parse fine and
+                // nothing asked whether anything selected them.
+                if q.prelude.iter().all(|v| is_blank_component(&v.node)) {
+                    report.push_full(
+                        CSS_008,
+                        Severity::Error,
+                        "a style rule must have a selector",
+                        css_path,
+                        origin.position(css, rule.span.start),
+                        "css.rule.missing_selector",
+                        Vec::new(),
+                    );
+                }
                 if !block_never_closed(rule.span.start, rule.span.end) {
                     check_declaration_shapes_spanned(
                         &q.block.node.values,
@@ -749,6 +766,16 @@ fn syntax_error_slug(kind: spanned::SyntaxErrorKind) -> &'static str {
 /// epubcheck reported 11 CSS-008 and we reported 0, every one a selector
 /// inside an `@media`, invisible in the totals because declaration errors in
 /// the same blocks were reported normally.
+/// Whitespace only - what an empty selector prelude looks like once the
+/// tokenizer has kept everything. Comments are not component values in
+/// styloria's output, so they need no arm here.
+fn is_blank_component(v: &spanned::ComponentValue) -> bool {
+    matches!(
+        v,
+        spanned::ComponentValue::Token(styloria::Token::Whitespace)
+    )
+}
+
 fn check_at_rule_block_spanned(
     name: &str,
     block_values: &[Spanned<spanned::ComponentValue>],
@@ -802,6 +829,23 @@ fn check_at_rule_block_spanned(
                     }
                     spanned::Rule::At(a) => {
                         let Some(block) = &a.block else { continue };
+                        // **`@font-face` is `@font-face` wherever it sits.**
+                        // The top-level walk calls this and the nested one did
+                        // not, so `@media all { @font-face { … } }` skipped
+                        // every `@font-face` rule - CSS-028 among them, which
+                        // epubcheck reports there (measured, one book). A
+                        // conditional group is a container, not a different
+                        // language.
+                        if a.name.eq_ignore_ascii_case("font-face") {
+                            check_font_face_spanned(
+                                &block.node.values,
+                                a.name_span,
+                                css,
+                                css_path,
+                                origin,
+                                report,
+                            );
+                        }
                         check_at_rule_block_spanned(
                             &a.name,
                             &block.node.values,
