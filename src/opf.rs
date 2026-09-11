@@ -1353,7 +1353,24 @@ fn is_valid_lang_tag(raw: &str) -> bool {
 /// Walks the whole OPF for every `xml:lang` attribute, `link/@hreflang`,
 /// and `dc:language`'s own text, checking each against `is_valid_lang_tag`
 /// (OPF-092).
-fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
+/// OPF-092 is **EPUB 3 only**, on this project's own version test: every call
+/// site of epubcheck's `checkLanguageTag` is in `OPFHandler30`
+/// (`:182`, `:478`, `:613`), and the base `OPFHandler` has none.
+///
+/// Ungated, `<dc:language>en_US</dc:language>` in a `version="2.0"` package
+/// drew OPF-092 from us and nothing from epubcheck — the same shape as
+/// OPF-091, found the same way, by walking the `--bin versions` candidate list
+/// after a user's library turned that one up.
+///
+/// **Population on the 474-book shelf is zero**, which is why no instrument
+/// here could have found it: all 390 EPUB 2 packages spell their tags well
+/// (`tr` 280, `tr-TR` 71, `en` 25, `tur` 6, `UND` 6, `en-GB` 3, `en-US` 3).
+/// The underscore spelling that fails is the one a Java or Windows locale
+/// writes, and no book of ours has it.
+fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, is_epub3: bool, report: &mut Report) {
+    if !is_epub3 {
+        return;
+    }
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(lang) = n.attribute((XML_NS, "lang"))
             && !is_valid_lang_tag(lang)
@@ -3875,7 +3892,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             check_prefix_usage(v, &declared_prefixes, opf_path, n, report);
         }
     }
-    check_lang_tags(&doc, opf_path, report);
     check_refines_cycles(&doc, opf_path, report);
     check_uuid_identifiers(&doc, opf_path, report);
     check_collection_roles(&doc, opf_path, report);
@@ -3983,6 +3999,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // Position in this function does not reach the output: the report is
     // sorted into document order before it is rendered.
     check_meta_property_scheme_shape(&doc, opf_path, is_epub3, report);
+    // Moved down here with it, and for the same reason: OPF-092 needs the
+    // version, and the version is only settled at this point - after the `-v`
+    // override, so `-v 2.0` on a 3.0 book correctly silences it too. Deriving
+    // a second `is_epub3` from `pkg` at the old call site would have been a
+    // second answer free to drift from this one.
+    check_lang_tags(&doc, opf_path, is_epub3, report);
     // OPF-047: the package document is written in **OEBPS 1.2**, the pre-EPUB
     // format EPUB 2 replaced, kept legal for backwards compatibility. Detected
     // exactly as epubcheck does (`OPFHandler.startElement`): a `<package>`
@@ -20212,6 +20234,47 @@ mod tests {
         ] {
             assert!(!takes(el, attr), "{el}/{attr} is not a resource reference");
         }
+    }
+
+    /// OPF-092 is EPUB 3 only: every call site of epubcheck's
+    /// `checkLanguageTag` is in `OPFHandler30` (`:182`, `:478`, `:613`) and
+    /// the base handler has none.
+    ///
+    /// Found by walking `--bin versions`' EPUB-3-only list after a user's
+    /// library turned up OPF-091 in the same class. `en_US` — the spelling a
+    /// Java or Windows locale writes — is an error at 3.0 and silent at 2.0,
+    /// and we reported it at both.
+    ///
+    /// **Zero population on the 474-book shelf**, which is why no instrument
+    /// here could have found it: all 390 EPUB 2 packages spell their tags
+    /// properly (`tr` 280, `tr-TR` 71, `en` 25, `tur` 6, `UND` 6, `en-GB` 3,
+    /// `en-US` 3 — the hyphenated form is fine). Paired so the gate cannot
+    /// overshoot into never firing.
+    #[test]
+    fn opf_092_is_epub3_only() {
+        let opf = |version: &str, lang: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>{lang}</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine toc="c1"><itemref idref="c1"/></spine>
+</package>"#
+            )
+        };
+        let fires = |version: &str, lang: &str| {
+            !opf_ids_of(&opf(version, lang), &[crate::ids::OPF_092]).is_empty()
+        };
+        assert!(
+            fires("3.0", "en_US"),
+            "EPUB 3 still reports a malformed tag"
+        );
+        assert!(!fires("2.0", "en_US"), "EPUB 2 never reaches it");
+        assert!(!fires("3.0", "en-US"), "a hyphenated tag is well-formed");
     }
 
     /// OPF-091 is EPUB 3 only: `OPFChecker30.checkItem` overrides

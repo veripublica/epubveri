@@ -8,6 +8,29 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **OPF-092 no longer reaches an EPUB 2 package.** `<dc:language>en_US</dc:language>`
+  — the spelling a Java or Windows locale writes — drew "language tag is not
+  well-formed" from us at both versions and from epubcheck only at 3.0. Every
+  call site of its `checkLanguageTag` is in `OPFHandler30` (`:182`, `:478`,
+  `:613`); the base handler has none.
+  - **Found by walking `--bin versions`' EPUB-3-only list**, which had carried
+    this id and 67 others as unprobed candidates. That list is where OPF-091
+    also sat until a user's 2,798-book run found it — so the lesson of that
+    defect was that the list needs working through, and this is the first
+    result of doing so.
+  - The check moved to after the version is settled rather than deriving a
+    second `is_epub3` of its own, so `-v 2.0` on a 3.0 book silences it too.
+  - **Population on the 474-book shelf is zero.** All 390 EPUB 2 packages spell
+    their tags well: `tr` 280, `tr-TR` 71, `en` 25, `tur` 6, `UND` 6, `en-GB` 3,
+    `en-US` 3. The hyphenated form is fine; only the underscore fails.
+  - Four other candidates from the same list were probed and are correctly
+    gated already: OPF-096/096b (a non-linear spine item), CSS-005 and CSS-015
+    (alternate stylesheets without titles). Recorded so they are not re-probed.
+
 ## [0.14.2] - 2026-09-11
 
 **Eleven false positives and fifteen missed findings, from someone else's
