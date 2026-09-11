@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "epubveri"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "roxmltree",
  "serde",
@@ -55,7 +55,7 @@ dependencies = [
 
 [[package]]
 name = "epubveri-wasm"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "epubveri",
  "serde",
