@@ -18,3 +18,9 @@ __pycache__/
 # makes conflict copies of them ("settings.local 2.json"), the same class of
 # stray file that once shipped inside the 0.7.2 npm tarball.
 /.claude/settings.local*.json
+
+# Drafts and one-off measurements that outlive a session but are not the work:
+# the session scratchpad lives under /private/tmp and is gone on restart, and
+# `~/Documents` is not a place to litter (owner, 2026-09-04). CLAUDE.md already
+# refers to files here, e.g. the 981-book compare baseline.
+/scratchpad/
