@@ -10665,29 +10665,30 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
                 let target = nfc(&resolve(&dir, bare.trim()));
                 // **RSC-008 is NOT asked here**, and adding it was a mistake
-                // this run's `compare` caught the same day: `css.rs`'s own
-                // RSC-001/007/008 walk already owns it, with a position, under
-                // this very rule slug. A second copy gave one `@import` two
-                // findings against epubcheck's one. What was actually missing
-                // was a `@font-face src` reaching that walk at all, and that
-                // is fixed where it belongs.
-                match items.iter().find(|(_, (p, _))| nfc(p) == target) {
-                    None => {}
-                    Some((id, (_, mt))) => {
-                        if !font_srcs.contains(&u)
-                            && !crate::cmt::is_core_media_type(mt)
-                            && !crate::foreign::fallback_reaches_core(id, &items, &fallback_map)
-                        {
-                            report.push_at_rule(
-                                RSC_032,
-                                Severity::Error,
-                                format!("URL '{u}' targets a foreign resource with no fallback"),
-                                path.clone(),
-                                "css.url.foreign_resource_no_fallback",
-                                vec![u.clone()],
-                            );
-                        }
-                    }
+                // the 981-book `compare` caught the same day: `css.rs`'s own
+                // RSC-001/007/008 walk already owns it, with a position and
+                // under the same rule key, so an undeclared `@import` target
+                // drew two findings against epubcheck's one.
+                //
+                // The gap that addition was aimed at is real and is closed
+                // elsewhere: `@font-face` blocks have their own URL path, which
+                // `css.rs` hands them to on purpose, and that path had no
+                // RSC-008 arm. It has one now. This loop keeps only the two
+                // questions nothing else asks of a `url()` - the query
+                // component and the fallback below.
+                if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == target)
+                    && !font_srcs.contains(&u)
+                    && !crate::cmt::is_core_media_type(mt)
+                    && !crate::foreign::fallback_reaches_core(id, &items, &fallback_map)
+                {
+                    report.push_at_rule(
+                        RSC_032,
+                        Severity::Error,
+                        format!("URL '{u}' targets a foreign resource with no fallback"),
+                        path.clone(),
+                        "css.url.foreign_resource_no_fallback",
+                        vec![u.clone()],
+                    );
                 }
             }
             if imports.contains(&u) {
