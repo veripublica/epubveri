@@ -12,6 +12,28 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **One `@import` no longer draws two RSC-008, and the font gap it was hiding
+  is closed where it belongs.** 0.14.2 added an RSC-008 to the CSS `url()`
+  loop; `css.rs` already owned that question, with a position and under the
+  same rule key, so an undeclared `@import` target got two findings against
+  epubcheck's one. Caught by the 981-book `compare` the same day — the run
+  CLAUDE.md prescribes after content-model work, run for exactly that reason.
+  - **The gap 0.14.2 was really closing was one arm of the `@font-face`
+    path**, not a missing walk. `@font-face` blocks have their own URL
+    handling on purpose — `css.rs` hands them over deliberately — and that
+    path asked RSC-007 and RSC-030 but never RSC-008. It does now, and the
+    finding carries a position it did not have this morning.
+  - **The first attempt at this was wrong and the shelf said so.** Making the
+    generic walk stop skipping `@font-face` looked like the fix; it gave every
+    missing font two RSC-007, 8 against epubcheck's 4 on a real book, across
+    14 books. The `else` was the design. A question asked twice is the same
+    defect as a question asked nowhere, one sign flipped.
+  - Consumer note: the rule key for this finding is now
+    `css.font_face.undeclared_target`. `css.url.undeclared_resource` existed
+    for one release and still names the `@import`/generic case, which is what
+    it was always for.
+  - Population unchanged: the same single shelf book reports it, and epubcheck
+    agrees on the count.
 - **OPF-092 no longer reaches an EPUB 2 package.** `<dc:language>en_US</dc:language>`
   — the spelling a Java or Windows locale writes — drew "language tag is not
   well-formed" from us at both versions and from epubcheck only at 3.0. Every

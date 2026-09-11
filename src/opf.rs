@@ -10664,19 +10664,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     );
                 }
                 let target = nfc(&resolve(&dir, bare.trim()));
+                // **RSC-008 is NOT asked here**, and adding it was a mistake
+                // this run's `compare` caught the same day: `css.rs`'s own
+                // RSC-001/007/008 walk already owns it, with a position, under
+                // this very rule slug. A second copy gave one `@import` two
+                // findings against epubcheck's one. What was actually missing
+                // was a `@font-face src` reaching that walk at all, and that
+                // is fixed where it belongs.
                 match items.iter().find(|(_, (p, _))| nfc(p) == target) {
-                    None => {
-                        if name_index.contains_key(&target) {
-                            report.push_at_rule(
-                                RSC_008,
-                                Severity::Error,
-                                format!("URL '{u}' is not declared in the manifest"),
-                                path.clone(),
-                                "css.url.undeclared_resource",
-                                vec![u.clone()],
-                            );
-                        }
-                    }
+                    None => {}
                     Some((id, (_, mt))) => {
                         if !font_srcs.contains(&u)
                             && !crate::cmt::is_core_media_type(mt)
@@ -12316,6 +12312,30 @@ fn check_exempt_font_usage(
         }
         let resolved = nfc(&resolve(dir, &u.node));
         let declared = items.values().any(|(ip, _)| nfc(ip) == resolved);
+        // **The undeclared-but-present arm, which was the only one missing.**
+        // A font whose file is in the container and absent from the manifest
+        // is RSC-008 in epubcheck and drew nothing here. `css.rs`'s generic
+        // `urls` walk asks this of every other `url()`, and deliberately hands
+        // `@font-face` to this function instead — so the question has to be
+        // asked here or it is asked nowhere, which is exactly what the
+        // neighbouring RSC-030 note says about its own duplicate.
+        //
+        // Found the long way round: a first attempt made the generic walk stop
+        // skipping `@font-face`, which produced a second RSC-007 beside this
+        // one on 14 shelf books — 8 against epubcheck's 4. The `else` was the
+        // design, not a defect, and the gap was one arm of this match rather
+        // than the whole path.
+        if !declared && name_index.contains_key(&resolved) {
+            report.push_full(
+                RSC_008,
+                Severity::Error,
+                format!("resource '{}' is not declared in the manifest", u.node),
+                path,
+                origin.position(css, u.span.start),
+                "css.font_face.undeclared_target",
+                vec![u.node.clone()],
+            );
+        }
         if !declared && !name_index.contains_key(&resolved) {
             report.push_full(
                 RSC_007,
@@ -20234,6 +20254,65 @@ mod tests {
         ] {
             assert!(!takes(el, attr), "{el}/{attr} is not a resource reference");
         }
+    }
+
+    /// A `@font-face src` gets all three answers, and each exactly once.
+    ///
+    /// `@font-face` has its own URL path — `css.rs`'s generic `urls` walk
+    /// hands those blocks to it deliberately — so every question the generic
+    /// walk asks has to be asked there too. RSC-007 and RSC-030 already were;
+    /// RSC-008, a font present in the container and absent from the manifest,
+    /// was not, and epubcheck reports it.
+    ///
+    /// **The counts are the point, not just the ids.** A first attempt closed
+    /// the gap by making the generic walk stop skipping `@font-face`, which
+    /// gave every missing font two RSC-007 — 8 against epubcheck's 4 on a real
+    /// book, caught by `compare` the same day. One finding per defect is what
+    /// this asserts.
+    #[test]
+    fn a_font_face_src_is_asked_each_question_once() {
+        let opf = |declare_font: bool| {
+            let font = if declare_font {
+                r#"<item id="f" href="Fonts/f.ttf" media-type="application/vnd.ms-opentype"/>"#
+            } else {
+                ""
+            };
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="css" href="Styles/s.css" media-type="text/css"/>
+    {font}
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        let count = |declare_font: bool, css: &str, id: &'static str| -> usize {
+            crate::validate_bytes(epub_with_opf_and_css(&opf(declare_font), css))
+                .messages
+                .iter()
+                .filter(|m| m.id == id)
+                .count()
+        };
+        const SRC: &str = "@font-face { font-family: \"f\"; src: url('../Fonts/f.ttf'); }";
+        const GONE: &str = "@font-face { font-family: \"f\"; src: url('../Fonts/nope.ttf'); }";
+
+        // In the container, not in the manifest: RSC-008, once.
+        assert_eq!(count(false, SRC, crate::ids::RSC_008), 1);
+        assert_eq!(count(false, SRC, crate::ids::RSC_007), 0);
+        // Declared and present: nothing.
+        assert_eq!(count(true, SRC, crate::ids::RSC_008), 0);
+        assert_eq!(count(true, SRC, crate::ids::RSC_007), 0);
+        // Not in the container at all: RSC-007, once, and not RSC-008.
+        assert_eq!(count(true, GONE, crate::ids::RSC_007), 1);
+        assert_eq!(count(true, GONE, crate::ids::RSC_008), 0);
     }
 
     /// OPF-092 is EPUB 3 only: every call site of epubcheck's
