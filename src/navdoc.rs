@@ -15,10 +15,6 @@ fn nav_type<'a>(nav: roxmltree::Node<'a, 'a>) -> Option<&'a str> {
     nav.attribute((EPUB_NS, "type"))
 }
 
-/// A label (`<a>`/`<span>`) has real content if it has non-whitespace text
-/// anywhere inside it, or an `<img>` descendant (confirmed via a real
-/// fixture: two `<img>` elements with no text at all, one even with an
-/// empty `alt`, are still a valid non-empty label).
 /// Is `n` inside an `<ol>` that is itself inside `nav`?
 ///
 /// The `//html:ol//` step of epubcheck's anchor- and span-label contexts. A
@@ -30,15 +26,64 @@ fn within_ol(nav: roxmltree::Node, n: roxmltree::Node) -> bool {
         .any(|a| a.is_element() && a.tag_name().name() == "ol")
 }
 
-fn has_text_or_image(n: roxmltree::Node) -> bool {
-    let has_text = n
+/// Does a nav label (`<a>`/`<span>`) or a heading carry text?
+///
+/// epubcheck asks one expression in all three places (`epub-nav-30.sch`,
+/// patterns `link-labels`, `span-labels` and `heading-content`):
+///
+/// ```text
+/// string-length(normalize-space(string-join(.|./html:img/@alt|.//@aria-label))) > 0
+/// ```
+///
+/// Three sources, and this is a port of all three rather than of the first:
+///
+/// 1. the element's own string value - every descendant text node;
+/// 2. the `alt` of an `<img>` that is a **direct child**, not a descendant;
+/// 3. an `aria-label` on the element **or** on any descendant (`.//@attr`
+///    steps through `descendant-or-self`, so the element's own counts).
+///
+/// **Blank means XML-blank, not Unicode-blank.** `normalize-space()` strips
+/// exactly space, tab, CR and LF, so `<span>&#160;</span>` is a label with
+/// text in it. This used `str::trim`, whose Unicode `White_Space` includes
+/// NO-BREAK SPACE, and so reported "must contain text" on a book epubcheck
+/// passes - 3 books of an external 2,798-book run, 2 of them changing verdict.
+/// [`is_xml_blank`] exists for exactly this trap and names four sites it was
+/// written for; this was the fifth and it was missed.
+///
+/// **The `<img>` half was wrong in the other direction, and on written
+/// evidence that misread its own fixture.** The note here used to say an
+/// `<img>` descendant is enough "confirmed via a real fixture: two `<img>`
+/// elements with no text at all, one even with an empty `alt`". The fixture is
+/// `content-model-a-multiple-images-valid.xhtml`, and what makes it valid is
+/// the *second* image's `alt="some text"` - not the presence of an image. So
+/// an `<img>` with no `alt`, or an empty one, or one wrapped in a `<span>`,
+/// was a label we passed and epubcheck rejects.
+///
+/// All of it measured against epubcheck 5.3.0, one book per shape: `&#160;`
+/// alone, `aria-label` on the anchor, and `aria-label` on a descendant are
+/// **valid**; an empty `alt`, an absent `alt`, and a correctly-labelled `<img>`
+/// nested one level down are each **RSC-005**.
+fn has_label_text(n: roxmltree::Node) -> bool {
+    let texty = |s: &str| !crate::xmlext::is_xml_blank(s);
+    let text = n
         .descendants()
         .filter(|d| d.is_text())
         .filter_map(|d| d.text())
-        .any(|t| !t.trim().is_empty());
-    has_text
-        || n.descendants()
-            .any(|d| d.is_element() && d.tag_name().name() == "img")
+        .any(texty);
+    let child_img_alt = || {
+        n.children()
+            .filter(|c| c.is_element() && c.tag_name().name() == "img")
+            .filter_map(|c| c.attr_no_ns("alt"))
+            .any(texty)
+    };
+    // roxmltree's `descendants()` yields the node itself first, which is the
+    // `descendant-or-self` step the XPath needs - do not narrow it to children.
+    let aria_label = || {
+        n.descendants()
+            .filter_map(|d| d.attr_no_ns("aria-label"))
+            .any(texty)
+    };
+    text || child_img_alt() || aria_label()
 }
 
 /// `hidden` is an HTML5 boolean attribute - only an empty value or the
@@ -373,7 +418,7 @@ pub(crate) fn check(doc: &roxmltree::Document, path: &str, dir: &str, report: &m
     for h in doc.descendants().filter(|n| {
         n.is_element() && matches!(n.tag_name().name(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
     }) {
-        if !has_text_or_image(h) {
+        if !has_label_text(h) {
             report.push_node(
                 RSC_005,
                 Severity::Error,
@@ -460,7 +505,7 @@ pub(crate) fn check(doc: &roxmltree::Document, path: &str, dir: &str, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "a")
             .filter(|n| within_ol(nav, *n))
         {
-            if !has_text_or_image(a) {
+            if !has_label_text(a) {
                 report.push_node(
                     RSC_005,
                     Severity::Error,
@@ -477,7 +522,7 @@ pub(crate) fn check(doc: &roxmltree::Document, path: &str, dir: &str, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "span")
             .filter(|n| within_ol(nav, *n))
         {
-            if !has_text_or_image(span) {
+            if !has_label_text(span) {
                 report.push_node(
                     RSC_005,
                     Severity::Error,

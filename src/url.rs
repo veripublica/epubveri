@@ -18,19 +18,498 @@
 //! youtube query was wrongly drawing RSC-020 while epubcheck stayed
 //! silent.
 
-/// Real, commonly-registered IANA URL schemes - anything else is
-/// HTM-025. Includes every scheme `is_external`/`is_remote_url` already
-/// treat specially, plus a few other common ones.
+/// Registered URL schemes, for HTM-025. **A union of three lists, and the
+/// union is the point.**
+///
+/// - IANA's own registry, every status (permanent, provisional, historical),
+///   read from `uri-schemes-1.csv` on **2026-09-11**. A historical scheme was
+///   registered once, which is what the message asks about.
+/// - epubcheck's `URISchemes.java`, a frozen 76-entry snapshot of that
+///   registry from around 2007. Two of its entries are not in IANA's list at
+///   all - `javascript` and `shttp` - so a pure-IANA reading would warn where
+///   epubcheck does not.
+/// - The twelve this file carried before, which is where `ftps` comes from;
+///   IANA does not list it either.
+///
+/// Taking the union rather than any one of them means every disagreement with
+/// epubcheck runs in the permissive direction: we never warn about a scheme
+/// it accepts. The cost is staying quiet about a scheme nobody registered,
+/// which is a warning and moves no verdict.
+///
+/// This is a dated snapshot and will drift, exactly as epubcheck's has since
+/// 2007 - it has no `ws`, `wss` or `sms`. Drift here is harmless in the same
+/// direction: a newly registered scheme draws a warning it should not, so
+/// re-read the CSV when one is reported.
+///
+/// Sorted, and [`has_unregistered_scheme`] binary-searches it.
 const REGISTERED_SCHEMES: &[&str] = &[
-    "http", "https", "ftp", "ftps", "mailto", "tel", "data", "urn", "file", "ws", "wss", "irc",
+    "aaa",
+    "aaas",
+    "about",
+    "acap",
+    "acct",
+    "acd",
+    "acr",
+    "adiumxtra",
+    "adt",
+    "aet",
+    "afp",
+    "afs",
+    "agtp",
+    "aim",
+    "amss",
+    "android",
+    "appdata",
+    "apt",
+    "ar",
+    "ari",
+    "ark",
+    "ars",
+    "at",
+    "attachment",
+    "aw",
+    "barion",
+    "bb",
+    "beshare",
+    "bitcoin",
+    "bitcoincash",
+    "bl",
+    "blob",
+    "bluetooth",
+    "bolo",
+    "brid",
+    "browserext",
+    "cabal",
+    "caip",
+    "calculator",
+    "callto",
+    "cap",
+    "cast",
+    "casts",
+    "chrome",
+    "chrome-extension",
+    "cid",
+    "cm",
+    "coap",
+    "coap+tcp",
+    "coap+ws",
+    "coaps",
+    "coaps+tcp",
+    "coaps+ws",
+    "com-eventbrite-attendee",
+    "content",
+    "content-type",
+    "crid",
+    "cstr",
+    "cttps",
+    "cvs",
+    "dab",
+    "dat",
+    "data",
+    "dav",
+    "dhttp",
+    "diaspora",
+    "dict",
+    "did",
+    "dilithium3",
+    "dis",
+    "dlna-playcontainer",
+    "dlna-playsingle",
+    "dnp",
+    "dns",
+    "dntp",
+    "doi",
+    "donau",
+    "dpp",
+    "drm",
+    "drop",
+    "dtmi",
+    "dtn",
+    "dvb",
+    "dvx",
+    "dweb",
+    "ed2k",
+    "eid",
+    "elsi",
+    "embedded",
+    "ens",
+    "esim",
+    "ethereum",
+    "example",
+    "ez",
+    "facetime",
+    "fax",
+    "feed",
+    "feedready",
+    "fido",
+    "file",
+    "filesystem",
+    "finger",
+    "first-run-pen-experience",
+    "fish",
+    "fm",
+    "ftp",
+    "ftps",
+    "fuchsia-pkg",
+    "gcx",
+    "gdsi",
+    "geo",
+    "gg",
+    "git",
+    "gitoid",
+    "gizmoproject",
+    "go",
+    "gopher",
+    "graph",
+    "grd",
+    "gtalk",
+    "h323",
+    "ham",
+    "hcap",
+    "hcp",
+    "hs20",
+    "http",
+    "https",
+    "hxxp",
+    "hxxps",
+    "hydrazone",
+    "hyper",
+    "i0",
+    "iax",
+    "ibi",
+    "ibi-",
+    "icap",
+    "icon",
+    "ilstring",
+    "im",
+    "imap",
+    "info",
+    "interaction",
+    "iotdisco",
+    "ipfs",
+    "ipn",
+    "ipns",
+    "ipp",
+    "ipps",
+    "irc",
+    "irc6",
+    "ircs",
+    "iris",
+    "iris.beep",
+    "iris.lwz",
+    "iris.xpc",
+    "iris.xpcs",
+    "isostore",
+    "itms",
+    "jabber",
+    "jar",
+    "javascript",
+    "jms",
+    "keyparc",
+    "lastfm",
+    "lbry",
+    "ldap",
+    "ldaps",
+    "leaptofrogans",
+    "lid",
+    "linkid",
+    "lorawan",
+    "lpa",
+    "lvlt",
+    "machineprovisioningprogressreporter",
+    "magnet",
+    "mailserver",
+    "mailto",
+    "maps",
+    "market",
+    "matrix",
+    "mdoc",
+    "mdoc-openid4vp",
+    "message",
+    "microsoft.windows.camera",
+    "microsoft.windows.camera.multipicker",
+    "microsoft.windows.camera.picker",
+    "mid",
+    "mms",
+    "modem",
+    "mongodb",
+    "moz",
+    "mqtt",
+    "mqtts",
+    "ms-access",
+    "ms-appinstaller",
+    "ms-browser-extension",
+    "ms-calculator",
+    "ms-drive-to",
+    "ms-enrollment",
+    "ms-excel",
+    "ms-eyecontrolspeech",
+    "ms-gamebarservices",
+    "ms-gamingoverlay",
+    "ms-getoffice",
+    "ms-help",
+    "ms-infopath",
+    "ms-inputapp",
+    "ms-launchremotedesktop",
+    "ms-lockscreencomponent-config",
+    "ms-media-stream-id",
+    "ms-meetnow",
+    "ms-mixedrealitycapture",
+    "ms-mobileplans",
+    "ms-newsandinterests",
+    "ms-officeapp",
+    "ms-people",
+    "ms-personacard",
+    "ms-powerpoint",
+    "ms-project",
+    "ms-publisher",
+    "ms-recall",
+    "ms-remotedesktop",
+    "ms-remotedesktop-launch",
+    "ms-restoretabcompanion",
+    "ms-screenclip",
+    "ms-screensketch",
+    "ms-search",
+    "ms-search-repair",
+    "ms-secondary-screen-controller",
+    "ms-secondary-screen-setup",
+    "ms-settings",
+    "ms-settings-airplanemode",
+    "ms-settings-bluetooth",
+    "ms-settings-camera",
+    "ms-settings-cellular",
+    "ms-settings-cloudstorage",
+    "ms-settings-connectabledevices",
+    "ms-settings-displays-topology",
+    "ms-settings-emailandaccounts",
+    "ms-settings-language",
+    "ms-settings-location",
+    "ms-settings-lock",
+    "ms-settings-nfctransactions",
+    "ms-settings-notifications",
+    "ms-settings-power",
+    "ms-settings-privacy",
+    "ms-settings-proximity",
+    "ms-settings-screenrotation",
+    "ms-settings-wifi",
+    "ms-settings-workplace",
+    "ms-spd",
+    "ms-stickers",
+    "ms-sttoverlay",
+    "ms-transit-to",
+    "ms-useractivityset",
+    "ms-uup",
+    "ms-virtualtouchpad",
+    "ms-visio",
+    "ms-walk-to",
+    "ms-whiteboard",
+    "ms-whiteboard-cmd",
+    "ms-widgetboard",
+    "ms-widgets",
+    "ms-word",
+    "msnim",
+    "msrp",
+    "msrps",
+    "mss",
+    "mt",
+    "mtqp",
+    "mtrust",
+    "mumble",
+    "mupdate",
+    "musik",
+    "mvn",
+    "mvrp",
+    "mvrps",
+    "news",
+    "nfs",
+    "ni",
+    "nih",
+    "nntp",
+    "nostr",
+    "notes",
+    "npamp",
+    "num",
+    "ocf",
+    "oid",
+    "onenote",
+    "onenote-cmd",
+    "opaquelocktoken",
+    "openid",
+    "openpgp4fpr",
+    "otpauth",
+    "p1",
+    "pack",
+    "palm",
+    "paparazzi",
+    "payment",
+    "payto",
+    "pkcs11",
+    "pkg",
+    "platform",
+    "pop",
+    "pres",
+    "prospero",
+    "proxy",
+    "psyc",
+    "pttp",
+    "pwid",
+    "qb",
+    "query",
+    "quic-transport",
+    "redis",
+    "rediss",
+    "reload",
+    "res",
+    "resource",
+    "rmi",
+    "rsync",
+    "rtmfp",
+    "rtmp",
+    "rtsp",
+    "rtsps",
+    "rtspu",
+    "sarif",
+    "secondlife",
+    "secret-token",
+    "service",
+    "session",
+    "sftp",
+    "sgn",
+    "shc",
+    "shelter",
+    "shttp",
+    "sieve",
+    "simpleledger",
+    "simplex",
+    "sip",
+    "sips",
+    "skype",
+    "smb",
+    "smp",
+    "sms",
+    "smtp",
+    "snews",
+    "snmp",
+    "soap.beep",
+    "soap.beeps",
+    "soldat",
+    "spacify",
+    "spiffe",
+    "spotify",
+    "ssb",
+    "ssh",
+    "sss",
+    "starknet",
+    "steam",
+    "stun",
+    "stuns",
+    "submit",
+    "svn",
+    "swh",
+    "swid",
+    "swidpath",
+    "tag",
+    "taler",
+    "teamspeak",
+    "teapot",
+    "teapots",
+    "tel",
+    "teliaeid",
+    "telnet",
+    "tftp",
+    "things",
+    "thismessage",
+    "thzp",
+    "tip",
+    "tn3270",
+    "tool",
+    "tttps",
+    "turn",
+    "turns",
+    "tv",
+    "udp",
+    "unreal",
+    "upn",
+    "upt",
+    "urn",
+    "ust",
+    "ut2004",
+    "uuaid",
+    "uuid-in-package",
+    "v-event",
+    "vemmi",
+    "ventrilo",
+    "ves",
+    "videotex",
+    "view-source",
+    "vnc",
+    "vscode",
+    "vscode-insiders",
+    "vsls",
+    "w3",
+    "wais",
+    "wasm",
+    "wasm-js",
+    "wcr",
+    "web+ap",
+    "web+interaction",
+    "web3",
+    "webcal",
+    "wifi",
+    "wpid",
+    "ws",
+    "wss",
+    "wtai",
+    "wyciwyg",
+    "xcompute",
+    "xcon",
+    "xcon-userid",
+    "xfire",
+    "xftp",
+    "xmlrpc.beep",
+    "xmlrpc.beeps",
+    "xmpp",
+    "xrcp",
+    "xri",
+    "ymsgr",
+    "z39.50",
+    "z39.50r",
+    "z39.50s",
+    "ztdnaid",
 ];
+
+/// The URL's scheme, per RFC 3986 §3.1: `ALPHA *( ALPHA / DIGIT / "+" / "-" /
+/// "." )` followed by `:`. Returned as written, so callers compare
+/// case-insensitively ("schemes are case-insensitive", same section).
+///
+/// **The ABNF is the whole check, and reading it loosely is what made
+/// `kindle:embed:0002?mime=image/jpg` a missing file.** The rule that decides
+/// is §4.2: "A path segment that contains a colon character (e.g.,
+/// "this:that") cannot be used as the first segment of a relative-path
+/// reference, as it would be mistaken for a scheme name." So a colon before
+/// the first `/`, `?` or `#` is *always* a scheme - there is no reading under
+/// which such a string is a relative path, and a predicate that looks for
+/// `"://"` instead misses every scheme that is not hierarchical.
+///
+/// Two spellings this gets right that a looser test does not: `2:30` is **not**
+/// a scheme (a scheme starts with a letter) and `x-custom:y` **is** one (`-` is
+/// in the set). `a/b:c` is not, because `/` is not - which is precisely how the
+/// ABNF keeps an ordinary relative path with a colon in a later segment out.
+pub(crate) fn scheme(href: &str) -> Option<&str> {
+    let (candidate, _) = href.split_once(':')?;
+    let mut chars = candidate.chars();
+    if !chars.next()?.is_ascii_alphabetic() {
+        return None;
+    }
+    chars
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        .then_some(candidate)
+}
 
 /// Only meaningful on absolute URLs (a scheme followed by `:`) - relative
 /// and fragment-only hrefs are untouched by both checks.
 pub(crate) fn is_absolute(href: &str) -> bool {
-    href.split_once(':').is_some_and(|(scheme, _)| {
-        !scheme.is_empty() && scheme.bytes().all(|b| b.is_ascii_alphanumeric())
-    })
+    scheme(href).is_some()
 }
 
 /// RSC-020: the URL doesn't conform to basic URL syntax. The "must have
@@ -150,12 +629,11 @@ fn percent_decode_lossy(host: &str) -> String {
 
 /// HTM-025: the URL's scheme isn't a real, registered one.
 pub(crate) fn has_unregistered_scheme(href: &str) -> bool {
-    let Some((scheme, _)) = href.split_once(':') else {
+    let Some(scheme) = scheme(href) else {
         return false;
     };
-    !REGISTERED_SCHEMES
-        .iter()
-        .any(|s| s.eq_ignore_ascii_case(scheme))
+    let scheme = scheme.to_ascii_lowercase();
+    REGISTERED_SCHEMES.binary_search(&scheme.as_str()).is_err()
 }
 
 /// RSC-031: a remote reference that is not transport-secure.
@@ -193,6 +671,61 @@ pub(crate) fn is_insecure_remote(href: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// RFC 3986 §3.1's ABNF, and the two readings that are not it.
+    ///
+    /// `is_external` asked `contains("://")` until 2026-09-11, which made
+    /// `kindle:embed:0002?mime=image/jpg` a relative path and cost 141 books of
+    /// an external 2,798-book run two invented errors each. Our own shelf has
+    /// **zero** such links — 96 of its 474 books carry a non-hierarchical
+    /// scheme and all 122 occurrences are `mailto:`, which the old hand-list
+    /// happened to name — so no instrument here could have caught it.
+    #[test]
+    fn scheme_follows_rfc3986() {
+        for (href, want) in [
+            ("kindle:embed:0002?mime=image/jpg", Some("kindle")),
+            ("news:comp.os.linux.setup", Some("news")),
+            ("javascript:void(0)", Some("javascript")),
+            ("mailto:a@b.com", Some("mailto")),
+            ("http://example.org/x", Some("http")),
+            ("HTTP://example.org/x", Some("HTTP")), // returned as written
+            ("x-custom:y", Some("x-custom")),       // '-' is in the set
+            ("a.b+c:d", Some("a.b+c")),             // so are '.' and '+'
+            ("2:30", None),                         // a scheme starts with a letter
+            (":no-scheme", None),
+            ("ch/a:b.xhtml", None), // '/' is not in the set, so this is a path
+            ("relative.xhtml", None),
+            ("#frag", None),
+            ("", None),
+        ] {
+            assert_eq!(scheme(href), want, "scheme({href:?})");
+        }
+    }
+
+    /// The registered-scheme table is the union of three lists, so it must
+    /// contain what each of them has that the others do not — and it must stay
+    /// sorted, because the lookup binary-searches it.
+    #[test]
+    fn registered_schemes_is_a_sorted_union() {
+        assert!(
+            REGISTERED_SCHEMES.windows(2).all(|w| w[0] < w[1]),
+            "the table must be sorted and free of duplicates"
+        );
+        // epubcheck has these and IANA's registry does not.
+        for s in ["javascript", "shttp"] {
+            assert!(!has_unregistered_scheme(&format!("{s}:x")), "{s}");
+        }
+        // IANA has these and epubcheck's 2007 snapshot does not.
+        for s in ["ws", "wss", "sms", "geo"] {
+            assert!(!has_unregistered_scheme(&format!("{s}:x")), "{s}");
+        }
+        // `ftps` was only ever in our own twelve.
+        assert!(!has_unregistered_scheme("ftps://example.org"));
+        // Scheme comparison is case-insensitive (RFC 3986 §3.1).
+        assert!(!has_unregistered_scheme("MAILTO:a@b.com"));
+        // And something nobody registered still warns.
+        assert!(has_unregistered_scheme("kindle:embed:0002"));
+    }
 
     /// The host is percent-decoded before it is judged, and only after the
     /// userinfo has been stripped. `%40` decodes to `@`; decoding first would

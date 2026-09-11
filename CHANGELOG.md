@@ -10,14 +10,85 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.14.2] - 2026-09-11
 
-One more instance of 0.14.1's defect, found by auditing every `params` call site
-in the crate rather than by waiting for it — epubsana asked whether
-"`params[1]` is machine-usable" was a property of OPF-090 or of `params`
-generally, and the honest answer needed the survey. 373 call sites read; this is
-the only one that had to move. Corpus unchanged (603/603 exact-ID, 0 false
-positives on 355 clean cases); all 474 shelf books report identically.
+**Three false positives, found by someone else's library: 2,798 books exported
+from Apple Books by ibook2epub 2.3.0 and checked with both tools.** Their run
+put epubveri at epubcheck's verdict on 2,757 of 2,798 books (98.5%), and traced
+every disagreement to the markup that caused it. The three fixed here are the
+three largest: they account for **26 of the 34 books epubveri wrongly rejected**.
+
+Read the shelf numbers below as the reason these survived, not as reassurance.
+Our own 474-book shelf contains **zero** books with any of the three
+constructs — no `kindle:`-style link, no `lang`/`xml:lang` pair differing only
+in case, no whitespace-only navigation label — so every instrument here was
+green throughout. The corpus is still 603/603 exact-ID with 0 false positives on
+355 clean cases, and all 474 shelf books report identically, which now means
+only that nothing else broke.
 
 ### Fixed
+
+- **A URL whose scheme is not followed by `//` is no longer read as a missing
+  file (RSC-007, RSC-033).** `<a href="kindle:embed:0002?mime=image/jpg">` was
+  resolved against the container as though it were a relative path, so it drew
+  "referenced resource could not be found" and "relative URL strings must not
+  have a query component" on a link that is neither. **141 books of the 2,798
+  carried it, 7 of them changing verdict** — the largest single false positive
+  that run found.
+  - The cause was `is_external`, which asked whether the href contained `"://"`.
+    RFC 3986 §4.2 settles what it should have asked: a first path segment
+    containing a colon "cannot be used as the first segment of a relative-path
+    reference, as it would be mistaken for a scheme name". So the test is the
+    scheme ABNF of §3.1, `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`, and it now
+    lives in one place, `url::scheme`, which `is_external`, `is_remote_url` and
+    `is_absolute` all share.
+  - **`news:` and `javascript:` links came out of the same hole**, each drawing
+    an RSC-007 nobody had reported, beside the HTM-025 below.
+  - Two spellings the ABNF gets right that the old test did not: `2:30` is not a
+    scheme, and `x-custom:y` is one. An ordinary relative path with a colon in a
+    later segment (`ch/a:b.xhtml`) is still a path, and still resolved — checked
+    against epubcheck, which agrees on all of it.
+- **`news:`, `javascript:` and 400-odd other registered schemes no longer draw
+  HTM-025.** The registered-scheme list had twelve entries. It now holds 433:
+  the union of IANA's registry (every status, read 2026-09-11), epubcheck's own
+  frozen 76-entry snapshot, and the twelve that were here.
+  - The union is deliberate. **Two of epubcheck's entries are not in IANA's
+    registry at all** — `javascript` and `shttp` — so reading "registered"
+    strictly would have warned where epubcheck does not; and IANA has `ws`,
+    `wss` and `sms`, which epubcheck's 2007 snapshot predates. Taking all three
+    lists means every disagreement runs in the permissive direction.
+- **`lang` and `xml:lang` differing only in letter case is no longer an error
+  (RSC-005).** `<html lang="en-US" xml:lang="en-us">` was reported in every file
+  that carried it. **22 books, and 21 of them changed verdict** — the largest
+  verdict-flipping cause in that run.
+  - HTML §3.2.5.2 names the comparison: the two "must have exactly the same
+    value when compared in an ASCII case-insensitive manner". **The
+    specification is more precise than epubcheck here**, which folds with
+    XPath's `lower-case()`, a Unicode fold; the two cannot differ on a real
+    language tag, whose subtags are ALPHA/DIGIT by RFC 5646's ABNF. So this
+    implements the rule rather than copying the implementation.
+  - Neither side is trimmed any more. XML attribute-value normalization does not
+    strip, so `lang=" en"` beside `xml:lang="en"` really is a mismatch;
+    epubcheck reports it and the trim used to swallow it.
+- **A navigation label made of a no-break space is no longer "must contain
+  text" (RSC-005).** 3 books, 2 changing verdict. epubcheck's assertion
+  normalizes with XPath's `normalize-space()`, which strips exactly space, tab,
+  CR and LF — `&#160;` is content. This used `str::trim`, whose Unicode
+  `White_Space` includes NO-BREAK SPACE.
+  - `xmlext::is_xml_blank` exists in this crate for precisely that trap and its
+    own note names the four sites it was written for. **The navigation document
+    was a fifth site and was missed**, which is the part worth keeping.
+  - **Reading the rule properly moved it in the other direction too.** The whole
+    assertion is `string-join(. | ./html:img/@alt | .//@aria-label)`, three
+    sources where this read one and a half: an `aria-label`, on the element or
+    any descendant, is a label and used to be ignored; and the `<img>` half
+    requires a **direct child** whose `alt` says something, where any descendant
+    `<img>` used to pass regardless of `alt`. Each shape was measured against
+    epubcheck 5.3.0, one book apiece.
+  - The note that justified the old behaviour had misread its own evidence. It
+    cited `content-model-a-multiple-images-valid.xhtml` for "an `<img>`
+    descendant is enough"; what makes that fixture valid is the *second*
+    image's `alt="some text"`.
+
+### Also fixed
 
 - **`opf.manifest_item.never_referenced` (OPF-097) now carries the manifest
   href in `params[0]`, not the abbreviation the message shows.** On a `data:`

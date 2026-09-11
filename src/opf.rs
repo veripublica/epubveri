@@ -468,15 +468,33 @@ pub(crate) fn data_url_media_type(href: &str) -> &str {
 }
 
 /// True for hrefs we should not resolve against the container (remote/special).
+///
+/// **"Has a scheme", not "contains `://`".** This was a `contains("://")` plus
+/// a hand-list of four schemes until 2026-09-11, and the gap between the two
+/// readings is every URL whose scheme is not hierarchical:
+/// `kindle:embed:0002?mime=image/jpg` has no `//`, so it was resolved against
+/// the container as if it were a relative path, and drew RSC-007 (no such
+/// file) and RSC-033 (a query component in a relative URL) on a link that is
+/// neither. 141 books of an external 2,798-book run carried it — the
+/// largest false positive that run found — and `news:` and `javascript:`
+/// links came out of the same hole.
+///
+/// RFC 3986 §4.2 is what settles it: a first path segment containing a
+/// colon "cannot be used as the first segment of a relative-path reference, as
+/// it would be mistaken for a scheme name". There is no reading under which
+/// `kindle:embed:0002` is a path. See [`crate::url::scheme`] for the ABNF.
+///
+/// epubcheck arrives at the same place by a different route —
+/// `OCFContainer.isRemote` asks whether the parsed URL is same-origin with the
+/// container root, and a `kindle:` URL is not — so this is parity, not a
+/// divergence.
+///
+/// The hand-list is also why [`is_remote_url`] below carries a note about
+/// `res:///` slipping between two predicates. Read that note as history: both
+/// now ask the same question of the scheme.
 pub(crate) fn is_external(href: &str) -> bool {
     let href = href.trim();
-    href.is_empty()
-        || href.starts_with('#')
-        || href.contains("://")
-        || href.starts_with("data:")
-        || href.starts_with("mailto:")
-        || href.starts_with("tel:")
-        || href.starts_with("file:")
+    href.is_empty() || href.starts_with('#') || crate::url::scheme(href).is_some()
 }
 
 /// True only for a genuine remote fetch (http/https) - unlike
@@ -521,15 +539,7 @@ pub(crate) fn is_remote_url(href: &str) -> bool {
     if href.starts_with("data:") || is_file_url(href) {
         return false;
     }
-    let Some(colon) = href.find(':') else {
-        return false;
-    };
-    let scheme = &href[..colon];
-    !scheme.is_empty()
-        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
-        && scheme
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    crate::url::scheme(href).is_some()
 }
 
 /// A `file:` URL, which EPUB never allows (RSC-030). epubcheck's rule is
@@ -7387,11 +7397,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // own `lang.attrib` declares `xml:lang` and `lang` as two independent
         // optional attributes with no constraint tying their values together.
         // So a book that sets both to different values is valid EPUB 2.
+        //
+        // **The comparison is ASCII case-insensitive, and the specification is
+        // more precise here than epubcheck is.** HTML §3.2.5.2: "If both the
+        // lang attribute in no namespace and the lang attribute in the XML
+        // namespace are specified on the same element, they must have exactly
+        // the same value when compared in an ASCII case-insensitive manner."
+        // epubcheck asserts `lower-case(@xml:lang) = lower-case(@lang)`, a
+        // *Unicode* fold - broader than the rule it implements, though the two
+        // cannot differ on a real language tag, whose subtags are ALPHA/DIGIT
+        // by RFC 5646's own ABNF. So `eq_ignore_ascii_case` is not an
+        // approximation of epubcheck: it is the operation the specification
+        // names, and copying epubcheck's fold would have been the looser
+        // choice.
+        //
+        // This was a case-sensitive `!=` until 2026-09-11, which made
+        // `<html lang="en-US" xml:lang="en-us">` an error. 22 books of an
+        // external 2,798-book run carried it and 21 of them changed verdict on
+        // it - the second-largest false positive that run found.
+        //
+        // **Neither side is trimmed, deliberately.** The rule compares the
+        // attribute values, and XML attribute-value normalization replaces tab,
+        // CR and LF with a space without stripping anything, so `lang=" en"`
+        // beside `xml:lang="en"` really is a mismatch - epubcheck reports it
+        // and the trim here used to swallow it.
         for n in d.descendants().filter(|n| is_epub3 && n.is_element()) {
             if let (Some(lang), Some(xml_lang)) = (
                 n.attr_no_ns("lang"),
                 n.attribute(("http://www.w3.org/XML/1998/namespace", "lang")),
-            ) && lang.trim() != xml_lang.trim()
+            ) && !lang.eq_ignore_ascii_case(xml_lang)
             {
                 report.push_node(
                     RSC_005,
@@ -7400,7 +7434,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     path.clone(),
                     n,
                     "opf.content_document.lang_xmllang_mismatch",
-                    vec![lang.trim().to_string(), xml_lang.trim().to_string()],
+                    vec![lang.to_string(), xml_lang.to_string()],
                 );
             }
         }
@@ -12562,6 +12596,77 @@ mod tests {
             heading.len(),
             1,
             "exactly one finding for one empty element: {heading:?}"
+        );
+    }
+
+    /// What counts as label text: the three sources of epubcheck's one
+    /// expression, `string-join(.|./html:img/@alt|.//@aria-label)` normalized
+    /// with `normalize-space()`.
+    ///
+    /// **Every case here was measured against epubcheck 5.3.0, one book per
+    /// shape**, because the change moved in both directions at once and the
+    /// written evidence that was here before had misread its own fixture.
+    ///
+    /// Neither the corpus nor the shelf can hold this. The corpus's only
+    /// image fixture pairs `alt=""` with `alt="some text"`, so it passes
+    /// whether or not `alt` is read at all; and a nav label made of one
+    /// `&#160;` is a thing publishers ship and our 474 books do not have.
+    #[test]
+    fn what_counts_as_nav_label_text() {
+        fn label_rules(inner: &str) -> Vec<&'static str> {
+            let nav = format!(r#"<nav epub:type="toc"><ol><li>{inner}</li></ol></nav>"#);
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_nav_body(&nav))
+                .messages
+                .iter()
+                .filter_map(|m| m.rule)
+                .filter(|r| r.starts_with("navdoc.label."))
+                .collect();
+            v.sort_unstable();
+            v
+        }
+
+        // Text. `normalize-space()` strips space, tab, CR and LF and nothing
+        // else, so a NO-BREAK SPACE is content. `str::trim` disagreed.
+        assert!(
+            label_rules(r#"<a href="ch1.xhtml">&#160;</a>"#).is_empty(),
+            "a no-break space is text"
+        );
+        assert_eq!(
+            label_rules(r#"<a href="ch1.xhtml"> &#9;&#10;</a>"#),
+            ["navdoc.label.empty_anchor"],
+            "XML whitespace alone is still not text"
+        );
+
+        // `aria-label`, on the element itself or on any descendant: `.//@x`
+        // steps through `descendant-or-self`.
+        assert!(
+            label_rules(r#"<a href="ch1.xhtml" aria-label="Chapter one"> </a>"#).is_empty(),
+            "the element's own aria-label is a label"
+        );
+        assert!(
+            label_rules(r#"<a href="ch1.xhtml"><b aria-label="Chapter one"> </b></a>"#).is_empty(),
+            "a descendant's aria-label is a label"
+        );
+
+        // `./html:img/@alt`: a direct child, and the `alt` must say something.
+        assert!(
+            label_rules(r#"<a href="ch1.xhtml"><img src="i.jpg" alt="ch"/></a>"#).is_empty(),
+            "a child image with a real alt is a label"
+        );
+        assert_eq!(
+            label_rules(r#"<a href="ch1.xhtml"><img src="i.jpg" alt=""/></a>"#),
+            ["navdoc.label.empty_anchor"],
+            "an empty alt says nothing"
+        );
+        assert_eq!(
+            label_rules(r#"<a href="ch1.xhtml"><img src="i.jpg"/></a>"#),
+            ["navdoc.label.empty_anchor"],
+            "no alt at all says nothing"
+        );
+        assert_eq!(
+            label_rules(r#"<a href="ch1.xhtml"><span><img src="i.jpg" alt="ch"/></span></a>"#),
+            ["navdoc.label.empty_anchor"],
+            "the image must be the label's own child - the span passes, the anchor does not"
         );
     }
 
@@ -19459,6 +19564,52 @@ mod tests {
             1,
             "EPUB 3 reports it exactly once"
         );
+    }
+
+    /// `lang` and `xml:lang` are compared **ASCII case-insensitively**, which
+    /// is the comparison HTML §3.2.5.2 names: they "must have exactly the
+    /// same value when compared in an ASCII case-insensitive manner".
+    ///
+    /// The shelf cannot protect this. `en-US`/`en-us` is what a publisher
+    /// writes, and 22 books of an external 2,798-book run carried it while
+    /// **zero** books of our own 474-book shelf did - so the rule went
+    /// case-sensitive for months with every instrument green. The test is the
+    /// protection.
+    #[test]
+    fn lang_and_xml_lang_differ_only_in_case_is_not_a_mismatch() {
+        let rule = "opf.content_document.lang_xmllang_mismatch";
+        let fires = |body: &str| -> usize {
+            let doc = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            crate::validate_bytes(epub_with_ch1(&doc))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some(rule))
+                .count()
+        };
+
+        // Case alone is not a difference - the subtags of a language tag are
+        // case-insensitive by RFC 5646 §2.1.1, and the capitalization
+        // conventions "MUST NOT be taken to carry meaning".
+        for same in [
+            "<p lang=\"en-US\" xml:lang=\"en-us\">x</p>",
+            "<p lang=\"EN\" xml:lang=\"en\">x</p>",
+            "<p lang=\"zh-Hant-TW\" xml:lang=\"ZH-HANT-tw\">x</p>",
+        ] {
+            assert_eq!(fires(same), 0, "case alone is not a mismatch: {same}");
+        }
+
+        // A real difference still is one.
+        assert_eq!(fires("<p lang=\"en\" xml:lang=\"fr\">x</p>"), 1);
+
+        // **Neither side is trimmed.** XML attribute-value normalization does
+        // not strip, so a leading space is part of the value and the two really
+        // do differ. epubcheck agrees - `lower-case(" en") = lower-case("en")`
+        // is false - and the trim this rule used to do swallowed it.
+        assert_eq!(fires("<p lang=\" en\" xml:lang=\"en\">x</p>"), 1);
     }
 
     /// OPF-005 (#50): a prefix declaration ending in a name with no URI.
