@@ -8,6 +8,54 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.14.2] - 2026-09-11
+
+One more instance of 0.14.1's defect, found by auditing every `params` call site
+in the crate rather than by waiting for it — epubsana asked whether
+"`params[1]` is machine-usable" was a property of OPF-090 or of `params`
+generally, and the honest answer needed the survey. 373 call sites read; this is
+the only one that had to move. Corpus unchanged (603/603 exact-ID, 0 false
+positives on 355 clean cases); all 474 shelf books report identically.
+
+### Fixed
+
+- **`opf.manifest_item.never_referenced` (OPF-097) now carries the manifest
+  href in `params[0]`, not the abbreviation the message shows.** On a `data:`
+  URL the message names the resource by its first 30 characters plus an
+  ellipsis, as epubcheck's `OPFItem`:117 does — and `params[0]` was showing the
+  same truncated, whitespace-stripped string. The rule's two other call sites
+  push the plain href, so this branch was the only place `params[0]` was not
+  the href, and a consumer matching it against the package document would have
+  found nothing, silently.
+  - **The message is unchanged**, so nothing about epubcheck parity moves. This
+    is the same `text` / `params` split 0.14.1 made for OPF-090's
+    `font/(ttf|otf)`: what a person reads may abbreviate, what a machine reads
+    is what the file holds.
+  - Population on the 474-book shelf is zero — 17 OPF-097 findings across 11
+    books and not one of them a `data:` URL.
+  - An existing test asserted the old behaviour and failed, which is the
+    protection working; it now asserts both halves, the abbreviated message and
+    the whole href.
+
+### The rest of the survey, for the record
+
+Three other shapes exist and are **left as they are**, because each is a
+faithful answer to its own question rather than a value meant to be written
+back:
+
+- **A conventional namespace prefix** we compose rather than read —
+  `enc:CipherData` in `encryption.xml` (`src/ocf.rs`), `dc:{name}` in the
+  package document. The document need not bind that prefix; the name is ours,
+  and the message and `params` agree on it.
+- **A normalised copy** — `text.trim()` on OPF-053, and both sides of NCX-001.
+  Faithful in content, not byte-identical to the document.
+- **A lossy rendering of bytes** — PKG-007's `params[0]` is the `mimetype`
+  file's content through `from_utf8_lossy`, so it can carry `U+FFFD`. The bytes
+  being arbitrary is the defect being reported.
+
+No `params` value anywhere is a joined list, a range, or a `{:?}` debug
+rendering.
+
 ## [0.14.1] - 2026-09-11
 
 Two defects in OPF-090's suggested replacement, both found by auditing the

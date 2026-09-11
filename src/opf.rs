@@ -10742,7 +10742,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             opf_path,
                             item,
                             "opf.manifest_item.never_referenced",
-                            vec![shown.clone()],
+                            // **The href, not the abbreviated form the message
+                            // shows.** `data_url_display` strips whitespace and
+                            // truncates at 30 characters with an ellipsis, which
+                            // is right for a message and useless to anything
+                            // matching against the document — and the rule's two
+                            // other sites push the plain `href`, so this branch
+                            // was the only one where `params[0]` was not the
+                            // manifest href. Same shape as OPF-090's
+                            // `font/(ttf|otf)`, found by the audit epubsana
+                            // asked for after that one (#135): `text` may
+                            // abbreviate, `params` carries what is in the file.
+                            vec![href.to_string()],
                         );
                     }
                     continue;
@@ -20564,13 +20575,28 @@ mod tests {
             "both in the spine: nothing to report"
         );
 
-        // --- a data: href is asked the question, and is named by its first
-        // 30 characters plus an ellipsis, as epubcheck's `OPFItem`:117 does.
-        let data = r#"<item id="img" href="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA" media-type="image/jpeg"/>"#;
+        // --- a data: href is asked the question, and the *message* names it by
+        // its first 30 characters plus an ellipsis, as epubcheck's
+        // `OPFItem`:117 does. `params` carries the whole href: the abbreviation
+        // is for a reader, and anything matching against the package document
+        // needs the value the document holds. This assertion used to read
+        // `params` and expect the abbreviation — see
+        // `opf_097_params_carry_the_href_not_its_abbreviation`, and #135, which
+        // is where the same split was made one rule over.
+        const DATA_HREF: &str = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAA";
+        let data = format!(r#"<item id="img" href="{DATA_HREF}" media-type="image/jpeg"/>"#);
         assert_eq!(
-            unreferenced(book(data, "", "")),
-            vec!["data:image/jpeg;base64,/9j/4AA…".to_string()],
-            "the payload does not belong in a usage message"
+            unreferenced(book(&data, "", "")),
+            vec![DATA_HREF.to_string()],
+            "params carry the href, not the abbreviation"
+        );
+        assert!(
+            crate::validate_bytes(book(&data, "", ""))
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::OPF_097
+                    && m.text.contains("data:image/jpeg;base64,/9j/4AA…")),
+            "the message still abbreviates, as epubcheck does"
         );
         // ...and it takes the same three exemptions as every other item. The
         // first version of the data-URL branch carried only `isNav()`, and
@@ -25339,6 +25365,92 @@ mod tests {
             got[3]
         );
         assert_eq!(got[3].1, ["application/font-sfnt"]);
+    }
+
+    /// `params[0]` on `opf.manifest_item.never_referenced` is the manifest
+    /// href, including on the `data:` branch — where the *message* shows
+    /// `data_url_display`'s abbreviation (whitespace stripped, truncated at 30
+    /// characters with an ellipsis) and `params` used to show it too. A
+    /// consumer matching `params[0]` against the package document would have
+    /// found nothing, silently. Found by the `params` audit epubsana asked for
+    /// after #135, and it is the same shape as OPF-090's `font/(ttf|otf)`:
+    /// `text` may abbreviate, `params` carries what is in the file. Population
+    /// on the 474-book shelf is zero — 17 findings in 11 books, none of them a
+    /// `data:` URL.
+    #[test]
+    fn opf_097_params_carry_the_href_not_its_abbreviation() {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        // Long enough that `data_url_display` must truncate it, and carrying a
+        // newline so the whitespace-stripping shows up too.
+        const DATA_URL: &str =
+            "data:text/plain;base64,QUJDREVGR0hJSktMTU5PUFFS\nU1RVVldYWVphYmNkZWZnaGlqa2xtbm9w";
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="c1" href="a.xhtml" media-type="application/xhtml+xml"/>
+    <item id="d1" href="{DATA_URL}" media-type="text/plain"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#
+        );
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+            xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+            <body><nav epub:type=\"toc\"><ol><li><a href=\"a.xhtml\">c</a></li></ol></nav></body></html>";
+        const DOC: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (name, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/nav.xhtml", NAV),
+                ("OEBPS/a.xhtml", DOC),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        let msgs = crate::validate_bytes(buf).messages;
+        let m = msgs
+            .iter()
+            .find(|m| m.rule == Some("opf.manifest_item.never_referenced"))
+            .expect("the data: item is referenced by nothing");
+        // The message abbreviates — that is what it is for, and asserting it
+        // here is what makes the params assertion mean something.
+        assert!(
+            m.text.contains('…'),
+            "the message should still abbreviate: {}",
+            m.text
+        );
+        // `params[0]` does not. The newline comes back as a space because XML
+        // attribute-value normalization replaces it — the parser's doing, not
+        // ours, and a consumer's parser does the same, so `params[0]` is still
+        // exactly what they will read off the attribute.
+        assert_eq!(m.params, [DATA_URL.replace('\n', " ")]);
+        assert!(m.params[0].len() > 60, "not the truncated form");
     }
 
     /// The signature reader, against every magic number RFC 8081 registers.
