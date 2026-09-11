@@ -15,6 +15,8 @@
 -->
 <grammar xmlns="http://relaxng.org/ns/structure/1.0"
          xmlns:dc="http://purl.org/dc/elements/1.1/"
+         xmlns:opf="http://www.idpf.org/2007/opf"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          ns="http://www.idpf.org/2007/opf"
          datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 
@@ -334,19 +336,147 @@
 
   <!-- Everything the permissive metadata model allowed, except that an
        OPF-namespace <meta> must now be the EPUB 2 shape. -->
+  <!-- EPUB 2 `<metadata>`. The Dublin Core elements carry a per-element
+       attribute list, everything else stays as loose as it was.
+
+       `opf20.rng` gives the fifteen five different lists, and the differences
+       are not decorative - `opf:file-as` is legal on `dc:creator` and an error
+       on `dc:title`, `xml:lang` is legal on `dc:title` and an error on
+       `dc:language`. All of it is namespaced: `<dc:creator file-as="..."
+       role="aut">` with no prefix is an error, because these attributes live
+       in the OPF namespace and a no-namespace attribute is a different
+       attribute.
+
+       This was `looseContent` until 2026-09-11, so the whole class was missed:
+       an external 2,798-book run reported 9 books where epubcheck errors and we
+       were silent. Five shapes probed against 5.3.0, one book each - a
+       `file-as` on `dc:title`, an unprefixed `file-as`/`role` pair, an
+       `xml:lang` on `dc:language`, an `opf:role` on `dc:publisher` and an
+       `opf:file-as` on `dc:subject` are each RSC-005 there; a properly
+       prefixed `dc:creator` pair and a `dc:date opf:event` are clean.
+
+       **Safe to tighten, and measured rather than assumed**: of the 474-book
+       shelf, 390 packages are EPUB 2 and 385 of them put an attribute other
+       than `id`/`xml:lang` on a Dublin Core element - but resolving prefixes
+       to namespaces, **not one of those is disallowed**. A prefix census says
+       the opposite (`ns0:role`, `ns3:scheme` and friends look foreign and are
+       the same attributes under another prefix), which is why the scan that
+       decided this resolves namespaces. -->
   <define name="metadataContent-epub2">
     <ref name="anyAttributes"/>
     <mixed>
       <zeroOrMore>
         <choice>
           <ref name="metaEl-epub2"/>
-          <element>
-            <anyName><except><name>meta</name></except></anyName>
-            <ref name="looseContent"/>
-          </element>
+          <ref name="dcCommon-epub2"/>
+          <ref name="dcAgent-epub2"/>
+          <ref name="dcIdentifier-epub2"/>
+          <ref name="dcTyped-epub2"/>
+          <ref name="dcDate-epub2"/>
+          <ref name="nonDcOrMetaElement-epub2"/>
         </choice>
       </zeroOrMore>
     </mixed>
+  </define>
+
+  <!-- The generic branch must EXCLUDE the fifteen, or the choice above makes
+       the constraint vacuous: a `<dc:title opf:file-as>` would simply match
+       here instead. Same reason `nonDcElement` carries the list on the EPUB 3
+       side. `meta` is excluded too, as before, so `metaEl-epub2` owns it. -->
+  <define name="nonDcOrMetaElement-epub2">
+    <element>
+      <anyName>
+        <except>
+        <name>meta</name>
+        <name>dc:title</name>
+        <name>dc:source</name>
+        <name>dc:creator</name>
+        <name>dc:subject</name>
+        <name>dc:description</name>
+        <name>dc:publisher</name>
+        <name>dc:contributor</name>
+        <name>dc:relation</name>
+        <name>dc:coverage</name>
+        <name>dc:rights</name>
+        <name>dc:identifier</name>
+        <name>dc:language</name>
+        <name>dc:date</name>
+        <name>dc:type</name>
+        <name>dc:format</name>
+        </except>
+      </anyName>
+      <ref name="looseContent"/>
+    </element>
+  </define>
+
+  <!-- `id` and `xml:lang`. -->
+  <define name="dcCommon-epub2">
+    <element>
+      <choice>
+        <name>dc:title</name>
+        <name>dc:coverage</name>
+        <name>dc:description</name>
+        <name>dc:publisher</name>
+        <name>dc:relation</name>
+        <name>dc:rights</name>
+        <name>dc:source</name>
+        <name>dc:subject</name>
+      </choice>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- The two that name a person: `opf:file-as` and `opf:role` as well. -->
+  <define name="dcAgent-epub2">
+    <element>
+      <choice>
+        <name>dc:creator</name>
+        <name>dc:contributor</name>
+      </choice>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
+      <optional><attribute name="opf:file-as"><data type="string"/></attribute></optional>
+      <optional><attribute name="opf:role"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- `opf:scheme` is the identifier's alone. -->
+  <define name="dcIdentifier-epub2">
+    <element>
+      <name>dc:identifier</name>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="xsi:type"><data type="string"/></attribute></optional>
+      <optional><attribute name="opf:scheme"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- `xsi:type` but no `xml:lang`: these hold codes, not prose. -->
+  <define name="dcTyped-epub2">
+    <element>
+      <choice>
+        <name>dc:language</name>
+        <name>dc:type</name>
+        <name>dc:format</name>
+      </choice>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="xsi:type"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
+  </define>
+
+  <!-- `opf:event` is the date's alone. -->
+  <define name="dcDate-epub2">
+    <element>
+      <name>dc:date</name>
+      <optional><attribute name="id"><data type="string"/></attribute></optional>
+      <optional><attribute name="xsi:type"><data type="string"/></attribute></optional>
+      <optional><attribute name="opf:event"><data type="string"/></attribute></optional>
+      <text/>
+    </element>
   </define>
 
   <!-- opf20: `name` and `content` are required; `id`, `xml:lang` and

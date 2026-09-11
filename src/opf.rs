@@ -19703,6 +19703,81 @@ mod tests {
         assert_eq!(fires("<p lang=\" en\" xml:lang=\"en\">x</p>"), 1);
     }
 
+    /// EPUB 2's Dublin Core elements each take their own attribute list
+    /// (`opf20.rng`), and the differences are load-bearing: `opf:file-as` is
+    /// legal on `dc:creator` and an error on `dc:title`; `xml:lang` is legal on
+    /// `dc:title` and an error on `dc:language`; and every `opf:*` attribute is
+    /// namespaced, so an unprefixed `file-as` is a different attribute.
+    ///
+    /// Ten shapes, each measured against epubcheck 5.3.0 on its own book.
+    /// The shelf could not have found this class and cannot protect it: of its
+    /// 390 EPUB 2 packages, 385 put something other than `id`/`xml:lang` on a
+    /// Dublin Core element and **not one of those is disallowed**.
+    #[test]
+    fn epub2_dublin_core_attributes_are_per_element() {
+        let opf = |extra: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"
+            xmlns:opf="http://www.idpf.org/2007/opf"
+            xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    {extra}
+  </metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="c1"/></spine>
+</package>"#
+            )
+        };
+        let msgs = |extra: &str| -> Vec<String> {
+            const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                               <head><title>t</title></head><body><p>x</p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(&opf(extra)), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .map(|m| m.text.clone())
+                .collect()
+        };
+        // The bare book already draws one RSC-005 of its own - this builder's
+        // EPUB 2 spine has no `toc` - so every count below is against that
+        // baseline rather than against zero.
+        let baseline = msgs("");
+        let rsc005 = |extra: &str| -> usize {
+            msgs(extra)
+                .into_iter()
+                .filter(|m| !baseline.contains(m))
+                .count()
+        };
+
+        for valid in [
+            r#"<dc:creator opf:file-as="D, A" opf:role="aut">A D</dc:creator>"#,
+            r#"<dc:contributor opf:file-as="c" opf:role="bkp">c</dc:contributor>"#,
+            r#"<dc:date opf:event="publication">2020</dc:date>"#,
+            r#"<dc:identifier opf:scheme="ISBN">1234</dc:identifier>"#,
+            r#"<dc:title xml:lang="tr">Baslik</dc:title>"#,
+            // A foreign element in the metadata stays completely loose.
+            r#"<calibre:series xmlns:calibre="http://calibre.kovidgoyal.net/2009/metadata">S</calibre:series>"#,
+        ] {
+            assert_eq!(rsc005(valid), 0, "valid in EPUB 2: {valid}");
+        }
+
+        for invalid in [
+            r#"<dc:title opf:file-as="X">x</dc:title>"#,
+            // Unprefixed: a no-namespace attribute is a different attribute.
+            r#"<dc:creator file-as="D, A" role="aut">A D</dc:creator>"#,
+            r#"<dc:language xml:lang="en">en</dc:language>"#,
+            r#"<dc:publisher opf:role="pbl">P</dc:publisher>"#,
+            r#"<dc:subject opf:file-as="S">S</dc:subject>"#,
+        ] {
+            assert!(rsc005(invalid) > 0, "invalid in EPUB 2: {invalid}");
+        }
+    }
+
     /// A relative reference under a remote `<base>` never addresses the
     /// container, so it cannot leak out of it (RSC-026).
     ///

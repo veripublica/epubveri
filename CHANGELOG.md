@@ -165,6 +165,32 @@ the book.
     descendant is enough"; what makes that fixture valid is the *second*
     image's `alt="some text"`.
 
+### Added
+
+- **EPUB 2's Dublin Core elements now carry their own attribute lists.** The
+  same report's largest false *negative*: 9 books where epubcheck errors and we
+  said nothing. `opf20.rng` gives the fifteen `dc:*` elements five different
+  attribute lists, and the differences decide real cases — `opf:file-as` is
+  legal on `dc:creator` and an error on `dc:title`; `xml:lang` is legal on
+  `dc:title` and an error on `dc:language`; and every `opf:*` attribute is
+  namespaced, so `<dc:creator file-as="..." role="aut">` with no prefix is an
+  error. Ten shapes probed against 5.3.0, one book each.
+  - **The pre-measurement said no book on the shelf would move, and three
+    did — because it answered a narrower question than the change asked.** It
+    resolved prefixes to namespaces and found that of the 390 EPUB 2 packages,
+    385 put something beyond `id`/`xml:lang` on a Dublin Core element and *not
+    one* of those attributes is disallowed. True, and beside the point: the
+    grammar also constrains the elements' **content** to text, and three books
+    carry `<opf:p>` markup inside `<dc:description>`.
+  - Those three are the gap closing, not a new false positive, and the
+    direction check says so: epubcheck reports 47, 31 and 6 RSC-005 on them
+    where we reported 43, 19 and 1, and we now report 47, 30 and 6. **Two of
+    the three match epubcheck exactly for the first time**, and none exceeds
+    it.
+  - A prefix census would have concluded the opposite — `ns0:role`,
+    `ns3:scheme` and their friends look foreign and are the same attributes
+    under another prefix. Namespaces, not prefixes.
+
 ### Also fixed
 
 - **`opf.manifest_item.never_referenced` (OPF-097) now carries the manifest
