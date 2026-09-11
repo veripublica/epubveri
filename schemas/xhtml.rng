@@ -2605,7 +2605,12 @@
              latter before removing anything from a shared set. -->
         <element name="meta"><ref name="globalAttrsCore-epub2"/>
           <optional><attribute name="http-equiv"><data type="string"/></attribute></optional>
-          <optional><attribute name="name"><data type="string"/></attribute></optional>
+          <!-- `name` is an NMTOKEN here (`meta.rng`:19), so `<meta name="a b">`
+               is an error - no spaces. HTML5 dropped the type and takes a free
+               string, which is why this is the split copy and `metaEl` above
+               is not: measured, one book per version, and epubcheck reports
+               the EPUB 2 one and accepts the EPUB 3 one. -->
+          <optional><attribute name="name"><data type="NMTOKEN"/></attribute></optional>
           <optional><attribute name="content"><data type="string"/></attribute></optional>
           <optional><attribute name="scheme"><data type="string"/></attribute></optional>
         </element>

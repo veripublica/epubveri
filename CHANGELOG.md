@@ -33,11 +33,13 @@ corpus is still 603/603 exact-ID with 0 false positives on 355 clean cases, and
 all 474 shelf books report identically, which now means only that nothing else
 broke.
 
-One row of that report could **not** be reproduced and is not fixed: "spaces
-around a URL" drawing RSC-020 on `<a href=" http://… ">`. Neither the markup as
-given nor a manifest href with surrounding spaces produces anything from
-0.14.1 — that case was fixed in 0.7.2, on patrik's MobileRead report. It needs
-the book.
+Two rows of that report could **not** be reproduced. "Spaces around a URL"
+drawing RSC-020 on `<a href=" http://… ">` produces nothing from 0.14.1 in any
+spelling tried, with or without a base — that case was fixed in 0.7.2, on
+patrik's MobileRead report, and it needs the book. And "NCX playOrder errors
+when every value is 0" already agrees: two `navPoint`s both at `playOrder="0"`
+draw RSC-005 from both tools, so if something differs there it is a count and
+not an id.
 
 ### Fixed
 
@@ -167,6 +169,11 @@ the book.
 
 ### Added
 
+- **An EPUB 2 `<meta name>` is an NMTOKEN, so it may not contain a space.**
+  `meta.rng`:19 types it; HTML5 dropped the type and takes a free string, which
+  is why this is the split EPUB 2 copy and the shared `metaEl` is untouched.
+  Measured one book per version: epubcheck reports `<meta name="a b">` at 2.0
+  and accepts it at 3.0.
 - **Five CSS misses, and the one that needed a second reading of the rule.**
   - **A `url()` is a registered reference and now answers the three questions
     every other one does**: RSC-033 for a query component in a relative URL
