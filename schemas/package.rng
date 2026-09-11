@@ -347,7 +347,7 @@
   <define name="packageEl-epub2">
     <element name="package">
       <attribute name="version"><data type="string"/></attribute>
-      <optional><attribute name="unique-identifier"><data type="string"/></attribute></optional>
+      <optional><attribute name="unique-identifier"><data type="IDREF"/></attribute></optional>
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <interleave>
         <element name="metadata"><ref name="metadataContent-epub2"/></element>
@@ -410,8 +410,39 @@
        the opposite (`ns0:role`, `ns3:scheme` and friends look foreign and are
        the same attributes under another prefix), which is why the scan that
        decided this resolves namespaces. -->
+  <!-- **Either the legacy wrappers or the plain elements, never both.**
+       `OPF20.metadata-content` is a `<choice>` of two interleaves: a required
+       `<dc-metadata>` with an optional `<x-metadata>` beside it, *or* the
+       Dublin Core elements written directly. epubcheck reports a book that
+       mixes them (RSC-005, `element "dc-metadata" not allowed here`); we
+       accepted the wrapper anywhere, which an external 2,798-book run found on
+       2 books.
+
+       The wrappers' own contents stay loose - that is OEBPS 1.2's vocabulary
+       and a separate question, the same line drawn for OPF-047. What is
+       enforced here is only the either/or.
+
+       0 of the shelf's 390 EPUB 2 packages use a wrapper at all. -->
   <define name="metadataContent-epub2">
     <ref name="anyAttributes"/>
+    <choice>
+      <ref name="legacyMetadata-epub2"/>
+      <ref name="modernMetadata-epub2"/>
+    </choice>
+  </define>
+
+  <define name="legacyMetadata-epub2">
+    <mixed>
+      <interleave>
+        <element name="dc-metadata"><ref name="looseContent"/></element>
+        <optional>
+          <element name="x-metadata"><ref name="looseContent"/></element>
+        </optional>
+      </interleave>
+    </mixed>
+  </define>
+
+  <define name="modernMetadata-epub2">
     <mixed>
       <zeroOrMore>
         <choice>
@@ -436,6 +467,10 @@
       <anyName>
         <except>
         <name>meta</name>
+        <!-- Excluded so the modern branch cannot absorb a legacy wrapper and
+             make the choice above vacuous. -->
+        <name>dc-metadata</name>
+        <name>x-metadata</name>
         <name>dc:title</name>
         <name>dc:source</name>
         <name>dc:creator</name>

@@ -2647,6 +2647,23 @@ fn check_guide_references(
                         "opf.guide.reference_missing_resource",
                         vec![href.to_string()],
                     );
+                } else {
+                    // The file is in the container and not in the manifest,
+                    // which is a different fault from "no such file" and has
+                    // its own id. A guide reference is registered like any
+                    // other, and `ResourceReferencesChecker` reports RSC-008
+                    // for a target the manifest does not declare - measured on
+                    // one book, where epubcheck gives OPF-031 and RSC-008
+                    // together and we gave only the first.
+                    report.push_node(
+                        RSC_008,
+                        Severity::Error,
+                        format!("guide reference '{href}' is not declared in the manifest"),
+                        opf_path,
+                        r,
+                        "opf.guide.reference_undeclared_resource",
+                        vec![href.to_string()],
+                    );
                 }
             }
             Some((id, (_, mt))) => {
@@ -2779,7 +2796,17 @@ fn check_ncx_content_fragments(
         let Some(src) = n.attr_no_ns("src") else {
             continue;
         };
-        if is_external(src) {
+        // **An empty `src` is a reference to this document, not the absence of
+        // one.** RFC 3986 §5.3: an empty reference resolves to the base URI,
+        // so `<content src=""/>` points at the NCX itself - which is not an
+        // OPS document, so epubcheck registers it and reports RSC-010
+        // (measured, one book). `is_external` counts an empty href as
+        // external, which is right where it means "nothing to resolve" and
+        // wrong here, and the whole element was being skipped.
+        //
+        // A fragment-only `src="#x"` keeps the old behaviour: it is non-empty,
+        // so `is_external` still stops it here.
+        if !src.trim().is_empty() && is_external(src) {
             continue;
         }
         // RSC-020: an unencoded space in the reference itself. epubcheck
@@ -2815,7 +2842,11 @@ fn check_ncx_content_fragments(
             Some((p, f)) => (p, Some(f)),
             None => (src, None),
         };
-        let resolved = nfc(&resolve(&dir, target));
+        let resolved = if target.trim().is_empty() {
+            nfc(ncx_path)
+        } else {
+            nfc(&resolve(&dir, target))
+        };
         if !name_index.contains_key(&resolved) {
             report.push_node(
                 RSC_007,
@@ -3536,7 +3567,25 @@ fn check_unique_identifier(
     pos: Position,
     report: &mut Report,
 ) -> Option<String> {
-    match pkg.attr_no_ns("unique-identifier").map(str::trim) {
+    // **An empty value counts as missing.** `OPFHandler`:511 keeps the
+    // attribute only `if (uniqueIdentAttr != null && !uniqueIdentAttr
+    // .equals(""))` and reports OPF-048 otherwise, so `unique-identifier=""`
+    // draws it there and drew only OPF-030 here.
+    //
+    // Reported *beside* OPF-030 rather than instead of it: an empty value
+    // names no `dc:identifier`, so epubcheck gives both, and returning early
+    // here would have traded one miss for another.
+    let uid_attr = pkg.attr_no_ns("unique-identifier").map(str::trim);
+    if uid_attr == Some("") {
+        report.push_at_pos(
+            OPF_048,
+            Severity::Error,
+            "<package>'s unique-identifier attribute has no value",
+            opf_path,
+            pos,
+        );
+    }
+    match uid_attr {
         Some(uid) => {
             match identifiers
                 .iter()
@@ -4505,8 +4554,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .collect();
                 text.trim() == "roll"
             });
+        // **Descendants, not children.** epubcheck's `OPFHandler` dispatches
+        // on namespace plus local name wherever the element sits, so a
+        // `<dc:title>` wrapped in a legacy `<dc-metadata>` counts there. Ours
+        // looked at direct children only and reported all three required
+        // elements missing on a pure legacy EPUB 2 package that epubcheck
+        // accepts - a false positive found while measuring the wrapper, not
+        // reported by anyone.
+        //
+        // Widening can only *remove* findings here, which is the safe
+        // direction; the predicate stays on the local name rather than
+        // gaining a namespace test, since narrowing it is the half that could
+        // invent one.
         let has = |local: &str| {
-            md.children()
+            md.descendants()
                 .any(|n| n.is_element() && n.tag_name().name() == local)
         };
         // The three required-metadata reports are silenced for OEBPS 1.2, and
@@ -4520,6 +4581,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // format instead of to the oracle is the mistake this project keeps
         // having to undo. epubcheck reports none of these three here, so
         // neither do we — and OPF-030 stays, as it does there.
+        // OPF-049 on a legacy `<dc-metadata>` / `<x-metadata>` wrapper in a
+        // package that is not OEBPS 1.2. `OPFHandler`:625 reports it with the
+        // element's own name - the message reads "Item id … was not found in
+        // the manifest", which is an odd choice for this condition but is
+        // deliberate: the branch is exactly `if (!opf12PackageFile)`.
+        //
+        // The wrapper's own contents are not judged here. 0 of the shelf's 390
+        // EPUB 2 packages use one; 2 books of an external 2,798-book run did.
+        if !is_oeb12 {
+            for w in md
+                .descendants()
+                .filter(|n| n.is_element())
+                .filter(|n| matches!(n.tag_name().name(), "dc-metadata" | "x-metadata"))
+            {
+                report.push_node(
+                    OPF_049,
+                    Severity::Error,
+                    format!(
+                        "<{}> is a legacy OEBPS 1.2 wrapper and does not belong in this package",
+                        w.tag_name().name()
+                    ),
+                    opf_path,
+                    w,
+                    "opf.metadata.legacy_wrapper",
+                    vec![w.tag_name().name().to_string()],
+                );
+            }
+        }
         if !has("title") && !is_oeb12 {
             report.push_node(
                 RSC_005,
@@ -4731,7 +4820,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             );
         }
         let identifiers: Vec<_> = md
-            .children()
+            .descendants()
             .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
             .collect();
         if identifiers.is_empty() && !is_oeb12 {
@@ -5518,7 +5607,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     {
         let identifiers: Vec<_> = metadata
             .into_iter()
-            .flat_map(|md| md.children())
+            .flat_map(|md| md.descendants())
             .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
             .collect();
         package_identifier_text =
@@ -19715,6 +19804,80 @@ mod tests {
         // do differ. epubcheck agrees - `lower-case(" en") = lower-case("en")`
         // is false - and the trim this rule used to do swallowed it.
         assert_eq!(fires("<p lang=\" en\" xml:lang=\"en\">x</p>"), 1);
+    }
+
+    /// The legacy `<dc-metadata>` wrapper: reported as OPF-049, and its
+    /// contents still count as the required metadata.
+    ///
+    /// Both halves measured against epubcheck 5.3.0. The second is the one
+    /// that was wrong in *our* favour's opposite direction: a pure legacy
+    /// EPUB 2 package drew three "Required metadata … is missing" errors and
+    /// an OPF-030 here, and none of them there, because `OPFHandler`
+    /// dispatches on namespace plus local name at any depth while we looked at
+    /// direct children. A false positive found by measuring, not reported.
+    #[test]
+    fn a_legacy_metadata_wrapper_is_opf_049_and_still_holds_the_metadata() {
+        let opf = |metadata: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">{metadata}</metadata>
+  <manifest>
+    <item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine toc="c1"><itemref idref="c1"/></spine>
+</package>"#
+            )
+        };
+        const DC: &str = r#"<dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language>"#;
+
+        let ids = |metadata: &str| {
+            opf_ids_of(
+                &opf(metadata),
+                &[
+                    crate::ids::OPF_049,
+                    crate::ids::OPF_030,
+                    crate::ids::RSC_005,
+                ],
+            )
+        };
+        // Plain: nothing to say.
+        assert!(ids(DC).is_empty(), "a plain EPUB 2 metadata block is clean");
+        // Wrapped: the wrapper is the only complaint - the metadata inside it
+        // is found, so no OPF-030 and no "required metadata missing".
+        let wrapped = ids(&format!("<dc-metadata>{DC}</dc-metadata>"));
+        assert_eq!(wrapped, vec![crate::ids::OPF_049], "got {wrapped:?}");
+    }
+
+    /// An empty `unique-identifier` is a missing one (OPF-048), *beside* the
+    /// OPF-030 it also earns.
+    ///
+    /// `OPFHandler`:511 keeps the attribute only when it is non-null and
+    /// non-empty. Measured: epubcheck gives OPF-030, OPF-048 and RSC-005 for
+    /// `unique-identifier=""`, and we gave only the first.
+    #[test]
+    fn an_empty_unique_identifier_is_a_missing_one() {
+        let opf = |uid: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="{uid}">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest><item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine toc="c1"><itemref idref="c1"/></spine>
+</package>"#
+            )
+        };
+        let want = [crate::ids::OPF_048, crate::ids::OPF_030];
+        assert!(
+            opf_ids_of(&opf("id"), &want).is_empty(),
+            "a real one is fine"
+        );
+        let empty = opf_ids_of(&opf(""), &want);
+        assert!(empty.contains(&crate::ids::OPF_048), "got {empty:?}");
+        assert!(empty.contains(&crate::ids::OPF_030), "got {empty:?}");
     }
 
     /// An `id` in a package document is an XML name, on both versions.

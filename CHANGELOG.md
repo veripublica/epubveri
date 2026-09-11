@@ -167,6 +167,34 @@ the book.
 
 ### Added
 
+- **Four more package-level misses, and a false positive found while measuring
+  them.**
+  - **An empty `src` on an NCX `<content>` is a reference to the NCX itself
+    (RSC-010).** RFC 3986 §5.3: an empty reference resolves to the base URI. The
+    whole element was being skipped, because `is_external` counts an empty href
+    as external — right where that means "nothing to resolve", wrong here.
+  - **An empty `unique-identifier` is a missing one (OPF-048).**
+    `OPFHandler`:511 keeps the attribute only when it is non-null *and*
+    non-empty. Reported beside the OPF-030 it also earns, not instead of it.
+    The attribute is now typed `IDREF` in the EPUB 2 package grammar as well,
+    which is where epubcheck's third finding on that book comes from.
+  - **A legacy `<dc-metadata>` or `<x-metadata>` wrapper is OPF-049.**
+    `OPFHandler`:625 reports it for any package that is not OEBPS 1.2 — with a
+    message that reads "Item id … was not found in the manifest", an odd
+    choice that is nonetheless exactly what the branch does.
+    - **The false positive is the other half.** A *pure* legacy EPUB 2 package
+      drew three "Required metadata … is missing" errors and an OPF-030 from
+      us and nothing from epubcheck, because its handler dispatches on
+      namespace plus local name at any depth while our scan read direct
+      children. Widened to descendants, which can only remove findings.
+    - Not to be confused with the OEBPS 1.2 case, where those same reports are
+      silenced *and* OPF-030 is kept on purpose — that decision is recorded in
+      `opf.rs` and is unchanged, because epubcheck really does report OPF-030
+      there.
+  - **A guide reference to a file that is in the container but not in the
+    manifest is RSC-008.** We reported OPF-031 alone; "no such file" and "not
+    declared" are different faults with different ids, and epubcheck gives both
+    OPF-031 and RSC-008.
 - **An irregular DOCTYPE on the NCX or the package document is now reported
   (HTM-004, HTM-009).** 2 books of the external run, 1 changing verdict.
   `DeclarationHandler`:58-107 wants the NCX's PUBLIC identifier to be exactly
