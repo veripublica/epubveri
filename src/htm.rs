@@ -58,6 +58,18 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
         );
     }
 
+    check_xml_version(text, path, report);
+
+    check_doctype(text, path, report);
+}
+
+/// HTM-001: EPUB allows XML 1.0 and nothing else.
+///
+/// Lifted out of the content-document pass so the **package document** can ask
+/// it too: epubcheck's `DeclarationHandler` sees every XML file it parses, and
+/// a `<?xml version="1.1"?>` on the OPF draws HTM-001 there and drew nothing
+/// here (measured, one book; 2 books of an external 2,798-book run).
+pub(crate) fn check_xml_version(text: &str, path: &str, report: &mut Report) {
     if let Some(decl_end) = text
         .trim_start()
         .strip_prefix("<?xml")
@@ -74,8 +86,6 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
             );
         }
     }
-
-    check_doctype(text, path, report);
 }
 
 /// The standard HTML named character entities declared by the XHTML 1.0/1.1

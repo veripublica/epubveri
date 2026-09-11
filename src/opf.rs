@@ -3761,6 +3761,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         return;
     };
     crate::htm::check_opf_doctype(&text, opf_path, report);
+    crate::htm::check_xml_version(&text, opf_path, report);
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {

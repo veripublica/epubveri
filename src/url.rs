@@ -584,6 +584,18 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     if host.chars().any(|c| matches!(c, '\\' | '@' | ' ')) {
         return true;
     }
+    // RFC 1035 §2.3.4: a domain label is at most 63 octets. Measured at the
+    // boundary against epubcheck 5.3.0, one book each - 64 characters in a
+    // label is RSC-020 there and 63 is not.
+    //
+    // Added where the port and IPv6 gaps above are deliberately left open,
+    // and the difference is the reason: this is a closed rule with a number
+    // in it, readable from the RFC without modelling anything galimatias
+    // does. `host` is percent-decoded and userinfo-stripped by this point,
+    // and `len()` counts octets, which is what the RFC bounds.
+    if host.split('.').any(|label| label.len() > 63) {
+        return true;
+    }
     // A space anywhere in an absolute URL, not only in the host. The comment
     // above used to scope this to the host on the reasoning that the WHATWG
     // parser normalizes a space in the path; it does, but epubcheck parses
