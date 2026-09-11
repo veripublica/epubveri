@@ -26,25 +26,88 @@ pub(crate) fn index_elements<'a>(doc: &'a roxmltree::Document<'a>) -> Vec<roxmlt
         .collect()
 }
 
-/// RSC-005: each `epub:type="index"` element must contain exactly one
-/// `epub:type="index-entry-list"` descendant (confirmed via a real
-/// fixture with zero, and every "valid" fixture having exactly one).
+/// An element's *semantic children*, `idx-xhtml.sch`'s `$semchilds`:
+///
+/// ```text
+/// descendant::h:*[ancestor::h:*[@epub:type or self::h:ul][1] is current()]
+/// ```
+///
+/// Descendants whose nearest ancestor that either carries an `epub:type` or is
+/// a `<ul>` is this element - so an entry list nested inside an
+/// `index-group`, or inside another list, belongs to *that* element and not to
+/// this one.
+///
+/// **This is not "descendants", and the difference is what the rule below
+/// turns on.** A plain descendant count says an `index` built from two
+/// `index-group`s holds two entry lists; the Schematron says it holds none,
+/// because each belongs to its group.
+fn semantic_children<'a>(el: roxmltree::Node<'a, 'a>) -> Vec<roxmltree::Node<'a, 'a>> {
+    el.descendants()
+        .filter(|n| n.is_element() && *n != el)
+        .filter(|n| {
+            n.ancestors()
+                .skip(1)
+                .find(|a| {
+                    a.is_element()
+                        && (a.attribute((EPUB_NS, "type")).is_some() || a.tag_name().name() == "ul")
+                })
+                .is_some_and(|a| a == el)
+        })
+        .collect()
+}
+
+/// RSC-005: an `epub:type="index"` holds **either** exactly one entry list
+/// **or** one or more `index-group`s, and not both.
+///
+/// `idx-xhtml.sch`, pattern `index`:
+///
+/// ```text
+/// if ($semchilds[tokenize(@epub:type,'\s+')='index-group'])
+/// then empty($semchilds[self::h:ul or tokenize(@epub:type,'\s+')='index-entry-list'])
+/// else count($semchilds[self::h:ul or tokenize(@epub:type,'\s+')='index-entry-list'])=1
+/// ```
+///
+/// This used to be "exactly one `index-entry-list` descendant", which was
+/// wrong three ways and right by accident in a fourth. Measured against
+/// epubcheck 5.3.0, one book per shape, with `properties="index"` on the item
+/// so its index Schematron actually runs:
+///
+/// | index holds | epubcheck | old rule |
+/// |---|---|---|
+/// | one entry list | valid | valid |
+/// | one `index-group` | valid | valid *by accident* - one list, one level down |
+/// | **two `index-group`s** | valid | **error** |
+/// | **a bare `<ul>`** | valid | **error** |
+/// | a group *and* a list | error | error |
+/// | nothing | error | error |
+///
+/// The two errors are the false positives; the accident is why one group
+/// never showed up. Both come from counting descendants instead of
+/// [`semantic_children`], and "possibly implied" is the `self::h:ul` term - a
+/// `<ul>` is an entry list whether or not it says so.
 pub(crate) fn check_content_model(doc: &roxmltree::Document, path: &str, report: &mut Report) {
     check_body_declaration(doc, path, report);
     for idx in index_elements(doc) {
-        let count = idx
-            .descendants()
-            .filter(|n| n.is_element() && has_type_token(*n, "index-entry-list"))
+        let sem = semantic_children(idx);
+        let groups = sem
+            .iter()
+            .filter(|n| has_type_token(**n, "index-group"))
             .count();
-        if count != 1 {
+        let lists = sem
+            .iter()
+            .filter(|n| n.tag_name().name() == "ul" || has_type_token(**n, "index-entry-list"))
+            .count();
+        let ok = if groups > 0 { lists == 0 } else { lists == 1 };
+        if !ok {
             report.push_node(
                 RSC_005,
                 Severity::Error,
-                "An \"index\" must contain one and only one \"index-entry-list\"",
+                "An \"index\" must contain one and only one \"index-entry-list\" \
+                 (possibly implied) or one or more \"index-group\"s",
                 path,
                 idx,
                 "indexes.content_model.wrong_entry_list_count",
-                vec![count.to_string()],
+                vec![lists.to_string(), groups.to_string()],
             );
         }
     }
@@ -252,6 +315,48 @@ pub(crate) fn check_collections(
 
 #[cfg(test)]
 mod tests {
+
+    /// Either one entry list or one or more groups, never both — and a bare
+    /// `<ul>` is an entry list.
+    ///
+    /// Every row measured against epubcheck 5.3.0, one book per shape, with
+    /// `properties="index"` on the manifest item: without that the index
+    /// Schematron does not run at all (`OPSChecker.validatorMap`), and a first
+    /// probe that omitted it had both tools silent on all seven shapes and
+    /// looked like agreement.
+    #[test]
+    fn an_index_holds_one_entry_list_or_some_groups() {
+        let el = r#"<ul epub:type="index-entry-list"><li>a</li></ul>"#;
+        let grp = format!(r#"<section epub:type="index-group">{el}</section>"#);
+        let count = |inner: &str| -> usize {
+            let xml = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>t</title></head>
+<body><p>outside</p><section epub:type="index">{inner}</section></body></html>"#
+            );
+            let doc = roxmltree::Document::parse(&xml).unwrap();
+            let mut report = Report::default();
+            super::check_content_model(&doc, "c.xhtml", &mut report);
+            report
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("indexes.content_model.wrong_entry_list_count"))
+                .count()
+        };
+
+        assert_eq!(count(el), 0, "one entry list");
+        assert_eq!(count(&grp), 0, "one group");
+        assert_eq!(count(&format!("{grp}{grp}")), 0, "two groups");
+        assert_eq!(count("<ul><li>a</li></ul>"), 0, "a bare ul is implied");
+        assert_eq!(
+            count(&format!("{grp}{el}")),
+            1,
+            "a group and a list is both"
+        );
+        assert_eq!(count("<p>nothing</p>"), 1, "neither");
+        assert_eq!(count(&format!("{el}{el}")), 1, "two lists");
+    }
     use super::*;
 
     fn body_findings(body_attrs: &str, body: &str) -> Vec<String> {

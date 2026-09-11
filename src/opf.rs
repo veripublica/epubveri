@@ -8929,7 +8929,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 && m.params.first().is_some_and(|p| p == u)
                         })
                     };
+                    // `remote_base.is_none()` for the same reason its two
+                    // neighbours above carry it: under a `<base href>` that
+                    // points somewhere remote, a relative reference resolves
+                    // against *that* and never addresses the container at
+                    // all, so it cannot leak out of it. This condition was
+                    // the one in the loop that did not ask, and `<a href="/">`
+                    // in such a document drew RSC-026 where epubcheck is
+                    // silent (measured, one book).
                     if !already
+                        && remote_base.is_none()
                         && !is_external(v)
                         && !v.trim().is_empty()
                         && href_leaks_container_root(&dir, v.trim())
@@ -19692,6 +19701,41 @@ mod tests {
         // do differ. epubcheck agrees - `lower-case(" en") = lower-case("en")`
         // is false - and the trim this rule used to do swallowed it.
         assert_eq!(fires("<p lang=\" en\" xml:lang=\"en\">x</p>"), 1);
+    }
+
+    /// A relative reference under a remote `<base>` never addresses the
+    /// container, so it cannot leak out of it (RSC-026).
+    ///
+    /// Paired, because a guard is easy to overshoot: without a base, and under
+    /// a *local* base, `<a href="/">` is still a leak and must still report.
+    /// Measured against epubcheck 5.3.0, one book per shape.
+    #[test]
+    fn a_remote_base_means_nothing_can_leak_the_container() {
+        let leaks = |head: &str, body: &str| -> usize {
+            let doc = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title>{head}</head><body>{body}</body></html>"
+            );
+            crate::validate_bytes(epub_with_ch1(&doc))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_026)
+                .count()
+        };
+        let remote = r#"<base href="http://example.org/"/>"#;
+        assert_eq!(leaks(remote, r#"<p><a href="/">x</a></p>"#), 0);
+        assert_eq!(leaks(remote, r#"<p><a href="../out.xhtml">x</a></p>"#), 0);
+        assert_eq!(
+            leaks("", r#"<p><a href="/">x</a></p>"#),
+            1,
+            "no base: still a leak"
+        );
+        assert_eq!(
+            leaks(r#"<base href="./"/>"#, r#"<p><a href="/">x</a></p>"#),
+            1,
+            "a local base: still a leak"
+        );
     }
 
     /// `a` is transparent: at flow level it takes flow content.

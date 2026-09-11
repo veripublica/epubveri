@@ -10,11 +10,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [0.14.2] - 2026-09-11
 
-**Eight false positives, found by someone else's library: 2,798 books exported
+**Ten false positives, found by someone else's library: 2,798 books exported
 from Apple Books by ibook2epub 2.3.0 and checked with both tools.** Their run
 put epubveri at epubcheck's verdict on 2,757 of 2,798 books (98.5%), and traced
-every disagreement to the markup that caused it. Fixed here are **31 of the 34
-books epubveri wrongly rejected**.
+every disagreement to the markup that caused it. Fixed here are **33 of the 34
+books epubveri wrongly rejected**, and eleven of its twelve named defects.
 
 Every one was settled against the specification before the code moved, because
 epubcheck can be wrong too — and twice the specification said something it does
@@ -121,6 +121,30 @@ the book.
   that method **overrides `OPFChecker.checkItem` without delegating to
   `super`** — this project's own test for an EPUB-3-only rule. Both halves were
   ungated.
+- **An index built from `index-group`s is valid, and so is a bare `<ul>`
+  (RSC-005).** `idx-xhtml.sch`'s assertion is an either/or — one entry list
+  **or** one or more groups, never both — over `$semchilds`, the descendants
+  whose nearest `epub:type`-carrying or `<ul>` ancestor is the index itself.
+  This counted `index-entry-list` descendants and required exactly one.
+  - Seven shapes measured against 5.3.0, one book each. Two were false
+    positives (two groups; a bare `<ul>`, which is the rule's "possibly
+    implied" term), three already agreed, and one — a single `index-group` —
+    had been passing **by accident**, because its one nested list happened to
+    make the descendant count 1.
+  - **The first probe of all seven had both tools silent and looked like
+    agreement.** epubcheck runs its index Schematron only for an IDX profile, a
+    `dc:type` of index, `properties="index"`, or an item in an index collection
+    (`OPSChecker.validatorMap`); without one of those the rule never ran on
+    either side.
+- **A relative reference under a remote `<base>` can no longer "leak outside
+  the container" (RSC-026).** `<a href="/">` in a document whose `<base href>`
+  points somewhere remote resolves against that base and never addresses the
+  container at all. Two neighbouring checks in the same loop already asked
+  whether the base was remote; this one did not.
+  - It is the last of the report's twelve, and the only one that needed a
+    second guess to reproduce: `<a href="/">` on its own draws RSC-026 from
+    **both** tools, so the disagreement is the `<base>`, not the href. Without
+    a base, or under a local one, it is still a leak and still reported.
 - **A navigation label made of a no-break space is no longer "must contain
   text" (RSC-005).** 3 books, 2 changing verdict. epubcheck's assertion
   normalizes with XPath's `normalize-space()`, which strips exactly space, tab,
