@@ -12,6 +12,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **`a` is transparent in the way HTML means it: its content model is its
+  parent's, not "always flow".** 0.14.2 gave the single `aEl` flow content
+  outright, which fixed the real false positive — `<a><div></div></a>` at flow
+  level, which epubcheck accepts — and created an incoherence doing it:
+  `<p><a><div>` was accepted while `<p><span><div>` was rejected, two elements
+  with the same obligation in that position answered differently.
+  - **Reported by Doitsu on MobileRead (374286 #291)**, who put the two
+    fragments side by side. He is right, and the changelog's "the cost is
+    stated rather than hidden" was the wrong answer to it — a stated
+    inconsistency is still an inconsistency.
+  - Now modelled as epubcheck models it (`mod/html5/phrase.rnc`:9-18): two
+    variants, `a` with phrasing content in the phrasing pool and `a` with flow
+    content in the block pool. `flowChoice` is `phrasingChoice | blockChoice`,
+    so flow content is reachable at flow level and only phrasing inside a
+    `<p>`. The attribute list is shared, so the two cannot drift.
+  - Nine shapes measured against epubcheck 5.3.0, one book each, and all nine
+    now agree — including both of Doitsu's and the flow-level cases 0.14.2 was
+    for. Shelf unchanged; corpus 603/603 with 0 false positives.
 - **One `@import` no longer draws two RSC-008, and the font gap it was hiding
   is closed where it belongs.** 0.14.2 added an RSC-008 to the CSS `url()`
   loop; `css.rs` already owned that question, with a position and under the

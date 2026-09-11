@@ -20193,6 +20193,26 @@ mod tests {
             rsc005(r#"<a href="x.xhtml"><nosuchelement>x</nosuchelement></a>"#) > 0,
             "an unknown element inside an anchor is still reported"
         );
+
+        // **And transparent is not "always flow".** Inside a `<p>` the parent's
+        // model is phrasing, so a `<div>` there is an error — the same answer
+        // `<span>` gets in the same position. 0.14.2 gave `a` flow content
+        // outright and those two diverged; reported by Doitsu on MobileRead
+        // (374286 #291), who put the pair side by side. Measured against
+        // epubcheck 5.3.0: it reports both.
+        assert!(
+            rsc005(r#"<p><a href="x.xhtml">lorem<div>ipsum</div></a></p>"#) > 0,
+            "a phrasing parent makes an anchor's content phrasing"
+        );
+        assert!(
+            rsc005(r#"<p><span>lorem<div>ipsum</div></span></p>"#) > 0,
+            "and a span in that position answers the same"
+        );
+        assert_eq!(
+            rsc005(r#"<p><a href="x.xhtml"><span>x</span></a></p>"#),
+            0,
+            "phrasing inside an anchor inside a p is valid"
+        );
     }
 
     /// A fragment names an element by its decoded value, and only the lookup

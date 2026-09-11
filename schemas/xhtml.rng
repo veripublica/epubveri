@@ -1498,37 +1498,46 @@
        `ping`/`referrerpolicy` are gated `v5only` in epubcheck's own
        schema (EPUB 3 only) - not added to aEl-epub2 below. `download`/
        `hreflang` carry no such gate, added to both. -->
+  <define name="aAttrs">
+    <ref name="globalAttrs"/>
+    <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+    <optional><attribute name="target"><data type="token"/></attribute></optional>
+    <optional><attribute name="type"><data type="string"/></attribute></optional>
+    <optional><attribute name="download"><data type="string"/></attribute></optional>
+    <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
+    <optional><attribute name="ping"><data type="string"/></attribute></optional>
+    <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
+  </define>
+
+  <!-- **`a` is transparent, and transparent means "its parent's content
+       model", not "always flow".** Two variants, which is how epubcheck
+       models it (`mod/html5/phrase.rnc`:9-18): `a.elem.phrasing` with
+       phrasing inner, `a.elem.flow` with transparent flow inner, each added
+       to the matching pool. `flowChoice` is `phrasingChoice | blockChoice`,
+       so putting the flow variant in `blockChoice` reproduces that exactly -
+       at flow level either may match and flow content is reachable; inside a
+       `<p>` only `phrasingChoice` is, so an `<a>` there takes phrasing.
+
+       0.14.2 gave the single `aEl` `flowContent` outright. That fixed the
+       real false positive - `<a><div></div></a>` at flow level, which
+       epubcheck accepts - and created an incoherence in doing it, reported
+       by Doitsu on MobileRead (374286 #291) the same day: `<p><a><div>` was
+       accepted while `<p><span><div>` was rejected, two elements with the
+       same obligation in that position treated differently because one
+       carried a label whose context-sensitivity had been dropped. He is
+       right, and "the cost is stated rather than hidden" was the wrong
+       answer to it - a stated inconsistency is still an inconsistency. -->
   <define name="aEl">
     <element name="a">
-      <ref name="globalAttrs"/>
-      <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
-      <optional><attribute name="target"><data type="token"/></attribute></optional>
-      <optional><attribute name="type"><data type="string"/></attribute></optional>
-      <optional><attribute name="download"><data type="string"/></attribute></optional>
-      <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
-      <optional><attribute name="ping"><data type="string"/></attribute></optional>
-      <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
-      <!-- `a` is TRANSPARENT in HTML: its content model is its parent's, so
-           at flow level it takes flow content. epubcheck models that with two
-           variants, `a.elem.phrasing` (`a.inner.phrasing`) and `a.elem.flow`
-           (`a.inner.transparent.flow`), in mod/html5/phrase.rnc:9-18.
+      <ref name="aAttrs"/>
+      <ref name="phrasingContent"/>
+    </element>
+  </define>
 
-           This said `phrasingContent`, which made `<a href="..."><div>...</div></a>`
-           at flow level an RSC-005 that epubcheck does not report - 3 books of
-           an external 2,798-book run, and `<p>` and `<ul>` inside an `<a>` came
-           out of the same line (measured, one book each).
-
-           One pool rather than two variants, on this grammar's own stated
-           design a few hundred lines down: "STRICT on vocabulary, PERMISSIVE
-           on nesting". `a` was the exception - every other transparent element
-           here already takes `flowContent`: `ins`, `del`, `canvas`, `noscript`,
-           `object`, `map`.
-
-           The cost is stated rather than hidden: inside a `<p>`, epubcheck
-           still rejects `<a><div>` and we no longer will. That is a false
-           negative on a defect nobody is harmed by not hearing about, traded
-           for a false positive on valid markup - the direction this project
-           ships. -->
+  <!-- The flow-level variant, referenced from `blockChoice` alone. -->
+  <define name="aEl-flow">
+    <element name="a">
+      <ref name="aAttrs"/>
       <ref name="flowContent"/>
     </element>
   </define>
@@ -2436,6 +2445,7 @@
 
   <define name="blockChoice">
     <choice>
+      <ref name="aEl-flow"/>
       <element name="p"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
       <element name="div"><ref name="globalAttrs"/><ref name="flowContent"/></element>
       <element name="blockquote">
