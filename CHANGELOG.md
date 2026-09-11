@@ -8,7 +8,16 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.14.3] - 2026-09-12
+
+**Three corrections to 0.14.2, two of them to things 0.14.2 itself introduced.**
+A release that closes 26 findings in a day earns a careful look at what it broke
+doing it, and the two instruments that answer that question — a reader's eye and
+the 981-book `compare` — each found one within hours.
+
+Nothing here changes a verdict on any book of the 474-book shelf: it reports
+identically to 0.14.2. The corpus is unchanged at 603/603 exact-ID with 0 false
+positives on 355 clean cases and 0 over-reported.
 
 ### Fixed
 
