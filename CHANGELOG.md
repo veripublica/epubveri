@@ -43,8 +43,8 @@ positives on 355 clean cases and 0 over-reported.
   is closed where it belongs.** 0.14.2 added an RSC-008 to the CSS `url()`
   loop; `css.rs` already owned that question, with a position and under the
   same rule key, so an undeclared `@import` target got two findings against
-  epubcheck's one. Caught by the 981-book `compare` the same day — the run
-  CLAUDE.md prescribes after content-model work, run for exactly that reason.
+  epubcheck's one. Caught by the 981-book `compare` the same day — the
+  follow-up this project runs after content-model work, run for that reason.
   - **The gap 0.14.2 was really closing was one arm of the `@font-face`
     path**, not a missing walk. `@font-face` blocks have their own URL
     handling on purpose — `css.rs` hands them over deliberately — and that
