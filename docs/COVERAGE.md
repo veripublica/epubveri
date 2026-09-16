@@ -19,9 +19,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | Family | full | partial | gap | ⊘ N/A | live | coverage | review |
 |---|---:|---:|---:|---:|---:|---:|:---:|
 | PKG | 22 | 1 | 0 | 2 | 23 | 23/23 | reviewed |
-| OPF | 90 | 0 | 2 | 15 | 92 | 90/92 | reviewed |
-| RSC | 27 | 4 | 0 | 4 | 31 | 31/31 | reviewed |
-| HTM | 22 | 0 | 0 | 29 | 22 | 22/22 | reviewed |
+| OPF | 92 | 0 | 2 | 15 | 94 | 92/94 | reviewed |
+| RSC | 30 | 4 | 0 | 4 | 34 | 34/34 | reviewed |
+| HTM | 24 | 0 | 0 | 29 | 24 | 24/24 | reviewed |
 | CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 9 | 0 | 0 | 2 | 9 | 9/9 | reviewed |
@@ -30,9 +30,10 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SCP | 0 | 0 | 0 | 10 | 0 | — | reviewed |
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
-| **All** | **203** | **5** | **2** | **105** | **210** | **208/210** | |
+| OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
+| **All** | **211** | **5** | **2** | **105** | **218** | **216/218** | |
 
-**epubveri implements 208 of 210 live epubcheck checks (~99%)** — 203 fully, 5 partially — plus 11 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 216 of 218 live epubcheck checks (~99%)** — 211 fully, 5 partially — plus 7 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -45,7 +46,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | PKG-004 | Corrupted EPUB ZIP header. | Y | Y | The other half of the same header check: long enough to fill 58 bytes but not starting with `PK`. epubcheck's test is `header[0] != 'P' && header[1] != 'K'` - an **and**, so `PX…` or `xK…` falls through to PKG-006 instead, measured. This was guarded on an image sniff until 2026-08-18, so 200 random bytes drew the generic PKG-008 alone; the sniff is kept as a second route for a file that is a recognisable other format yet happens to start `PK`. |
 | PKG-005 | The mimetype file has an extra field of length %1$s. The use of the extra field feature... | Y | Y | the mimetype entry's ZIP header has a non-empty extra field |
 | PKG-006 | Mimetype file entry is missing or is not the first file in the archive. | Y | ~ | Reported from the parsed zip, so it never runs on a container that fails to open - where epubcheck still reports it, reading the raw 58-byte header (`OCFZipChecker`: filename-size != 8). Measured with `PX…`/`xK…` headers, which epubcheck calls PKG-006 and we call PKG-008 alone. Same family as #80 and left as its own change; PKG-005 reads the same raw header there and is likely the same shape, unmeasured. |
-| PKG-007 | Mimetype file should only contain the string "application/epub+zip" and should not be c... | Y | Y | mimetype compressed, or contents != application/epub+zip |
+| PKG-007 | The content of the mimetype file must be the string "application/epub+zip"%1$s | Y | Y | mimetype compressed, or contents != application/epub+zip |
 | PKG-008 | Unable to read file "%1$s". | Y | Y | the ZIP archive could not be opened at all |
 | PKG-009 | The file name "%1$s" contains characters that are not allowed in OCF file names: %2$s. | Y | Y | a file name contains a forbidden character |
 | PKG-010 | The file name "%1$s" contains spaces, which may create interoperability issues with old... | Y | Y | an href contains unencoded spaces |
@@ -149,7 +150,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-071 | Index collections must only contain resources pointing to XHTML Content Documents. | Y | Y | an index collection links to a non-XHTML resource |
 | OPF-072 | Metadata element "%1$s" is empty. | Y | Y | a dc metadata element is empty (usage, EPUB2) |
 | OPF-073 | External identifiers must not appear in the document type declaration. | Y | Y | a manifest resource's DOCTYPE external identifier is disallowed or mismatched |
-| OPF-074 | Package resource "%1$s" is declared in several manifest item. | Y | Y | two manifest items represent the same resource |
+| OPF-074 | Package resource "%1$s" is declared in several manifest items. | Y | Y | two manifest items represent the same resource |
 | OPF-075 | Preview collections must only point to EPUB Content Documents. | Y | Y | a preview collection link does not target an XHTML Content Document |
 | OPF-076 | The URI of preview collections link elements must not include EPUB canonical fragment i... | Y | Y | a preview collection link uses an EPUB CFI fragment |
 | OPF-077 | A Data Navigation Document should not be included in the spine. | Y | Y | the Data Navigation Document is referenced from the spine |
@@ -163,6 +164,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-085 | dc:identifier" value "%1$s" is marked as a UUID, but is an invalid UUID. | Y | Y | a urn:uuid: dc:identifier isn't a valid UUID |
 | OPF-086 | Property "%1$s" is deprecated. Consider using %2$s instead. | Y | Y | warning: a deprecated rendition property/value or deprecated meta viewport |
 | OPF-086b | epub:type value "%1$s" is deprecated. Consider using %2$s instead. | Y | Y | same family, usage-level: a deprecated epub:type semantic value |
+| OPF-086c | the "%1$s" reserved prefix is deprecated. | Y | Y | warning: a deprecated reserved prefix (xsd/msv/prism; epubcheck 5.4.0) |
 | OPF-087 | epub:type value "%1$s" is not allowed on documents of type "%2$s". | Y | Y | epub:type value only restates its host element's own native semantic (usage) |
 | OPF-088 | Unrecognized epub:type value "%1$s". | Y | Y | epub:type value isn't in the default vocabulary (usage) |
 | OPF-089 | The "alternate" link rel keyword cannot be paired with other keywords. | Y | Y | an "alternate" link is combined with another rel keyword |
@@ -177,6 +179,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF-097 | Resource "%1$s" is listed in the manifest, but no reference to it was found in content ... | Y | Y | a manifest resource that no document references (usage) |
 | OPF-098 | The "href" attribute must reference resources, not elements in the package document, bu... | Y | Y | a link target must not reference a manifest item id |
 | OPF-099 | The manifest must not list the package document. | Y | Y | a manifest item references the package document itself |
+| OPF-100 | The "%1$s" property only applies to pre-paginated content. | Y | Y | a page-spread-* spine override on reflowable content (usage, epubcheck 5.4.0) |
 
 ### RSC  _(reviewed)_
 
@@ -217,6 +220,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | RSC-031 | Remote resource references should use HTTPS, but found "%1$s". | Y | Y | a remote resource uses http instead of https |
 | RSC-032 | Fallback must be provided for foreign resources, but found none for resource "%1$s" of ... | Y | Y | a foreign resource is used with no required fallback |
 | RSC-033 | Relative URL strings must not have a query component, but found one in "%1$s". | Y | Y | a local reference has a URL query string |
+| RSC-034 | Scripts must have a JavaScript media type. | Y | Y | a script resource's media type is not JavaScript (epubcheck 5.4.0) |
+| RSC-035 | %1$s" is a legacy media type for JavaScript. Consider using 'text/javascript' instead. | Y | Y | a legacy JavaScript media type (usage, epubcheck 5.4.0) |
+| RSC-036 | %1$s | Y | Y | an obsolete but conforming HTML feature (usage, epubcheck 5.4.0) |
 
 ### HTM  _(reviewed)_
 
@@ -273,6 +279,8 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | HTM-060a | EPUB reading systems must ignore secondary viewport meta elements in fixed-layout docum... | Y | Y | a secondary viewport meta in a fixed-layout doc (usage) |
 | HTM-060b | EPUB reading systems must ignore viewport meta elements in reflowable documents; viewpo... | Y | Y | a viewport meta in a reflowable doc (usage) |
 | HTM-061 | %1$s" is not a valid custom data attribute (it must have at least one character after t... | Y | Y | an invalid data-* attribute name |
+| HTM-062 | SVG "xlink:href" attribute is deprecated; an "href" attribute should be used instead. | Y | Y | SVG xlink:href with no href beside it (usage, epubcheck 5.4.0) |
+| HTM-063 | SVG "xlink:href" attribute value ("%1$s") should be equal to the "href" attribute value... | Y | Y | SVG xlink:href and href disagree (usage, epubcheck 5.4.0) |
 
 ### CSS  _(reviewed)_
 
@@ -419,6 +427,12 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 |---|---|:---:|:---:|---|
 | INF-001 | Rule %1$s is under review and its severity may change in a future release. See the disc... | Y | ⊘ | epubcheck meta-message flagging that one of *epubcheck's own* rules is under review and its severity may change - a note about the tool, not a finding about the EPUB. Nothing for epubveri to report. |
 
+### OBS  _(first-pass — `Y` = has-the-ID, not yet checked for partialness)_
+
+| ID | Checks | epubcheck | epubveri | Notes |
+|---|---|:---:|:---:|---|
+| OBS-001 | Usage of %1$s is outdated. | Y | Y | a feature EPUB 3.4 marks as outdated (usage, epubcheck 5.4.0) |
+
 ## epubveri-owned IDs (not in epubcheck)
 
 | ID | Checks | epubcheck | epubveri |
@@ -430,7 +444,3 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-009 | two sibling nav entries land on one document, no fragment (usage, MobileRead #195) | — | Y |
 | ADV-010 | an EPUB 2 manifest resource nothing references (usage, MobileRead #221) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
-| NEXT-005 | EPUB 3.4: page-spread-* on a reflowable document (was ADV-005; usage, w3c/epubcheck#1652) | — | Y |
-| NEXT-006 | EPUB 3.4: a spine layout override beside a roll layout (was ADV-006; usage, w3c/epubcheck#1651) | — | Y |
-| NEXT-007 | EPUB 3.4: a roll spine document without ICB dimensions (was ADV-007; usage, w3c/epubcheck#1651) | — | Y |
-| NEXT-008 | EPUB 3.4: a feature deprecated in 3.4 (was ADV-008; usage, w3c/epubcheck#1649) | — | Y |

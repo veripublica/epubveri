@@ -33,8 +33,12 @@ pub(crate) enum Category {
 /// resource — its own two fixtures, `foreign-exempt-xhtml-video-in-img-error`
 /// and `foreign-xhtml-img-video-error`. The position exemption lives in
 /// `check_candidate_group`, where it always did.
-fn classify(mt: &str) -> Category {
-    if crate::cmt::is_core_media_type(mt) {
+fn classify(mt: &str, is_epub3: bool) -> Category {
+    // The audio types are the one family whose EPUB 2 answer differs: 5.4.0
+    // reads the `codecs` parameter in `OPFChecker30`, so at EPUB 2 the
+    // pre-5.4.0 list still applies. Everything else is version-neutral here.
+    if crate::cmt::is_core_media_type(mt) || (!is_epub3 && crate::cmt::is_core_audio_type_epub2(mt))
+    {
         Category::Core
     } else {
         Category::Foreign
@@ -83,10 +87,11 @@ pub(crate) fn fallback_reaches_core(
 pub(crate) fn build_resource_status(
     items: &HashMap<String, (String, String)>,
     fallback_map: &HashMap<String, String>,
+    is_epub3: bool,
 ) -> HashMap<String, ResourceStatus> {
     let mut status = HashMap::new();
     for (id, (path, mt)) in items {
-        let category = classify(mt);
+        let category = classify(mt, is_epub3);
         let reaches_core_via_fallback = match category {
             Category::Core => true,
             _ => fallback_reaches_core(id, items, fallback_map),
@@ -153,6 +158,9 @@ fn data_url_media_type(href: &str) -> Option<&str> {
 pub(crate) struct Refs<'a> {
     pub status: &'a HashMap<String, ResourceStatus>,
     pub restricted_remote: &'a HashSet<String>,
+    /// The version, for the one classification that differs between them
+    /// (the audio Core Media Types — see `classify`).
+    pub(crate) is_epub3: bool,
 }
 
 fn resolve_ref(dir: &str, href: &str, refs: &Refs<'_>) -> Option<(Category, bool)> {
@@ -181,7 +189,7 @@ fn resolve_ref(dir: &str, href: &str, refs: &Refs<'_>) -> Option<(Category, bool
     }
     if h.starts_with("data:") {
         let mt = data_url_media_type(h).unwrap_or("text/plain");
-        return Some((classify(mt), false));
+        return Some((classify(mt, refs.is_epub3), false));
     }
     let key = lookup_key(dir, h)?;
     let st = refs.status.get(&key)?;
@@ -591,7 +599,7 @@ mod tests {
             "w".to_string(),
             ("mod.wasm".to_string(), "application/wasm".to_string()),
         );
-        let status = build_resource_status(&items, &HashMap::new());
+        let status = build_resource_status(&items, &HashMap::new(), true);
         // No fallback declared, and application/wasm is not a Core Media
         // Type, so the resource is foreign with nothing to rescue it.
         assert!(!status["mod.wasm"].reaches_core_via_fallback);
@@ -607,6 +615,7 @@ mod tests {
                 "ch.xhtml",
                 "",
                 &Refs {
+                    is_epub3: true,
                     status: &status,
                     restricted_remote: &HashSet::new(),
                 },
@@ -659,7 +668,7 @@ mod tests {
                 "audio/x-wav".to_string(),
             ),
         );
-        let status = build_resource_status(&items, &HashMap::new());
+        let status = build_resource_status(&items, &HashMap::new(), true);
         assert!(!status["https://example.org/clip.wav"].reaches_core_via_fallback);
 
         let findings = |body: &str, restricted: &HashSet<String>| {
@@ -673,6 +682,7 @@ mod tests {
                 "ch.xhtml",
                 "",
                 &Refs {
+                    is_epub3: true,
                     status: &status,
                     restricted_remote: restricted,
                 },
@@ -733,7 +743,7 @@ mod tests {
             "a".to_string(),
             ("sound.wav".to_string(), "audio/x-wav".to_string()),
         );
-        let status = build_resource_status(&items, &HashMap::new());
+        let status = build_resource_status(&items, &HashMap::new(), true);
         // Both are foreign with no fallback to rescue them, or the rows
         // below would pass for the wrong reason.
         assert!(!status["stream.m3u8"].reaches_core_via_fallback);
@@ -750,6 +760,7 @@ mod tests {
                 "ch.xhtml",
                 "",
                 &Refs {
+                    is_epub3: true,
                     status: &status,
                     restricted_remote: &HashSet::new(),
                 },
@@ -801,7 +812,7 @@ mod tests {
             "w".to_string(),
             ("x.bin".to_string(), "application/octet-stream".to_string()),
         );
-        let status = build_resource_status(&items, &HashMap::new());
+        let status = build_resource_status(&items, &HashMap::new(), true);
         assert!(!status["x.bin"].reaches_core_via_fallback);
 
         let findings = |body: &str| {
@@ -815,6 +826,7 @@ mod tests {
                 "ch.xhtml",
                 "",
                 &Refs {
+                    is_epub3: true,
                     status: &status,
                     restricted_remote: &HashSet::new(),
                 },

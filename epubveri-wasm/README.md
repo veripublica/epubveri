@@ -86,7 +86,9 @@ function version(): string;
 epubcheck has no verdict on, in two families, both at `usage` severity:
 
 - **`NEXT-*`** — a published specification requires it and epubcheck has not implemented it
-  yet, so it becomes an ordinary error the day it catches up (today: the EPUB 3.4 rules).
+  yet, so it becomes an ordinary error the day it catches up. **Empty at present:** the four
+  EPUB 3.4 rules that were here graduated when epubcheck 5.4.0 implemented them, and now
+  report under its own ids without this flag.
 - **`ADV-*`** — no specification says anything, but the book is still probably wrong
   (unknown CSS property and descriptor names, a type selector naming no known element, an
   EPUB 2 package written in EPUB 3, two navigation entries landing on one document, an

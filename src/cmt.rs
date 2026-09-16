@@ -92,6 +92,18 @@ pub(crate) fn is_core_media_type(mt: &str) -> bool {
 /// Compared with whitespace removed and lowercased, because epubcheck
 /// normalizes the declaration before its equality test and a manifest is
 /// free to write `audio/mp4; codecs=opus` with the space.
+/// The EPUB 2 answer, which is the one epubcheck 5.3.0 gave at both
+/// versions: membership by base type, parameters ignored. Kept because the
+/// 5.4.0 tightening is `OPFChecker30`'s — measured on a downgraded copy of
+/// its own `resources-cmt-audio-opus-mimetype-error`, where epubcheck says
+/// nothing and we had started reporting RSC-032.
+pub(crate) fn is_core_audio_type_epub2(mt: &str) -> bool {
+    matches!(
+        base_media_type(mt),
+        "audio/mpeg" | "audio/mp4" | "audio/ogg" | "audio/opus"
+    )
+}
+
 pub(crate) fn is_core_audio_type(mt: &str) -> bool {
     let normalized: String = mt
         .chars()

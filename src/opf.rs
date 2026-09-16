@@ -2161,6 +2161,7 @@ fn check_prefix_declaration(
     path: &str,
     node: roxmltree::Node,
     context: PrefixContext,
+    is_epub3: bool,
     report: &mut Report,
 ) -> HashMap<String, String> {
     let (pairs, faults) = parse_prefix_value(prefix_attr.value());
@@ -2302,7 +2303,10 @@ fn check_prefix_declaration(
         // **This is the declaration half. epubcheck has a second site** —
         // `VocabUtil`:123, on a *use* of a property whose prefix is one of
         // these — which is reported separately below.
-        if DEPRECATED_PREFIXES_34.contains(&name.as_str()) {
+        // EPUB 3 only, measured: a downgraded copy of epubcheck's own
+        // `deprecated-prefix-declaration-used-warning.opf` draws nothing
+        // there. The reserved-prefix mechanism is EPUB 3's.
+        if is_epub3 && DEPRECATED_PREFIXES_34.contains(&name.as_str()) {
             report.push_node_attr(
                 OPF_086C,
                 Severity::Warning,
@@ -2327,6 +2331,7 @@ fn check_prefix_usage(
     declared: &HashMap<String, String>,
     path: &str,
     node: roxmltree::Node,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     for tok in text.split_whitespace() {
@@ -2351,7 +2356,7 @@ fn check_prefix_usage(
         // declares the prefix — and a book that declares *and* uses one gets
         // two findings, one per site. Measured against 5.4.0 on its own
         // `deprecated-prefix-declaration-used-warning` fixture.
-        if DEPRECATED_PREFIXES_34.contains(&prefix) {
+        if is_epub3 && DEPRECATED_PREFIXES_34.contains(&prefix) {
             report.push_full(
                 OPF_086C,
                 Severity::Warning,
@@ -4074,17 +4079,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         );
         return;
     }
-    let declared_prefixes = attr_no_ns_node(pkg, "prefix")
-        .map(|p| check_prefix_declaration(p, opf_path, pkg, PrefixContext::Package, report))
-        .unwrap_or_default();
-    for n in doc.descendants().filter(|n| n.is_element()) {
-        if let Some(v) = n.attr_no_ns("property") {
-            check_prefix_usage(v, &declared_prefixes, opf_path, n, report);
-        }
-        if let Some(v) = n.attr_no_ns("properties") {
-            check_prefix_usage(v, &declared_prefixes, opf_path, n, report);
-        }
-    }
     check_refines_cycles(&doc, opf_path, report);
     check_uuid_identifiers(&doc, opf_path, report);
     check_collection_roles(&doc, opf_path, report);
@@ -4201,6 +4195,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // Down here for the same reason as its two neighbours: every OBS-001 site
     // is `OPFHandler30`'s, so the rule needs the settled version.
     check_outdated_features(&doc, opf_path, is_epub3, report);
+    // Moved down here with its neighbours, for their reason: `OPF-086c` is
+    // EPUB 3 only, and the version is only settled at this point — after the
+    // `-v` override, so `-v 2.0` on a 3.0 book silences it too.
+    let declared_prefixes = attr_no_ns_node(pkg, "prefix")
+        .map(|p| {
+            check_prefix_declaration(p, opf_path, pkg, PrefixContext::Package, is_epub3, report)
+        })
+        .unwrap_or_default();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(v) = n.attr_no_ns("property") {
+            check_prefix_usage(v, &declared_prefixes, opf_path, n, is_epub3, report);
+        }
+        if let Some(v) = n.attr_no_ns("properties") {
+            check_prefix_usage(v, &declared_prefixes, opf_path, n, is_epub3, report);
+        }
+    }
+
     // OPF-047: the package document is written in **OEBPS 1.2**, the pre-EPUB
     // format EPUB 2 replaced, kept legal for backwards compatibility. Detected
     // exactly as epubcheck does (`OPFHandler.startElement`): a `<package>`
@@ -6984,7 +6995,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     // resolved-resource-key -> Core-Media-Type/fallback status, for the
     // foreign-resource-fallback checks (RSC-032/MED-003/MED-007) below.
-    let resource_status = crate::foreign::build_resource_status(&items, &fallback_map);
+    let resource_status = crate::foreign::build_resource_status(&items, &fallback_map, is_epub3);
     // Container paths whose manifest item declares a `fallback`, for the
     // OBS-001 the reference walk below reports.
     let manifest_fallback_paths: HashSet<String> = items
@@ -7414,6 +7425,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         &path,
                         d.root_element(),
                         PrefixContext::ContentDocument,
+                        is_epub3,
                         report,
                     )
                 })
@@ -7421,7 +7433,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         check_prefix_placement(&d, &path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                check_prefix_usage(v, &declared_prefixes, &path, n, report);
+                check_prefix_usage(v, &declared_prefixes, &path, n, is_epub3, report);
             }
         }
 
@@ -9349,7 +9361,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // the same line `is_resource_reference` already draws,
                         // since epubcheck asks `isPublicationResourceReference`
                         // here and a hyperlink answers no.
-                        if manifest_fallback_paths.contains(&key) {
+                        // **EPUB 3 only, measured rather than assumed.**
+                        // `checkFallbacks` looks version-neutral in
+                        // epubcheck's source, but a downgraded copy of its
+                        // own `outdated-manifest-fallback-xhtml-audio-valid`
+                        // draws nothing there while we drew one — the
+                        // reference types this question is asked of are
+                        // registered by the EPUB 3 handler.
+                        if is_epub3 && manifest_fallback_paths.contains(&key) {
                             report.push_node(
                                 OBS_001,
                                 Severity::Usage,
@@ -10219,6 +10238,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             &crate::foreign::Refs {
                 status: &resource_status,
                 restricted_remote: &restricted_remote_refs,
+                is_epub3,
             },
             report,
         );
@@ -10515,6 +10535,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         doc_path,
                         d.root_element(),
                         PrefixContext::ContentDocument,
+                        is_epub3,
                         report,
                     )
                 })
@@ -10522,7 +10543,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         check_prefix_placement(&d, doc_path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                check_prefix_usage(v, &declared_prefixes, doc_path, n, report);
+                check_prefix_usage(v, &declared_prefixes, doc_path, n, is_epub3, report);
             }
         }
         // A standalone SVG has no XHTML href walk, so its remote references
@@ -11547,6 +11568,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             &path,
                             smil_root,
                             PrefixContext::Overlay,
+                            is_epub3,
                             report,
                         )
                     })
@@ -11554,7 +11576,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             check_prefix_placement(&smil_doc, &path, report);
             for n in smil_doc.descendants().filter(|n| n.is_element()) {
                 if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                    check_prefix_usage(v, &declared_prefixes, &path, n, report);
+                    check_prefix_usage(v, &declared_prefixes, &path, n, is_epub3, report);
                 }
             }
         }
@@ -20991,7 +21013,7 @@ mod tests {
             let pkg = d.root_element();
             let attr = super::attr_no_ns_node(pkg, "prefix").unwrap();
             let mut report = crate::report::Report::new();
-            super::check_prefix_declaration(attr, "OEBPS/content.opf", pkg, ctx, &mut report);
+            super::check_prefix_declaration(attr, "OEBPS/content.opf", pkg, ctx, true, &mut report);
             report
                 .messages
                 .iter()
@@ -21045,6 +21067,7 @@ mod tests {
                 "OEBPS/content.opf",
                 pkg,
                 super::PrefixContext::Package,
+                true,
                 &mut report,
             );
             report
