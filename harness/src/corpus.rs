@@ -94,8 +94,12 @@ fn following_errs_warns_re() -> &'static Regex {
     // reported" (1). Missing the latter dropped its rows into the
     // *error* bucket, so three deprecation warnings were scored as
     // expected errors.
+    // 5.4.0 added a third spelling, "the following usages are reported",
+    // for OBS-001's tables. Without it those rows fell into whichever mode
+    // was last set — scored as *errors* — and the scenario then looked like
+    // a severity disagreement on our side rather than a gap in this parser.
     RE.get_or_init(|| {
-        Regex::new(r"(?i)(?:the )?following (errors?|warnings?) are reported").unwrap()
+        Regex::new(r"(?i)(?:the )?following (errors?|warnings?|usages?) are reported").unwrap()
     })
 }
 
@@ -141,6 +145,7 @@ fn find_feature_files(dir: &Path, out: &mut Vec<PathBuf>) {
 enum TableMode {
     Err,
     Warn,
+    Usage,
 }
 
 fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
@@ -285,6 +290,8 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
         if let Some(m) = following_errs_warns_re().captures(line) {
             table_mode = Some(if m[1].starts_with("warning") {
                 TableMode::Warn
+            } else if m[1].starts_with("usage") {
+                TableMode::Usage
             } else {
                 TableMode::Err
             });
@@ -296,10 +303,10 @@ fn parse_feature_file(path: &Path, scenarios: &mut Vec<Scenario>) {
                 .map(|c| format!("{}-{}", &c[1], &c[2]))
                 .collect();
             if !ids.is_empty() {
-                let target = if table_mode == Some(TableMode::Warn) {
-                    &mut scenarios[cur_idx].warns
-                } else {
-                    &mut scenarios[cur_idx].errs
+                let target = match table_mode {
+                    Some(TableMode::Warn) => &mut scenarios[cur_idx].warns,
+                    Some(TableMode::Usage) => &mut scenarios[cur_idx].usages,
+                    _ => &mut scenarios[cur_idx].errs,
                 };
                 target.extend(ids);
             }
