@@ -520,6 +520,19 @@ pub(crate) fn is_absolute(href: &str) -> bool {
 /// applying that rule to them uniformly would be a real false positive
 /// (confirmed via `a-href-valid.xhtml`'s `mailto:` link).
 pub(crate) fn has_syntax_error(href: &str) -> bool {
+    // **Trim first, because leading and trailing whitespace is stripped by
+    // the URL parser before anything else looks at the URL** — the rule this
+    // module already states for the interior-space check below, applied one
+    // step earlier so the host check cannot see it either.
+    //
+    // Without it a trailing space fell *inside the host* whenever the URL had
+    // no path: `http://example.com ` has no `/`, `?` or `#` to split on, so
+    // the host came out as `example.com ` and the space denylist rejected it,
+    // while `http://example.com/ ` was clean. epubcheck accepts both.
+    // Reported from a 2,798-book Apple Books library run against 5.3.0, where
+    // it was the only finding of ours the reporter could call wrong: three
+    // books, one of them flipped to invalid by it alone.
+    let href = href.trim();
     let Some((scheme, rest)) = href.split_once(':') else {
         return false;
     };
@@ -761,6 +774,20 @@ mod tests {
         assert!(!has_syntax_error("http://example.com/x"));
         // A malformed escape is left alone rather than guessed at.
         assert!(!has_syntax_error("http://exa%zzmple.com/x"));
+    }
+
+    /// The trailing-space case the host check used to swallow: with no path
+    /// there is nothing to split the host on, so the space stayed in it.
+    /// Both spellings are clean in epubcheck; the pair is the point, since
+    /// only the path-less one was ever wrong.
+    #[test]
+    fn a_trailing_space_is_valid_with_or_without_a_path() {
+        assert!(!has_syntax_error("http://example.com "));
+        assert!(!has_syntax_error("http://example.com/ "));
+        assert!(!has_syntax_error("  http://example.com  "));
+        // …and the interior cases stay errors, which is what makes the fix a
+        // trim rather than a relaxation of the denylist.
+        assert!(has_syntax_error("http://example .com"));
     }
 
     #[test]

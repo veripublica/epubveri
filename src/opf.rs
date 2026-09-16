@@ -6714,18 +6714,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         && let Some(b) = ocf.read_content(&orig)
                     {
                         let ncx_text = String::from_utf8_lossy(&b).into_owned();
-                        // Only NCX-001/NCX-004 need the package identifier -
-                        // they compare `dtb:uid` against it. Gating the whole
-                        // block on it meant a book whose `unique-identifier`
-                        // resolves to nothing (already its own OPF-030) had
-                        // RSC-007, RSC-010 and RSC-012 on its NCX silently
-                        // switched off as well. One shelf book, three real
-                        // undefined fragments, and no output at all: the
-                        // familiar shape where a precondition for one check
-                        // takes unrelated ones down with it.
-                        if let Some(uid_text) = &package_identifier_text {
-                            crate::ncx::check(&ncx_text, ncx_path, uid_text, is_epub3, report);
-                        }
+                        // Only NCX-001/NCX-004 need the package identifier —
+                        // they compare `dtb:uid` against it — so the absence
+                        // of one is passed *into* the check rather than used
+                        // to skip it. `ncx::check` already declines to
+                        // compare against an empty identifier, which is the
+                        // condition epubcheck guards those two messages on.
+                        //
+                        // **This gate has now swallowed unrelated checks
+                        // twice.** First RSC-007/RSC-010/RSC-012, pulled out
+                        // below; then the whole of `ncx::check` — id
+                        // uniqueness, the navPoint content model and the four
+                        // play-order rules — which stayed behind it. Reported
+                        // from a 2,798-book library: *The Land Across* has 34
+                        // navPoints all at `playOrder="0"` and a
+                        // `unique-identifier` no `dc:identifier` carries, so
+                        // epubcheck reported OPF-030 and 68 RSC-005 while we
+                        // reported OPF-030 alone.
+                        //
+                        // The lesson the second time is the one the first
+                        // time already wrote down: a precondition belongs to
+                        // the check that needs it, never to the block that
+                        // happens to contain it.
+                        crate::ncx::check(
+                            &ncx_text,
+                            ncx_path,
+                            package_identifier_text.as_deref().unwrap_or(""),
+                            is_epub3,
+                            report,
+                        );
                         if let Ok(ncx_doc) = parse_xml(&ncx_text) {
                             check_ncx_content_fragments(
                                 &ncx_doc,
@@ -9136,6 +9153,38 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // xlink:href="missing.png">` is still an RSC-007 — its own
             // fixture, and the reason this is a list rather than an
             // `or_else` chain. At EPUB 2 only `xlink:href` is a reference.
+            // The same OBS-001 question for `srcset` candidates, which the
+            // attribute walk below cannot ask: it reads one URL per
+            // attribute, and a `srcset` is a list. epubcheck reports per
+            // reference, so each candidate counts — its own
+            // `foreign-xhtml-picture-source-no-type-error` fixture is a
+            // `<source srcset>` pointing at a resource with a fallback, and
+            // it was the only OBS-001 the 1086-book oracle run found us
+            // missing.
+            if is_epub3 && matches!(node.tag_name().name(), "img" | "source") {
+                for cand in node.attr_no_ns("srcset").unwrap_or("").split(',') {
+                    let Some(url) = cand.split_whitespace().next() else {
+                        continue;
+                    };
+                    if url.is_empty() || is_external(url) || is_remote_url(url) {
+                        continue;
+                    }
+                    let key = nfc(&resolve(&dir, strip_url_fragment(url).trim()));
+                    if manifest_fallback_paths.contains(&key) {
+                        report.push_node(
+                            OBS_001,
+                            Severity::Usage,
+                            format!(
+                                "usage of a manifest content fallback (for resource '{key}') is outdated"
+                            ),
+                            path.clone(),
+                            node,
+                            "opf.content_document.outdated_manifest_fallback",
+                            vec![key.clone()],
+                        );
+                    }
+                }
+            }
             // `RSC-034`/`RSC-035`: a `<script src>` must point at a
             // resource the manifest declares with a JavaScript media type,
             // and 5.4.0 nudges the legacy spellings towards the three core
@@ -21357,11 +21406,42 @@ mod tests {
                 .iter()
                 .any(|m| m.id == crate::ids::RSC_012)
         );
+
+        // **The play-order family, which the same gate took down a second
+        // time.** `playOrder="0"` is RSC-005 from both tools; reported from a
+        // 2,798-book library where a book with 34 such navPoints and an
+        // unresolvable `unique-identifier` drew OPF-030 from us and OPF-030
+        // plus 68 RSC-005 from epubcheck. Asserted under *both* identifiers,
+        // because a fix that only ran the checks when one resolves is the
+        // defect restated.
+        for uid_present in [true, false] {
+            let r = crate::validate_bytes(epub2_with_ncx(uid_present, "", "0"));
+            assert!(
+                r.messages.iter().any(|m| m.id == crate::ids::RSC_005),
+                "playOrder=0 is reported with uid_present={uid_present}"
+            );
+        }
+        // NCX-001 stays silent when there is nothing to compare against —
+        // that is the one check the identifier is genuinely a precondition
+        // for, and it is guarded inside `ncx::check` rather than around it.
+        assert!(
+            !crate::validate_bytes(epub2_with_ncx(false, "", "1"))
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::NCX_001)
+        );
     }
 
     /// An EPUB 2 whose NCX `<content src>` carries `frag`, and whose
     /// `unique-identifier` either resolves to a `dc:identifier` or does not.
     fn epub2_with_ncx_fragment(uid_present: bool, frag: &str) -> Vec<u8> {
+        epub2_with_ncx(uid_present, frag, "1")
+    }
+
+    /// The same, with the navPoint's `playOrder` spelled out — `"0"` puts the
+    /// play-order family in play, which is the second thing the unresolved
+    /// identifier used to switch off.
+    fn epub2_with_ncx(uid_present: bool, frag: &str, play_order: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -21389,7 +21469,7 @@ mod tests {
             "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
              version=\"2005-1\"><head><meta name=\"dtb:uid\" \
              content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
-             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\">\
+             <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"{play_order}\">\
              <navLabel><text>T</text></navLabel><content src=\"ch1.xhtml{frag}\"/></navPoint>\
              </navMap></ncx>"
         );

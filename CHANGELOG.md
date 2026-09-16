@@ -160,6 +160,30 @@ epubcheck reports an RSC-005 we do not.
 
 ### Fixed
 
+- **A trailing space on a URL with no path is no longer `RSC-020`.**
+  `http://example.com ` has nothing to split a host on, so the space stayed
+  inside the host and hit the forbidden-character list, while
+  `http://example.com/ ` — the same URL with a path — was clean. The URL
+  parser strips leading and trailing whitespace before anything looks at the
+  URL, which this module already said about its interior-space rule; it now
+  trims one step earlier so the host check cannot see it either.
+  - **Reported from a 2,798-book Apple Books library**, run against epubcheck
+    5.3.0 book by book. It was the only finding of ours in that run the
+    reporter could call wrong: three books, one of which it alone turned
+    invalid.
+- **An unresolvable `unique-identifier` no longer switches off the NCX
+  checks.** Only `NCX-001`/`NCX-004` compare against the package identifier,
+  and `ncx::check` already declines to compare against an empty one — but the
+  whole call sat behind `if let Some(uid)`, so id uniqueness, the navPoint
+  content model and the four play-order rules went with it.
+  - From the same run: a book with 34 `navPoint`s all at `playOrder="0"` and a
+    `unique-identifier` no `dc:identifier` carries drew `OPF-030` from us and
+    `OPF-030` plus 68 `RSC-005` from epubcheck. Both books of the minimal pair
+    now match it exactly.
+  - **This gate had already been caught once**, and the fix then pulled
+    `RSC-007`/`RSC-010`/`RSC-012` out from behind it while leaving this. A
+    precondition belongs to the check that needs it, not to the block that
+    happens to contain it.
 - **`stroke="url('#target')"` no longer reports a missing resource.** The
   quoted form is legal CSS, we took the quotes as part of the name, and a valid
   file drew RSC-007 for a resource nothing was missing. Found in one of 5.4.0's
