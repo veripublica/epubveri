@@ -1078,6 +1078,37 @@ fn check_declaration_shapes(
                 Vec::new(),
             );
         } else if let Some(ComponentValue::Token(Token::Ident(name))) = first {
+            // `OBS-001`, the same rule the stylesheet walk applies. A `style`
+            // attribute is where W3C's own `css-epub-hyphens`,
+            // `css-epub-text-align-last` and `css-epub-word-break` tests put
+            // their prefixed properties, and the epub-tests run was the only
+            // instrument that could see the omission: no stylesheet on any
+            // shelf here carries one. The finding anchors at the file, as
+            // everything on this path does — no document offset reaches here.
+            if name.starts_with("-epub-") {
+                report.push_at_rule(
+                    OBS_001,
+                    Severity::Usage,
+                    format!("usage of the CSS prefixed property '{name}' is outdated"),
+                    css_path,
+                    "css.outdated_prefixed_property",
+                    vec![name.to_string()],
+                );
+            } else if name.eq_ignore_ascii_case("text-transform")
+                && chunk.iter().any(|v| {
+                    matches!(v, ComponentValue::Token(Token::Ident(x))
+                        if x.eq_ignore_ascii_case("-epub-fullwidth"))
+                })
+            {
+                report.push_at_rule(
+                    OBS_001,
+                    Severity::Usage,
+                    "usage of the CSS prefixed value '-epub-fullwidth' is outdated",
+                    css_path,
+                    "css.outdated_prefixed_value",
+                    vec!["-epub-fullwidth".to_string()],
+                );
+            }
             if is_epub3
                 && FLAGGED_PROPERTIES
                     .iter()
