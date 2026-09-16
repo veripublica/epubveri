@@ -8,6 +8,191 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.15.0] - 2026-09-17
+
+**epubcheck 5.4.0 shipped on 2026-09-15 and this release catches up with it.**
+Everything here is parity work: each change makes epubveri agree with a rule
+5.4.0 introduced, relaxed or moved. Several of them remove an error from a book
+5.4.0 considers valid, which is the class this project treats as urgent; the
+rest close gaps where it reports something we did not.
+
+**Where the measurements stand**, against 5.4.0's own test suite (1086
+scenarios, up from 981 — upstream added fixtures and renumbered its
+directories):
+
+| | when 5.4.0 landed | now |
+|---|---|---|
+| exact-ID recall | 90.8% | **99.7%** |
+| detection recall | 96.9% | **99.6%** |
+| false positives on clean books | 4 | **0** |
+| over-reported scenarios | 6 | **0** |
+| severity disagreements | 3 | **0** |
+
+On the 474-book shelf, **423 of 474 books now agree with 5.4.0 on the exact ID
+set** (381 when the day started) and **no ID is reported by epubveri alone**.
+One book gains an error — the IDPF `haruko-jpeg` sample, where 5.4.0 reports
+the same one — and 91 gain usage messages.
+
+**What is still missing, so nobody reads this as complete parity:** the
+per-element half of the ARIA role rules (`role="doc-pagefooter"` on a
+`<section>` is an error upstream and silent here), which is an older gap than
+this release and needs epubcheck's own per-element table rather than a guess.
+
+**One difference you will see against 5.4.0 is theirs, not ours:** it rejects
+`aria-label` and `aria-labelledby` on a navigation document's `<nav>`
+(w3c/epubcheck#1726, confirmed by its maintainer, marked critical). Every
+Project Gutenberg EPUB 3 on our shelf trips it. epubveri accepts that markup,
+which is correct, and this is why the shelf still shows 49 books where
+epubcheck reports an RSC-005 we do not.
+
+### Changed
+
+- **`RSC-013`, `RSC-014` and `RSC-015` are usage rather than errors**, matching
+  5.4.0's downgrade of the advanced URL fragment-integrity checks
+  (w3c/epubcheck#1678, which we filed). This is verdict-moving: a book whose
+  only finding was one of these now passes.
+  - The severity had been written at each of the nine emission sites. Three of
+    those go through `missing_fragment_id`, which answers RSC-012 *or* RSC-014
+    for the same condition, so there the severity now follows the id rather
+    than the call site — RSC-012, a fragment that resolves to nothing at all,
+    stays an error.
+- **The whole `NEXT-*` advisory family graduated and is empty today.** It held
+  four EPUB 3.4 rules that epubcheck had not implemented, opt-in behind
+  `--advisory` because reporting what epubcheck does not is indistinguishable
+  from a false positive. 5.4.0 implements all four, so each now reports under
+  epubcheck's id, at its severity, with no flag:
+
+  | was | now |
+  |---|---|
+  | `NEXT-005` page-spread on reflowable content | `OPF-100`, usage |
+  | `NEXT-006` layout override beside a roll layout | `RSC-005`, error |
+  | `NEXT-007` roll item without ICB dimensions | `HTM-046`/`HTM-056`, error |
+  | `NEXT-008` EPUB 3.4 deprecations | `OPF-086`/`OPF-086c`, warning |
+
+  - `NEXT-007` leaves no id of its own: 5.4.0 requires a roll publication's
+    spine items to be fixed-layout documents, so the fixed-layout viewport
+    rules now ask its question.
+  - The family's own note in `ids.rs` predicted this would take years, citing
+    the 2.4 years EPUB 3.3 took to reach Recommendation. It took five weeks.
+  - `--advisory` still exists and `ADV-*` is unchanged. The flag's help text
+    says the other family is empty for now.
+- **A roll publication's spine items are fixed-layout, and fixed layout is
+  inherited down the fallback chain.** Both are 5.4.0 rules. The second is why
+  a pre-paginated book whose spine item is an image falling back to XHTML now
+  reports `HTM-046` on that XHTML — reported once per document, not once per
+  spine item that shares it.
+- **`video/*` is no longer exempt from the fallback requirement by type.** The
+  exemption belongs to the *position*: a reference from a `<video>` element is
+  exempt, a video used as `<img src>` is not and needs a fallback like any
+  other foreign resource (w3c/epubcheck#1662).
+- **The audio Core Media Types now read their `codecs` parameter.** `audio/mp4`
+  is core bare or with `codecs=aac`/`codecs=opus`; `audio/ogg` is core only
+  with `codecs=opus`. Bare `audio/ogg`, `audio/opus` and `audio/mp4` with any
+  other codec are foreign, as 5.4.0 has them. This is the one media-type family
+  where the parameter is part of the answer rather than noise.
+- **An EPUB 3 `<metadata>` element takes no attributes** — not `id`, `dir` or
+  `xml:lang` (w3c/epubcheck#1665). EPUB 2 is unchanged. No book on the shelf
+  declares any of them.
+- **In EPUB 3, `<object>` requires `data` and `<param>` is gone**, from the
+  HTML schemas 5.4.0 pulled in. EPUB 2 keeps both, since XHTML 1.1 has `param`.
+- **The ARIA `role` vocabulary was re-extracted from 5.4.0's schemas: 111 names
+  → 125.** Its validator.nu update added the ARIA 1.2/1.3 element-backed roles
+  (`blockquote`, `caption`, `code`, `deletion`, `emphasis`, `image`,
+  `insertion`, `meter`, `paragraph`, `strong`, `subscript`, `superscript`,
+  `time`) plus DPUB's `doc-pagefooter` and `doc-pageheader`, and dropped
+  `directory`. Extracted from the schema rather than transcribed, as the list
+  always has been; no book on the shelf uses any of the affected values.
+- **A `<script type="module">` no longer requires the `scripted` property, and
+  a legacy JavaScript media type now does.** Our list of script media types was
+  hand-written and wrong in both directions; it is now epubcheck's
+  `isScriptType` — sixteen spellings, mostly historical. `module` is an HTML
+  keyword rather than a media type, which is why epubcheck never treats it as
+  scripting; `text/ecmascript` and its relatives are types, and it does.
+
+### Added
+
+- **`RSC-036`: obsolete but conforming HTML, at usage severity** — `border` on
+  `img`, `charset` on `script`, `type` on `style`, `name` on `a`. 5.4.0 admits
+  these in the grammar (validator.nu discourages them rather than rejecting
+  them) and reports each as a usage message. We rejected the first three
+  outright, so this removes a whole class of error from EPUB 3 books: on the
+  shelf, seven books gain the usage message, one of them 23 times.
+  - The value restrictions are epubcheck's and are deliberate: `border="1"`, a
+    `charset` that is not UTF-8, and a `style type` that is not `text/css` are
+    still schema errors.
+- **`OBS-001`: the features EPUB 3.4 marks as outdated**, at usage severity and
+  in all eight places epubcheck reports them: the OPF 2 `guide` and `meta`
+  elements, the `collection` element, the outdated `rendition:*` and `source-of`
+  properties, an NCX in an EPUB 3 book, `-epub-` prefixed CSS properties and the
+  `-epub-fullwidth` value, font obfuscation, and every reference to a resource
+  that has a manifest content fallback.
+  - It is the most widespread message here: 91 of the 474 shelf books draw at
+    least one, almost all for their NCX or `guide`. Usage severity, so no
+    verdict moves — but both editor plugins pass `-u`, so their users will see
+    it.
+- **`HTM-062`/`HTM-063`: SVG `xlink:href` without a matching `href`**, and the
+  two spellings disagreeing (w3c/epubcheck#1677, which we filed). With it, the
+  plain SVG 2 `href` is now a reference we resolve at EPUB 3 — both spellings
+  when they differ, so a missing target behind the deprecated one is still
+  found. EPUB 2 keeps the old answer, where reading the plain spelling would
+  invent errors.
+  - 58 shelf books draw `HTM-062`, matching epubcheck's count exactly.
+- **`RSC-034`/`RSC-035`: a `<script src>`'s declared media type** must be
+  JavaScript, and the legacy spellings draw a usage note. A `<script src>` whose
+  `type` is neither `module` nor a JavaScript media type is also a schema error
+  now, which is where 5.4.0 puts it.
+- **`OPF-086c`: the `xsd`, `msv` and `prism` reserved prefixes are deprecated**,
+  reported both where a prefix is declared and where one is used — epubcheck
+  asks at both sites, so a book that declares and uses one gets two findings.
+- **`fill`, `stroke` and `clip-path` targets are type-checked in standalone SVG
+  documents too** (`RSC-014`, usage). Only their existence was checked there;
+  the embedded-in-XHTML path has asked this for months. `clip-path` is also
+  collected as a reference at all now, which is w3c/epubcheck#1678 — also ours —
+  arriving back as a rule.
+- **`doc-pagefooter` and `doc-pageheader` must not carry an accessible name.**
+  epubcheck states this in Schematron because its grammar admits the two roles
+  on anything that takes a role at all. An element carrying both `aria-label`
+  and `aria-labelledby` draws one finding, as it does there.
+  - The per-element half of the role rules — which elements may carry which
+    role — remains unimplemented here, so `<section role="doc-pagefooter">` is
+    an error upstream and silent here. That gap is older than this release and
+    is documented in `schemas/xhtml.rng`.
+
+### Fixed
+
+- **`stroke="url('#target')"` no longer reports a missing resource.** The
+  quoted form is legal CSS, we took the quotes as part of the name, and a valid
+  file drew RSC-007 for a resource nothing was missing. Found in one of 5.4.0's
+  own fixtures. Both places that read an SVG paint reference now share one
+  parser.
+- **A prefixed and an unprefixed spread placement are no longer a conflict.**
+  `rendition:page-spread-left` beside `page-spread-left` names one property
+  twice; we reported RSC-005. 5.4.0 fixed the same false positive on its side,
+  and we now count distinct placements rather than tokens.
+
+### Library
+
+- **Every `ids::NEXT_*` constant is removed** — `NEXT_005` through `NEXT_008` —
+  and `ids::OPF_100`, `RSC_034`, `RSC_035`, `RSC_036`, `OPF_086C` and `OBS_001`
+  are added. Removing public constants is why this is a minor bump.
+- **`schematron::run` returns `Vec<schematron::Finding>`** rather than a tuple,
+  because a Schematron rule can now name its own message id and severity
+  (`flag` and `role` on the assertion) instead of every finding being
+  RSC-005/error. The default is unchanged when a rule says nothing.
+- **Consumer note for repair tools.** No rule key was renamed and none changed
+  meaning, but four rules now carry a different message id, and all four appear
+  without `--advisory`:
+
+  | rule key | was | now |
+  |---|---|---|
+  | `opf.itemref.page_spread_on_reflowable` | `NEXT-005` | `OPF-100` |
+  | `opf.itemref.layout_override_beside_roll` | `NEXT-006` | `RSC-005` |
+  | `opf.itemref.deprecated_align_x_center` | `NEXT-008` | `OPF-086` |
+  | `opf.prefix.deprecated_in_epub34` | `NEXT-008` | `OPF-086c` |
+
+  Anything keyed on the rule is unaffected. Anything filtering on `NEXT-*` will
+  stop seeing them, and anything keyed on the bare id needs the new one.
+
 ## [0.14.3] - 2026-09-12
 
 **Three corrections to 0.14.2, two of them to things 0.14.2 itself introduced.**
