@@ -24,6 +24,21 @@ pub(crate) fn check(
     if !is_epub3 {
         crate::htm::check_ncx_doctype(ncx_xml, ncx_path, report);
     }
+    // `OBS-001`: in EPUB 3 the NCX is the OPF 2 way of declaring navigation,
+    // which 3.4 marks outdated (epubcheck 5.4.0, `NCXChecker.checkContent`).
+    // Once per NCX document, at the file itself, before it is even parsed —
+    // the finding is about the file existing, not about what is in it, and
+    // epubcheck reports it ahead of its own RELAX NG pass for that reason.
+    if is_epub3 {
+        report.push_at_rule(
+            OBS_001,
+            Severity::Usage,
+            "usage of OPF 2 NCX navigation is outdated",
+            ncx_path,
+            "ncx.outdated_navigation",
+            Vec::new(),
+        );
+    }
     let d = match crate::ocf::parse_xml(ncx_xml) {
         Ok(d) => d,
         Err(e) => {

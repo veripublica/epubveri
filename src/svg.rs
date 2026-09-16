@@ -138,6 +138,24 @@ fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
     SVG_ELEMENTS.contains(&name)
 }
 
+/// The target of an SVG paint reference: the inside of `url(…)`, with the
+/// optional quotes CSS allows removed (`url('#a')`, `url("#a")`).
+///
+/// **The quoted spellings are not exotic — one of epubcheck's own fixtures
+/// uses `stroke="url('#circle')"`**, and taking the value literally made the
+/// target `'#circle'`, a name no document holds, so a valid file drew an
+/// RSC-007 for a missing resource. Trimmed inside the parens too, since
+/// `url( #a )` is equally legal.
+pub(crate) fn url_reference(value: &str) -> Option<&str> {
+    let inner = value.trim().strip_prefix("url(")?.strip_suffix(')')?.trim();
+    let unquoted = inner
+        .strip_prefix('\'')
+        .and_then(|r| r.strip_suffix('\''))
+        .or_else(|| inner.strip_prefix('"').and_then(|r| r.strip_suffix('"')))
+        .unwrap_or(inner);
+    Some(unquoted.trim())
+}
+
 /// `RSC-025` (usage): an SVG-namespaced element not in the known
 /// vocabulary. Stops descending at `foreignObject`/`title` boundaries
 /// (their own, separate content models apply instead - checked via
@@ -172,7 +190,9 @@ fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
 /// epubcheck says nothing about. Five, measured one book each against 5.3.0,
 /// every one of them an RSC-007 we invented:
 /// `<textPath xlink:href="missing.svg#p">`, `<tref>` likewise, a gradient's
-/// `xlink:href`, and a **plain** `href` on `<use>` or `<image>`.
+/// `xlink:href`, and — at the time — a **plain** `href` on `<use>` or
+/// `<image>`. The last of those is no longer invented at EPUB 3: 5.4.0
+/// registers it, which is what `plain_href_counts` turns on.
 ///
 /// What it registers, and nothing else:
 ///
@@ -186,35 +206,71 @@ fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
 ///
 /// Two details of that dispatch are load-bearing and both were probed:
 ///
-/// - **`xlink:href` only.** Every call site passes the namespace explicitly,
-///   so SVG 2's unprefixed `href` is not a reference to epubcheck at all —
-///   the same finding as issue #77 made about `<a>`, which turns out to be
-///   the general rule rather than an anchor quirk.
+/// - **`xlink:href` only *through 5.3.0*, and that is why `plain_href_counts`
+///   exists.** Every call site used to pass the namespace explicitly, so SVG
+///   2's unprefixed `href` was not a reference to epubcheck at all — the same
+///   finding as issue #77 made about `<a>`. We filed it as w3c/epubcheck#1677
+///   and 5.4.0 fixed it: `getSVGHrefs` now reads both spellings, and reports
+///   HTM-062/063 on the mismatch (see `check_deprecated_xlink_href`). The
+///   flag is the EPUB version — the fix lives in the EPUB 3 handler only, so
+///   an EPUB 2 book still gets the 5.3.0 answer, and reading a plain `href`
+///   there would invent exactly the RSC-007s listed below.
 /// - **`checkPaint` takes the value literally**: `startsWith("url(")` and
 ///   `endsWith(")")`, so `fill="url(#a) red"` registers nothing. Probed.
 ///
-/// `clip-path` and the `marker-*` properties look like paint references and
-/// are not dispatched, which is why they draw nothing. The callback receives
+/// The `marker-*` properties look like paint references and are not
+/// dispatched, which is why they draw nothing. `clip-path` was in that
+/// sentence until 5.4.0 fixed w3c/epubcheck#1678 — ours — and started
+/// registering it. The callback receives
 /// the reference **already unwrapped** from `url(...)`.
+/// Where a reference was written, which decides what its target may be.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RefSource {
+    /// `href`/`xlink:href` on `use`/`image`/`a`/`font-face-uri`.
+    Href,
+    /// `fill`/`stroke="url(#…)"` — must reach a paint server.
+    Paint,
+    /// `clip-path="url(#…)"` — must reach a `clipPath`. Checked by epubcheck
+    /// only since 5.4.0 (w3c/epubcheck#1678, ours): the `case` handling it
+    /// existed and nothing registered the reference, so both a dangling and
+    /// a wrong-typed clip-path passed silently.
+    ClipPath,
+}
+
 fn for_each_reference<'a>(
     root: roxmltree::Node<'a, 'a>,
-    mut f: impl FnMut(roxmltree::Node<'a, 'a>, &'a str),
+    plain_href_counts: bool,
+    mut f: impl FnMut(roxmltree::Node<'a, 'a>, &'a str, RefSource),
 ) {
-    const XLINK: &str = "http://www.w3.org/1999/xlink";
     for n in root.descendants().filter(|n| n.is_element()) {
         if n.tag_name().namespace() != Some(SVG_NS) {
             continue;
         }
-        if matches!(n.tag_name().name(), "use" | "image" | "a" | "font-face-uri")
-            && let Some(v) = n.attribute((XLINK, "href"))
-        {
-            f(n, v);
+        if matches!(n.tag_name().name(), "use" | "image" | "a" | "font-face-uri") {
+            let xhref = n.attribute((XLINK_NS, "href"));
+            let href = plain_href_counts.then(|| n.attr_no_ns("href")).flatten();
+            // epubcheck's `getSVGHrefs`, both arms: with the two spellings
+            // present and different, *both* are references; otherwise
+            // whichever one is there.
+            match (href, xhref) {
+                (Some(h), Some(x)) if h != x => {
+                    f(n, h, RefSource::Href);
+                    f(n, x, RefSource::Href);
+                }
+                (Some(h), _) => f(n, h, RefSource::Href),
+                (None, Some(x)) => f(n, x, RefSource::Href),
+                (None, None) => {}
+            }
         }
-        for attr in ["fill", "stroke"] {
+        for (attr, source) in [
+            ("fill", RefSource::Paint),
+            ("stroke", RefSource::Paint),
+            ("clip-path", RefSource::ClipPath),
+        ] {
             if let Some(v) = n.attr_no_ns(attr)
-                && let Some(inner) = v.strip_prefix("url(").and_then(|r| r.strip_suffix(')'))
+                && let Some(inner) = url_reference(v)
             {
-                f(n, inner);
+                f(n, inner, source);
             }
         }
     }
@@ -232,10 +288,11 @@ pub(crate) fn check_resource_references(
     path: &str,
     base_dir: &str,
     name_index: &std::collections::HashMap<String, String>,
+    is_epub3: bool,
     report: &mut Report,
 ) {
     use crate::opf::{is_external, nfc, resolve};
-    for_each_reference(svg_root, |n, v| {
+    for_each_reference(svg_root, is_epub3, |n, v, _| {
         let v = v.trim();
         if v.is_empty() || v.starts_with('#') || is_external(v) || crate::opf::is_remote_url(v) {
             return;
@@ -265,7 +322,13 @@ pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for_each_reference(doc.root_element(), |_, v| {
+    // Unconditionally both spellings, unlike the two checks that report:
+    // this only answers "was this resource referenced" (OPF-097), so the
+    // worst an over-wide read can do is withhold a usage message, never
+    // invent an error. That is the right direction to be wrong in here, and
+    // it keeps the extractor's signature free of a version it has no other
+    // use for.
+    for_each_reference(doc.root_element(), true, |_, v, _| {
         {
             let v = v.trim();
             // Remote targets come back unresolved, as the SMIL extractor's do
@@ -865,30 +928,69 @@ fn is_valid_ncname(s: &str) -> bool {
 /// not register. With [`for_each_reference`] narrowed to the registered set,
 /// the same walk answers this question correctly — measured one book per
 /// construct, and the six that draw RSC-012 there now draw it here.
-pub(crate) fn check_fragments(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
-    let mut ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+pub(crate) fn check_fragments(
+    svg_root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    // The same walk answers two questions, which is why the element is kept
+    // beside its id: does the fragment resolve at all (RSC-012, error), and
+    // does it resolve to something the reference may point at (RSC-014,
+    // usage since 5.4.0).
+    let mut by_id: std::collections::HashMap<&str, roxmltree::Node> =
+        std::collections::HashMap::new();
     for n in svg_root.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attr_no_ns("id") {
-            ids.insert(id);
+            by_id.entry(id).or_insert(n);
         }
     }
-    for_each_reference(svg_root, |n, v| {
+    for_each_reference(svg_root, is_epub3, |n, v, source| {
         let v = v.trim();
         let Some(frag) = v.strip_prefix('#') else {
             return;
         };
-        if frag.is_empty() || ids.contains(frag) {
+        if frag.is_empty() {
             return;
         }
-        report.push_node(
-            RSC_012,
-            Severity::Error,
-            format!("fragment identifier '{v}' does not resolve to an element in this document"),
-            path,
-            n,
-            "svg.fragment_missing_target",
-            vec![v.to_string()],
-        );
+        let Some(target) = by_id.get(frag) else {
+            report.push_node(
+                RSC_012,
+                Severity::Error,
+                format!(
+                    "fragment identifier '{v}' does not resolve to an element in this document"
+                ),
+                path,
+                n,
+                "svg.fragment_missing_target",
+                vec![v.to_string()],
+            );
+            return;
+        };
+        // **A standalone SVG's paint and clip-path targets were never
+        // type-checked here**, only their existence — the embedded-in-XHTML
+        // path has asked this since RefKind existed. epubcheck asks it of
+        // both, and 5.4.0's downgrade made it a usage message.
+        let kind = crate::opf::IdKind::of(*target);
+        let wanted = match source {
+            RefSource::Href => return,
+            RefSource::Paint => crate::opf::IdKind::SvgPaint,
+            RefSource::ClipPath => crate::opf::IdKind::SvgClipPath,
+        };
+        if kind != wanted {
+            report.push_node(
+                RSC_014,
+                Severity::Usage,
+                format!(
+                    "reference '{v}' targets {} (incompatible resource type)",
+                    kind.describe()
+                ),
+                path,
+                n,
+                "svg.fragment_incompatible_target",
+                vec![v.to_string()],
+            );
+        }
     });
 }
 
@@ -931,6 +1033,61 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
 /// no `xlink:title` attribute, no `<title>` child, no `aria-label`, and
 /// no real text content anywhere inside it (confirmed via a real fixture
 /// exercising all four labeling mechanisms as valid, plus a fifth `<a>`
+/// `HTM-062`/`HTM-063`: SVG 2 deprecated `xlink:href` in favour of the
+/// no-namespace `href`, and epubcheck 5.4.0 says so (w3c/epubcheck#1677, which
+/// we filed; `OPSHandler30.getSVGHrefs`).
+///
+/// Two findings, both usage: `xlink:href` with no `href` beside it (HTM-062),
+/// and both present with different values (HTM-063). Identical values are
+/// silent — that is the migration epubcheck is asking for, not a defect.
+///
+/// **EPUB 3 only, and the four elements are epubcheck's rather than every
+/// element that can carry the attribute**: the messages come out of the
+/// `getSVGHrefs` override, which the base (EPUB 2) handler leaves alone, and
+/// only `use`, `image`, `a` and `font-face-uri` route their URL through it.
+pub(crate) fn check_deprecated_xlink_href(
+    svg_root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    if !is_epub3 {
+        return;
+    }
+    for n in svg_root.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().namespace() == Some(SVG_NS)
+            && matches!(n.tag_name().name(), "use" | "image" | "a" | "font-face-uri")
+    }) {
+        let Some(xhref) = n.attribute((XLINK_NS, "href")) else {
+            continue;
+        };
+        match n.attr_no_ns("href") {
+            None => report.push_node(
+                HTM_062,
+                Severity::Usage,
+                "the SVG \"xlink:href\" attribute is deprecated; use \"href\" instead",
+                path,
+                n,
+                "svg.reference.deprecated_xlink_href",
+                vec![xhref.to_string()],
+            ),
+            Some(href) if href != xhref => report.push_node(
+                HTM_063,
+                Severity::Usage,
+                format!(
+                    "the \"xlink:href\" value (\"{xhref}\") should equal the \"href\" value (\"{href}\")"
+                ),
+                path,
+                n,
+                "svg.reference.xlink_href_mismatch",
+                vec![xhref.to_string(), href.to_string()],
+            ),
+            Some(_) => {}
+        }
+    }
+}
+
 /// with none of them).
 pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     for a in svg_root.descendants().filter(|n| {
@@ -1849,6 +2006,7 @@ mod tests {
                 "EPUB/pic.svg",
                 "EPUB",
                 &index,
+                true,
                 &mut report,
             );
             report
@@ -1957,10 +2115,10 @@ mod tests {
     /// The wide walk this replaces produced five errors on markup epubcheck
     /// says nothing about, each measured one book at a time against 5.3.0:
     /// `<textPath xlink:href>`, `<tref xlink:href>`, a gradient's
-    /// `xlink:href`, and a **plain** `href` on `<use>` or `<image>`. The last
-    /// pair is issue #77's `<a>` finding turning out to be the general rule —
-    /// every SVG call site in epubcheck passes the xlink namespace
-    /// explicitly, so the unprefixed SVG 2 spelling is not a reference to it.
+    /// `xlink:href`, and — against 5.3.0 — a **plain** `href` on `<use>` or
+    /// `<image>`. That last pair moved: we filed it as w3c/epubcheck#1677 and
+    /// 5.4.0 registers the unprefixed SVG 2 spelling, so at EPUB 3 it belongs
+    /// in the registered set and at EPUB 2 it still does not.
     ///
     /// Asserted as a whole set rather than case by case, because the failure
     /// this guards against is the set quietly widening again.
@@ -1968,7 +2126,7 @@ mod tests {
     fn the_svg_reference_set_is_the_one_epubcheck_registers() {
         use std::collections::HashMap;
         let index: HashMap<String, String> = HashMap::new();
-        let named = |body: &str| -> Vec<String> {
+        let named_at = |body: &str, is_epub3: bool| -> Vec<String> {
             let xml = format!(
                 r#"<svg xmlns="http://www.w3.org/2000/svg"
                         xmlns:xlink="http://www.w3.org/1999/xlink"
@@ -1981,6 +2139,7 @@ mod tests {
                 "EPUB/pic.svg",
                 "EPUB",
                 &index,
+                is_epub3,
                 &mut report,
             );
             report
@@ -1989,6 +2148,7 @@ mod tests {
                 .map(|m| m.params.first().cloned().unwrap_or_default())
                 .collect()
         };
+        let named = |body: &str| named_at(body, true);
 
         // Registered: the four xlink elements and the two paint properties.
         for body in [
@@ -1998,6 +2158,15 @@ mod tests {
             r#"<font-face-uri xlink:href="gone.svg"/>"#,
             r#"<rect fill="url(gone.svg)"/>"#,
             r#"<rect stroke="url(gone.svg)"/>"#,
+            // The unprefixed SVG 2 spelling, registered since epubcheck
+            // 5.4.0 (w3c/epubcheck#1677, ours) — and *not* at EPUB 2, which
+            // the block after this one holds.
+            r#"<use href="gone.svg"/>"#,
+            r#"<image href="gone.svg"/>"#,
+            // `clip-path` likewise: the `case` for it existed upstream with
+            // nothing registering the reference, which is what we filed as
+            // w3c/epubcheck#1678 and 5.4.0 fixed.
+            r#"<rect clip-path="url(gone.svg)"/>"#,
         ] {
             assert_eq!(
                 named(body),
@@ -2011,15 +2180,23 @@ mod tests {
             r#"<text><textPath xlink:href="gone.svg"/></text>"#,
             r#"<text><tref xlink:href="gone.svg"/></text>"#,
             r#"<linearGradient xlink:href="gone.svg"/>"#,
-            r#"<use href="gone.svg"/>"#,
-            r#"<image href="gone.svg"/>"#,
-            r#"<rect clip-path="url(gone.svg)"/>"#,
             r#"<line marker-start="url(gone.svg)"/>"#,
             // `checkPaint` takes the value literally: it must be exactly
             // `url(…)`, so a paint list registers nothing. Probed.
             r#"<rect fill="url(gone.svg) red"/>"#,
         ] {
             assert!(named(body).is_empty(), "not registered: {body}");
+        }
+
+        // EPUB 2 keeps the 5.3.0 answer, because the fix lives in
+        // epubcheck's EPUB 3 handler alone. Reading the plain spelling here
+        // would re-create two of the false positives above.
+        for body in [r#"<use href="gone.svg"/>"#, r#"<image href="gone.svg"/>"#] {
+            assert!(
+                named_at(body, false).is_empty(),
+                "EPUB 2 registers only xlink:href: {body}"
+            );
+            assert_eq!(named_at(body, true).len(), 1, "but EPUB 3 does: {body}");
         }
     }
 
@@ -2040,7 +2217,7 @@ mod tests {
             );
             let d = doc(&xml);
             let mut report = Report::new();
-            check_fragments(d.root_element(), "EPUB/pic.svg", &mut report);
+            check_fragments(d.root_element(), "EPUB/pic.svg", true, &mut report);
             report
                 .messages
                 .iter()

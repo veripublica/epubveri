@@ -13,7 +13,11 @@
   rules — so schemas/xhtml.rng handles element/text placement and this handles
   the rest. (idref/idrefs *resolution* is hand-coded in htm.rs, since checking
   every whitespace-separated token needs iteration the XPath 1.0 core lacks.)
-  EPUB 3 only. Every violation is reported by epubcheck as RSC-005; we match that.
+  EPUB 3 only. epubcheck reports nearly every violation here as RSC-005 and we
+  match that, so RSC-005/error is what a pattern gets by default. A pattern that
+  needs another id or severity says so on its own assert/report, with
+  Schematron's `flag` (the message id) and `role` (the severity) — which is how
+  the `obsolete-*` patterns below report USAGE RSC-036.
 -->
 <schema xmlns="http://purl.oclc.org/dsdl/schematron">
   <ns uri="http://www.w3.org/1999/xhtml" prefix="h"/>
@@ -247,6 +251,61 @@
   <pattern id="ssml-ph-not-nested">
     <rule context="*[@ssml:ph]">
       <report test="ancestor::*[@ssml:ph]">the "ssml:ph" attribute must not appear on a descendant of an element that also carries it</report>
+    </rule>
+  </pattern>
+  <!-- DPUB-ARIA's two page-running-head roles prohibit an accessible name.
+       epubcheck states this in Schematron rather than the grammar, because
+       its grammar admits the roles on anything taking any role at all
+       (`epub-xhtml-integration.rnc`), so the constraint has nowhere else to
+       live. `role` is a single token for us (see the ariaRole note in
+       xhtml.rng), which is why this matches the whole attribute where
+       epubcheck tokenises it. -->
+  <pattern id="aria-role-name-prohibited">
+    <rule context="h:*[@role = 'doc-pagefooter' or @role = 'doc-pageheader']">
+      <report test="@aria-label">an element with the "<value-of select="@role"/>" role must not carry an "aria-label" attribute</report>
+      <!-- Guarded on the absence of the other spelling so an element
+           carrying both draws one finding, as epubcheck's single
+           `@aria-label|@aria-labelledby` report does. -->
+      <report test="@aria-labelledby and not(@aria-label)">an element with the "<value-of select="@role"/>" role must not carry an "aria-labelledby" attribute</report>
+    </rule>
+  </pattern>
+  <!-- Obsolete but conforming HTML: reported as USAGE RSC-036 rather than
+       the RSC-005 every other pattern here produces (epubcheck 5.4.0,
+       `obsolete.*` in `epub-xhtml-30.sch`). The grammar admits these
+       attributes only in the restricted forms xhtml.rng documents, so a rule
+       firing here is always on a value the schema already accepted. -->
+  <!-- A `script` element with a `src` must declare either `type="module"`
+       or a JavaScript media type; anything else is a schema error. epubcheck
+       5.4.0 states this in Schematron on its own admission — the constraint
+       belongs to validator.nu's non-schema code, which it has not integrated
+       (w3c/epubcheck 5911ef1). The sixteen media types are
+       `OPFChecker.isScriptType`'s, mirrored in `opf.rs`'s
+       `is_script_media_type`; `module` is the HTML keyword and is not one of
+       them, which is why it is named separately here and there. -->
+  <pattern id="script-src-type">
+    <rule context="h:script[@src][@type]">
+      <let name="t" value="lower-case(normalize-space(@type))"/>
+      <report test="not($t = 'module' or $t = 'application/javascript' or $t = 'text/javascript' or $t = 'application/ecmascript' or $t = 'application/x-ecmascript' or $t = 'application/x-javascript' or $t = 'text/ecmascript' or $t = 'text/javascript1.0' or $t = 'text/javascript1.1' or $t = 'text/javascript1.2' or $t = 'text/javascript1.3' or $t = 'text/javascript1.4' or $t = 'text/javascript1.5' or $t = 'text/jscript' or $t = 'text/livescript' or $t = 'text/x-ecmascript' or $t = 'text/x-javascript')">a "script" element with a "src" must declare "module" or a JavaScript media type, not "<value-of select="@type"/>"</report>
+    </rule>
+  </pattern>
+  <pattern id="obsolete-img-border">
+    <rule context="h:img[@border]">
+      <report test="true()" role="usage" flag="RSC-036">the "border" attribute on an "img" element is obsolete; use CSS instead</report>
+    </rule>
+  </pattern>
+  <pattern id="obsolete-script-charset">
+    <rule context="h:script[@charset]">
+      <report test="true()" role="usage" flag="RSC-036">the "charset" attribute on a "script" element is obsolete</report>
+    </rule>
+  </pattern>
+  <pattern id="obsolete-style-type">
+    <rule context="h:style[@type]">
+      <report test="true()" role="usage" flag="RSC-036">the "type" attribute on a "style" element is obsolete</report>
+    </rule>
+  </pattern>
+  <pattern id="obsolete-a-name">
+    <rule context="h:a[@name]">
+      <report test="true()" role="usage" flag="RSC-036">the "name" attribute on an "a" element is obsolete; use an "id" on the nearest container instead</report>
     </rule>
   </pattern>
   <pattern id="track-rules">

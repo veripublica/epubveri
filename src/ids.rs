@@ -83,6 +83,10 @@ pub const RSC_030: &str = "RSC-030"; // a file: URL is used, which is not allowe
 pub const RSC_031: &str = "RSC-031"; // a remote resource uses http instead of https
 pub const RSC_032: &str = "RSC-032"; // a foreign resource is used with no required fallback
 pub const RSC_033: &str = "RSC-033"; // a local reference has a URL query string
+pub const RSC_034: &str = "RSC-034"; // a script resource's media type is not JavaScript (epubcheck 5.4.0)
+pub const RSC_035: &str = "RSC-035"; // a legacy JavaScript media type (usage, epubcheck 5.4.0)
+pub const RSC_036: &str = "RSC-036"; // an obsolete but conforming HTML feature (usage, epubcheck 5.4.0)
+pub const OBS_001: &str = "OBS-001"; // a feature EPUB 3.4 marks as outdated (usage, epubcheck 5.4.0)
 pub const RSC_026: &str = "RSC-026"; // a URL is path-absolute or escapes the container root
 
 // --- OPF package document (dedicated codes, used verbatim) ---
@@ -111,6 +115,7 @@ pub const OPF_066: &str = "OPF-066"; // an edupub page-list nav exists but no pr
 pub const OPF_067: &str = "OPF-067"; // a metadata <link> target is also a manifest item
 pub const OPF_086: &str = "OPF-086"; // warning: a deprecated rendition property/value or deprecated meta viewport
 pub const OPF_086B: &str = "OPF-086b"; // same family, usage-level: a deprecated epub:type semantic value
+pub const OPF_086C: &str = "OPF-086c"; // warning: a deprecated reserved prefix (xsd/msv/prism; epubcheck 5.4.0)
 pub const OPF_087: &str = "OPF-087"; // epub:type value only restates its host element's own native semantic (usage)
 pub const OPF_088: &str = "OPF-088"; // epub:type value isn't in the default vocabulary (usage)
 pub const OPF_090: &str = "OPF-090"; // a non-preferred (but valid) Core Media Type is used (usage)
@@ -161,6 +166,7 @@ pub const OPF_096: &str = "OPF-096"; // non-linear content isn't reachable from 
 pub const OPF_096B: &str = "OPF-096b"; // same, but usage-level: the book uses scripting, which could add reachability dynamically
 pub const OPF_098: &str = "OPF-098"; // a link target must not reference a manifest item id
 pub const OPF_099: &str = "OPF-099"; // a manifest item references the package document itself
+pub const OPF_100: &str = "OPF-100"; // a page-spread-* spine override on reflowable content (usage, epubcheck 5.4.0)
 
 // --- CSS (via the styloria parser) ---
 pub const CSS_001: &str = "CSS-001"; // use of the 'direction' or 'unicode-bidi' property
@@ -220,10 +226,26 @@ pub const ADV_010: &str = "ADV-010"; // an EPUB 2 manifest resource nothing refe
 // **Do not encode a spec version in the prefix.** `NEXT-` says "the next
 // epubcheck reports this"; `EPUB34-` would age the moment 3.5 exists and would
 // have to be renamed, which is the thing this split exists to avoid.
-pub const NEXT_005: &str = "NEXT-005"; // EPUB 3.4: page-spread-* on a reflowable document (was ADV-005; usage, w3c/epubcheck#1652)
-pub const NEXT_006: &str = "NEXT-006"; // EPUB 3.4: a spine layout override beside a roll layout (was ADV-006; usage, w3c/epubcheck#1651)
-pub const NEXT_007: &str = "NEXT-007"; // EPUB 3.4: a roll spine document without ICB dimensions (was ADV-007; usage, w3c/epubcheck#1651)
-pub const NEXT_008: &str = "NEXT-008"; // EPUB 3.4: a feature deprecated in 3.4 (was ADV-008; usage, w3c/epubcheck#1649)
+// **THE WHOLE FAMILY GRADUATED ON 2026-09-17 AND NO `NEXT-*` CONSTANT
+// EXISTS TODAY.** epubcheck 5.4.0 shipped every rule the four named, so each
+// now reports under epubcheck's own id, in the default output, unflagged:
+//
+// | was | now | upstream |
+// |---|---|---|
+// | `NEXT-005` page-spread on reflowable | `OPF-100` (usage) | #1652 |
+// | `NEXT-006` layout override beside roll | `RSC-005` (error) | roll support |
+// | `NEXT-007` roll item without ICB dimensions | `HTM-046`/`HTM-056` (error) | roll support |
+// | `NEXT-008` 3.4 deprecations | `OPF-086`/`OPF-086c` (warning) | #1649 |
+//
+// **The note above predicted this would take years** — "EPUB 3.3 took 2.4
+// years … 'temporary' here means years" — and it took five weeks. The
+// reasoning was sound and the estimate was not, which is worth remembering
+// the next time a deferral is priced by how slow a standards body has been.
+//
+// The numbers are not reused: a future spec-ahead check takes `NEXT-009`.
+// `NEXT-007` left no id behind at all — the rule it asked (are a roll item's
+// ICB dimensions set) is now asked by the fixed-layout viewport family,
+// because 5.4.0 makes a roll spine item fixed-layout.
 
 /// What an `ADV-*` finding is grounded in. **Two different claims live in the
 /// advisory family and they justify themselves differently**, which until now
@@ -370,6 +392,8 @@ pub const HTM_054: &str = "HTM_054"; // custom attribute uses a reserved (w3.org
 pub const HTM_055: &str = "HTM_055"; // a discouraged element (base/embed/rp) is used (usage)
 pub const HTM_058: &str = "HTM_058"; // content document isn't UTF-8 encoded
 pub const HTM_061: &str = "HTM_061"; // an invalid data-* attribute name
+pub const HTM_062: &str = "HTM_062"; // SVG xlink:href with no href beside it (usage, epubcheck 5.4.0)
+pub const HTM_063: &str = "HTM_063"; // SVG xlink:href and href disagree (usage, epubcheck 5.4.0)
 
 // --- Extension profiles: EDUPUB, Region-Based Navigation ---
 pub const HTM_051: &str = "HTM-051"; // HTML5 microdata attribute in an edupub content document
@@ -422,9 +446,9 @@ mod tests {
     /// entire reason this project adopted the ID scheme instead of inventing
     /// one.
     ///
-    /// The block is `HTM_053`..`HTM_061` and `MED_006`..`MED_018`, read off
-    /// `MessageId.java`. `HTM_053` and `MED_006` are not implemented here, so
-    /// 19 of the 21 appear below.
+    /// The block is `HTM_053`..`HTM_063` and `MED_006`..`MED_018`, read off
+    /// `MessageId.java` (5.4.0 added `HTM_062`/`HTM_063` to it). `HTM_053` and
+    /// `MED_006` are not implemented here, so 21 of the 23 appear below.
     ///
     /// This test exists because the rule was known and applied to two ids out
     /// of nineteen — the comment on `HTM_060A` stated it correctly while the
@@ -436,8 +460,8 @@ mod tests {
     fn epubcheck_spells_this_block_with_underscores() {
         const UNDERSCORED: &[&str] = &[
             "HTM_054", "HTM_055", "HTM_056", "HTM_057", "HTM_058", "HTM_059", "HTM_060a",
-            "HTM_060b", "HTM_061", "MED_007", "MED_010", "MED_011", "MED_012", "MED_013",
-            "MED_014", "MED_015", "MED_016", "MED_017", "MED_018",
+            "HTM_060b", "HTM_061", "HTM_062", "HTM_063", "MED_007", "MED_010", "MED_011",
+            "MED_012", "MED_013", "MED_014", "MED_015", "MED_016", "MED_017", "MED_018",
         ];
 
         let declared: Vec<String> = include_str!("ids.rs")
@@ -490,7 +514,11 @@ mod tests {
     #[test]
     fn an_advisory_constants_name_agrees_with_its_id() {
         let consts = advisory_constants();
-        assert!(consts.len() >= 9, "parser broke: {consts:?}");
+        // Six today, all `ADV-*`: the four `NEXT-*` graduated with epubcheck
+        // 5.4.0 and the family is empty for now. The floor is a parser guard,
+        // not a target — it moved 9 → 6 for that reason and moves again when
+        // the next spec-ahead check lands.
+        assert!(consts.len() >= 6, "parser broke: {consts:?}");
         for (name, id) in &consts {
             let expected = if name.starts_with("NEXT_") {
                 "NEXT-"

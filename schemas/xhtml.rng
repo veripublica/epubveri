@@ -146,6 +146,8 @@
     <element name="script"><ref name="globalAttrsCore"/>
       <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <!-- Obsolete but conforming, UTF-8 only; see imgEl's note. -->
+      <optional><attribute name="charset"><data type="string"><param name="pattern">[uU][tT][fF]-8</param></data></attribute></optional>
       <text/>
     </element>
   </define>
@@ -566,8 +568,12 @@
        actually reports and can be verified against it, rather than coding to
        a specification we would be guessing at. -->
   <!-- The role token vocabulary: every `attribute role { string "…" }` in
-       epubcheck's `schema/30`, extracted rather than transcribed — 111 names,
-       39 of them DPUB-ARIA `doc-*`.
+       epubcheck's `schema/30`, extracted rather than transcribed — 125 names,
+       41 of them DPUB-ARIA `doc-*`. Re-extracted from 5.4.0, whose
+       validator.nu update added 15 (the ARIA 1.2/1.3 element-backed roles:
+       blockquote, caption, code, deletion, emphasis, image, insertion, meter,
+       paragraph, strong, subscript, superscript, time, plus DPUB's
+       doc-pagefooter and doc-pageheader) and dropped `directory`.
 
        **This is the value layer only.** epubcheck also restricts *which* of
        the 111 each element may carry, and that per-element layer is still not
@@ -592,16 +598,19 @@
           <value>application</value>
           <value>article</value>
           <value>banner</value>
+          <value>blockquote</value>
           <value>button</value>
+          <value>caption</value>
           <value>cell</value>
           <value>checkbox</value>
+          <value>code</value>
           <value>columnheader</value>
           <value>combobox</value>
           <value>complementary</value>
           <value>contentinfo</value>
           <value>definition</value>
+          <value>deletion</value>
           <value>dialog</value>
-          <value>directory</value>
           <value>doc-abstract</value>
           <value>doc-acknowledgments</value>
           <value>doc-afterword</value>
@@ -632,6 +641,8 @@
           <value>doc-noteref</value>
           <value>doc-notice</value>
           <value>doc-pagebreak</value>
+          <value>doc-pagefooter</value>
+          <value>doc-pageheader</value>
           <value>doc-pagelist</value>
           <value>doc-part</value>
           <value>doc-preface</value>
@@ -642,6 +653,7 @@
           <value>doc-tip</value>
           <value>doc-toc</value>
           <value>document</value>
+          <value>emphasis</value>
           <value>feed</value>
           <value>figure</value>
           <value>form</value>
@@ -652,7 +664,9 @@
           <value>gridcell</value>
           <value>group</value>
           <value>heading</value>
+          <value>image</value>
           <value>img</value>
+          <value>insertion</value>
           <value>link</value>
           <value>list</value>
           <value>listbox</value>
@@ -666,10 +680,12 @@
           <value>menuitem</value>
           <value>menuitemcheckbox</value>
           <value>menuitemradio</value>
+          <value>meter</value>
           <value>navigation</value>
           <value>none</value>
           <value>note</value>
           <value>option</value>
+          <value>paragraph</value>
           <value>presentation</value>
           <value>progressbar</value>
           <value>radio</value>
@@ -685,6 +701,9 @@
           <value>slider</value>
           <value>spinbutton</value>
           <value>status</value>
+          <value>strong</value>
+          <value>subscript</value>
+          <value>superscript</value>
           <value>switch</value>
           <value>tab</value>
           <value>table</value>
@@ -692,6 +711,7 @@
           <value>tabpanel</value>
           <value>term</value>
           <value>textbox</value>
+          <value>time</value>
           <value>timer</value>
           <value>toolbar</value>
           <value>tooltip</value>
@@ -1507,6 +1527,9 @@
     <optional><attribute name="hreflang"><data type="token"/></attribute></optional>
     <optional><attribute name="ping"><data type="string"/></attribute></optional>
     <optional><attribute name="referrerpolicy"><data type="token"/></attribute></optional>
+    <!-- Obsolete but conforming; see imgEl's note. epubcheck types it as an
+         id without enforcing uniqueness, and says so in its own comment. -->
+    <optional><attribute name="name"><data type="ID"/></attribute></optional>
   </define>
 
   <!-- **`a` is transparent, and transparent means "its parent's content
@@ -1559,11 +1582,18 @@
 
   <!-- HTML5 `img` (EPUB 3): width/height are non-negative integers
        (embed.rnc's `common.data.integer.non-negative`). -->
+  <!-- Obsolete but conforming HTML (EPUB 3 only). validator.nu discourages
+       these rather than rejecting them, and epubcheck 5.4.0 re-admits them in
+       `mod/epub-xhtml-integration.rnc` and reports each as a USAGE RSC-036
+       (see the `obsolete-*` patterns in xhtml.sch). The value restrictions
+       are theirs and are the point: `border="1"` and a `charset` that is not
+       UTF-8 stay schema errors. -->
   <define name="imgEl">
     <element name="img">
       <ref name="imgAttrsCommon"/>
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
+      <optional><attribute name="border"><value>0</value></attribute></optional>
     </element>
   </define>
 
@@ -2039,18 +2069,19 @@
     </element>
   </define>
 
-  <define name="paramEl">
-    <element name="param">
-      <ref name="globalAttrs"/>
-      <optional><attribute name="name"><data type="string"/></attribute></optional>
-      <optional><attribute name="value"><data type="string"/></attribute></optional>
-    </element>
-  </define>
 
   <define name="objectEl">
     <element name="object">
       <ref name="globalAttrs"/>
-      <optional><attribute name="data"><data type="anyURI"/></attribute></optional>
+      <!-- **`data` is required and `param` is gone**, both from the HTML
+           schemas 5.4.0 pulled in (validator.nu 26.9.7.2): `param` was
+           removed from HTML and an `object` without `data` has nothing to
+           embed. Its fixture `obsolete-object-param-error.xhtml` expects
+           exactly these two errors. EPUB 2 keeps both — XHTML 1.1 has
+           `param`, and this is the EPUB 3 grammar. Population on the shelf
+           before the change: 0 EPUB 3 books with a `param`, 0 with a
+           `data`-less `object`. -->
+      <attribute name="data"><data type="anyURI"/></attribute>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <optional><attribute name="width"><data type="nonNegativeInteger"/></attribute></optional>
       <optional><attribute name="height"><data type="nonNegativeInteger"/></attribute></optional>
@@ -2058,10 +2089,7 @@
       <optional><attribute name="usemap"><data type="string"/></attribute></optional>
       <optional><attribute name="name"><data type="string"/></attribute></optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
-      <interleave>
-        <zeroOrMore><ref name="paramEl"/></zeroOrMore>
-        <ref name="flowContent"/>
-      </interleave>
+      <ref name="flowContent"/>
     </element>
   </define>
 

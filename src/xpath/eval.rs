@@ -300,8 +300,10 @@ fn qname_matches(
     namespaces: &HashMap<String, String>,
 ) -> bool {
     match test_name.split_once(':') {
+        // `prefix:*` matches every name in that namespace; `prefix:local`
+        // matches exactly one.
         Some((prefix, name)) => match namespaces.get(prefix) {
-            Some(uri) => ns == Some(uri.as_str()) && local == name,
+            Some(uri) => ns == Some(uri.as_str()) && (name == "*" || local == name),
             None => false,
         },
         None => ns.is_none() && local == test_name,

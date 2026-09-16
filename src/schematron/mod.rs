@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use roxmltree::{Document, Node};
 
-use crate::report::Position;
+use crate::report::{Position, Severity};
 use crate::xmlext::NodeExt;
 use crate::xpath::ast::{Axis, Expr, NameTest, Path, PathStart, Step};
 use crate::xpath::{Env, NodeRef, Value, eval};
@@ -48,6 +48,15 @@ pub struct Check {
     pub kind: CheckKind,
     pub test: Expr,
     pub message: Vec<MessagePart>,
+    /// The message id this check reports under, from Schematron's `flag`
+    /// attribute. `None` means the caller's default, which is RSC-005 —
+    /// how epubcheck surfaces nearly every Schematron finding. 5.4.0's
+    /// obsolete-but-conforming HTML features are the exception: they are
+    /// RSC-036, so the id has to be per check rather than per schema.
+    pub id: Option<&'static str>,
+    /// The severity, from Schematron's `role` attribute (`usage`,
+    /// `warning`, `error`). `None` means the caller's default, error.
+    pub severity: Option<Severity>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,14 +221,36 @@ fn parse_check(n: Node, kind: CheckKind) -> Result<Check, String> {
             message.push(MessagePart::ValueOf(select));
         }
     }
+    let id = n.attr_no_ns("flag").map(intern_str);
+    let severity = match n.attr_no_ns("role") {
+        Some("usage") => Some(Severity::Usage),
+        Some("warning") => Some(Severity::Warning),
+        Some("error") => Some(Severity::Error),
+        Some(other) => return Err(format!("unknown <assert>/<report> role '{other}'")),
+        None => None,
+    };
     Ok(Check {
         kind,
         test,
         message,
+        id,
+        severity,
     })
 }
 
 // --- executor ---
+
+/// One fired check. `id`/`severity` are `None` unless the schema names them
+/// (`flag`/`role`), in which case the caller uses them in place of its
+/// defaults.
+#[derive(Debug, Clone)]
+pub struct Finding {
+    pub message: String,
+    pub position: Position,
+    pub rule: &'static str,
+    pub id: Option<&'static str>,
+    pub severity: Option<Severity>,
+}
 
 /// Run a loaded schema against a document, returning one message per fired
 /// check (a failing `assert` or a true `report`), in document/pattern/rule
@@ -246,6 +277,23 @@ fn parse_check(n: Node, kind: CheckKind) -> Result<Check, String> {
 /// are interned once for the life of the process — so leaking them is cheaper
 /// and far less error-prone than hand-maintaining a 102-row table that could
 /// drift from the schema.
+/// Intern an arbitrary short string from a bundled schema, for the same
+/// reason as [`intern_rule`]: both schemas are compile-time constants, so the
+/// set is bounded by what is written in them.
+fn intern_str(s: &str) -> &'static str {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static POOL: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+    let pool = POOL.get_or_init(|| Mutex::new(HashSet::new()));
+    let mut pool = pool.lock().expect("schema string pool");
+    if let Some(existing) = pool.get(s) {
+        return existing;
+    }
+    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
+    pool.insert(leaked);
+    leaked
+}
+
 fn intern_rule(prefix: &str, pattern_id: &str) -> &'static str {
     use std::collections::HashSet;
     use std::sync::{Mutex, OnceLock};
@@ -261,11 +309,7 @@ fn intern_rule(prefix: &str, pattern_id: &str) -> &'static str {
     leaked
 }
 
-pub fn run<'input>(
-    schema: &Schema,
-    doc: &Document<'input>,
-    rule_prefix: &str,
-) -> Vec<(String, Position, &'static str)> {
+pub fn run<'input>(schema: &Schema, doc: &Document<'input>, rule_prefix: &str) -> Vec<Finding> {
     let root = doc.root_element();
     let namespaces = &schema.namespaces;
 
@@ -327,14 +371,16 @@ pub fn run<'input>(
                         CheckKind::Report => test_true,
                     };
                     if fires {
-                        messages.push((
-                            render_message(&check.message, &env, node),
-                            Position::of(node),
-                            intern_rule(
+                        messages.push(Finding {
+                            message: render_message(&check.message, &env, node),
+                            position: Position::of(node),
+                            rule: intern_rule(
                                 rule_prefix,
                                 pattern.id.as_deref().unwrap_or("unnamed_pattern"),
                             ),
-                        ));
+                            id: check.id,
+                            severity: check.severity,
+                        });
                     }
                 }
             }
@@ -418,10 +464,14 @@ fn name_test_matches_for_context(
     match test {
         NameTest::Any => true,
         NameTest::Name(qn) => match qn.split_once(':') {
+            // `prefix:*` matches every name in that namespace. This mirrors
+            // `qname_matches` in `xpath::eval`; a context pattern is matched
+            // here rather than there, so a wildcard added to one and not the
+            // other parses fine and silently selects nothing.
             Some((prefix, name)) => match namespaces.get(prefix) {
                 Some(uri) => {
                     node.tag_name().namespace() == Some(uri.as_str())
-                        && node.tag_name().name() == name
+                        && (name == "*" || node.tag_name().name() == name)
                 }
                 None => false,
             },
@@ -463,7 +513,7 @@ mod tests {
         let doc = Document::parse(r#"<root><a id="x"/><b id="x"/><c id="y"/></root>"#).unwrap();
         let texts: Vec<String> = run(&schema, &doc, "test")
             .into_iter()
-            .map(|(t, _, _)| t)
+            .map(|f| f.message)
             .collect();
         assert_eq!(
             texts,
@@ -505,7 +555,7 @@ mod tests {
             Document::parse(r#"<root xmlns:epub="urn:test:epub"><epub:switch/></root>"#).unwrap();
         let texts: Vec<String> = run(&schema, &doc, "test")
             .into_iter()
-            .map(|(t, _, _)| t)
+            .map(|f| f.message)
             .collect();
         assert_eq!(
             texts,
@@ -528,7 +578,7 @@ mod tests {
         let doc = Document::parse(r#"<root><a id="x"/></root>"#).unwrap();
         let texts: Vec<String> = run(&schema, &doc, "test")
             .into_iter()
-            .map(|(t, _, _)| t)
+            .map(|f| f.message)
             .collect();
         assert_eq!(texts, vec!["bad id \"x\"".to_string()]);
     }
@@ -559,7 +609,7 @@ mod tests {
         .unwrap();
         let texts: Vec<String> = run(&schema, &bad_doc, "test")
             .into_iter()
-            .map(|(t, _, _)| t)
+            .map(|f| f.message)
             .collect();
         assert_eq!(
             texts,
@@ -587,7 +637,7 @@ mod tests {
             let doc = Document::parse(&opf).unwrap();
             run(&package_schema(), &doc, "test")
                 .iter()
-                .any(|(m, _, _)| m.contains("only one dc:date"))
+                .any(|f| f.message.contains("only one dc:date"))
         }
         assert!(!flags_second_date("2.0"), "EPUB 2 allows multiple dc:date");
         assert!(flags_second_date("3.0"), "EPUB 3 allows only one dc:date");
@@ -603,18 +653,42 @@ mod tests {
         let doc = Document::parse(&xml).unwrap();
         run(&xhtml_schema(), &doc, "test")
             .into_iter()
-            .map(|(t, _, _)| t)
+            .map(|f| f.message)
             .collect()
+    }
+
+    /// The `flag`/`role` mechanism, end to end: an obsolete-but-conforming
+    /// attribute reports USAGE RSC-036 while everything else in this schema
+    /// keeps the RSC-005/error default. Both halves are asserted, because a
+    /// mechanism that gave *every* finding the new id would pass a test that
+    /// only looked at the obsolete one.
+    #[test]
+    fn obsolete_features_carry_their_own_id_and_severity() {
+        let xml = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p><a name="x">y</a></p><form><form><p>z</p></form></form></body></html>"#;
+        let doc = Document::parse(xml).unwrap();
+        let out = run(&xhtml_schema(), &doc, "test");
+
+        let obsolete: Vec<_> = out.iter().filter(|f| f.id == Some("RSC-036")).collect();
+        assert_eq!(obsolete.len(), 1, "{out:?}");
+        assert_eq!(obsolete[0].severity, Some(Severity::Usage));
+        assert_eq!(obsolete[0].rule, "test.obsolete_a_name");
+
+        let nesting: Vec<_> = out.iter().filter(|f| f.id.is_none()).collect();
+        assert_eq!(nesting.len(), 1, "{out:?}");
+        assert_eq!(nesting[0].severity, None, "the default is the caller's");
     }
 
     #[test]
     fn xhtml_schema_parses_with_expected_rule_count() {
         // Guards the rule table: 33 nesting patterns (17 disallowed-descendant
-        // + 2 required-ancestor + 14 interactive-content) plus 8 attribute-
-        // level patterns — the eighth is `bdo-dir-required`, epubcheck's
-        // `bdo-dir`, added after diffing `schematron-error.xhtml` finding by
-        // finding. A change that dropped rules would trip this.
-        assert_eq!(xhtml_schema().patterns.len(), 41);
+        // + 2 required-ancestor + 14 interactive-content), 9 attribute-level
+        // patterns — the eighth is `bdo-dir-required`, epubcheck's `bdo-dir`,
+        // added after diffing `schematron-error.xhtml` finding by finding; the
+        // ninth is `aria-role-name-prohibited`, from 5.4.0's two new DPUB
+        // roles — 4 `obsolete-*` patterns, the USAGE RSC-036 family, and
+        // `script-src-type` from 5.4.0. A change that dropped rules would
+        // trip this.
+        assert_eq!(xhtml_schema().patterns.len(), 47);
     }
 
     #[test]

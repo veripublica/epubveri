@@ -984,6 +984,37 @@ fn report_declarations(
         // Both of these stay here rather than moving with the walk: "is
         // `direction` discouraged" is an EPUB rule, not a CSS one. CSS has
         // nothing against either property.
+        // `OBS-001`: EPUB 3.4 marks the `-epub-` prefixed properties, and the
+        // `-epub-fullwidth` value of `text-transform`, as outdated
+        // (epubcheck 5.4.0, `CSSHandler.java`:277-287). Usage severity and
+        // ungated by version — epubcheck asks this before its own EPUB 3
+        // branch below, so an EPUB 2 stylesheet gets it too.
+        if name.starts_with("-epub-") {
+            report.push_full(
+                OBS_001,
+                Severity::Usage,
+                format!("usage of the CSS prefixed property '{name}' is outdated"),
+                css_path,
+                origin.position(css, d.node.name_span.start),
+                "css.outdated_prefixed_property",
+                vec![name.to_string()],
+            );
+        } else if name.eq_ignore_ascii_case("text-transform")
+            && d.node.value.iter().any(|v| {
+                matches!(&v.node, spanned::ComponentValue::Token(Token::Ident(x))
+                    if x.eq_ignore_ascii_case("-epub-fullwidth"))
+            })
+        {
+            report.push_full(
+                OBS_001,
+                Severity::Usage,
+                "usage of the CSS prefixed value '-epub-fullwidth' is outdated",
+                css_path,
+                origin.position(css, d.node.name_span.start),
+                "css.outdated_prefixed_value",
+                vec!["-epub-fullwidth".to_string()],
+            );
+        }
         if is_epub3
             && FLAGGED_PROPERTIES
                 .iter()

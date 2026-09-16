@@ -110,8 +110,14 @@
        were this. No book on the 336-book shelf carries an `opf:*` attribute
        on a dc element, so nothing here is shelf-visible in either direction -
        the probe and the tests are the whole evidence. -->
+  <!-- **No attributes at all on an EPUB 3 `metadata` element**, not even
+       `id`, `dir` or `xml:lang`. epubcheck 5.4.0 dropped them from
+       `package-30.rnc` (`opf.metadata = element metadata {
+       opf.metadata.content }`, w3c/epubcheck#1665), so the catch-all that
+       used to open this define is gone. EPUB 2's copy is untouched — that
+       change is in the 3.0 grammar only. Population on the 474-book shelf:
+       0 books declare any attribute there, measured before the change. -->
   <define name="metadataContent-epub3">
-    <ref name="anyAttributes"/>
     <mixed>
       <zeroOrMore>
         <choice>

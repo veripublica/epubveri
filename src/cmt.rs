@@ -27,10 +27,9 @@ const PREFERRED: &[&str] = &[
     // a valid book.
     "image/avif",
     "image/jxl",
-    "audio/mpeg",
-    "audio/mp4",
-    "audio/ogg",
-    "audio/opus",
+    // The audio Core Media Types are NOT in this list: they are the one
+    // family whose *parameters* decide the answer, so `is_core_audio_type`
+    // below owns them. See its note.
     "text/css",
     "font/otf",
     "font/ttf",
@@ -68,20 +67,49 @@ pub(crate) fn base_media_type(mt: &str) -> &str {
 
 pub(crate) fn is_core_media_type(mt: &str) -> bool {
     let base = base_media_type(mt);
-    PREFERRED.contains(&base) || NON_PREFERRED.contains(&base)
+    PREFERRED.contains(&base) || NON_PREFERRED.contains(&base) || is_core_audio_type(mt)
+}
+
+/// The audio Core Media Types, which are the only family where the
+/// `codecs` parameter is part of the answer rather than noise
+/// (`OPFChecker30.isBlessedAudioType`).
+///
+/// | declared | core? |
+/// |---|---|
+/// | `audio/mpeg` | yes |
+/// | `audio/mp4` | yes, bare |
+/// | `audio/mp4; codecs=aac` / `codecs=opus` | yes (EPUB 3.4) |
+/// | `audio/ogg; codecs=opus` | yes |
+/// | `audio/ogg` bare, `audio/opus`, `audio/mp4; codecs=flac` | **no** |
+///
+/// **We used to strip the parameter and accept `audio/ogg`, `audio/opus`
+/// and any `audio/mp4` codec**, which is three false negatives: 5.4.0's
+/// `resources-cmt-audio-opus-mimetype-error` and
+/// `resources-cmt-audio-mp4-other-error` are both books we called valid.
+/// Opus is a codec, not a container, so it has no media type of its own;
+/// bare `audio/ogg` says nothing about what is inside.
+///
+/// Compared with whitespace removed and lowercased, because epubcheck
+/// normalizes the declaration before its equality test and a manifest is
+/// free to write `audio/mp4; codecs=opus` with the space.
+pub(crate) fn is_core_audio_type(mt: &str) -> bool {
+    let normalized: String = mt
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+    matches!(
+        normalized.as_str(),
+        "audio/mpeg"
+            | "audio/mp4"
+            | "audio/mp4;codecs=aac"
+            | "audio/mp4;codecs=opus"
+            | "audio/ogg;codecs=opus"
+    )
 }
 
 pub(crate) fn is_non_preferred_core_media_type(mt: &str) -> bool {
     NON_PREFERRED.contains(&base_media_type(mt))
-}
-
-/// EPUB 3 defines no Core Media Type for video at all, so any `video/*`
-/// resource is exempt from the fallback requirement everywhere it's used
-/// (confirmed via `foreign-exempt-xhtml-video-valid` and
-/// `foreign-exempt-xhtml-video-in-img-valid`, the latter using a video
-/// resource directly as an `<img src>` with no fallback).
-pub(crate) fn is_exempt_video(mt: &str) -> bool {
-    base_media_type(mt).starts_with("video/")
 }
 
 /// EPUB 3 §3.6 allows audio, video, and font resources to be located
@@ -257,7 +285,6 @@ mod tests {
     #[test]
     fn core_media_types_recognized() {
         assert!(is_core_media_type("image/jpeg"));
-        assert!(is_core_media_type("audio/ogg; codecs=opus"));
         assert!(is_core_media_type("font/ttf"));
         assert!(!is_core_media_type("audio/foreign"));
         assert!(!is_core_media_type("image/vnd.xyz"));
@@ -273,7 +300,18 @@ mod tests {
         assert!(is_core_media_type("image/avif"));
         assert!(is_core_media_type("image/jxl"));
         assert!(is_core_media_type("audio/mp4; codecs=opus"));
-        assert!(is_core_media_type("audio/mp4; codecs=mp4a.40.2"));
+        assert!(is_core_media_type("audio/mp4; codecs=aac"));
+        // **`codecs=aac` is the only AAC spelling either tool blesses.** The
+        // RFC 6381 form was accepted here while this list was ours alone;
+        // epubcheck 5.4.0 matches the literal string (its own fixture
+        // declares `audio/mp4; codecs=aac`), so a book using `mp4a.40.2`
+        // draws RSC-032 from both tools now.
+        assert!(!is_core_media_type("audio/mp4; codecs=mp4a.40.2"));
+        // A container without its codec says nothing, and Opus has no media
+        // type of its own — both are 5.4.0 fixtures.
+        assert!(!is_core_media_type("audio/ogg"));
+        assert!(!is_core_media_type("audio/opus"));
+        assert!(is_core_media_type("audio/ogg; codecs=opus"));
         // Additions, not reclassifications: both are preferred types.
         assert!(!is_non_preferred_core_media_type("image/avif"));
         assert!(!is_non_preferred_core_media_type("image/jxl"));
@@ -290,10 +328,16 @@ mod tests {
         assert!(!is_non_preferred_core_media_type("audio/foreign"));
     }
 
+    /// **Video is not a Core Media Type and is not exempt by type.** This
+    /// test used to be `video_always_exempt` and asserted the opposite,
+    /// through an `is_exempt_video` helper that no longer exists: epubcheck
+    /// 5.4.0 removed `isBlessedVideoType` (w3c/epubcheck#1662), leaving the
+    /// exemption to the *position* — a reference from a `<video>` element —
+    /// which `foreign.rs` has always handled separately.
     #[test]
-    fn video_always_exempt() {
-        assert!(is_exempt_video("video/avi"));
-        assert!(is_exempt_video("video/webm"));
-        assert!(!is_exempt_video("audio/foreign"));
+    fn video_is_foreign_by_type() {
+        assert!(!is_core_media_type("video/avi"));
+        assert!(!is_core_media_type("video/webm"));
+        assert!(!is_core_media_type("video/mp4"));
     }
 }

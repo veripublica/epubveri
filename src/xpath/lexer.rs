@@ -207,7 +207,17 @@ impl<'a> Lexer<'a> {
                 if self.peek() == Some(':') && self.peek2() != Some(':') {
                     self.advance();
                     name.push(':');
-                    name.push_str(&self.read_ident_like());
+                    // `h:*` — a wildcard within one namespace, which is how
+                    // epubcheck's Schematron writes "any HTML element". The
+                    // `*` has to be taken here: left to the general lexer it
+                    // becomes a multiplication token and `h:*[...]` fails to
+                    // parse at the predicate.
+                    if self.peek() == Some('*') {
+                        self.advance();
+                        name.push('*');
+                    } else {
+                        name.push_str(&self.read_ident_like());
+                    }
                 }
                 Token::Ident(name)
             }

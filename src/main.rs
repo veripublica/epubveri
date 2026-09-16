@@ -64,10 +64,11 @@ OPTIONS:
                            on, at usage severity, in two families:
                              NEXT-*  a published spec requires it and epubcheck
                                      has not implemented it yet, so it becomes
-                                     a real error once it does — today the
-                                     EPUB 3.4 rules (page-spread-* on a
-                                     reflowable document, roll-layout
-                                     constraints, features deprecated in 3.4).
+                                     a real error once it does. Empty today:
+                                     epubcheck 5.4.0 implemented all four
+                                     EPUB 3.4 rules that were here, and they
+                                     now report under its own ids without
+                                     this flag.
                              ADV-*   no spec says anything, but the book is
                                      still wrong — unknown CSS property or
                                      descriptor names, a type selector naming
@@ -829,11 +830,12 @@ mod tests {
         let mut r = Report::new();
         r.push(epubveri::ids::CSS_028, Severity::Usage, "a feature note");
         r.push(epubveri::ids::ADV_003, Severity::Usage, "an advisory");
-        r.push(
-            epubveri::ids::NEXT_005,
-            Severity::Usage,
-            "a spec-ahead advisory",
-        );
+        // A second advisory id, because the exemption is about the family
+        // rather than one member. This used to be a `NEXT-*` id, and every
+        // one of those graduated when epubcheck 5.4.0 shipped their rules —
+        // the `shown_to_a_reader` predicate still names both prefixes, since
+        // the family will exist again the next time we run ahead.
+        r.push(epubveri::ids::ADV_009, Severity::Usage, "another advisory");
         r.push(epubveri::ids::RSC_005, Severity::Error, "an error");
         r.push(epubveri::ids::CSS_007, Severity::Info, "an info");
 
@@ -849,7 +851,7 @@ mod tests {
             visible(false),
             vec![
                 epubveri::ids::ADV_003,
-                epubveri::ids::NEXT_005,
+                epubveri::ids::ADV_009,
                 epubveri::ids::RSC_005,
                 epubveri::ids::CSS_007,
             ],
@@ -860,7 +862,7 @@ mod tests {
             vec![
                 epubveri::ids::CSS_028,
                 epubveri::ids::ADV_003,
-                epubveri::ids::NEXT_005,
+                epubveri::ids::ADV_009,
                 epubveri::ids::RSC_005,
                 epubveri::ids::CSS_007,
             ],
@@ -903,7 +905,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            10,
+            6,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

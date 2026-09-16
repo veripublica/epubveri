@@ -20,15 +20,22 @@ use crate::xmlext::NodeExt;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Category {
     Core,
-    ExemptVideo,
     Foreign,
 }
 
+/// **`video/*` is foreign, and the exemption is a property of the
+/// *position*, not of the type.** There used to be an `ExemptVideo`
+/// category here, on the reading that EPUB 3 defines no video Core Media
+/// Type so a video resource needs no fallback anywhere. epubcheck 5.4.0
+/// settled it the other way (w3c/epubcheck#1662): `isBlessedVideoType` is
+/// gone and only a reference *from a video element* is exempt, so a video
+/// used as `<img src>` now needs a fallback like any other foreign
+/// resource — its own two fixtures, `foreign-exempt-xhtml-video-in-img-error`
+/// and `foreign-xhtml-img-video-error`. The position exemption lives in
+/// `check_candidate_group`, where it always did.
 fn classify(mt: &str) -> Category {
     if crate::cmt::is_core_media_type(mt) {
         Category::Core
-    } else if crate::cmt::is_exempt_video(mt) {
-        Category::ExemptVideo
     } else {
         Category::Foreign
     }
@@ -352,7 +359,7 @@ fn check_candidate_group(
         };
         any_known = true;
         match category {
-            Category::Core | Category::ExemptVideo => any_ok = true,
+            Category::Core => any_ok = true,
             Category::Foreign => {
                 // Either its own fallback chain rescues it, or the `<video>`
                 // position exemption covers it — see the doc comment above.

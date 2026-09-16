@@ -279,6 +279,22 @@ fn percent_decode(s: &str) -> String {
 /// themselves.
 ///
 /// SVG's `<image>`, `<use>` and `<font-face-uri>` address their targets with
+/// The URL values an SVG element's `href`/`xlink:href` pair contributes, in
+/// epubcheck's order (`OPSHandler30.getSVGHrefs`): both when they differ,
+/// otherwise whichever is present. EPUB 2 sees only `xlink:href`, because the
+/// plain spelling reaches no reference check in the base handler — reading it
+/// there invents RSC-007 (issue #77).
+fn svg_href_values<'a>(node: roxmltree::Node<'a, 'a>, is_epub3: bool) -> Vec<&'a str> {
+    let xhref = node.attribute(("http://www.w3.org/1999/xlink", "href"));
+    let href = is_epub3.then(|| node.attr_no_ns("href")).flatten();
+    match (href, xhref) {
+        (Some(h), Some(x)) if h != x => vec![h, x],
+        (Some(h), _) => vec![h],
+        (None, Some(x)) => vec![x],
+        (None, None) => Vec::new(),
+    }
+}
+
 /// `xlink:href` and are handled before this loop; SVG's `<a>` shares the name.
 fn element_takes_url_attr(element: &str, attr: &str) -> bool {
     match attr {
@@ -639,7 +655,7 @@ pub(crate) fn strip_url_fragment(url: &str) -> String {
 /// registers a clip-path reference, so no reference can be compared against
 /// it (see `docs/COVERAGE.md`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum IdKind {
+pub(crate) enum IdKind {
     Generic,
     SvgSymbol,
     SvgPaint,
@@ -648,7 +664,7 @@ enum IdKind {
 
 impl IdKind {
     /// How the kind reads in a finding's message.
-    fn describe(self) -> &'static str {
+    pub(crate) fn describe(self) -> &'static str {
         match self {
             Self::Generic => "an element",
             Self::SvgSymbol => "an SVG symbol",
@@ -662,7 +678,7 @@ impl IdKind {
     /// the list is `OPSHandler`'s rather than the SVG spec's notion of a
     /// definition element — `marker`, `mask` and `filter` are deliberately
     /// absent, verified against epubcheck one book each.
-    fn of(n: roxmltree::Node) -> Self {
+    pub(crate) fn of(n: roxmltree::Node) -> Self {
         if n.tag_name().namespace() != Some("http://www.w3.org/2000/svg") {
             return Self::Generic;
         }
@@ -761,6 +777,53 @@ fn declared_media_type<'a>(
 /// A comment at the NCX site used to say a dangling fragment into such a
 /// document "draws nothing there". That was measured for RSC-012 and true;
 /// the conclusion was not, because nobody had looked for the other id.
+/// The media types that make a `<script>` javascript, mirroring epubcheck's
+/// `OPFChecker.isScriptType` — sixteen spellings, most of them historical.
+///
+/// **`module` is deliberately absent, and it is the whole reason this list is
+/// spelled out rather than guessed.** `type="module"` is an HTML keyword, not
+/// a media type, so epubcheck's `checkScript` does not reach
+/// `processJavascript` for it and never requires the `scripted` property —
+/// measured against 5.4.0's `foreign-exempt-xhtml-script-module-valid`, which
+/// declares no `scripted` and is expected to be clean. We used to mark it
+/// scripted and to omit the legacy javascript spellings, so a `text/ecmascript`
+/// script drew OPF-015 ("declared but not needed") on a book that needs it.
+fn is_script_media_type(t: &str) -> bool {
+    const TYPES: [&str; 16] = [
+        "application/javascript",
+        "text/javascript",
+        "application/ecmascript",
+        "application/x-ecmascript",
+        "application/x-javascript",
+        "text/ecmascript",
+        "text/javascript1.0",
+        "text/javascript1.1",
+        "text/javascript1.2",
+        "text/javascript1.3",
+        "text/javascript1.4",
+        "text/javascript1.5",
+        "text/jscript",
+        "text/livescript",
+        "text/x-ecmascript",
+        "text/x-javascript",
+    ];
+    TYPES.iter().any(|k| t.eq_ignore_ascii_case(k))
+}
+
+/// The severity `missing_fragment_id`'s answer carries. **RSC-012 is an
+/// error and RSC-014 is not**, since epubcheck 5.4.0 downgraded the three
+/// advanced fragment-integrity checks (RSC-013/014/015) to USAGE
+/// (w3c/epubcheck#1678, commit 240976c), leaving RSC-012 — a fragment that
+/// resolves to nothing at all — an error. So the severity here follows the
+/// id rather than the call site.
+fn fragment_id_severity(id: &'static str) -> Severity {
+    if id == RSC_012 {
+        Severity::Error
+    } else {
+        Severity::Usage
+    }
+}
+
 fn missing_fragment_id(items: &HashMap<String, (String, String)>, resolved: &str) -> &'static str {
     match declared_media_type(items, resolved) {
         Some(mt) if is_content_document_type(mt) => RSC_012,
@@ -1058,50 +1121,23 @@ impl PrefixContext {
     }
 }
 
-/// Does this XHTML document declare an initial containing block, i.e. a
-/// `<meta name="viewport">` giving both a width and a height?
-///
-/// Only *presence* is asked. `crate::layout::check_xhtml_viewport` is the
-/// real check and validates the values too; duplicating that here would give
-/// an advisory two ways to disagree with an error-level check about the same
-/// document. The advisory answers the one question #1651 raises — are the ICB
-/// dimensions set at all.
-fn has_icb_dimensions(d: &roxmltree::Document) -> bool {
-    d.descendants()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("name") == Some("viewport")
-        })
-        .any(|n| {
-            let content = n.attr_no_ns("content").unwrap_or("");
-            let has = |k: &str| {
-                content
-                    .split(',')
-                    .any(|p| p.trim_start().starts_with(k) && p.contains('='))
-            };
-            has("width") && has("height")
-        })
-}
-
 /// EPUB 3.4 deprecations and roll-layout constraints that live on a spine
-/// itemref (w3c/epubcheck#1649, #1651 — both open and unimplemented there).
+/// itemref (w3c/epubcheck#1649, #1651 — both shipped in 5.4.0).
 ///
-/// Two conditions, kept as separate IDs because a consumer filters on them
-/// differently:
+/// Two conditions, kept as separate IDs because they are different claims
+/// and epubcheck gives them different severities:
 ///
-/// - **ADV-006** — a `rendition:layout-*` spine override beside a `roll`
-///   package layout. #1651: "no mixing layouts". Only the two override values
-///   are reported; `roll` itself has no spine-override form, which is why
+/// - a `rendition:layout-*` spine override beside a `roll` package layout,
+///   **RSC-005**: "no mixing layouts". Only the two override values are
+///   reported; `roll` itself has no spine-override form, which is why
 ///   `KNOWN_ITEMREF_PROPERTIES` does not carry one.
-/// - **ADV-008** — `rendition:align-x-center`, deprecated in 3.4 (#1649).
+/// - `rendition:align-x-center`, deprecated in 3.4, **OPF-086** (warning).
 ///
-/// Advisory-only for the reason the whole restrictive half is: epubcheck
-/// reports neither, so in a side-by-side diff these are indistinguishable
-/// from false positives until it catches up. Nothing on the 125-book shelf
-/// carries `align-x-center` or a `roll` layout, so the shelf is silent on
-/// both and its silence is not evidence — no real book uses a layout the
-/// specification introduced weeks ago.
+/// **Both shipped here as advisories (ADV-006/008, then NEXT-006/008) and
+/// both graduated when 5.4.0 implemented them**, which is why neither is
+/// behind `--advisory` any more. Nothing on the shelf carries
+/// `align-x-center` or a `roll` layout, so its silence was never evidence
+/// either way; the fixtures are.
 fn check_epub34_itemref_deprecations(
     props: &str,
     package_layout_roll: bool,
@@ -1110,16 +1146,17 @@ fn check_epub34_itemref_deprecations(
     report: &mut Report,
 ) {
     for token in props.split_whitespace() {
+        // Graduated from NEXT-006: 5.4.0 supports roll publications and
+        // reports this as an ordinary RSC-005 error
+        // (`rendition-layout-pre-paginated-override-roll-error.opf`), so it
+        // is parity now rather than running ahead, and no longer opt-in.
         if package_layout_roll
             && (token == "rendition:layout-reflowable" || token == "rendition:layout-pre-paginated")
         {
             report.push_node(
-                NEXT_006,
-                Severity::Usage,
-                format!(
-                    "EPUB 3.4: a roll layout admits no per-spine layout override, \
-                     but this itemref declares \"{token}\""
-                ),
+                RSC_005,
+                Severity::Error,
+                format!("\"{token}\" must not be used in roll publications"),
                 path.to_string(),
                 ir,
                 "opf.itemref.layout_override_beside_roll",
@@ -1127,10 +1164,13 @@ fn check_epub34_itemref_deprecations(
             );
         }
         if token == "rendition:align-x-center" {
+            // `OPF-086`, graduated from NEXT-008: 5.4.0 ships
+            // w3c/epubcheck#1649's deprecation with a warning severity.
             report.push_node(
-                NEXT_008,
-                Severity::Usage,
-                "EPUB 3.4: the \"rendition:align-x-center\" property is deprecated",
+                OPF_086,
+                Severity::Warning,
+                "the \"rendition:align-x-center\" property is deprecated; \
+                 consider a custom prefixed property instead",
                 path.to_string(),
                 ir,
                 "opf.itemref.deprecated_align_x_center",
@@ -1154,13 +1194,16 @@ fn check_epub34_itemref_deprecations(
 /// the legacy EPUB 3.0 spine property and never had a centre value - the same
 /// asymmetry `KNOWN_ITEMREF_PROPERTIES` already encodes.
 ///
-/// Advisory-only, and deliberately so even though the spec is a Candidate
-/// Recommendation: epubcheck has not implemented #1652, so to anyone diffing
-/// the two tools this is indistinguishable from a false positive. It becomes
-/// a normal error once epubcheck ships it. Nothing on the 125-book shelf uses
-/// `page-spread-*` at all, so the shelf can neither confirm nor refute this
-/// one - the evidence is the enumeration in the tests, not the shelf's
-/// silence (the rule #48 set).
+/// **Graduated out of the advisory family in 5.4.0's wake.** This shipped as
+/// `ADV-005`, then `NEXT-005`, on the reasoning that reporting what epubcheck
+/// does not is indistinguishable from a false positive to anyone diffing the
+/// two tools. epubcheck implemented #1652 as the USAGE `OPF-100`, so the
+/// finding is now parity and reports under their id, unflagged — which is
+/// exactly the retirement the `NEXT-*` family was defined to have.
+///
+/// Nothing on the shelf uses `page-spread-*` at all, so the shelf can neither
+/// confirm nor refute this one - the evidence is the enumeration in the tests,
+/// not the shelf's silence (the rule #48 set).
 fn check_reflowable_page_spread(props: &str, path: &str, ir: roxmltree::Node, report: &mut Report) {
     const PROHIBITED: &[&str] = &[
         "page-spread-left",
@@ -1172,10 +1215,10 @@ fn check_reflowable_page_spread(props: &str, path: &str, ir: roxmltree::Node, re
     for token in props.split_whitespace() {
         if PROHIBITED.contains(&token) {
             report.push_node(
-                NEXT_005,
+                OPF_100,
                 Severity::Usage,
                 format!(
-                    "EPUB 3.4: the \"{token}\" spine override applies to \
+                    "the \"{token}\" spine override applies to \
                      fixed-layout content, but this document is reflowable"
                 ),
                 path.to_string(),
@@ -1219,12 +1262,22 @@ fn check_itemref_rendition_conflicts(
             );
         }
     }
-    if tokens
+    // Count *distinct placements*, not tokens: the prefixed and unprefixed
+    // spellings name the same property, so `rendition:page-spread-left
+    // page-spread-left` is a redundant declaration rather than a conflict.
+    // epubcheck agreed from 5.4.0 (w3c/epubcheck edc3ee5, which strips an
+    // optional `rendition:` and takes distinct-values before counting);
+    // before that it reported the pair, and we matched it.
+    let mut placements: Vec<&str> = tokens
         .iter()
-        .filter(|t| t.starts_with("page-spread-") || t.starts_with("rendition:page-spread-"))
-        .count()
-        > 1
-    {
+        .filter_map(|t| {
+            let bare = t.strip_prefix("rendition:").unwrap_or(t);
+            bare.starts_with("page-spread-").then_some(bare)
+        })
+        .collect();
+    placements.sort_unstable();
+    placements.dedup();
+    if placements.len() > 1 {
         report.push_node(
             RSC_005,
             Severity::Error,
@@ -2108,7 +2161,6 @@ fn check_prefix_declaration(
     path: &str,
     node: roxmltree::Node,
     context: PrefixContext,
-    advisory: bool,
     report: &mut Report,
 ) -> HashMap<String, String> {
     let (pairs, faults) = parse_prefix_value(prefix_attr.value());
@@ -2241,18 +2293,20 @@ fn check_prefix_declaration(
                 vec![name.clone()],
             );
         }
-        // EPUB 3.4 (w3c/epubcheck#1649, open and unimplemented there):
-        // these three reserved prefixes are deprecated. Reported on the
-        // *declaration*, which is the unambiguous signal — a book that
-        // relies on the reserved mapping without declaring it says nothing
-        // in the package document, and guessing from property names would
-        // need the whole vocabulary. Advisory-only, like the rest of the
-        // restrictive 3.4 work.
-        if advisory && DEPRECATED_PREFIXES_34.contains(&name.as_str()) {
+        // `OPF-086c`: these three reserved prefixes are deprecated in EPUB
+        // 3.4 (w3c/epubcheck#1649, shipped in 5.4.0). Graduated out of
+        // `--advisory` with the id and the WARNING severity epubcheck gave
+        // it; it shipped here as NEXT-008 while upstream had not
+        // implemented the rule.
+        //
+        // **This is the declaration half. epubcheck has a second site** —
+        // `VocabUtil`:123, on a *use* of a property whose prefix is one of
+        // these — which is reported separately below.
+        if DEPRECATED_PREFIXES_34.contains(&name.as_str()) {
             report.push_node_attr(
-                NEXT_008,
-                Severity::Usage,
-                format!("EPUB 3.4: the reserved prefix \"{name}\" is deprecated"),
+                OPF_086C,
+                Severity::Warning,
+                format!("the \"{name}\" reserved prefix is deprecated"),
                 path,
                 node,
                 prefix_attr,
@@ -2290,6 +2344,23 @@ fn check_prefix_usage(
         // half is the `prefix.is_empty()` test just below.
         if local.is_empty() {
             continue;
+        }
+        // `OPF-086c` on a *use*: epubcheck asks this at `VocabUtil`:123,
+        // before the undeclared-prefix question and independently of it, so
+        // a deprecated reserved prefix draws it whether or not the book
+        // declares the prefix — and a book that declares *and* uses one gets
+        // two findings, one per site. Measured against 5.4.0 on its own
+        // `deprecated-prefix-declaration-used-warning` fixture.
+        if DEPRECATED_PREFIXES_34.contains(&prefix) {
+            report.push_full(
+                OPF_086C,
+                Severity::Warning,
+                format!("the \"{prefix}\" reserved prefix is deprecated"),
+                path,
+                Position::of(node),
+                "opf.prefix.deprecated_in_epub34_use",
+                vec![prefix.to_string()],
+            );
         }
         if prefix.is_empty() || RESERVED_PREFIXES_ANY.iter().any(|(n, _)| *n == prefix) {
             continue;
@@ -2478,6 +2549,130 @@ fn check_collection_roles(doc: &roxmltree::Document, opf_path: &str, report: &mu
                 opf_path,
                 Position::of(n),
             );
+        }
+    }
+}
+
+/// `OBS-001`: features EPUB 3.4 marks as outdated, at usage severity
+/// (epubcheck 5.4.0). This covers the package document's share of them —
+/// the OPF 2 `guide` and `meta` elements, the `collection` element, and the
+/// outdated `rendition:*` and `source-of` properties in both the metadata
+/// and spine-override vocabularies.
+///
+/// **Outdated is not deprecated, and epubcheck keeps them apart**: a
+/// deprecated property draws OPF-086, an outdated one draws this, and
+/// `rendition:align-x-center` manages to be both. Nothing here changes a
+/// verdict — `OBS-001` is usage, so it is only visible with `-u`.
+///
+/// **EPUB 3 only.** Every site is in `OPFHandler30`, which is the whole
+/// point: a `guide` is how EPUB 2 says "guide", not an outdated way of
+/// saying it.
+///
+/// **Once per outermost `collection`**, mirroring epubcheck's guard on its
+/// own builder stack — a nested collection is part of the same declaration.
+fn check_outdated_features(
+    doc: &roxmltree::Document,
+    opf_path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    if !is_epub3 {
+        return;
+    }
+    // The metadata and spine-override halves of epubcheck's OUTDATED
+    // property status (`RenditionVocabs`, `PackageVocabs`), spelled with the
+    // prefix the document uses.
+    const OUTDATED_META_PROPERTIES: &[&str] = &[
+        "rendition:orientation",
+        "rendition:spread",
+        "rendition:flow",
+        "source-of",
+    ];
+    const OUTDATED_ITEMREF_PROPERTIES: &[&str] = &[
+        "rendition:orientation-auto",
+        "rendition:orientation-landscape",
+        "rendition:orientation-portrait",
+        "rendition:spread-auto",
+        "rendition:spread-both",
+        "rendition:spread-landscape",
+        "rendition:spread-none",
+        "rendition:flow-auto",
+        "rendition:flow-paginated",
+        "rendition:flow-scrolled-continuous",
+        "rendition:flow-scrolled-doc",
+    ];
+    let outdated = |node: roxmltree::Node,
+                    what: String,
+                    rule: &'static str,
+                    params: Vec<String>,
+                    report: &mut Report| {
+        report.push_node(
+            OBS_001,
+            Severity::Usage,
+            format!("usage of {what} is outdated"),
+            opf_path,
+            node,
+            rule,
+            params,
+        );
+    };
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        match n.tag_name().name() {
+            "guide" => outdated(
+                n,
+                "the OPF 2 \"guide\" element".to_string(),
+                "opf.guide.outdated",
+                Vec::new(),
+                report,
+            ),
+            "collection"
+                if !n
+                    .ancestors()
+                    .skip(1)
+                    .any(|a| a.is_element() && a.tag_name().name() == "collection") =>
+            {
+                outdated(
+                    n,
+                    "the \"collection\" element".to_string(),
+                    "opf.collection.outdated",
+                    Vec::new(),
+                    report,
+                )
+            }
+            "meta" if n.attr_no_ns("name").is_some() => outdated(
+                n,
+                "the OPF 2 \"meta\" element".to_string(),
+                "opf.metadata.outdated_meta_element",
+                Vec::new(),
+                report,
+            ),
+            "meta" => {
+                if let Some(p) = n.attr_no_ns("property")
+                    && OUTDATED_META_PROPERTIES.contains(&p.trim())
+                {
+                    outdated(
+                        n,
+                        format!("the \"{}\" property", p.trim()),
+                        "opf.metadata.outdated_property",
+                        vec![p.trim().to_string()],
+                        report,
+                    );
+                }
+            }
+            "itemref" => {
+                for token in n.attr_no_ns("properties").unwrap_or("").split_whitespace() {
+                    if OUTDATED_ITEMREF_PROPERTIES.contains(&token) {
+                        outdated(
+                            n,
+                            format!("the \"{token}\" property"),
+                            "opf.itemref.outdated_property",
+                            vec![token.to_string()],
+                            report,
+                        );
+                    }
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -2771,7 +2966,7 @@ fn check_guide_references(
                 if !ids.contains_key(frag_key(frag).as_ref()) {
                     report.push_node(
                         missing_fragment_id(items, &resolved),
-                        Severity::Error,
+                        fragment_id_severity(missing_fragment_id(items, &resolved)),
                         format!("fragment identifier '{frag}' is not defined in '{resolved}'"),
                         opf_path,
                         r,
@@ -2956,7 +3151,7 @@ fn check_ncx_content_fragments(
         if !ids.contains_key(frag_key(frag).as_ref()) {
             report.push_node(
                 missing_fragment_id(items, &resolved),
-                Severity::Error,
+                fragment_id_severity(missing_fragment_id(items, &resolved)),
                 format!("fragment identifier '{frag}' is not defined in '{target}'"),
                 ncx_path,
                 n,
@@ -3880,9 +4075,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         return;
     }
     let declared_prefixes = attr_no_ns_node(pkg, "prefix")
-        .map(|p| {
-            check_prefix_declaration(p, opf_path, pkg, PrefixContext::Package, advisory, report)
-        })
+        .map(|p| check_prefix_declaration(p, opf_path, pkg, PrefixContext::Package, report))
         .unwrap_or_default();
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(v) = n.attr_no_ns("property") {
@@ -4005,6 +4198,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // a second `is_epub3` from `pkg` at the old call site would have been a
     // second answer free to drift from this one.
     check_lang_tags(&doc, opf_path, is_epub3, report);
+    // Down here for the same reason as its two neighbours: every OBS-001 site
+    // is `OPFHandler30`'s, so the rule needs the settled version.
+    check_outdated_features(&doc, opf_path, is_epub3, report);
     // OPF-047: the package document is written in **OEBPS 1.2**, the pre-EPUB
     // format EPUB 2 replaced, kept legal for backwards compatibility. Detected
     // exactly as epubcheck does (`OPFHandler.startElement`): a `<package>`
@@ -4153,18 +4349,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // **EPUB 3 only.** See the header of `schemas/package.sch`: that file is
     // the port of `package-30.sch`, which epubcheck puts behind
     // `version(EPUBVersion.VERSION_3)` in `OPFChecker.validatorMap`.
-    for (message, position, rule) in
-        crate::schematron::run(&crate::schematron::package_schema(), &doc, "opf.package")
-            .into_iter()
-            .filter(|_| is_epub3)
+    for f in crate::schematron::run(&crate::schematron::package_schema(), &doc, "opf.package")
+        .into_iter()
+        .filter(|_| is_epub3)
     {
         report.push_full(
-            RSC_005,
-            Severity::Error,
-            message,
+            f.id.unwrap_or(RSC_005),
+            f.severity.unwrap_or(Severity::Error),
+            f.message,
             opf_path,
-            position,
-            rule,
+            f.position,
+            f.rule,
             Vec::new(),
         );
     }
@@ -4178,11 +4373,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // Package-level fixed-layout default (individual spine itemrefs can
     // override this via their own 'properties'), used for the viewport/
     // viewBox checks below.
+    // Fallback documents whose fixed-layout viewport requirement has already
+    // been asked; see the walk in the spine loop.
+    let mut fallback_layout_checked: HashSet<String> = HashSet::new();
     let mut package_fixed_layout = false;
-    // EPUB 3.4's webtoon layout. Kept beside `package_fixed_layout` rather
-    // than folded into it: roll *is* a fixed-layout mode, but saying so here
-    // would switch on the error-severity viewport checks unflagged, and the
-    // restrictive half of #1651 is advisory until epubcheck ships it.
+    // EPUB 3.4's webtoon layout. Still its own flag rather than folded into
+    // `package_fixed_layout`, because the two are not the same question —
+    // NEXT-006/007 ask about roll specifically — but the *viewport* checks
+    // now treat it as fixed layout, which is where the two meet.
+    //
+    // **That changed with epubcheck 5.4.0.** This used to stay out of the
+    // viewport checks deliberately: roll is a fixed-layout mode, but saying
+    // so switched on error-severity checks epubcheck did not run, so the
+    // restrictive half of #1651 was advisory. 5.4.0 supports roll and
+    // requires each roll spine item to be a fixed-layout document — enforced
+    // through HTM-046, since such a document needs a viewport.
     let mut package_layout_roll = false;
     // media:active-class / media:playback-active-class: the CSS class a
     // reading system applies to the active/playing media-overlay element,
@@ -6274,7 +6479,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             // An error on a book does not excuse the checks
                             // after it from being right: the reader still gets
                             // a verdict on the rest of the document.
-                            let is_fixed_layout = if props
+                            // **Pre-paginated and fixed-layout are not the
+                            // same question here, and conflating them cost a
+                            // finding.** `page-spread-*` applies to
+                            // pre-paginated content *only*, so a roll
+                            // publication draws OPF-100 like a reflowable one
+                            // (5.4.0's `layout-page-spread-roll-usage`) —
+                            // while the viewport requirement treats roll as
+                            // fixed layout, because a roll spine item must be
+                            // a fixed-layout document
+                            // (`layout-roll-content-reflowable-error`).
+                            let is_pre_paginated = if props
                                 .split_whitespace()
                                 .any(|p| p == "rendition:layout-pre-paginated")
                             {
@@ -6287,13 +6502,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             } else {
                                 package_fixed_layout
                             };
+                            // Roll admits no per-spine layout override at all
+                            // (NEXT-006), so an itemref that declares one is
+                            // not read as a roll item here either.
+                            let is_roll_item = package_layout_roll
+                                && !props.split_whitespace().any(|p| {
+                                    p == "rendition:layout-pre-paginated"
+                                        || p == "rendition:layout-reflowable"
+                                });
+                            let is_fixed_layout = is_pre_paginated || is_roll_item;
                             check_itemref_rendition_conflicts(
                                 props, opf_path, ir, is_epub3, report,
                             );
-                            if advisory && is_epub3 {
-                                if !is_fixed_layout {
-                                    check_reflowable_page_spread(props, opf_path, ir, report);
-                                }
+                            // OPF-100 is no longer advisory: epubcheck ships it
+                            // since 5.4.0, so reporting it is parity rather
+                            // than running ahead. The rest of the 3.4 spine
+                            // work stays behind the flag until it does too.
+                            if is_epub3 && !is_pre_paginated {
+                                check_reflowable_page_spread(props, opf_path, ir, report);
+                            }
+                            if is_epub3 {
                                 check_epub34_itemref_deprecations(
                                     props,
                                     package_layout_roll,
@@ -6303,6 +6531,61 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 );
                             }
                             fixed_layout_docs.insert(nfc(path), is_fixed_layout);
+                            // **Fixed layout is inherited down the fallback
+                            // chain** (EPUB 3.4, epubcheck 5.4.0's
+                            // `FallbackChainResolver`: an item whose fallback
+                            // is fixed-layout is itself fixed-layout, and the
+                            // document actually rendered is the fallback). So
+                            // a pre-paginated spine item pointing at a JPEG
+                            // that falls back to XHTML puts the viewport
+                            // requirement on that XHTML — `layout-pre-
+                            // paginated-fallback-reflowable-error`, where the
+                            // spine item is not a content document at all and
+                            // the block below therefore never looks at it.
+                            if is_epub3 && is_fixed_layout {
+                                let mut seen: HashSet<&str> = HashSet::new();
+                                let mut cur = idref;
+                                // The rule is per *document*, and thirteen
+                                // spine items can share one fallback: the
+                                // IDPF `haruko-jpeg` sample has thirteen JPEG
+                                // pages falling back to a single
+                                // `fallback.xhtml`, where epubcheck reports
+                                // HTM-046 once and we reported it thirteen
+                                // times before this set existed.
+                                while let Some(next) = fallback_map.get(cur) {
+                                    if !seen.insert(next.as_str()) {
+                                        break; // a cycle; OPF-045 owns that
+                                    }
+                                    let Some((fb_path, fb_mt)) = items.get(next.as_str()) else {
+                                        break;
+                                    };
+                                    fixed_layout_docs.insert(nfc(fb_path), true);
+                                    if !fallback_layout_checked.insert(nfc(fb_path))
+                                        || !matches!(
+                                            fb_mt.as_str(),
+                                            "application/xhtml+xml" | "image/svg+xml"
+                                        )
+                                    {
+                                        cur = next.as_str();
+                                        continue;
+                                    }
+                                    if let Some(orig) = name_index.get(&nfc(fb_path)).cloned()
+                                        && let Some(b) = ocf.read_content(&orig)
+                                        && let Ok(fb_doc) = parse_xml(&String::from_utf8_lossy(&b))
+                                    {
+                                        if fb_mt == "application/xhtml+xml" {
+                                            crate::layout::check_xhtml_viewport(
+                                                &fb_doc, fb_path, report,
+                                            );
+                                        } else if fb_mt == "image/svg+xml" {
+                                            crate::layout::check_svg_viewbox(
+                                                &fb_doc, fb_path, report,
+                                            );
+                                        }
+                                    }
+                                    cur = next.as_str();
+                                }
+                            }
                             if let Some(orig) = name_index.get(&nfc(path)).cloned()
                                 && let Some(b) = ocf.read_content(&orig)
                             {
@@ -6327,39 +6610,20 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                     } else if is_epub3 && mt == "image/svg+xml" && is_fixed_layout {
                                         crate::layout::check_svg_viewbox(&d, path, report);
                                     }
-                                    // EPUB 3.4 (#1651): a roll spine must
-                                    // reference fixed-layout documents, which
-                                    // for an XHTML one means its ICB
-                                    // dimensions are set.
-                                    //
-                                    // Deliberately *not* done by making roll
-                                    // imply `is_fixed_layout` above. That
-                                    // would be the truer model, and it would
-                                    // switch on `check_xhtml_viewport`, whose
-                                    // findings are HTM-046 and friends at
-                                    // error severity - restrictive, unflagged,
-                                    // and counting toward the verdict, which
-                                    // is exactly what an advisory may not do.
-                                    // So the presence question is asked here
-                                    // and answered at usage level; when
-                                    // epubcheck ships #1651 this collapses
-                                    // into `is_fixed_layout` and this block
-                                    // goes away.
-                                    if advisory
-                                        && is_epub3
-                                        && package_layout_roll
-                                        && mt == "application/xhtml+xml"
-                                        && !has_icb_dimensions(&d)
-                                    {
-                                        report.push_at(
-                                            NEXT_007,
-                                            Severity::Usage,
-                                            "EPUB 3.4: a roll layout requires fixed-layout \
-                                             documents, but this one declares no viewport \
-                                             width and height",
-                                            path,
-                                        );
-                                    }
+                                    // **The roll ICB question was NEXT-007
+                                    // and is now answered above.** It used to
+                                    // be asked here, at usage level, because
+                                    // making roll imply `is_fixed_layout`
+                                    // would switch on HTM-046 and friends —
+                                    // error severity, unflagged, verdict-
+                                    // moving — which an advisory may not do.
+                                    // epubcheck 5.4.0 requires exactly that of
+                                    // a roll spine item, so roll *is* fixed
+                                    // layout here now and the viewport family
+                                    // covers it: HTM-046 for no meta at all,
+                                    // HTM-056 for one that omits width or
+                                    // height. The block that stood here said
+                                    // it would go away on this day.
                                 }
                             }
                         }
@@ -6721,6 +6985,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // resolved-resource-key -> Core-Media-Type/fallback status, for the
     // foreign-resource-fallback checks (RSC-032/MED-003/MED-007) below.
     let resource_status = crate::foreign::build_resource_status(&items, &fallback_map);
+    // Container paths whose manifest item declares a `fallback`, for the
+    // OBS-001 the reference walk below reports.
+    let manifest_fallback_paths: HashSet<String> = items
+        .iter()
+        .filter(|(id, _)| fallback_map.contains_key(*id))
+        .map(|(_, (path, _))| nfc(path))
+        .collect();
 
     // --- broken internal references + content-model from content documents ---
     // An EPUB 2 `text/html` item is checked here too, but *not* against the
@@ -7143,7 +7414,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         &path,
                         d.root_element(),
                         PrefixContext::ContentDocument,
-                        advisory,
                         report,
                     )
                 })
@@ -7345,16 +7615,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // EPUB 3 content-model nesting constraints (Schematron), reported as
             // RSC-005 at the offending element, matching epubcheck.
             if let Some(sch) = &xhtml_sch {
-                for (message, position, rule) in
-                    crate::schematron::run(sch, &d, "opf.content_document")
-                {
+                for f in crate::schematron::run(sch, &d, "opf.content_document") {
                     report.push_full(
-                        RSC_005,
-                        Severity::Error,
-                        message,
+                        f.id.unwrap_or(RSC_005),
+                        f.severity.unwrap_or(Severity::Error),
+                        f.message,
                         path.clone(),
-                        position,
-                        rule,
+                        f.position,
+                        f.rule,
                         Vec::new(),
                     );
                 }
@@ -7407,6 +7675,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             crate::svg::check_required_attributes(svg_root, &path, is_epub3, report);
             crate::svg::check_content_model(svg_root, &path, is_epub3, report);
             crate::svg::check_epub_attributes(svg_root, &path, report);
+            crate::svg::check_deprecated_xlink_href(svg_root, &path, is_epub3, report);
             // `check_ids` is standalone-SVG-only: a real fixture confirms
             // `id="1"` on an SVG root is fine when the SVG is embedded
             // inline inside an XHTML document (a shared XML id-space with
@@ -8314,7 +8583,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if !target_ids.contains_key(frag_key(frag).as_ref()) {
                     report.push_node(
                         missing_fragment_id(&items, &target_nfc),
-                        Severity::Error,
+                        fragment_id_severity(missing_fragment_id(&items, &target_nfc)),
                         format!("fragment identifier '{frag}' is not defined in '{target_nfc}'"),
                         path.clone(),
                         a,
@@ -8346,7 +8615,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 {
                     report.push_at_pos(
                         RSC_014,
-                        Severity::Error,
+                        Severity::Usage,
                         format!(
                             "hyperlink '{href}' targets {} (incompatible resource type)",
                             kind.describe()
@@ -8387,10 +8656,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
                 for attr in ["fill", "stroke"] {
                     if let Some(v) = n.attr_no_ns(attr)
-                        && let Some(inner) =
-                            v.strip_prefix("url(").and_then(|r| r.strip_suffix(')'))
+                        && let Some(inner) = crate::svg::url_reference(v)
                     {
-                        typed_refs.push((n, inner.trim().to_string(), RefKind::Paint));
+                        typed_refs.push((n, inner.to_string(), RefKind::Paint));
                     }
                 }
             }
@@ -8453,7 +8721,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if !ref_kind.accepts(kind) {
                     report.push_at_pos(
                         RSC_014,
-                        Severity::Error,
+                        Severity::Usage,
                         format!(
                             "reference '{href}' targets {} (incompatible resource type)",
                             kind.describe()
@@ -8480,7 +8748,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             {
                 report.push_at_pos(
                     RSC_013,
-                    Severity::Error,
+                    Severity::Usage,
                     format!("stylesheet reference '{href}' must not have a fragment identifier"),
                     path.clone(),
                     Position::of(n),
@@ -8622,7 +8890,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let v = a.value();
                 report.push_node_attr(
                     RSC_015,
-                    Severity::Error,
+                    Severity::Usage,
                     format!("\"use\" element's href '{v}' has no fragment identifier"),
                     path.clone(),
                     n,
@@ -8851,11 +9119,62 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // resource reference; `<use>`/paint references point inside a
             // document and are not (matching epubcheck's SVG_SYMBOL /
             // SVG_PAINT, which it also excludes).
-            if node.tag_name().name() == "image"
-                && let Some(v) = node
-                    .attr_no_ns("href")
-                    .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")))
+            // Both spellings, and both when they differ: 5.4.0 registers
+            // each (`OPSHandler30.getSVGHrefs`), so an `<image href="ok.png"
+            // xlink:href="missing.png">` is still an RSC-007 — its own
+            // fixture, and the reason this is a list rather than an
+            // `or_else` chain. At EPUB 2 only `xlink:href` is a reference.
+            // `RSC-034`/`RSC-035`: a `<script src>` must point at a
+            // resource the manifest declares with a JavaScript media type,
+            // and 5.4.0 nudges the legacy spellings towards the three core
+            // ones (`OPFChecker30.isBlessedScriptType`).
+            //
+            // **EPUB 3 only**: the SCRIPT reference type is registered in
+            // `OPSHandler30.checkScript`, and the base handler registers
+            // nothing for a script element at all.
+            if is_epub3
+                && node.tag_name().name() == "script"
+                && node.tag_name().namespace() == Some("http://www.w3.org/1999/xhtml")
+                && let Some(src) = node.attr_no_ns("src")
+                && !is_external(src)
+                && !is_remote_url(src)
             {
+                let key = nfc(&resolve(&dir, strip_url_fragment(src).trim()));
+                if let Some(mt) = declared_media_type(&items, &key) {
+                    if !is_script_media_type(mt) {
+                        report.push_node(
+                            RSC_034,
+                            Severity::Error,
+                            format!("script '{src}' must have a JavaScript media type"),
+                            path.clone(),
+                            node,
+                            "opf.content_document.script_not_javascript",
+                            vec![src.to_string(), mt.to_string()],
+                        );
+                    } else if !matches!(
+                        mt,
+                        "text/javascript" | "application/javascript" | "application/ecmascript"
+                    ) {
+                        report.push_node(
+                            RSC_035,
+                            Severity::Usage,
+                            format!(
+                                "'{mt}' is a legacy media type for JavaScript; consider \"text/javascript\""
+                            ),
+                            path.clone(),
+                            node,
+                            "opf.content_document.legacy_script_media_type",
+                            vec![mt.to_string()],
+                        );
+                    }
+                }
+            }
+            let image_hrefs = if node.tag_name().name() == "image" {
+                svg_href_values(node, is_epub3)
+            } else {
+                Vec::new()
+            };
+            for v in image_hrefs {
                 if is_external(v) {
                     // A remote target is still a reference, and the
                     // unreferenced-remote-item check (#70) turns on whether
@@ -8945,16 +9264,37 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // change and turned out to be a substitution.
             let svg_anchor =
                 node.tag_name().name() == "a" && node.tag_name().namespace() == Some(SVG_NS);
+            // The URL-bearing attributes of this element, in document
+            // order per attribute. A list rather than one value per
+            // attribute because of the SVG anchor: from 5.4.0 epubcheck
+            // reads `href` *and* `xlink:href` there and registers **both**
+            // when they differ (`OPSHandler30.getSVGHrefs`), so a missing
+            // target hiding behind the deprecated spelling is still found.
+            // At EPUB 2 the base handler reads only `xlink:href`, and
+            // reading the plain one there would invent RSC-007 (issue #77).
+            let mut candidates: Vec<(&str, &str)> = Vec::new();
             for attr in ["src", "href", "data", "poster", "altimg", "cite"] {
                 if !element_takes_url_attr(node.tag_name().name(), attr) {
                     continue;
                 }
-                let value = if svg_anchor && attr == "href" {
-                    node.attribute(("http://www.w3.org/1999/xlink", "href"))
-                } else {
-                    node.attr_no_ns(attr)
-                };
-                if let Some(v) = value {
+                if svg_anchor && attr == "href" {
+                    let xhref = node.attribute(("http://www.w3.org/1999/xlink", "href"));
+                    let href = is_epub3.then(|| node.attr_no_ns("href")).flatten();
+                    match (href, xhref) {
+                        (Some(h), Some(x)) if h != x => {
+                            candidates.push((attr, h));
+                            candidates.push((attr, x));
+                        }
+                        (Some(h), _) => candidates.push((attr, h)),
+                        (None, Some(x)) => candidates.push((attr, x)),
+                        (None, None) => {}
+                    }
+                } else if let Some(v) = node.attr_no_ns(attr) {
+                    candidates.push((attr, v));
+                }
+            }
+            for (attr, v) in candidates {
+                {
                     // EPUB 3 only, and the gate has to sit here rather than
                     // in `is_resource_reference`: that predicate decides only
                     // whether the target enters `resource_refs` (OPF-097's
@@ -9000,7 +9340,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // reported nothing.
                     if remote_base.is_none() && !is_external(v) && is_resource_reference(node, attr)
                     {
-                        resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+                        let key = nfc(&resolve(&dir, strip_url_fragment(v).trim()));
+                        // `OBS-001`: EPUB 3.4 marks the *manifest* content
+                        // fallback outdated (epubcheck 5.4.0,
+                        // `ResourceReferencesChecker.checkFallbacks`). Per
+                        // reference rather than per manifest item, and only
+                        // for a reference that consumes its target — which is
+                        // the same line `is_resource_reference` already draws,
+                        // since epubcheck asks `isPublicationResourceReference`
+                        // here and a hyperlink answers no.
+                        if manifest_fallback_paths.contains(&key) {
+                            report.push_node(
+                                OBS_001,
+                                Severity::Usage,
+                                format!(
+                                    "usage of a manifest content fallback (for resource '{key}') is outdated"
+                                ),
+                                path.clone(),
+                                node,
+                                "opf.content_document.outdated_manifest_fallback",
+                                vec![key.clone()],
+                            );
+                        }
+                        resource_refs.insert(key);
                     }
                     // RSC-026: the reference resolves above the container
                     // root, or is path-absolute. epubcheck applies this in
@@ -9415,11 +9777,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
             if node.tag_name().name() == "script" {
                 let script_type = node.attr_no_ns("type").unwrap_or("");
-                if script_type.is_empty()
-                    || script_type.eq_ignore_ascii_case("text/javascript")
-                    || script_type.eq_ignore_ascii_case("application/javascript")
-                    || script_type.eq_ignore_ascii_case("module")
-                {
+                if script_type.is_empty() || is_script_media_type(script_type) {
                     has_script.get_or_insert(node);
                 }
             }
@@ -10157,7 +10515,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         doc_path,
                         d.root_element(),
                         PrefixContext::ContentDocument,
-                        advisory,
                         report,
                     )
                 })
@@ -10233,13 +10590,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             doc_path,
             &parent_dir(doc_path),
             &name_index,
+            is_epub3,
             report,
         );
         crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_content_model(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
+        crate::svg::check_deprecated_xlink_href(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_ids(d.root_element(), doc_path, report);
-        crate::svg::check_fragments(d.root_element(), doc_path, report);
+        crate::svg::check_fragments(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_link_labels(d.root_element(), doc_path, report);
         for fo in d.descendants().filter(|n| {
             n.is_element()
@@ -10276,7 +10635,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             {
                 report.push_node(
                     RSC_015,
-                    Severity::Error,
+                    Severity::Usage,
                     format!("\"use\" element's href '{v}' has no fragment identifier"),
                     doc_path.clone(),
                     n,
@@ -11188,7 +11547,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             &path,
                             smil_root,
                             PrefixContext::Overlay,
-                            advisory,
                             report,
                         )
                     })
@@ -11251,7 +11609,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 {
                     report.push_at_rule(
                         RSC_014,
-                        Severity::Error,
+                        Severity::Usage,
                         format!(
                             "overlay text link '{target}#{frag}' targets {} (incompatible resource type)",
                             kind.describe()
@@ -12276,7 +12634,6 @@ fn check_exempt_font_usage(
             // no resolved path to compare.
             if let Some((_, mt)) = items.values().find(|(ip, _)| ip.trim() == u.node.trim())
                 && !crate::cmt::is_core_media_type(mt)
-                && !crate::cmt::is_exempt_video(mt)
                 && (is_epub3 || !blessed_font_type_epub2(mt))
             {
                 report.push_full(
@@ -12354,7 +12711,6 @@ fn check_exempt_font_usage(
         }
         if let Some((_, mt)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
             && !crate::cmt::is_core_media_type(mt)
-            && !crate::cmt::is_exempt_video(mt)
             && (is_epub3 || !blessed_font_type_epub2(mt))
         {
             report.push_full(
@@ -12447,6 +12803,19 @@ fn check_font_obfuscation(
         if algorithm != Some(OBFUSCATION_ALGORITHM) {
             continue;
         }
+        // `OBS-001`: EPUB 3.4 marks font obfuscation outdated (epubcheck
+        // 5.4.0, `OCFEncryptionFileHandler`). The IDPF algorithm only — the
+        // Adobe one is a different branch there and draws nothing — and at
+        // both versions, since that handler carries no version gate.
+        report.push_full(
+            OBS_001,
+            Severity::Usage,
+            "usage of font obfuscation is outdated",
+            ENC,
+            Position::of(enc_data),
+            "ocf.encryption.outdated_font_obfuscation",
+            Vec::new(),
+        );
         let Some(uri) = enc_data
             .descendants()
             .find(|n| n.is_element() && n.tag_name().name() == "CipherReference")
@@ -15472,11 +15841,23 @@ mod tests {
         // The control: a reference that resolves keeps the informational note
         // and draws nothing else. Without this the test below would pass on a
         // build that had simply stopped emitting RSC-004 altogether.
-        assert_eq!(rules(PRESENT), vec!["ocf.resource.encrypted_not_checked"]);
+        // `outdated_font_obfuscation` rides along at both versions — measured
+        // against epubcheck 5.4.0 on a downgraded copy of its own fixture,
+        // which reports OBS-001 on an EPUB 2 book as well.
+        assert_eq!(
+            rules(PRESENT),
+            vec![
+                "ocf.resource.encrypted_not_checked",
+                "ocf.encryption.outdated_font_obfuscation"
+            ]
+        );
 
         assert_eq!(
             rules(MISSING),
-            vec!["ocf.encryption.missing_resource"],
+            vec![
+                "ocf.encryption.outdated_font_obfuscation",
+                "ocf.encryption.missing_resource"
+            ],
             "a missing target is reported instead of the encrypted note, not alongside it"
         );
     }
@@ -20610,14 +20991,7 @@ mod tests {
             let pkg = d.root_element();
             let attr = super::attr_no_ns_node(pkg, "prefix").unwrap();
             let mut report = crate::report::Report::new();
-            super::check_prefix_declaration(
-                attr,
-                "OEBPS/content.opf",
-                pkg,
-                ctx,
-                false,
-                &mut report,
-            );
+            super::check_prefix_declaration(attr, "OEBPS/content.opf", pkg, ctx, &mut report);
             report
                 .messages
                 .iter()
@@ -20671,7 +21045,6 @@ mod tests {
                 "OEBPS/content.opf",
                 pkg,
                 super::PrefixContext::Package,
-                false,
                 &mut report,
             );
             report
@@ -22858,14 +23231,17 @@ mod tests {
     /// EPUB 3.4's restrictive half: the roll-layout constraints (#1651) and
     /// the deprecations (#1649).
     ///
-    /// All four are advisory. epubcheck has implemented none of them, so in
-    /// a side-by-side diff they are indistinguishable from false positives —
-    /// and **0 of the 125 shelf books draws any of them**, so the shelf
-    /// confirms silence but cannot confirm correctness. No real book uses a
-    /// layout the specification introduced weeks ago; this enumeration is
-    /// the evidence, as it was for ADV-005.
+    /// **All four shipped as advisories and all four graduated when epubcheck
+    /// 5.4.0 implemented them**, so this test now asserts the opposite of
+    /// what it did: the findings appear under epubcheck's ids, at its
+    /// severities, *without* `--advisory`. The last assertion — that the flag
+    /// changes nothing here any more — is the one that would catch a
+    /// half-finished graduation.
+    ///
+    /// Still no shelf book draws any of them, so the enumeration below
+    /// remains the evidence, as it was when these were ours alone.
     #[test]
-    fn epub34_roll_constraints_and_deprecations_are_advisory() {
+    fn epub34_roll_constraints_and_deprecations_graduated() {
         const VIEWPORT: &str = r#"<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>
 <meta name="viewport" content="width=1200, height=1600"/></head><body><p>x</p></body></html>"#;
@@ -22910,9 +23286,18 @@ mod tests {
                 .messages
                 .iter()
                 .map(|m| m.id)
+                // The ids these rules graduated into, plus anything left in
+                // the advisory families — so a rule slipping back behind the
+                // flag would show up here rather than as silence.
                 .filter(|id| {
-                    (id.starts_with("NEXT-") || id.starts_with("ADV-"))
-                        && *id != crate::ids::NEXT_005
+                    matches!(
+                        *id,
+                        crate::ids::RSC_005
+                            | crate::ids::HTM_046
+                            | crate::ids::OPF_086
+                            | crate::ids::OPF_100
+                    ) || id.starts_with("NEXT-")
+                        || id.starts_with("ADV-")
                 })
                 .collect();
                 v.sort_unstable();
@@ -22920,45 +23305,51 @@ mod tests {
                 v
             };
 
-        // #1651: no per-spine layout override beside a roll layout.
+        // #1651, ex-NEXT-006: no per-spine layout override beside a roll
+        // layout. An error in 5.4.0, not a usage note.
         assert_eq!(
-            ids("roll", "rendition:layout-reflowable", "", VIEWPORT, true),
-            vec![crate::ids::NEXT_006]
+            ids("roll", "rendition:layout-reflowable", "", VIEWPORT, false),
+            vec![crate::ids::RSC_005]
         );
         assert_eq!(
-            ids("roll", "rendition:layout-pre-paginated", "", VIEWPORT, true),
-            vec![crate::ids::NEXT_006]
+            ids(
+                "roll",
+                "rendition:layout-pre-paginated",
+                "",
+                VIEWPORT,
+                false
+            ),
+            vec![crate::ids::RSC_005]
         );
         // The same override is ordinary outside a roll layout.
-        assert!(ids("", "rendition:layout-reflowable", "", VIEWPORT, true).is_empty());
+        assert!(ids("", "rendition:layout-reflowable", "", VIEWPORT, false).is_empty());
 
-        // #1651: a roll spine document must declare its ICB dimensions.
+        // #1651, ex-NEXT-007: a roll spine document must be fixed-layout,
+        // which for XHTML means declaring its ICB dimensions. No id of its
+        // own any more — a roll item is fixed layout, so the viewport family
+        // asks it.
         assert_eq!(
-            ids("roll", "", "", NO_VIEWPORT, true),
-            vec![crate::ids::NEXT_007]
+            ids("roll", "", "", NO_VIEWPORT, false),
+            vec![crate::ids::HTM_046]
         );
-        assert!(ids("roll", "", "", VIEWPORT, true).is_empty());
+        assert!(ids("roll", "", "", VIEWPORT, false).is_empty());
         // Only under a roll layout — a plain reflowable book has no ICB.
-        assert!(ids("", "", "", NO_VIEWPORT, true).is_empty());
-
-        // #1649: two deprecations, one ID.
+        assert!(ids("", "", "", NO_VIEWPORT, false).is_empty());
+        // And page-spread placement still applies to a roll publication,
+        // because roll is not pre-paginated — the distinction that cost an
+        // OPF-100 when roll first became fixed-layout here.
         assert_eq!(
-            ids("", "rendition:align-x-center", "", VIEWPORT, true),
-            vec![crate::ids::NEXT_008]
+            ids("roll", "page-spread-left", "", VIEWPORT, false),
+            vec![crate::ids::OPF_100]
         );
-        for prefix in ["xsd", "msv", "prism"] {
-            assert_eq!(
-                ids(
-                    "",
-                    "",
-                    &format!(r#" prefix="{prefix}: http://example.org/{prefix}#""#),
-                    VIEWPORT,
-                    true
-                ),
-                vec![crate::ids::NEXT_008],
-                "{prefix} is deprecated in EPUB 3.4"
-            );
-        }
+
+        // #1649, ex-NEXT-008: the property deprecation, now a warning under
+        // epubcheck's id. Its prefix half is `OPF-086c` and is asserted by
+        // `the_epub34_prefix_deprecations_graduated`.
+        assert_eq!(
+            ids("", "rendition:align-x-center", "", VIEWPORT, false),
+            vec![crate::ids::OPF_086]
+        );
         // A reserved prefix 3.4 does *not* deprecate stays quiet.
         assert!(
             ids(
@@ -22971,10 +23362,87 @@ mod tests {
             .is_empty()
         );
 
-        // Opt-in, every one of them.
-        assert!(ids("roll", "rendition:layout-reflowable", "", VIEWPORT, false).is_empty());
-        assert!(ids("roll", "", "", NO_VIEWPORT, false).is_empty());
-        assert!(ids("", "rendition:align-x-center", "", VIEWPORT, false).is_empty());
+        // **The flag changes nothing here any more**, which is the whole of
+        // the graduation: every assertion above already passes `false`, and
+        // passing `true` gives the same answer.
+        assert_eq!(
+            ids("roll", "rendition:layout-reflowable", "", VIEWPORT, true),
+            ids("roll", "rendition:layout-reflowable", "", VIEWPORT, false)
+        );
+        assert_eq!(
+            ids("roll", "", "", NO_VIEWPORT, true),
+            ids("roll", "", "", NO_VIEWPORT, false)
+        );
+    }
+
+    /// The two EPUB 3.4 deprecations that graduated when epubcheck 5.4.0
+    /// shipped w3c/epubcheck#1649: `rendition:align-x-center` as `OPF-086`
+    /// and the `xsd`/`msv`/`prism` reserved prefixes as `OPF-086c`, both
+    /// warnings, both without `--advisory`.
+    ///
+    /// **The flag assertions are the point.** While these were `NEXT-008`
+    /// the test above asserted they were silent by default; a graduation
+    /// that only changed the id would leave them opt-in and invisible, and
+    /// nothing else here would notice.
+    ///
+    /// The two `OPF-086c` sites are asserted separately because epubcheck
+    /// has two: a book that both declares and uses a deprecated prefix gets
+    /// two findings, which its own
+    /// `deprecated-prefix-declaration-used-warning` fixture pins.
+    #[test]
+    fn the_epub34_prefix_deprecations_graduated() {
+        let ids = |opf_extra: &str, itemref_props: &str, advisory: bool| -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"{opf_extra}>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">u</dc:identifier><dc:title>t</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1" properties="{itemref_props}"/></spine>
+</package>"#
+            );
+            const CH: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body><p>x</p></body></html>"#;
+            let mut v: Vec<&'static str> = crate::validate_bytes_with_options(
+                epub_with_opf(Some(&opf), CH),
+                &crate::Options {
+                    advisory,
+                    ..Default::default()
+                },
+            )
+            .messages
+            .iter()
+            .filter(|m| m.id.starts_with("OPF-086"))
+            .map(|m| m.id)
+            .collect();
+            v.sort_unstable();
+            v
+        };
+
+        assert_eq!(
+            ids("", "rendition:align-x-center", false),
+            vec![crate::ids::OPF_086],
+            "align-x-center is a plain warning now, flag or no flag"
+        );
+        for prefix in ["xsd", "msv", "prism"] {
+            assert_eq!(
+                ids(
+                    &format!(r#" prefix="{prefix}: http://example.org/{prefix}#""#),
+                    "",
+                    false
+                ),
+                vec![crate::ids::OPF_086C],
+                "{prefix} is deprecated and reported unflagged"
+            );
+        }
+        // A reserved prefix 3.4 leaves alone stays quiet, which is what makes
+        // the three above a list rather than "any prefix declaration".
+        assert!(ids(r#" prefix="dcterms: http://purl.org/dc/terms/""#, "", true).is_empty());
     }
 
     /// EPUB 3.4 (w3c/epubcheck#1651): `rendition:layout` gains the value
@@ -23041,8 +23509,9 @@ mod tests {
     /// and without an itemref override in each direction) against the five
     /// prohibited tokens, plus the tokens that must stay silent.
     ///
-    /// epubcheck cannot arbitrate any of it - #1652 is open and
-    /// unimplemented - which is exactly why this is advisory-only.
+    /// epubcheck shipped #1652 in 5.4.0 as the USAGE `OPF-100`, so this is
+    /// parity now and fires with or without `--advisory`; the last assertion
+    /// below is what holds that, and it used to assert the opposite.
     #[test]
     fn page_spread_is_confined_to_fixed_layout_content() {
         const PROHIBITED: &[&str] = &[
@@ -23063,7 +23532,7 @@ mod tests {
 
         for &(pre_paginated, override_token, reflowable) in LAYOUTS {
             for token in PROHIBITED {
-                let n = adv_005(pre_paginated, &format!("{override_token}{token}"), true);
+                let n = opf_100(pre_paginated, &format!("{override_token}{token}"), true);
                 assert_eq!(
                     n,
                     usize::from(reflowable),
@@ -23073,22 +23542,23 @@ mod tests {
             }
             // A layout override on its own is never the subject of this rule.
             assert_eq!(
-                adv_005(pre_paginated, override_token.trim(), true),
+                opf_100(pre_paginated, override_token.trim(), true),
                 0,
                 "no page-spread token, nothing to report"
             );
         }
 
-        // Opt-in only: the same book is silent without `--advisory`, which is
-        // what keeps a rule epubcheck has not shipped out of the default diff.
-        assert_eq!(adv_005(false, "page-spread-left", false), 0);
+        // Graduated: the same book reports it *without* `--advisory` too.
+        // While epubcheck had not shipped #1652 this asserted 0, and that
+        // assertion is the thing the graduation had to change.
+        assert_eq!(opf_100(false, "page-spread-left", false), 1);
         // A neighbouring rendition override is not a page-spread token.
-        assert_eq!(adv_005(false, "rendition:align-x-center", true), 0);
+        assert_eq!(opf_100(false, "rendition:align-x-center", true), 0);
     }
 
-    /// Count ADV-005 for one spine itemref, with the package either
-    /// pre-paginated or left at its reflowable default.
-    fn adv_005(package_pre_paginated: bool, itemref_props: &str, advisory: bool) -> usize {
+    /// Count OPF-100 (ex-ADV-005, ex-NEXT-005) for one spine itemref, with
+    /// the package either pre-paginated or left at its reflowable default.
+    fn opf_100(package_pre_paginated: bool, itemref_props: &str, advisory: bool) -> usize {
         let layout = if package_pre_paginated {
             r#"<meta property="rendition:layout">pre-paginated</meta>"#
         } else {
@@ -23127,7 +23597,7 @@ mod tests {
         )
         .messages
         .iter()
-        .filter(|m| m.id == crate::ids::NEXT_005)
+        .filter(|m| m.id == crate::ids::OPF_100)
         .count()
     }
 
@@ -23484,8 +23954,9 @@ mod tests {
         assert!(ids("<p><a href=\"ch1.xhtml\">x</a></p>").is_empty());
     }
 
-    /// #77: an SVG anchor's target is checked for existence, through
-    /// `xlink:href` and only that.
+    /// #77: an SVG anchor's target is checked for existence — through
+    /// `xlink:href` at both versions, and through the plain `href` at EPUB 3
+    /// since epubcheck 5.4.0 (w3c/epubcheck#1677, ours).
     ///
     /// The existence check lives in the bare-name attribute walk, which
     /// cannot see a namespaced attribute - so 0.9.22 fixed the fragment and
@@ -23496,14 +23967,15 @@ mod tests {
     /// resource set that answers OPF-097.
     #[test]
     fn an_svg_anchor_target_is_checked_for_existence() {
-        let ids = |body: &str| -> Vec<&'static str> {
-            crate::validate_bytes(epub_with_body("3.0", body))
+        let ids_at = |version: &str, body: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_body(version, body))
                 .messages
                 .iter()
                 .filter(|m| m.id == crate::ids::RSC_007)
                 .map(|m| m.id)
                 .collect()
         };
+        let ids = |body: &str| ids_at("3.0", body);
         let svga = |attr: &str| {
             format!(
                 "<svg xmlns=\"http://www.w3.org/2000/svg\" \
@@ -23512,10 +23984,14 @@ mod tests {
             )
         };
         assert_eq!(ids(&svga("xlink:href")), vec![crate::ids::RSC_007]);
-        // The plain spelling registers no reference in epubcheck, so it must
-        // register none here either - reporting it was the false-positive
-        // half, removed in 0.9.22.
-        assert!(ids(&svga("href")).is_empty(), "plain href on an SVG anchor");
+        // The plain spelling: silent through 5.3.0 (reporting it was the
+        // false-positive half removed in 0.9.22), a reference from 5.4.0 —
+        // but at EPUB 3 only, since the fix is in epubcheck's EPUB 3 handler.
+        assert_eq!(ids(&svga("href")), vec![crate::ids::RSC_007]);
+        assert!(
+            ids_at("2.0", &svga("href")).is_empty(),
+            "EPUB 2 keeps the 5.3.0 answer for a plain SVG href"
+        );
         // The XHTML control, same target, still reported.
         assert_eq!(
             ids("<p><a href=\"missing.xhtml\">x</a></p>"),
@@ -26825,7 +27301,18 @@ mod tests {
         // too, and it is a fact about the manifest media type rather than
         // about the ciphertext. The rule being fixed is only ever about
         // *reading* the bytes.
-        assert_eq!(ids(true), vec![crate::ids::PKG_026, crate::ids::RSC_004]);
+        // OBS-001 rides along because the book obfuscates a resource at all,
+        // which EPUB 3.4 marks outdated — a fact about `encryption.xml`, not
+        // about the bytes, so it belongs in this list for the same reason
+        // PKG-026 does.
+        assert_eq!(
+            ids(true),
+            vec![
+                crate::ids::OBS_001,
+                crate::ids::PKG_026,
+                crate::ids::RSC_004
+            ]
+        );
         // The control, and the reason the line above means anything: the
         // identical bytes without the declaration are unparseable and must
         // still be reported. Without this, a change that stopped reading
