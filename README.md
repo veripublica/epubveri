@@ -424,9 +424,13 @@ can tell them apart without reading the message:
 
 - **`NEXT-*` — the specification says it; epubcheck has not implemented it
   yet.** These become real errors the day epubcheck catches up, so they are
-  worth fixing before somebody downstream runs epubcheck on your book. Today
-  they are the EPUB 3.4 rules; that specification froze its features in 2026
-  and epubcheck's own milestone for it is still at zero.
+  worth fixing before somebody downstream runs epubcheck on your book.
+
+  **The family is empty at present, and that is the mechanism working rather
+  than an omission.** It held four EPUB 3.4 rules; epubcheck 5.4.0 implemented
+  all four, so since epubveri 0.15.0 they report under epubcheck's own ids, at
+  its severities, with no flag. The next check we reach before epubcheck does
+  will take `NEXT-009`.
 - **`ADV-*` — no specification says anything, but the book is still wrong.**
   Two table-of-contents entries pointing at the same page, so one of them goes
   nowhere useful. A CSS rule styling an element that does not exist. Nobody is
@@ -479,7 +483,8 @@ for the full API and the one CLI-only difference (the filename-based
 
 **Is this a drop-in replacement for epubcheck?** Close on the checks;
 still not a substitute for its standing. The per-message matrix is at
-**208 of 210 live epubcheck checks** — 203 fully, 5 partially — and the
+**216 of 218 live epubcheck checks** — 211 fully, 5 partially, counted
+against epubcheck 5.4.0 — and the
 two that are absent are scope decisions rather than unfinished work: an
 unregistered-URI-scheme check that only fires inside *DTBook* content
 (a legacy format epubveri deliberately doesn't validate), and an

@@ -256,7 +256,7 @@ changes the verdict**:
 | | Default | What it adds |
 |---|---|---|
 | `-u`, `--usage` | **off** | The `USAGE` lines described above. |
-| `--advisory` | **off** | Extra opinions epubcheck does not hold, in two families: `NEXT-*` (a specification requires it and epubcheck hasn't implemented it yet) and `ADV-*` (no specification says anything, but the book is still probably wrong). |
+| `--advisory` | **off** | Extra opinions epubcheck does not hold, in two families: `NEXT-*` (a specification requires it and epubcheck hasn't implemented it yet — **empty at present**, since epubcheck 5.4.0 implemented all four rules that were here and epubveri 0.15.0 moved them to its ids) and `ADV-*` (no specification says anything, but the book is still probably wrong). |
 
 Everything else you see is a finding epubcheck would report too. **A book that
 passes epubcheck passes epubveri**, with or without either switch — `--advisory`
