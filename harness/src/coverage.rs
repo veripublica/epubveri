@@ -293,30 +293,30 @@ const ANN: &[Ann] = &[
          fixtures are built to trigger each rule deliberately, which is exactly \
          the coverage negative evidence needs and exactly what a non-random \
          sample of real books cannot supply."),
-    ("RSC-010", Some("partial"),
+    ("RSC-010", None,
         "Three of epubcheck's four cells. It runs RSC-010 from two places in \
          `ResourceReferencesChecker`: `case HYPERLINK` (:231), where the \
          target is neither a blessed nor a deprecated-blessed item type and \
          no fallback reaches one, and `case OVERLAY_TEXT_LINK` (:257), where \
          a media overlay's `<text src>` target is not a blessed type - that \
          one with no deprecated-type exemption and no fallback test. \
-         **Implemented**: the NCX `<content src>`, the nav toc link, and \
-         (2026-08-18, #78) an ordinary hyperlink, XHTML and SVG alike. \
-         **One deliberate divergence, measured and settled 2026-08-18**: \
-         for an overlay text link to a non-blessed target we report \
-         **MED-013**, epubcheck reports **RSC-010**, and each reports exactly \
-         one message. The probe that settled it used a *valid* content \
-         document as the overlay's target: there both tools report MED-013 \
-         plus MED-010 and agree exactly, so epubcheck's MED-013 works \
-         normally and its silence in the non-blessed case comes from the \
-         `CheckAbortException` its RSC-010 throws. That abort drops a \
-         second, unrelated package-level defect - the content document \
-         declares `media-overlay` and the overlay never references it - \
-         which is a real finding a user needs. **We keep MED-013 on purpose**: \
-         the verdict is INVALID from both tools either way, so nothing about \
-         the decision differs, and matching would mean reproducing a \
-         suppression rather than a check. Same reasoning as the `&nbsp;` \
-         divergence on RSC-016. Reported upstream. \
+         **All four cells implemented**: the NCX `<content src>`, the nav toc \
+         link, an ordinary hyperlink (2026-08-18, #78) XHTML and SVG alike, \
+         and the overlay text link (2026-09-17). \
+         **The fourth was recorded for a month as a deliberate divergence, \
+         and the record was wrong.** It said epubcheck reports RSC-010 where \
+         we report MED-013, *each exactly one message*, and that epubcheck's \
+         MED-013 was being swallowed by the `CheckAbortException` its \
+         RSC-010 throws - filed upstream as w3c/epubcheck#1679. Rebuilding \
+         the book to answer the maintainer's request for a reproduction \
+         showed epubcheck reporting **both**, at 5.3.0 and 5.4.0 alike. \
+         There was no suppression and no divergence: there was a missing \
+         check, and a story about someone else's bug kept it from being \
+         looked at again. \
+         Two findings came out of that one book: this cell, and MED-010, \
+         which was keyed on the fragment-bearing text links only - so an \
+         overlay whose `<text src>` carried no fragment referenced nothing as \
+         far as the overlay-wiring checks could see. \
          Reported *instead of* RSC-011, never alongside it - epubcheck aborts \
          the reference's remaining checks right after, and our spine-\
          reachability loop skips the same targets for the same reason. \

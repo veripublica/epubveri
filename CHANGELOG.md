@@ -8,6 +8,37 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A media overlay's `<text src>` must point at a content document
+  (`RSC-010`), and an overlay references a document whether or not the link
+  names a fragment (`MED-010`).** Two findings from one book, and the book
+  exists because epubcheck's maintainer asked for a reproduction.
+
+  The first was recorded here a month ago as a **deliberate divergence**: that
+  for an overlay pointing at a non-content-document, epubcheck reports
+  RSC-010 and we report MED-013, *each exactly one message*, and that
+  epubcheck's own MED-013 was being swallowed by the `CheckAbortException`
+  its RSC-010 throws. That was filed upstream as w3c/epubcheck#1679, where it
+  could not be reproduced. Rebuilding the three books to answer that request
+  showed epubcheck reporting **both messages**, at 5.3.0 and 5.4.0 alike.
+  There was no suppression: there was a check we had not written, and a story
+  about someone else's bug kept anyone from looking at it again.
+
+  The second came out of the same book. `referenced_by` — which decides
+  MED-010, MED-012 and MED-013 — was built from the *fragment-bearing* text
+  links, the list that exists for fragment resolution. An overlay whose
+  `<text src>` carried no fragment therefore referenced nothing as far as
+  those three checks could see, so a document referenced by an overlay
+  without declaring `media-overlay` drew MED-013 ("nothing references me")
+  where epubcheck reports MED-010.
+
+  All three books now match epubcheck's output exactly. Shelf unchanged: no
+  book on it has a media overlay at all, which is why only a hand-built book
+  could find this.
+
 ## [0.15.0] - 2026-09-17
 
 **epubcheck 5.4.0 shipped on 2026-09-15 and this release catches up with it.**

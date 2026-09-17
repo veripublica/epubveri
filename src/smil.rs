@@ -20,6 +20,21 @@ use crate::xmlext::NodeExt;
 /// return type is otherwise unreadable at the call site.
 pub(crate) type Targets = Vec<(String, String)>;
 
+/// What one pass over a media overlay collects for the caller.
+///
+/// Two lists rather than one because they answer different questions, and
+/// one struct rather than two parameters because they are filled by the same
+/// walk and a checker that has one always wants the other: `fragments` is
+/// every `<text src>` that names a fragment, for the fragment-resolution and
+/// target-kind checks; `srcs` is every `<text src>` target, for the
+/// overlay-wiring checks, which do not care about fragments and were wrong
+/// for a month because they read the first list.
+#[derive(Default)]
+pub(crate) struct TextLinks {
+    pub fragments: Targets,
+    pub srcs: Vec<String>,
+}
+
 const CORE_AUDIO_TYPES: [&str; 2] = ["audio/mpeg", "audio/mp4"];
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -40,8 +55,8 @@ pub(crate) fn check(
     name_index: &HashMap<String, String>,
     media_types: &HashMap<String, String>,
     report: &mut Report,
-) -> (Targets, Targets) {
-    let mut text_targets = Vec::new();
+) -> (Targets, Targets, Vec<String>) {
+    let mut text = TextLinks::default();
     let mut textref_targets = Vec::new();
     let doc = match crate::ocf::parse_xml(smil_xml) {
         Ok(doc) => doc,
@@ -63,7 +78,7 @@ pub(crate) fn check(
                 "smil.malformed_xml",
                 Vec::new(),
             );
-            return (text_targets, textref_targets);
+            return (text.fragments, textref_targets, text.srcs);
         }
     };
     let root = doc.root_element();
@@ -98,7 +113,7 @@ pub(crate) fn check(
             name_index,
             media_types,
             report,
-            &mut text_targets,
+            &mut text,
         );
     }
 
@@ -146,7 +161,7 @@ pub(crate) fn check(
         }
     }
 
-    (text_targets, textref_targets)
+    (text.fragments, textref_targets, text.srcs)
 }
 
 /// Every manifest resource this overlay references, resolved and NFC-normalized.
@@ -229,7 +244,7 @@ fn check_container(
     name_index: &HashMap<String, String>,
     media_types: &HashMap<String, String>,
     report: &mut Report,
-    text_targets: &mut Vec<(String, String)>,
+    text: &mut TextLinks,
 ) {
     let is_par = node.tag_name().name() == "par";
     // A <par> may contain at most one <text> child - confirmed the first
@@ -246,7 +261,7 @@ fn check_container(
                     name_index,
                     media_types,
                     report,
-                    text_targets,
+                    text,
                 );
             }
             (true, "text") => {
@@ -262,7 +277,7 @@ fn check_container(
                         Vec::new(),
                     );
                 } else {
-                    check_text(child, smil_path, base_dir, name_index, report, text_targets);
+                    check_text(child, smil_path, base_dir, name_index, report, text);
                 }
             }
             (true, "audio") => {
@@ -308,7 +323,7 @@ fn check_text(
     base_dir: &str,
     name_index: &HashMap<String, String>,
     report: &mut Report,
-    text_targets: &mut Vec<(String, String)>,
+    text: &mut TextLinks,
 ) {
     let Some(src) = node.attr_no_ns("src") else {
         return;
@@ -337,9 +352,16 @@ fn check_text(
         );
         return;
     }
+    // **Two lists, because two questions.** `text_targets` answers "does
+    // this fragment resolve, and to what kind of element", so it holds only
+    // the targets that *have* a fragment. `text_srcs` answers "may an
+    // overlay point here at all" (RSC-010), which is about the target's
+    // media type and has nothing to do with fragments — a `<text
+    // src="orphan.css"/>` is the whole case and carries none.
+    text.srcs.push(resolved_nfc.clone());
     if let Some(f) = frag {
         check_fragment_scheme(path_part, f, smil_path, node, report);
-        text_targets.push((resolved_nfc, f.to_string()));
+        text.fragments.push((resolved_nfc, f.to_string()));
     }
 }
 
@@ -582,7 +604,7 @@ mod tests {
         media_types: &HashMap<String, String>,
     ) -> (Vec<&'static str>, Vec<(String, String)>) {
         let mut report = Report::new();
-        let (targets, _textref_targets) = check(
+        let (targets, _textref_targets, _srcs) = check(
             smil,
             "content.smil",
             "OEBPS",
@@ -835,7 +857,7 @@ mod tests {
         </smil>"#;
         let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
         let mut report = Report::new();
-        let (_targets, textref_targets) = check(
+        let (_targets, textref_targets, _srcs) = check(
             smil,
             "content.smil",
             "OEBPS",

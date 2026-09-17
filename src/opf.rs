@@ -11583,7 +11583,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let smil_text = String::from_utf8_lossy(&b).into_owned();
         let dir = parent_dir(&path);
         let overlay_path = nfc(&path);
-        let (targets, textref_targets) = crate::smil::check(
+        let (targets, textref_targets, text_srcs) = crate::smil::check(
             &smil_text,
             &path,
             &dir,
@@ -11656,6 +11656,40 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         vec![frag.clone(), target.clone()],
                     );
                 }
+            }
+        }
+
+        // **`RSC-010`: a media overlay's `<text src>` must point at a
+        // content document.** epubcheck's `case OVERLAY_TEXT_LINK`
+        // (`ResourceReferencesChecker`:257) asks only
+        // `isBlessedItemType` — **no deprecated-type exemption and no
+        // fallback test**, unlike the hyperlink case two branches above, so
+        // `text/html` is an error here while it is exempt there.
+        //
+        // **This cell was recorded as a deliberate divergence and the
+        // recording was wrong.** The note said epubcheck reports RSC-010
+        // where we report MED-013, "each exactly one message", and that its
+        // MED-013 was being swallowed by the abort — filed upstream as
+        // w3c/epubcheck#1679. Rebuilding the book to answer the maintainer's
+        // request for a repro showed epubcheck reporting **both**, at 5.3.0
+        // and 5.4.0 alike. So there was no suppression and no divergence:
+        // there was a missing check, hidden behind a story about someone
+        // else's bug.
+        for target in &text_srcs {
+            if let Some((_, mt)) = items.values().find(|(p, _)| nfc(p) == *target)
+                && !is_referenced_content_document_type(mt, is_epub3)
+            {
+                report.push_at_rule(
+                    RSC_010,
+                    Severity::Error,
+                    format!(
+                        "media overlay text link '{target}' targets '{mt}', \
+                         which is not an EPUB Content Document"
+                    ),
+                    path.clone(),
+                    "opf.smil.text_non_content_document",
+                    vec![target.clone(), mt.to_string()],
+                );
             }
         }
 
@@ -11764,7 +11798,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
         }
 
-        for (content_doc_path, _frag) in targets {
+        // **`text_srcs`, not `targets`, and the difference is a whole
+        // finding.** "Which documents does this overlay reference" is what
+        // MED-010/MED-012/MED-013 turn on, and a `<text src="other.xhtml"/>`
+        // references one whether or not it names a fragment. Built from the
+        // fragment-only list, an overlay whose text links carry no fragment
+        // referenced nothing as far as these three checks could see — so a
+        // document referenced by an overlay without declaring
+        // `media-overlay` drew MED-013 (as though nothing referenced it)
+        // instead of MED-010, and epubcheck reported both.
+        for content_doc_path in text_srcs {
+            // Content documents only. MED-010/012/013 are questions about a
+            // *content document's* overlay wiring, and epubcheck asks them
+            // from `OPFChecker30` over exactly those; an overlay pointing at
+            // a stylesheet is the RSC-010 above, not a document missing a
+            // `media-overlay` attribute. Without this the two error books in
+            // the #1679 repro drew a MED-010 epubcheck does not report.
+            let is_content_doc = items
+                .values()
+                .find(|(p, _)| nfc(p) == content_doc_path)
+                .is_some_and(|(_, mt)| is_referenced_content_document_type(mt, is_epub3));
+            if !is_content_doc {
+                continue;
+            }
             referenced_by
                 .entry(content_doc_path)
                 .or_default()
@@ -24167,19 +24223,35 @@ mod tests {
     /// which is why the overlay half of RSC-014 was measured with a
     /// hand-built probe and had no test.
     fn epub_with_overlay(body: &str, frags: &[&str]) -> Vec<u8> {
+        let srcs: Vec<String> = frags.iter().map(|f| format!("ch1.xhtml#{f}")).collect();
+        let refs: Vec<&str> = srcs.iter().map(String::as_str).collect();
+        epub_with_overlay_srcs(body, &refs, "", &[])
+    }
+
+    /// The same book with the overlay's `<text src>` values written out in
+    /// full, plus any extra manifest items and files they need. Fragments are
+    /// optional here, which is the point: the overlay-wiring checks do not
+    /// depend on one.
+    fn epub_with_overlay_srcs(
+        body: &str,
+        srcs: &[&str],
+        extra_items: &str,
+        extra_files: &[(&str, &str)],
+    ) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-        let pars: String = frags
+        let pars: String = srcs
             .iter()
             .enumerate()
-            .map(|(i, f)| format!("<par id=\"p{i}\"><text src=\"ch1.xhtml#{f}\"/></par>"))
+            .map(|(i, src)| format!("<par id=\"p{i}\"><text src=\"{src}\"/></par>"))
             .collect();
         let smil = format!(
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
              <smil xmlns=\"http://www.w3.org/ns/SMIL\" version=\"3.0\"><body>{pars}</body></smil>"
         );
-        let opf = r##"<?xml version="1.0" encoding="utf-8"?>
+        let opf = format!(
+            r##"<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
     <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
@@ -24191,9 +24263,10 @@ mod tests {
   <manifest>
     <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="mo" properties="svg"/>
     <item id="mo" href="ch1.smil" media-type="application/smil+xml"/>
-  </manifest>
+{extra_items}  </manifest>
   <spine><itemref idref="ch1"/></spine>
-</package>"##;
+</package>"##
+        );
         let ch1 = format!(
             "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
              <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
@@ -24215,16 +24288,122 @@ mod tests {
             let o = SimpleFileOptions::default();
             for (name, content) in [
                 ("META-INF/container.xml", CONTAINER),
-                ("OEBPS/content.opf", opf),
+                ("OEBPS/content.opf", opf.as_str()),
                 ("OEBPS/ch1.xhtml", ch1.as_str()),
                 ("OEBPS/ch1.smil", smil.as_str()),
             ] {
                 z.start_file(name, o).unwrap();
                 z.write_all(content.as_bytes()).unwrap();
             }
+            for (name, content) in extra_files {
+                z.start_file(*name, o).unwrap();
+                z.write_all(content.as_bytes()).unwrap();
+            }
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// **The overlay cell of RSC-010, and the record it corrects.**
+    ///
+    /// A media overlay's `<text src>` must point at a content document.
+    /// epubcheck asks only `isBlessedItemType` here — no deprecated-type
+    /// exemption and no fallback test, unlike the hyperlink case — so
+    /// `text/html` is an error in this position while it is exempt in that
+    /// one, and both arms are asserted below.
+    ///
+    /// This cell was recorded for a month as a *deliberate divergence*: that
+    /// epubcheck reported RSC-010 where we reported MED-013, each exactly
+    /// one message, its MED-013 swallowed by the `CheckAbortException`.
+    /// Rebuilding the book to answer w3c/epubcheck#1679's request for a
+    /// reproduction showed epubcheck reporting **both**, at 5.3.0 and 5.4.0
+    /// alike. There was no suppression to match — there was a check missing.
+    #[test]
+    fn an_overlay_text_link_must_point_at_a_content_document() {
+        let ids = |src: &str, item: &str, files: &[(&str, &str)]| -> Vec<&'static str> {
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_overlay_srcs(
+                "<p id=\"ok\">t</p>",
+                &[src],
+                item,
+                files,
+            ))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_010 || m.id == crate::ids::MED_013)
+            .map(|m| m.id)
+            .collect();
+            v.sort_unstable();
+            v
+        };
+
+        const CSS_ITEM: &str = "    <item id=\"css\" href=\"s.css\" media-type=\"text/css\"/>\n";
+        const HTML_ITEM: &str =
+            "    <item id=\"h\" href=\"legacy.html\" media-type=\"text/html\"/>\n";
+        let html = "<html><head><title>t</title></head><body><p>x</p></body></html>";
+
+        // A stylesheet: RSC-010, and MED-013 as well because ch1 declares an
+        // overlay that never references it. epubcheck reports both.
+        assert_eq!(
+            ids("s.css", CSS_ITEM, &[("OEBPS/s.css", "p { color: #000; }")]),
+            vec![crate::ids::MED_013, crate::ids::RSC_010]
+        );
+        // `text/html` is deprecated-blessed, which exempts it from the
+        // *hyperlink* cell and not from this one.
+        assert_eq!(
+            ids("legacy.html", HTML_ITEM, &[("OEBPS/legacy.html", html)]),
+            vec![crate::ids::MED_013, crate::ids::RSC_010]
+        );
+        // The control: pointing at ch1 itself is the ordinary case and
+        // neither message fires, so the two above are about the target.
+        assert!(ids("ch1.xhtml", "", &[]).is_empty());
+    }
+
+    /// **An overlay references a document whether or not the link names a
+    /// fragment**, and for a month the overlay-wiring checks could not see it.
+    ///
+    /// `referenced_by` was built from the fragment-bearing text links only —
+    /// the list that exists for fragment *resolution* — so a
+    /// `<text src="other.xhtml"/>` registered nothing. A document referenced
+    /// by an overlay without declaring `media-overlay` then drew MED-013
+    /// ("nothing references me") instead of MED-010, while epubcheck
+    /// reported MED-010. Found in the same #1679 reproduction.
+    #[test]
+    fn an_overlay_text_link_without_a_fragment_still_references_its_document() {
+        const OTHER: &str =
+            "    <item id=\"other\" href=\"other.xhtml\" media-type=\"application/xhtml+xml\"/>\n";
+        let other = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>o</title></head>\
+             <body><p>o</p></body></html>";
+        let ids = |src: &str| -> Vec<&'static str> {
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_overlay_srcs(
+                "<p id=\"ok\">t</p>",
+                &[src],
+                OTHER,
+                &[("OEBPS/other.xhtml", other)],
+            ))
+            .messages
+            .iter()
+            .filter(|m| m.id.starts_with("MED_"))
+            .map(|m| m.id)
+            .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+
+        // No fragment: `other.xhtml` is referenced by the overlay and does
+        // not declare one, which is MED-010. MED-013 is ch1's own, and both
+        // are what epubcheck reports on this book.
+        assert_eq!(
+            ids("other.xhtml"),
+            vec![crate::ids::MED_010, crate::ids::MED_013]
+        );
+        // With a fragment the answer must not change — the old code only
+        // saw this spelling, so asserting both is what keeps the fix honest.
+        assert_eq!(
+            ids("other.xhtml#o1"),
+            vec![crate::ids::MED_010, crate::ids::MED_013]
+        );
     }
 
     /// The overlay cell of RSC-014: a media overlay's `<text src>` may name a

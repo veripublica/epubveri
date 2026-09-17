@@ -501,7 +501,7 @@ for the full API and the one CLI-only difference (the filename-based
 
 **Is this a drop-in replacement for epubcheck?** Close on the checks;
 still not a substitute for its standing. The per-message matrix is at
-**216 of 218 live epubcheck checks** — 211 fully, 5 partially, counted
+**216 of 218 live epubcheck checks** — 212 fully, 4 partially, counted
 against epubcheck 5.4.0 — and the
 two that are absent are scope decisions rather than unfinished work: an
 unregistered-URI-scheme check that only fires inside *DTBook* content
