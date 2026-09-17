@@ -11,6 +11,9 @@ __pycache__/
 
 # Local-only project context / history — not for publication (owner decision).
 /CLAUDE.md
+/docs/DECISIONS.md
+/docs/INSTRUMENTS.md
+/docs/SESSION_LOG.md
 /docs/PROGRESS_LOG.md
 /docs/UPSTREAM_TRIAGE.md
 
