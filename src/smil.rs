@@ -182,11 +182,28 @@ pub(crate) fn check(
 /// `epub-tests` publications tripped it, and no book on the shelf could:
 /// none of them carries an overlay.
 ///
+/// **Only `<audio src>`, and that is not an oversight — a `<text src>` does
+/// NOT make its target a referenced resource.** epubcheck registers the two
+/// under different reference types and asks OPF-097 of one of them:
+/// `OverlayHandler.processAudioSrc` registers `Type.AUDIO`, while both
+/// `<text src>` and `epub:textref` go through `processContentDocumentLink`
+/// as `Type.OVERLAY_TEXT_LINK` — and `Reference.Type.isPublicationResourceReference`
+/// lists AUDIO and not OVERLAY_TEXT_LINK, which is the exact predicate
+/// `OPFChecker30`:177 filters the registry by. Collecting the text targets
+/// here cost a usage finding on any resource an overlay points at and
+/// nothing else does. Measured against 5.4.0 on the #1679 books: epubcheck
+/// reports `USAGE(OPF-097)` on the CSS and on the HTML file, and we did not.
+///
+/// The narrowness is worth stating, because it is why nothing caught this:
+/// a text link normally targets a spine document, and `item.isInSpine()`
+/// exempts those before the reference question is asked at all.
+///
 /// This is the per-source shape `CLAUDE.md` records for fragment resolution,
 /// recurring: references are collected one *source* at a time here and per
 /// *reference* in epubcheck, so each new source has to be added by hand and
 /// nothing fails loudly when it is forgotten. Before adding a reference
-/// kind, ask which per-source lists it must join.
+/// kind, ask which per-source lists it must join — and which of them it must
+/// stay out of.
 pub(crate) fn resource_refs(smil_xml: &str, base_dir: &str) -> Vec<String> {
     let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
         return Vec::new();
@@ -216,19 +233,12 @@ pub(crate) fn resource_refs(smil_xml: &str, base_dir: &str) -> Vec<String> {
             }
         }
     };
-    for n in doc.descendants().filter(|n| n.is_element()) {
-        match n.tag_name().name() {
-            "audio" | "text" => {
-                if let Some(src) = n.attr_no_ns("src") {
-                    push(src);
-                }
-            }
-            "seq" | "par" => {
-                if let Some(textref) = n.attribute((EPUB_NS, "textref")) {
-                    push(textref);
-                }
-            }
-            _ => {}
+    for n in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().name() == "audio")
+    {
+        if let Some(src) = n.attr_no_ns("src") {
+            push(src);
         }
     }
     out

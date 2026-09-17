@@ -14248,6 +14248,65 @@ mod tests {
         );
     }
 
+    /// A media overlay's `<text src>` does **not** make its target referenced.
+    ///
+    /// The other half of the sibling test above, and the two are easy to
+    /// conflate: an overlay's audio counts for OPF-097 and its text link does
+    /// not. epubcheck separates them by reference type —
+    /// `OverlayHandler.processAudioSrc` registers `Type.AUDIO`,
+    /// `processContentDocumentLink` registers `Type.OVERLAY_TEXT_LINK`, and
+    /// only the first is in `isPublicationResourceReference`, which is the
+    /// predicate `OPFChecker30`:177 filters the reference registry by.
+    ///
+    /// Measured on the w3c/epubcheck#1679 books at 5.4.0: an overlay pointing
+    /// at a stylesheet draws `USAGE(OPF-097)` on that stylesheet from
+    /// epubcheck, and drew nothing from us until this was split.
+    ///
+    /// **A spine document cannot pose the question**, which is why no
+    /// instrument here found it: `item.isInSpine()` exempts the target before
+    /// the reference question is asked, and a text link normally points at a
+    /// spine document.
+    #[test]
+    fn an_overlay_text_link_does_not_make_its_target_a_referenced_resource() {
+        let opf = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="media:duration">0:00:01</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="ov"/>
+    <item id="ov" href="ov.smil" media-type="application/smil+xml"/>
+    <item id="a" href="a.mp3" media-type="audio/mpeg"/>
+    <item id="css" href="orphan.css" media-type="text/css"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        const SMIL: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+<body><par><text src="orphan.css"/><audio src="a.mp3"/></par></body></smil>"#;
+
+        let report = crate::validate_bytes(epub_with_opf_and_overlay(opf, SMIL));
+        let unreferenced: Vec<&str> = report
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::OPF_097)
+            .map(|m| m.text.as_str())
+            .collect();
+        assert_eq!(
+            unreferenced.len(),
+            1,
+            "the stylesheet the text link points at, and nothing else: {unreferenced:?}"
+        );
+        assert!(
+            unreferenced[0].contains("orphan.css"),
+            "and it is the stylesheet, not the audio: {unreferenced:?}"
+        );
+    }
+
     /// An EPUB 3 with one chapter, one overlay and a caller-supplied package
     /// document.
     fn epub_with_opf_and_overlay(opf: &str, smil: &str) -> Vec<u8> {

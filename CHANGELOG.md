@@ -39,6 +39,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   book on it has a media overlay at all, which is why only a hand-built book
   could find this.
 
+- **A media overlay's `<text src>` does not make its target a referenced
+  resource (`OPF-097`).** The third finding from the same three books, and it
+  runs the opposite way from the two above — here we were silent where
+  epubcheck speaks.
+
+  An overlay's `<audio src>` counts as a reference and its `<text src>` does
+  not, which is a distinction our extractor did not draw: one walk collected
+  both, plus `epub:textref`. epubcheck separates them by reference *type* —
+  `OverlayHandler.processAudioSrc` registers `Type.AUDIO` while both text
+  spellings go through `processContentDocumentLink` as
+  `Type.OVERLAY_TEXT_LINK`, and only the first is listed in
+  `Reference.Type.isPublicationResourceReference`, which is the predicate
+  `OPFChecker30` filters the reference registry by.
+
+  **Nothing here could have found it, for a reason worth stating**: a text
+  link normally points at a spine document, and a spine item is exempt from
+  the question before it is asked. It takes an overlay pointing somewhere
+  else — which is the shape the #1679 books were built to make.
+
 ## [0.15.0] - 2026-09-17
 
 **epubcheck 5.4.0 shipped on 2026-09-15 and this release catches up with it.**
