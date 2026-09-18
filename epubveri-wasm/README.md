@@ -89,10 +89,12 @@ epubcheck has no verdict on, in two families, both at `usage` severity:
   yet, so it becomes an ordinary error the day it catches up. **Empty at present:** the four
   EPUB 3.4 rules that were here graduated when epubcheck 5.4.0 implemented them, and now
   report under its own ids without this flag.
-- **`ADV-*`** — no specification says anything, but the book is still probably wrong
+- **`ADV-*`** — no specification requires it, but the book is still probably wrong
   (unknown CSS property and descriptor names, a type selector naming no known element, an
   EPUB 2 package written in EPUB 3, two navigation entries landing on one document, an
-  EPUB 2 manifest resource nothing draws, applies or loads).
+  EPUB 2 manifest resource nothing draws, applies or loads, a `dc:date` epubcheck accepts
+  that is not in the W3C date format the specifications name, a class selector such as
+  `.-` whose name is not a CSS identifier).
 
 It is **off by default**: leaving the argument out, or passing `false`/`undefined`,
 produces a byte-identical report, so existing two-argument callers are unaffected. Neither
