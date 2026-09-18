@@ -12,6 +12,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A scheme-relative link (`<a href="//example.com/x">`) is a link to another
+  host, not a missing file.** It has no scheme, so every scheme test let it
+  through and it was resolved as a path at the container root: `RSC-007` and
+  `RSC-026`, two errors, on a book epubcheck passes. It now counts as remote,
+  as it does there, which also makes `<img src="//…">` and a remote
+  stylesheet `RSC-006` like their `https:` forms, and exempts it from
+  `RSC-031` (it takes the container's scheme, not `http`). A malformed one —
+  `//` or `///x.html`, no host — is `RSC-020`, and a bare `//` also fails the
+  `href` datatype (`RSC-005`), both as in epubcheck. Found while checking the
+  items below; no book on our shelf has one, so no user report behind it.
+  Checked against 5.4.0 on 18 cases in both versions.
+
 - **`dc:date` is judged the way epubcheck judges it (`OPF-053`/`OPF-054`).**
   We checked the value against W3C Date and Time Formats; epubcheck runs its
   own `DateParser`, which is looser. A time with no timezone

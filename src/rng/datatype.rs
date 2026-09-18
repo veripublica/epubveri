@@ -145,13 +145,15 @@ impl Datatype {
     ///   `http://`   rejected - a special scheme with nothing after it
     ///   `%zz`       rejected - a percent sign that is not an escape
     ///   `:`         rejected - an empty scheme
+    ///   `//`        rejected - a scheme-relative reference with nothing after
+    ///               it (5.4.0; `///x.html` is accepted, and is RSC-020 only)
     ///   `http://x`  accepted
     ///   `a b`       accepted - a space is NOT an error here, which is what
     ///               keeps this from being a false-positive machine; the space
     ///               case belongs to RSC-020, separately and partially
     ///   `http://a b` accepted
     ///
-    /// Only those three rejections are implemented. Anything not on the measured
+    /// Only those four rejections are implemented. Anything not on the measured
     /// list is accepted, on the same reasoning RSC-020 is left partial: a guess
     /// about an unreadable implementation, applied to 39 schema sites, would
     /// invent errors on real books.
@@ -174,6 +176,10 @@ impl Datatype {
         }
         // An empty scheme: a leading colon.
         if s.starts_with(':') {
+            return false;
+        }
+        // A bare scheme-relative `//`: the same "nothing after the slashes".
+        if s == "//" {
             return false;
         }
         // A scheme with nothing at all after `://`.

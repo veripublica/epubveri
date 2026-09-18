@@ -578,7 +578,20 @@ pub(crate) fn data_url_media_type(href: &str) -> &str {
 /// now ask the same question of the scheme.
 pub(crate) fn is_external(href: &str) -> bool {
     let href = href.trim();
-    href.is_empty() || href.starts_with('#') || crate::url::scheme(href).is_some()
+    href.is_empty()
+        || href.starts_with('#')
+        || is_scheme_relative(href)
+        || crate::url::scheme(href).is_some()
+}
+
+/// `//host/path` — a scheme-relative URL. It has no scheme, so it slipped
+/// past every scheme test and was resolved as a path inside the container:
+/// `<a href="//example.com/x">` drew RSC-007 and RSC-026, two errors, on a
+/// book epubcheck passes. Resolved against the container's URL it lands on
+/// another host, which is what makes it remote to epubcheck
+/// (`OCFContainer.isRemote`), and so here.
+pub(crate) fn is_scheme_relative(href: &str) -> bool {
+    href.trim_start().starts_with("//")
 }
 
 /// True only for a genuine remote fetch (http/https) - unlike
@@ -623,7 +636,7 @@ pub(crate) fn is_remote_url(href: &str) -> bool {
     if href.starts_with("data:") || is_file_url(href) {
         return false;
     }
-    crate::url::scheme(href).is_some()
+    is_scheme_relative(href) || crate::url::scheme(href).is_some()
 }
 
 /// A `file:` URL, which EPUB never allows (RSC-030). epubcheck's rule is
@@ -8751,7 +8764,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let Some(href) = attr else {
                     continue;
                 };
-                if crate::url::is_absolute(href) {
+                if crate::url::is_absolute(href) || is_scheme_relative(href) {
                     if crate::url::has_syntax_error(href) {
                         report.push_node(
                             RSC_020,
@@ -25195,6 +25208,37 @@ mod tests {
     /// into a separate `remote_link_refs` set and never become embedded
     /// dependencies. Asserting it here rather than special-casing the scheme
     /// keeps the predicate the same shape as the oracle's.
+    /// `<a href="//example.com/x">` is a link to another host, not a missing
+    /// file at the container root. It drew RSC-007 and RSC-026 — two errors
+    /// on a book epubcheck passes — until `//` counted as remote. The
+    /// malformed ones (`//`, `///x.html`) are RSC-020, as they are there.
+    #[test]
+    fn a_scheme_relative_link_is_remote_not_a_container_path() {
+        let ids = |body: &str| {
+            let xhtml = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!DOCTYPE html>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            let r = crate::validate_bytes(epub_with_opf(None, &xhtml));
+            let mut v: Vec<&str> = r.messages.iter().map(|m| m.id).collect();
+            v.sort_unstable();
+            v
+        };
+        let base = ids("<p>x</p>");
+        assert_eq!(ids(r#"<p><a href="//example.com/x">l</a></p>"#), base);
+        assert_eq!(ids(r#"<p><a href="//example.com/x#f">l</a></p>"#), base);
+        for bad in ["//", "///x.html"] {
+            let got = ids(&format!(r#"<p><a href="{bad}">l</a></p>"#));
+            assert!(got.contains(&crate::ids::RSC_020), "{bad}: {got:?}");
+            assert!(!got.contains(&crate::ids::RSC_007), "{bad}: {got:?}");
+            assert!(!got.contains(&crate::ids::RSC_026), "{bad}: {got:?}");
+        }
+        assert!(super::is_external("//example.com/x"));
+        assert!(!crate::url::is_insecure_remote("//example.com/x"));
+        assert!(crate::url::is_insecure_remote("http://example.com/x"));
+    }
+
     #[test]
     fn is_remote_url_is_any_scheme_except_data() {
         for yes in [
@@ -25206,6 +25250,8 @@ mod tests {
             "mailto:x@y.com",
             "tel:+900000",
             "  https://example.com/x  ",
+            // Scheme-relative: resolves to another host (5.4.0 treats it so).
+            "//example.com/x",
         ] {
             assert!(super::is_remote_url(yes), "must be remote: {yes}");
         }

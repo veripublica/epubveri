@@ -533,6 +533,13 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     // it was the only finding of ours the reporter could call wrong: three
     // books, one of them flipped to invalid by it alone.
     let href = href.trim();
+    // A scheme-relative `//host/…` resolves against the container's URL and
+    // takes its scheme, so its host is judged as an https URL's would be:
+    // `//` and `///x.html` (no host) are RSC-020 to epubcheck, and were
+    // silently accepted once `//` stopped being read as a container path.
+    if crate::opf::is_scheme_relative(href) {
+        return has_syntax_error(&format!("https:{href}"));
+    }
     let Some((scheme, rest)) = href.split_once(':') else {
         return false;
     };
@@ -687,8 +694,15 @@ pub(crate) fn has_unregistered_scheme(href: &str) -> bool {
 /// package document's `<link>` elements are not collected into either of the
 /// sets that reach RSC-031.
 ///
+/// A scheme-relative `//host/…` has no scheme of its own: epubcheck tests the
+/// *resolved* URL, which takes the container's, and that is not `http` — so
+/// it never draws RSC-031 there (probed, a CSS `url()` and an `@font-face`).
+///
 /// [`is_remote_url`]: crate::opf::is_remote_url
 pub(crate) fn is_insecure_remote(href: &str) -> bool {
+    if crate::opf::is_scheme_relative(href) {
+        return false;
+    }
     let scheme = href.trim().split_once(':').map(|(s, _)| s).unwrap_or("");
     !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("file")
 }
