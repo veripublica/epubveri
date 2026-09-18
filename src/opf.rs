@@ -8097,15 +8097,32 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // the corpus does: "reported 2 times (once for each ID)". A
             // duplicate has no innocent half; naming only the second tells an
             // author to look at one of the two places it could be fixed.
-            let mut counts: HashMap<&str, usize> = HashMap::new();
+            //
+            // **EPUB 2 compares the value the DTD sees.** An ID-typed attribute
+            // is normalised by XML 1.0 §3.3.3 — outer whitespace dropped, inner
+            // runs collapsed — so `id=" a"` and `id="a"` are one ID there and
+            // epubcheck reports both ("Duplicate "a""). EPUB 3 has no DTD and
+            // compares the raw value, as both tools do.
+            let key = |id: &str| -> String {
+                if is_epub3 {
+                    id.to_string()
+                } else {
+                    id.split([' ', '\t', '\n', '\r'])
+                        .filter(|t| !t.is_empty())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                }
+            };
+            let mut counts: HashMap<String, usize> = HashMap::new();
             for n in d.descendants().filter(|n| n.is_element()) {
                 if let Some(id) = n.attr_no_ns("id") {
-                    *counts.entry(id).or_insert(0) += 1;
+                    *counts.entry(key(id)).or_insert(0) += 1;
                 }
             }
             for n in d.descendants().filter(|n| n.is_element()) {
-                if let Some(id) = n.attr_no_ns("id")
-                    && counts.get(id).copied().unwrap_or(0) > 1
+                if let Some(raw) = n.attr_no_ns("id")
+                    && let id = key(raw)
+                    && counts.get(&id).copied().unwrap_or(0) > 1
                 {
                     report.push_node(
                         RSC_005,
@@ -23101,6 +23118,56 @@ mod tests {
                 other.messages
             );
         }
+    }
+
+    /// Two content-document id findings epubcheck makes and we did not,
+    /// measured against 5.4.0: in EPUB 2 the DTD normalises an ID's
+    /// whitespace, so `id=" a"` duplicates `id="a"` (both reported); in EPUB 3
+    /// an `xml:id` on an XHTML element is not allowed at all.
+    #[test]
+    fn epub2_ids_compare_normalised_and_xml_id_is_not_xhtml() {
+        let ids = |ver: &str, body: &str| {
+            let (doctype, opf) = if ver == "2.0" {
+                (
+                    "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">",
+                    Some(
+                        r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#,
+                    ),
+                )
+            } else {
+                ("<!DOCTYPE html>", None)
+            };
+            let xhtml = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n{doctype}\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            let r = crate::validate_bytes(epub_with_opf(opf, &xhtml));
+            r.messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        // Against the same book without the fault: this minimal EPUB 2 has
+        // no NCX, which the package grammar reports on its own.
+        let e2 = ids("2.0", r#"<p id="a">x</p><p id="b">y</p>"#);
+        assert_eq!(ids("2.0", r#"<p id=" a">x</p><p id="a">y</p>"#), e2 + 2);
+        assert_eq!(ids("2.0", r#"<p id=" a ">x</p><p id="b">y</p>"#), e2);
+        let e3 = ids("3.0", "<p>x</p>");
+        assert_eq!(ids("3.0", r#"<p xml:id="a">x</p>"#), e3 + 1);
+        assert_eq!(ids("3.0", r#"<p xml:lang="en">x</p>"#), e3);
+        assert_eq!(
+            ids("3.0", r#"<p xml:base="x/" xml:space="preserve">x</p>"#),
+            e3
+        );
     }
 
     /// ADV-011: a `dc:date` epubcheck accepts and W3C-DTF does not. The

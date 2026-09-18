@@ -1090,15 +1090,19 @@
          OTHER namespace." A malformed/impersonated reserved namespace
          (one that resolves to a w3.org/idpf.org host but isn't a real
          known one) is still caught separately by HTM-054 in htm.rs, which
-         runs independently of this grammar. -->
+         runs independently of this grammar.
+
+         The whole `xml:` namespace is excepted, not just the three names
+         granted above: epubcheck rejects every other `xml:*` on an XHTML
+         element (`xml:id`, `xml:foo`: RSC-005, "attribute not allowed
+         here"; measured against 5.4.0), where this wildcard used to wave
+         them through as a foreign namespace. -->
     <zeroOrMore>
       <attribute>
         <anyName>
           <except>
             <nsName ns=""/>
-            <name>xml:lang</name>
-            <name>xml:base</name>
-            <name>xml:space</name>
+            <nsName ns="http://www.w3.org/XML/1998/namespace"/>
             <name>epub:type</name>
             <name>epub:trigger</name>
             <name>epub:prefix</name>

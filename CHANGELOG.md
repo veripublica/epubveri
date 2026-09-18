@@ -56,6 +56,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   in both tools. 4 books in the same 2,798-book library; checked against
   5.4.0 on 10 manifests in both versions.
 
+- **Two id findings epubcheck makes and we missed (`RSC-005`).** In EPUB 2 the
+  DTD normalises an ID's whitespace (XML 1.0 §3.3.3), so `id=" a"` and
+  `id="a"` are the same ID and both are reported; we compared the raw values.
+  In EPUB 3 an `xml:id` — or any `xml:*` other than `xml:lang`, `xml:base` and
+  `xml:space` — on an XHTML element is not allowed; the grammar's wildcard for
+  foreign-namespace attributes let the `xml:` namespace through. Found while
+  looking for the report's duplicate-id row; checked against 5.4.0 in both
+  versions. `xml:*` inside MathML is still accepted here and not there.
+
 ### Added
 
 - **`ADV-011` (with `--advisory`): a `dc:date` epubcheck accepts that is not
