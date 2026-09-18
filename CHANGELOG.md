@@ -65,6 +65,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   looking for the report's duplicate-id row; checked against 5.4.0 in both
   versions. `xml:*` inside MathML is still accepted here and not there.
 
+- **Reserved prefixes are per document type, and `<meta scheme>` is a prefix
+  use.** We checked every prefix against one list of every reserved prefix,
+  where epubcheck uses the document's own: `xsd` and `dcterms` belong to the
+  package, `msv` and `prism` to content documents. So `epub:type="dcterms:x"`
+  (or `xsd:`, `a11y:`, `marc:`) in a content document and `property="msv:x"`
+  in a package drew nothing, or a warning, where epubcheck reports `OPF-028`
+  — an error, and a verdict. `<meta scheme>` now goes through the same check,
+  as it does there: `scheme="xsd:string"` is `OPF-086c` (the 5 books a
+  2,798-book library's third run found us missing), `scheme="foo:x"`
+  `OPF-028`, `scheme="xsd:"` `OPF-026`. Two over-reports went with it:
+  declaring `msv`/`prism` on a package is not `OPF-086c`, and an EPUB 2
+  `epub:type` is the schema's `RSC-005` alone, without `OPF-028`. Checked
+  against 5.4.0 on 25 cases; a test asserting the old package behaviour had
+  never been measured, and is corrected.
+
 ### Added
 
 - **`ADV-011` (with `--advisory`): a `dc:date` epubcheck accepts that is not

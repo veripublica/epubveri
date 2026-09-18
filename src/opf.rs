@@ -2081,6 +2081,16 @@ fn check_meta_property_scheme_shape(
                     "opf.meta.scheme_value_list",
                     vec![scheme.to_string()],
                 );
+            } else if is_epub3 && scheme.contains(':') && !is_well_formed_ncname_or_prefixed(scheme)
+            {
+                // `scheme="xsd:"`: OPF-026, as for `property` — same parser.
+                report.push_at_pos(
+                    OPF_026,
+                    Severity::Error,
+                    format!("meta scheme '{scheme}' is not well-formed"),
+                    opf_path,
+                    Position::of(n),
+                );
             } else if is_epub3 && !scheme.is_empty() && !scheme.contains(':') {
                 report.push_node_attr(
                     OPF_027,
@@ -2538,7 +2548,13 @@ fn check_prefix_declaration(
         // EPUB 3 only, measured: a downgraded copy of epubcheck's own
         // `deprecated-prefix-declaration-used-warning.opf` draws nothing
         // there. The reserved-prefix mechanism is EPUB 3's.
-        if is_epub3 && DEPRECATED_PREFIXES_34.contains(&name.as_str()) {
+        // Only where the prefix is reserved: epubcheck's condition is
+        // `predefined.containsKey(prefix) && …isDeprecated`, so declaring
+        // `msv` in a package document (where it is not reserved) says nothing.
+        if is_epub3
+            && DEPRECATED_PREFIXES_34.contains(&name.as_str())
+            && context.reserved().iter().any(|(n, _)| n == name)
+        {
             report.push_node_attr(
                 OPF_086C,
                 Severity::Warning,
@@ -2561,11 +2577,29 @@ fn check_prefix_declaration(
 fn check_prefix_usage(
     text: &str,
     declared: &HashMap<String, String>,
+    ctx: PrefixContext,
     path: &str,
     node: roxmltree::Node,
     is_epub3: bool,
     report: &mut Report,
 ) {
+    // **The context's own reserved prefixes, not the union.** epubcheck looks
+    // the prefix up in the vocab map its `parsePrefixDeclaration` built for
+    // *this* document, so `msv:`/`prism:` in a package document and `xsd:`,
+    // `dcterms:`, `a11y:` or `marc:` in a content document are undeclared —
+    // OPF-028, an error — where the union let them through as reserved (and
+    // called the deprecated ones OPF-086c, a warning). Measured against 5.4.0
+    // in both documents; the overlay context follows the same code there.
+    //
+    // **EPUB 3 only, the whole of it.** epubcheck's EPUB 2 handlers never
+    // parse a vocabulary, so an EPUB 2 `epub:type="foo:x"` is the schema's
+    // RSC-005 alone there; OPF-028 used to ride along here (measured, one
+    // book per prefix).
+    if !is_epub3 {
+        return;
+    }
+    let reserved = ctx.reserved();
+    let is_reserved = |p: &str| reserved.iter().any(|(n, _)| *n == p);
     for tok in text.split_whitespace() {
         let Some((prefix, local)) = tok.split_once(':') else {
             continue;
@@ -2588,7 +2622,7 @@ fn check_prefix_usage(
         // declares the prefix — and a book that declares *and* uses one gets
         // two findings, one per site. Measured against 5.4.0 on its own
         // `deprecated-prefix-declaration-used-warning` fixture.
-        if is_epub3 && DEPRECATED_PREFIXES_34.contains(&prefix) {
+        if is_epub3 && DEPRECATED_PREFIXES_34.contains(&prefix) && is_reserved(prefix) {
             report.push_full(
                 OPF_086C,
                 Severity::Warning,
@@ -2599,7 +2633,7 @@ fn check_prefix_usage(
                 vec![prefix.to_string()],
             );
         }
-        if prefix.is_empty() || RESERVED_PREFIXES_ANY.iter().any(|(n, _)| *n == prefix) {
+        if prefix.is_empty() || is_reserved(prefix) {
             continue;
         }
         if declared.contains_key(prefix) {
@@ -4437,10 +4471,46 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         .unwrap_or_default();
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(v) = n.attr_no_ns("property") {
-            check_prefix_usage(v, &declared_prefixes, opf_path, n, is_epub3, report);
+            check_prefix_usage(
+                v,
+                &declared_prefixes,
+                PrefixContext::Package,
+                opf_path,
+                n,
+                is_epub3,
+                report,
+            );
         }
         if let Some(v) = n.attr_no_ns("properties") {
-            check_prefix_usage(v, &declared_prefixes, opf_path, n, is_epub3, report);
+            check_prefix_usage(
+                v,
+                &declared_prefixes,
+                PrefixContext::Package,
+                opf_path,
+                n,
+                is_epub3,
+                report,
+            );
+        }
+        // `<meta scheme>` goes through the same parser there
+        // (`OPFHandler30`:608, after the OPF 2 `name` form has returned), so
+        // `scheme="xsd:string"` is OPF-086c and `scheme="foo:x"` OPF-028 — the
+        // five books of a 2,798-book library that drew OPF-086c from 5.4.0
+        // and nothing from us all carried the first.
+        if n.tag_name().name() == "meta"
+            && n.tag_name().namespace() == Some(OPF_PKG_NS)
+            && n.attr_no_ns("name").is_none()
+            && let Some(v) = n.attr_no_ns("scheme")
+        {
+            check_prefix_usage(
+                v,
+                &declared_prefixes,
+                PrefixContext::Package,
+                opf_path,
+                n,
+                is_epub3,
+                report,
+            );
         }
     }
 
@@ -7712,7 +7782,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         check_prefix_placement(&d, &path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                check_prefix_usage(v, &declared_prefixes, &path, n, is_epub3, report);
+                check_prefix_usage(
+                    v,
+                    &declared_prefixes,
+                    PrefixContext::ContentDocument,
+                    &path,
+                    n,
+                    is_epub3,
+                    report,
+                );
             }
         }
 
@@ -10871,7 +10949,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         check_prefix_placement(&d, doc_path, report);
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                check_prefix_usage(v, &declared_prefixes, doc_path, n, is_epub3, report);
+                check_prefix_usage(
+                    v,
+                    &declared_prefixes,
+                    PrefixContext::ContentDocument,
+                    doc_path,
+                    n,
+                    is_epub3,
+                    report,
+                );
             }
         }
         // A standalone SVG has no XHTML href walk, so its remote references
@@ -11904,7 +11990,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             check_prefix_placement(&smil_doc, &path, report);
             for n in smil_doc.descendants().filter(|n| n.is_element()) {
                 if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
-                    check_prefix_usage(v, &declared_prefixes, &path, n, is_epub3, report);
+                    check_prefix_usage(
+                        v,
+                        &declared_prefixes,
+                        PrefixContext::Overlay,
+                        &path,
+                        n,
+                        is_epub3,
+                        report,
+                    );
                 }
             }
         }
@@ -24099,6 +24193,75 @@ mod tests {
         );
     }
 
+    /// A prefix is reserved *per document type*, and `<meta scheme>` is a
+    /// prefix use. Each row measured against 5.4.0: `msv:`/`prism:` in a
+    /// package and `xsd:`/`dcterms:` in a content document are undeclared
+    /// (OPF-028, an error); `scheme="xsd:string"` is OPF-086c.
+    #[test]
+    fn reserved_prefixes_are_per_context_and_scheme_is_a_use() {
+        let pkg = |meta: &str| -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">u</dc:identifier><dc:title>t</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>{meta}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            const CH: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body><p>x</p></body></html>"#;
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_opf(Some(&opf), CH))
+                .messages
+                .iter()
+                .filter(|m| m.id.starts_with("OPF-02") || m.id.starts_with("OPF-086"))
+                .map(|m| m.id)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        use crate::ids::{OPF_026, OPF_027, OPF_028, OPF_086C};
+        assert_eq!(pkg(r#"<meta property="msv:x">y</meta>"#), vec![OPF_028]);
+        assert_eq!(pkg(r#"<meta property="prism:x">y</meta>"#), vec![OPF_028]);
+        assert_eq!(pkg(r#"<meta property="xsd:x">y</meta>"#), vec![OPF_086C]);
+        let scheme = |v: &str| {
+            pkg(&format!(
+                r##"<meta refines="#uid" property="identifier-type" scheme="{v}">y</meta>"##
+            ))
+        };
+        assert_eq!(scheme("xsd:string"), vec![OPF_086C]);
+        assert_eq!(scheme("onix:codelist5"), Vec::<&str>::new());
+        assert_eq!(scheme("foo:bar"), vec![OPF_028]);
+        assert_eq!(scheme("msv:x"), vec![OPF_028]);
+        assert_eq!(scheme("xsd:"), vec![OPF_026]);
+        assert_eq!(scheme("ISBN"), vec![OPF_027]);
+
+        let doc = |prefix: &str| -> Vec<&'static str> {
+            let ch = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>c</title></head><body><section epub:type="{prefix}:x"><p>x</p></section></body></html>"#
+            );
+            let mut v: Vec<&'static str> = crate::validate_bytes(epub_with_opf(None, &ch))
+                .messages
+                .iter()
+                .filter(|m| m.id.starts_with("OPF-02") || m.id.starts_with("OPF-086"))
+                .map(|m| m.id)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(doc("msv"), vec![OPF_086C]);
+        assert_eq!(doc("prism"), vec![OPF_086C]);
+        for undeclared in ["xsd", "dcterms", "a11y", "marc", "foo"] {
+            assert_eq!(doc(undeclared), vec![OPF_028], "{undeclared}");
+        }
+    }
+
     /// The two EPUB 3.4 deprecations that graduated when epubcheck 5.4.0
     /// shipped w3c/epubcheck#1649: `rendition:align-x-center` as `OPF-086`
     /// and the `xsd`/`msv`/`prism` reserved prefixes as `OPF-086c`, both
@@ -24153,15 +24316,23 @@ mod tests {
             vec![crate::ids::OPF_086],
             "align-x-center is a plain warning now, flag or no flag"
         );
-        for prefix in ["xsd", "msv", "prism"] {
+        // Only where the prefix is reserved. `xsd` is a package prefix;
+        // `msv` and `prism` are content-document ones, so declaring them on
+        // a package draws nothing from 5.4.0 — measured, one book each, and
+        // this test used to assert the opposite without having asked.
+        for (prefix, want) in [
+            ("xsd", vec![crate::ids::OPF_086C]),
+            ("msv", vec![]),
+            ("prism", vec![]),
+        ] {
             assert_eq!(
                 ids(
                     &format!(r#" prefix="{prefix}: http://example.org/{prefix}#""#),
                     "",
                     false
                 ),
-                vec![crate::ids::OPF_086C],
-                "{prefix} is deprecated and reported unflagged"
+                want,
+                "{prefix} declared on a package"
             );
         }
         // A reserved prefix 3.4 leaves alone stays quiet, which is what makes
