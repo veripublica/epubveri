@@ -344,6 +344,7 @@ pub(crate) fn check(
                         css,
                         css_path,
                         origin,
+                        advisory,
                         is_epub3,
                         report,
                     );
@@ -364,17 +365,15 @@ pub(crate) fn check(
     // rule block is parsed as raw component values; the declaration split
     // happens in `check_declaration_shapes_spanned` below, which still emits
     // its own CSS-008 for those).
-    for e in collapse_selector_errors(&syntax_errs, &sheet.rules) {
-        report.push_full(
-            CSS_008,
-            Severity::Error,
-            "CSS syntax error",
-            css_path,
-            origin.position(css, e.span.start),
-            syntax_error_slug(e.kind),
-            Vec::new(),
-        );
-    }
+    report_syntax_errors(
+        collapse_selector_errors(&syntax_errs, &sheet.rules),
+        &sheet.rules,
+        css,
+        css_path,
+        origin,
+        advisory,
+        report,
+    );
     for u in urls {
         let url = u.node;
         let pos = origin.position(css, u.span.start);
@@ -704,6 +703,166 @@ fn collapse_selector_errors<'a>(
     out
 }
 
+/// Report styloria's syntax errors as CSS-008 — except a selector whose only
+/// fault is a class name that is not a CSS identifier (`.-`, `.-1`).
+///
+/// **The verdict there is epubcheck's.** Its scanner reads `.` followed by
+/// any CSS 2.1 `{name}` as a class (`CssScanner._classname`), so `span.-`
+/// passes; Selectors, CSS 2.1 and every browser want an *identifier*, which
+/// `-` and `-1` are not, and drop the whole rule. The spec is on our side and
+/// the verdict is not ours to move, so the finding becomes ADV-012 behind
+/// `--advisory` — a reader's 2,798-book library had one book flip on it.
+///
+/// "Only fault" is tested, not assumed: the prelude is re-validated with
+/// each such class name swapped for a placeholder identifier, and anything
+/// still wrong keeps its CSS-008.
+fn report_syntax_errors(
+    errors: Vec<&spanned::SyntaxError>,
+    rules: &[Spanned<spanned::Rule>],
+    css: &str,
+    css_path: &str,
+    origin: CssOrigin,
+    advisory: bool,
+    report: &mut Report,
+) {
+    for e in errors {
+        let classes = (e.kind == spanned::SyntaxErrorKind::InvalidSelector)
+            .then(|| epubcheck_only_class_names(css, rules, e.span.start))
+            .flatten();
+        let Some(classes) = classes else {
+            report.push_full(
+                CSS_008,
+                Severity::Error,
+                "CSS syntax error",
+                css_path,
+                origin.position(css, e.span.start),
+                syntax_error_slug(e.kind),
+                Vec::new(),
+            );
+            continue;
+        };
+        if !advisory {
+            continue;
+        }
+        for (start, end) in classes {
+            let class = &css[start..end];
+            report.push_full(
+                ADV_012,
+                Severity::Usage,
+                format!(
+                    "'{class}' is not a class selector: a class name must be a CSS \
+                     identifier, so browsers ignore this whole rule"
+                ),
+                css_path,
+                origin.position(css, start),
+                "css.selector.class_not_identifier",
+                vec![class.to_string()],
+            );
+        }
+    }
+}
+
+/// The class names epubcheck accepts and CSS does not in the selector of the
+/// rule holding `offset`, as byte ranges of `css` (dot included) — or `None`
+/// when there are none, or when the selector is still invalid without them.
+fn epubcheck_only_class_names(
+    css: &str,
+    rules: &[Spanned<spanned::Rule>],
+    offset: usize,
+) -> Option<Vec<(usize, usize)>> {
+    let q = rules.iter().find_map(|r| match &r.node {
+        spanned::Rule::Qualified(q) if r.span.start <= offset && offset < r.span.end => Some(q),
+        _ => None,
+    })?;
+    let start = q.prelude.first()?.span.start;
+    let end = q.prelude.last()?.span.end;
+    let prelude = css.get(start..end)?;
+    let (relaxed, found) = relax_class_names(prelude);
+    if found.is_empty() {
+        return None;
+    }
+    let (_, errors) = spanned::parse_stylesheet_with_errors(&format!("{relaxed}{{}}"));
+    errors.is_empty().then(|| {
+        found
+            .into_iter()
+            .map(|(s, e)| (start + s, start + e))
+            .collect()
+    })
+}
+
+/// `prelude` with every class name epubcheck's scanner accepts but CSS does
+/// not replaced by a same-length placeholder identifier, and where each was.
+///
+/// epubcheck's rule, from `CssScanner`: a `.` starts a class when the next
+/// character is a `{nmchar}` (`[_a-zA-Z0-9-]` or non-ASCII) — unless it is a
+/// digit, which makes the `.` part of a number (`.5`), as does a run of
+/// digits before it (`2.5`). The class then runs over every `{nmchar}`.
+/// Strings, comments and attribute brackets are skipped, and a class name
+/// with an escape in it is left alone (it would take CSS's escape rules to
+/// judge, and no book has needed that).
+fn relax_class_names(prelude: &str) -> (String, Vec<(usize, usize)>) {
+    fn nmchar(c: char) -> bool {
+        c.is_ascii_alphanumeric() || c == '_' || c == '-' || !c.is_ascii()
+    }
+    fn is_ident(name: &str) -> bool {
+        let mut cs = name.chars();
+        let start = |c: char| c.is_ascii_alphabetic() || c == '_' || !c.is_ascii();
+        match (cs.next(), cs.next()) {
+            (Some('-'), Some(c)) => c == '-' || start(c),
+            (Some(c), _) => start(c),
+            (None, _) => false,
+        }
+    }
+    let mut out = prelude.to_string();
+    let mut found = Vec::new();
+    let b = prelude.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' { 2 } else { 1 };
+                }
+                i += 1;
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                i = prelude[i + 2..]
+                    .find("*/")
+                    .map_or(b.len(), |p| i + 2 + p + 2);
+            }
+            b'[' => i = prelude[i..].find(']').map_or(b.len(), |p| i + p + 1),
+            b'.' => {
+                let before = prelude[..i]
+                    .chars()
+                    .rev()
+                    .take_while(|c| nmchar(*c))
+                    .collect::<String>();
+                let is_number = !before.is_empty() && before.bytes().all(|c| c.is_ascii_digit());
+                let name_len: usize = prelude[i + 1..]
+                    .chars()
+                    .take_while(|c| nmchar(*c))
+                    .map(char::len_utf8)
+                    .sum();
+                let name = &prelude[i + 1..i + 1 + name_len];
+                let escaped = prelude[i + 1 + name_len..].starts_with('\\');
+                if !is_number
+                    && !name.is_empty()
+                    && !name.starts_with(|c: char| c.is_ascii_digit())
+                    && !escaped
+                    && !is_ident(name)
+                {
+                    out.replace_range(i + 1..i + 1 + name_len, &"x".repeat(name_len));
+                    found.push((i, i + 1 + name_len));
+                }
+                i += 1 + name_len;
+            }
+            _ => i += 1,
+        }
+    }
+    (out, found)
+}
+
 /// The `rule` slug for one of styloria's syntax errors. Every one of them is
 /// CSS-008 to epubcheck; the slug is where a consumer can tell them apart.
 ///
@@ -776,12 +935,14 @@ fn is_blank_component(v: &spanned::ComponentValue) -> bool {
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_at_rule_block_spanned(
     name: &str,
     block_values: &[Spanned<spanned::ComponentValue>],
     css: &str,
     css_path: &str,
     origin: CssOrigin,
+    advisory: bool,
     is_epub3: bool,
     report: &mut Report,
 ) {
@@ -804,17 +965,15 @@ fn check_at_rule_block_spanned(
             );
         }
         styloria::BlockContents::Rules(rules) => {
-            for e in collapse_selector_errors(&errors, &rules) {
-                report.push_full(
-                    CSS_008,
-                    Severity::Error,
-                    "CSS syntax error",
-                    css_path,
-                    origin.position(css, e.span.start),
-                    syntax_error_slug(e.kind),
-                    Vec::new(),
-                );
-            }
+            report_syntax_errors(
+                collapse_selector_errors(&errors, &rules),
+                &rules,
+                css,
+                css_path,
+                origin,
+                advisory,
+                report,
+            );
             for r in &rules {
                 match &r.node {
                     spanned::Rule::Qualified(q) => {
@@ -852,6 +1011,7 @@ fn check_at_rule_block_spanned(
                             css,
                             css_path,
                             origin,
+                            advisory,
                             is_epub3,
                             report,
                         );
@@ -1687,6 +1847,69 @@ mod tests {
             &mut report,
         );
         report.messages.iter().map(|m| m.id).collect()
+    }
+
+    /// A class name epubcheck's scanner accepts and CSS does not (`.-`,
+    /// `.-1`) is not CSS-008: the verdict follows epubcheck. With
+    /// `--advisory` it is ADV-012, since browsers drop the rule. Anything
+    /// else wrong with the same selector keeps its CSS-008.
+    #[test]
+    fn a_class_name_that_is_not_an_identifier_is_adv_012_not_css_008() {
+        let idx = empty_index();
+        for css in [
+            "span.- { color: red }",
+            "span.-1 { color: red }",
+            ".- { color: red }",
+            "span.- , p { color: red }",
+            "h1.-.x { color: red }",
+            "@media all { span.- { color: red } }",
+        ] {
+            assert!(!run(css, &idx).contains(&CSS_008), "{css}");
+            let r = run_advisory(css);
+            let adv: Vec<_> = r.messages.iter().filter(|m| m.id == ADV_012).collect();
+            assert_eq!(adv.len(), 1, "{css}: {:?}", r.messages);
+            assert_eq!(adv[0].severity, Severity::Usage);
+            assert_eq!(adv[0].rule, Some("css.selector.class_not_identifier"));
+            assert!(adv[0].params[0].starts_with(".-"), "{css}");
+            assert!(!r.messages.iter().any(|m| m.id == CSS_008), "{css}");
+        }
+        // epubcheck rejects these too, so they stay CSS-008, with no advisory.
+        for css in [
+            "span.1 { color: red }",
+            "span. { color: red }",
+            "span.- > > p { color: red }",
+        ] {
+            assert!(run(css, &idx).contains(&CSS_008), "{css}");
+            assert!(
+                !run_advisory(css).messages.iter().any(|m| m.id == ADV_012),
+                "{css}"
+            );
+        }
+        // Identifiers are untouched either way.
+        for css in [
+            "span.-x { color: red }",
+            "span.-- { color: red }",
+            "p.x- { }",
+        ] {
+            assert!(!run(css, &idx).contains(&CSS_008), "{css}");
+            assert!(
+                !run_advisory(css).messages.iter().any(|m| m.id == ADV_012),
+                "{css}"
+            );
+        }
+    }
+
+    #[test]
+    fn relax_class_names_follows_epubcheck_scanner() {
+        let found = |p: &str| super::relax_class_names(p).1;
+        assert_eq!(found("span.-"), vec![(4, 6)]);
+        assert_eq!(super::relax_class_names("h1.-1 a").0, "h1.xx a");
+        assert!(found("span.x").is_empty());
+        assert!(found("span.-x").is_empty());
+        assert!(found(".1").is_empty()); // a number to epubcheck
+        assert!(found("[title='.-']").is_empty());
+        assert!(found("/* .- */ p").is_empty());
+        assert!(found("p.-\\31").is_empty()); // escapes are left alone
     }
 
     fn empty_index() -> HashMap<String, String> {

@@ -201,6 +201,10 @@ pub const ADV_010: &str = "ADV-010"; // an EPUB 2 manifest resource nothing refe
 // points at it, so the finding is always true and never a verdict. It will not
 // graduate — epubcheck's leniency is long-standing, not a gap it is closing.
 pub const ADV_011: &str = "ADV-011"; // dc:date epubcheck accepts but W3C-DTF does not (usage, 2,798-book report)
+// ADV-012 is the same shape in CSS: epubcheck's scanner takes `.` plus any
+// CSS 2.1 {name} as a class, so `span.-` passes there, while a class name has
+// to be an identifier and browsers drop the rule. CSS-008 follows epubcheck.
+pub const ADV_012: &str = "ADV-012"; // a class selector whose name is not a CSS identifier (usage, 2,798-book report)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

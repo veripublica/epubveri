@@ -28,6 +28,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     catch, print a stack trace, and report **no messages at all**. That is not
     a verdict to copy; the value is not a date, and we keep saying so.
 
+- **A class name that is not a CSS identifier is no longer `CSS-008`.**
+  `span.-` and `span.-1` are not class selectors — a class name has to be an
+  identifier, and browsers drop the whole rule — but epubcheck's scanner reads
+  `.` followed by any CSS 2.1 name as a class and accepts them. One book in
+  the same 2,798-book library changed verdict on it (Mockingbird). The verdict
+  now follows epubcheck, checked against 5.4.0 on 18 selectors in both
+  versions; a selector with anything else wrong keeps its CSS-008.
+
 ### Added
 
 - **`ADV-011` (with `--advisory`): a `dc:date` epubcheck accepts that is not
@@ -39,6 +47,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   rather than "no specification says anything", because this one is
   recommended; the `advisory_basis` token stays `spec-silent`, which is what
   a consumer routes on — ours for good, not temporary.
+- **`ADV-012` (with `--advisory`): a class selector whose name is not a CSS
+  identifier** (`.-`, `.-1`), the other half of the fix above. The message
+  says what is true in every case: browsers ignore that whole rule — which,
+  in `span.- , p`, includes the `p`.
 
 ## [0.15.1] - 2026-09-17
 

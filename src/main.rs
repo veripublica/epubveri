@@ -79,7 +79,10 @@ OPTIONS:
                                      applies or loads (epubcheck asks this
                                      of EPUB 3 books only, as OPF-097), a
                                      dc:date epubcheck accepts that is not
-                                     in the W3C date format the specs name.
+                                     in the W3C date format the specs name,
+                                     a class selector like .- whose name is
+                                     not a CSS identifier (browsers drop the
+                                     rule; epubcheck accepts it).
                            Off by default; neither ever affects the verdict or
                            the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
@@ -907,7 +910,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            7,
+            8,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );
