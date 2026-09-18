@@ -36,6 +36,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   now follows epubcheck, checked against 5.4.0 on 18 selectors in both
   versions; a selector with anything else wrong keeps its CSS-008.
 
+- **A manifest line written twice is no longer `OPF-074` as well.** The same
+  `<item>` — same id, same href — twice is one mistake, and the duplicate id
+  already reports it (`RSC-005`). epubcheck keys manifest items by id and a
+  repeated id replaces the earlier item, so no second item is left to collide
+  with and it never says OPF-074; two *different* ids for one file still do,
+  in both tools. 4 books in the same 2,798-book library; checked against
+  5.4.0 on 10 manifests in both versions.
+
 ### Added
 
 - **`ADV-011` (with `--advisory`): a `dc:date` epubcheck accepts that is not

@@ -5719,8 +5719,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         Position::of(item),
                     );
                 }
-                if let Some(first_id) = resource_seen.get(&resolved_nfc) {
-                    report.push_at_pos(
+                // A manifest line written twice — same id, same href — is one
+                // fault, and the duplicate id already reports it (RSC-005).
+                // epubcheck keys its items by id and a repeated id *replaces*
+                // the earlier item (`OPFHandler.itemBuilders`), so no second
+                // item remains to collide with and OPF-074 never fires there.
+                // Counting it again here was the "OPF-074 as well" row of a
+                // 2,798-book library (4 books).
+                match resource_seen.get(&resolved_nfc) {
+                    Some(first_id) if first_id != id => report.push_at_pos(
                         OPF_074,
                         Severity::Error,
                         format!(
@@ -5728,9 +5735,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         ),
                         opf_path,
                         Position::of(item),
-                    );
-                } else {
-                    resource_seen.insert(resolved_nfc.clone(), id.to_string());
+                    ),
+                    Some(_) => {}
+                    None => {
+                        resource_seen.insert(resolved_nfc.clone(), id.to_string());
+                    }
                 }
             }
             if let Some(props) = item.attr_no_ns("properties") {
@@ -23018,6 +23027,67 @@ mod tests {
         assert_eq!(ids(&r3, crate::ids::OPF_097), 1, "{:?}", r3.messages);
         assert_eq!(ids(&r3, crate::ids::ADV_010), 0, "the id must not change");
         assert_eq!(ids(&run("3.0", false, EXTRA), crate::ids::OPF_097), 1);
+    }
+
+    /// OPF-074 fires on two *items* for one resource, not on one item written
+    /// twice. epubcheck keys items by id, so a repeated id replaces the
+    /// earlier item and leaves nothing to collide; the duplicate id is
+    /// RSC-005's to report. Probed against 5.4.0 in both versions.
+    #[test]
+    fn a_manifest_line_written_twice_is_not_opf_074() {
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let run = |ver: &str, extra: &str| {
+            let (modified, nav) = if ver.starts_with('3') {
+                (
+                    "<meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>",
+                    "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>",
+                )
+            } else {
+                ("", "")
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{modified}
+  </metadata>
+  <manifest>{nav}<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>{extra}</manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH1))
+        };
+        let count =
+            |r: &crate::report::Report, id: &str| r.messages.iter().filter(|m| m.id == id).count();
+        for ver in ["2.0", "3.0"] {
+            let same = run(
+                ver,
+                r#"<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#,
+            );
+            assert_eq!(
+                count(&same, crate::ids::OPF_074),
+                0,
+                "{ver}: {:?}",
+                same.messages
+            );
+            assert!(
+                count(&same, crate::ids::RSC_005) > 0,
+                "{ver}: the duplicate id is still reported"
+            );
+            let other = run(
+                ver,
+                r#"<item id="ch1b" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#,
+            );
+            assert_eq!(
+                count(&other, crate::ids::OPF_074),
+                1,
+                "{ver}: {:?}",
+                other.messages
+            );
+        }
     }
 
     /// ADV-011: a `dc:date` epubcheck accepts and W3C-DTF does not. The
