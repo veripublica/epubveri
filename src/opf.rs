@@ -1616,6 +1616,225 @@ fn is_wcdtf_time_with_tz(s: &str) -> bool {
     }
 }
 
+/// Whether epubcheck accepts a `dc:date` value — the test OPF-053 (EPUB 3)
+/// and OPF-054 (EPUB 2) fire on. **The verdict is epubcheck's, so this is a
+/// port, not a reading of the spec**: `util/DateParser.java` (unchanged
+/// through 5.4.0) plus the four-digit-year check `OPFHandler` runs after it.
+///
+/// It is looser than W3C-DTF in ways a 2,798-book library showed are real:
+/// a time with no timezone (`2010-01-01T00:00:00`), one-digit months and
+/// days (`2010-1-1`), a year under four digits, an hour with no minutes. And
+/// stricter in one: it checks the date exists, so `2010-02-30` fails where
+/// [`is_valid_dc_date`]'s day range lets it through. What it accepts and
+/// W3C-DTF does not is ADV-011's business, behind `--advisory`.
+///
+/// Quirks kept on purpose, because each one moves a verdict:
+/// - Java's `trim()` strips only `<= U+0020`, so a trailing no-break space is
+///   part of the value and fails it.
+/// - Tokens after a numeric offset are never read: `…+01:00-05` passes.
+/// - A non-zero offset is applied with `Calendar.add` *before* the calendar
+///   turns strict, and `add` normalises every field, so `2010-13-01T00:00+01:00`
+///   passes while the same date with `Z` fails.
+///
+/// Two known gaps, neither seen in a real book: `Integer.parseInt` also takes
+/// non-ASCII decimal digits (this refuses them), and the year check formats
+/// in the JVM's default timezone (this assumes UTC).
+fn epubcheck_accepts_dc_date(raw: &str) -> bool {
+    let s = raw.trim_matches(|c: char| c <= ' ');
+    let mut toks = Vec::new();
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        if "-T:.+Z".contains(c) {
+            if start < i {
+                toks.push(&s[start..i]);
+            }
+            toks.push(&s[i..i + 1]);
+            start = i + 1;
+        }
+    }
+    if start < s.len() {
+        toks.push(&s[start..]);
+    }
+    parse_epubcheck_date(&toks).is_some_and(|d| d.is_accepted())
+}
+
+/// The fields `DateParser.getCalendar` sets, with its defaults for the ones
+/// it does not reach. Month is 0-based, as `Calendar.MONTH` is.
+struct EpubcheckDate {
+    year: i64,
+    month: i64,
+    day: i64,
+    hour: i64,
+    minute: i64,
+    second: i64,
+    milli: i64,
+    /// Minutes to add to reach UTC; non-zero means `Calendar.add` ran.
+    offset: i64,
+}
+
+/// `getCalendar`, token for token. `None` is an `InvalidDateException` — or
+/// the `NoSuchElementException` a trailing `.` throws (`…T10:00:00.`), which
+/// nothing catches: epubcheck 5.4.0 prints a stack trace and then reports
+/// **no messages at all**, so the book "passes". That is epubcheck failing,
+/// not a verdict to copy; the value is not a date and we say so.
+fn parse_epubcheck_date(toks: &[&str]) -> Option<EpubcheckDate> {
+    // Integer.parseInt: digits only here, since every sign is a delimiter.
+    fn int(t: &str) -> Option<i64> {
+        if t.is_empty() || !t.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        t.parse::<i64>().ok().filter(|v| *v <= i64::from(i32::MAX))
+    }
+    // checkValueAndNext: Some(false) when nothing is left, None when the
+    // delimiter is wrong or nothing follows it.
+    fn next_is<'a>(
+        it: &mut std::iter::Peekable<impl Iterator<Item = &'a str>>,
+        want: &str,
+    ) -> Option<bool> {
+        match it.next() {
+            None => Some(false),
+            Some(t) if t != want => None,
+            Some(_) => it.peek().map(|_| true),
+        }
+    }
+    let mut it = toks.iter().copied().peekable();
+
+    let mut d = EpubcheckDate {
+        year: int(it.next()?)?,
+        month: 0,
+        day: 1,
+        hour: 0,
+        minute: 0,
+        second: 0,
+        milli: 0,
+        offset: 0,
+    };
+    if !next_is(&mut it, "-")? {
+        return Some(d);
+    }
+    d.month = int(it.next()?)? - 1;
+    if !next_is(&mut it, "-")? {
+        return Some(d);
+    }
+    d.day = int(it.next()?)?;
+    if !next_is(&mut it, "T")? {
+        return Some(d);
+    }
+    d.hour = int(it.next()?)?;
+    if !next_is(&mut it, ":")? {
+        return Some(d);
+    }
+    d.minute = int(it.next()?)?;
+    let Some(mut tok) = it.next() else {
+        return Some(d);
+    };
+    if tok == ":" {
+        d.second = int(it.next()?)?;
+        let Some(t) = it.next() else {
+            return Some(d);
+        };
+        tok = t;
+        if tok == "." {
+            let frac: Vec<char> = it.next()?.chars().collect();
+            if frac.iter().skip(3).any(|c| !c.is_ascii_digit()) {
+                return None;
+            }
+            let mut ms: String = frac.iter().take(3).collect();
+            while ms.chars().count() < 3 {
+                ms.push('0');
+            }
+            d.milli = int(&ms)?;
+            let Some(t) = it.next() else {
+                return Some(d);
+            };
+            tok = t;
+        }
+    }
+    if tok == "Z" {
+        return if it.next().is_some() { None } else { Some(d) };
+    }
+    if tok != "+" && tok != "-" {
+        return None;
+    }
+    let hours = int(it.next()?)?;
+    if !next_is(&mut it, ":")? {
+        return None;
+    }
+    let minutes = int(it.next()?)?;
+    let sign = if tok == "+" { -1 } else { 1 };
+    d.offset = sign * (hours * 60 + minutes);
+    Some(d)
+}
+
+impl EpubcheckDate {
+    /// `calendar.setLenient(false); calendar.getTime()`, then the year check.
+    fn is_accepted(&self) -> bool {
+        if self.offset != 0 {
+            // `Calendar.add` ran in lenient mode and normalised every field;
+            // only the year check can still refuse.
+            let days = civil_to_days(self.year, self.month, 1) + self.day - 1;
+            let minutes = days * 1440
+                + self.hour * 60
+                + self.minute
+                + self.offset
+                + (self.second + self.milli / 1000) / 60;
+            let year = days_to_year(minutes.div_euclid(1440));
+            let era_year = if year <= 0 { 1 - year } else { year };
+            return era_year <= 9999;
+        }
+        (1..=9999).contains(&self.year)
+            && (0..=11).contains(&self.month)
+            && (1..=hybrid_month_len(self.year, self.month)).contains(&self.day)
+            && !(self.year == 1582 && self.month == 9 && (5..=14).contains(&self.day))
+            && (0..=23).contains(&self.hour)
+            && (0..=59).contains(&self.minute)
+            && (0..=59).contains(&self.second)
+            && (0..=999).contains(&self.milli)
+    }
+}
+
+/// Days in a month of `GregorianCalendar`'s default calendar: Julian leap
+/// years before the October 1582 cutover, Gregorian after it.
+fn hybrid_month_len(year: i64, month0: i64) -> i64 {
+    let julian = year < 1582 || (year == 1582 && month0 < 9);
+    let leap = if julian {
+        year % 4 == 0
+    } else {
+        (year % 4 == 0 && year % 100 != 0) || year % 400 == 0
+    };
+    match month0 {
+        1 if leap => 29,
+        1 => 28,
+        3 | 5 | 8 | 10 => 30,
+        _ => 31,
+    }
+}
+
+/// Proleptic-Gregorian day number of a (possibly out-of-range) month. Only
+/// the year of the result matters here, and only near year 10000 or year 1.
+fn civil_to_days(year: i64, month0: i64, day: i64) -> i64 {
+    let y = year + month0.div_euclid(12);
+    let m = month0.rem_euclid(12) + 1;
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe
+}
+
+fn days_to_year(days: i64) -> i64 {
+    let era = days.div_euclid(146097);
+    let doe = days - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400;
+    if m <= 2 { y + 1 } else { y }
+}
+
 /// `dcterms:modified` must be exactly `CCYY-MM-DDThh:mm:ssZ` (fixed
 /// width, literal `T`/`Z`, no fractional seconds or numeric timezone
 /// offset - confirmed via a real fixture using a bare date with no time
@@ -4904,32 +5123,53 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .filter(|t| t.is_text())
                 .filter_map(|t| t.text())
                 .collect();
-            if !is_valid_dc_date(text.trim()) {
-                if is_epub3 {
+            if epubcheck_accepts_dc_date(&text) {
+                // epubcheck's verdict is "fine"; W3C-DTF may still disagree,
+                // and saying so is ours to say, not its.
+                let value = text.trim();
+                if advisory && !is_valid_dc_date(value) {
+                    let spec = if is_epub3 {
+                        "EPUB 3 recommends"
+                    } else {
+                        "the EPUB 2 package specification defines"
+                    };
                     report.push_full(
-                        OPF_053,
-                        Severity::Warning,
+                        ADV_011,
+                        Severity::Usage,
                         format!(
-                            "dc:date value '{}' does not follow recommended syntax",
-                            text.trim()
+                            "dc:date value '{value}' is not in the W3C Date and Time Formats \
+                             profile of ISO 8601 that {spec}"
                         ),
                         opf_path,
                         Position::of(n),
-                        "opf.metadata.date_syntax_not_recommended",
-                        vec![text.trim().to_string()],
-                    );
-                } else {
-                    report.push_at_pos(
-                        OPF_054,
-                        Severity::Error,
-                        format!(
-                            "dc:date value '{}' is empty or doesn't conform to ISO 8601",
-                            text.trim()
-                        ),
-                        opf_path,
-                        Position::of(n),
+                        "opf.metadata.date_not_w3cdtf",
+                        vec![value.to_string()],
                     );
                 }
+            } else if is_epub3 {
+                report.push_full(
+                    OPF_053,
+                    Severity::Warning,
+                    format!(
+                        "dc:date value '{}' does not follow recommended syntax",
+                        text.trim()
+                    ),
+                    opf_path,
+                    Position::of(n),
+                    "opf.metadata.date_syntax_not_recommended",
+                    vec![text.trim().to_string()],
+                );
+            } else {
+                report.push_at_pos(
+                    OPF_054,
+                    Severity::Error,
+                    format!(
+                        "dc:date value '{}' is empty or doesn't conform to ISO 8601",
+                        text.trim()
+                    ),
+                    opf_path,
+                    Position::of(n),
+                );
             }
         }
         // OPF-072 (usage, EPUB 2 only): a `dc:*` metadata element with no
@@ -13191,6 +13431,48 @@ mod tests {
         assert!(!is_valid_dc_date("2025-04-24T25:00:00Z")); // hour 25
         assert!(!is_valid_dc_date("2025-04-24T17:00:00")); // missing timezone
         assert!(!is_valid_dc_date("2025-04-24T17:00:00X")); // bad timezone
+    }
+
+    /// OPF-053/054 follow epubcheck's `DateParser`, not W3C-DTF. Each case
+    /// below is a branch of the Java, and the first group is what a
+    /// 2,798-book library found we rejected and epubcheck did not.
+    #[test]
+    fn dc_date_verdict_follows_epubcheck_dateparser() {
+        use super::epubcheck_accepts_dc_date as ok;
+        // Looser than W3C-DTF.
+        assert!(ok("2010-01-01T00:00:00")); // no timezone
+        assert!(ok("2010-1-1")); // one-digit month and day
+        assert!(ok("10")); // a two-digit year
+        assert!(ok("2010-01-01T10")); // an hour with no minutes
+        assert!(ok("2010-01-01T10:00+01:00-05")); // tokens after the offset
+        assert!(ok("2010-13-01T00:00+01:00")); // normalised by Calendar.add
+        assert!(ok(" 2010-05-04\n")); // Java trim
+        assert!(ok("1500-02-29")); // Julian leap year before the cutover
+        // The W3C-DTF forms, still accepted.
+        assert!(ok("2011"));
+        assert!(ok("2011-05-04"));
+        assert!(ok("2025-04-24T17:00:00Z"));
+        assert!(ok("2025-04-24T17:00:00.5Z"));
+        assert!(ok("2025-04-24T17:00:00.1234Z"));
+        assert!(ok("2025-04-24T17:00:00-05:30"));
+        // Refused.
+        assert!(!ok(""));
+        assert!(!ok("   "));
+        assert!(!ok("Anno Domini Twenty"));
+        assert!(!ok("20010-11-08")); // five-digit year
+        assert!(!ok("0000")); // no year zero
+        assert!(!ok("2025-13-01")); // month 13, no offset to normalise it
+        assert!(!ok("2010-02-30")); // W3C-DTF's day range lets this through
+        assert!(!ok("2011-02-29"));
+        assert!(!ok("1582-10-10")); // the Gregorian cutover gap
+        assert!(!ok("2010-01-01T24:00Z"));
+        assert!(!ok("2010-01-01Z")); // Z where T belongs
+        assert!(!ok("2010-01-01T10:00+01")); // offset without minutes
+        assert!(!ok("2010-01-01T10:00:00.")); // epubcheck crashes here; see the fn
+        assert!(!ok("2010-01-01T10:00:00.12aZ"));
+        assert!(!ok("2010-01-01T10:00Z1"));
+        assert!(!ok("2010\u{a0}")); // Java trim keeps a no-break space
+        assert!(!ok("9999-12-31T23:00-02:00")); // the offset carries into 10000
     }
 
     /// A duplicate `id` in a content document is reported on **every**
@@ -22736,6 +23018,80 @@ mod tests {
         assert_eq!(ids(&r3, crate::ids::OPF_097), 1, "{:?}", r3.messages);
         assert_eq!(ids(&r3, crate::ids::ADV_010), 0, "the id must not change");
         assert_eq!(ids(&run("3.0", false, EXTRA), crate::ids::OPF_097), 1);
+    }
+
+    /// ADV-011: a `dc:date` epubcheck accepts and W3C-DTF does not. The
+    /// verdict is epubcheck's (no OPF-053/054), the observation is ours and
+    /// only behind the flag; a date epubcheck refuses stays OPF-053/054 and
+    /// never draws ADV-011 beside it.
+    #[test]
+    fn a_dc_date_epubcheck_accepts_but_w3cdtf_does_not_is_adv_011() {
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let run = |ver: &str, date: &str, advisory: bool| {
+            let (modified, nav) = if ver.starts_with('3') {
+                (
+                    "<meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>",
+                    "<item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>",
+                )
+            } else {
+                ("", "")
+            };
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language><dc:date>{date}</dc:date>{modified}
+  </metadata>
+  <manifest>{nav}<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let opts = crate::Options {
+                advisory,
+                ..Default::default()
+            };
+            crate::validate_bytes_with_options(epub_with_opf(Some(&opf), CH1), &opts)
+        };
+        let count =
+            |r: &crate::report::Report, id: &str| r.messages.iter().filter(|m| m.id == id).count();
+
+        for ver in ["2.0", "3.0"] {
+            // Accepted by epubcheck, not W3C-DTF: ADV-011 with the flag only,
+            // and the verdict is the same either way.
+            let on = run(ver, "2010-01-01T00:00:00", true);
+            let off = run(ver, "2010-01-01T00:00:00", false);
+            assert_eq!(
+                count(&on, crate::ids::ADV_011),
+                1,
+                "{ver}: {:?}",
+                on.messages
+            );
+            assert!(on.messages.iter().any(|m| m.id == crate::ids::ADV_011
+                && m.rule == Some("opf.metadata.date_not_w3cdtf")
+                && m.severity == crate::report::Severity::Usage));
+            assert_eq!(count(&off, crate::ids::ADV_011), 0);
+            for r in [&on, &off] {
+                assert_eq!(count(r, crate::ids::OPF_053), 0, "{ver}");
+                assert_eq!(count(r, crate::ids::OPF_054), 0, "{ver}");
+            }
+            assert_eq!(on.errors(), off.errors());
+
+            // Valid either way: nothing.
+            assert_eq!(count(&run(ver, "2010-01-01", true), crate::ids::ADV_011), 0);
+
+            // Refused by epubcheck: its id, and no advisory on top.
+            let bad = run(ver, "2010-02-30", true);
+            let want = if ver == "2.0" {
+                crate::ids::OPF_054
+            } else {
+                crate::ids::OPF_053
+            };
+            assert_eq!(count(&bad, want), 1, "{ver}: {:?}", bad.messages);
+            assert_eq!(count(&bad, crate::ids::ADV_011), 0);
+        }
     }
 
     /// A `<script src>` in an **EPUB 2** book loads its target, and ADV-010

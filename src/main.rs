@@ -69,7 +69,7 @@ OPTIONS:
                                      EPUB 3.4 rules that were here, and they
                                      now report under its own ids without
                                      this flag.
-                             ADV-*   no spec says anything, but the book is
+                             ADV-*   no spec requires it, but the book is
                                      still wrong — unknown CSS property or
                                      descriptor names, a type selector naming
                                      no known element, an EPUB 2 package
@@ -77,7 +77,9 @@ OPTIONS:
                                      entries landing on one document, an
                                      EPUB 2 manifest resource nothing draws,
                                      applies or loads (epubcheck asks this
-                                     of EPUB 3 books only, as OPF-097).
+                                     of EPUB 3 books only, as OPF-097), a
+                                     dc:date epubcheck accepts that is not
+                                     in the W3C date format the specs name.
                            Off by default; neither ever affects the verdict or
                            the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
@@ -905,7 +907,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            6,
+            7,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

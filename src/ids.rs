@@ -186,7 +186,7 @@ pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has 
 // --- ADV-*: advisory, and nobody says the book is wrong -----------------
 //
 // epubveri-owned, opt-in via --advisory, always Usage, never touches the
-// verdict. **No specification forbids these; the book is still wrong.** They
+// verdict. **No specification requires these; the book is still wrong.** They
 // never graduate: there is nobody to hand them to. See the module note.
 pub const ADV_001: &str = "ADV-001"; // a declaration uses a property CSS does not define (usage)
 pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not define (usage)
@@ -195,6 +195,12 @@ pub const ADV_003: &str = "ADV-003"; // a CSS type selector names an element no 
 pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)
 pub const ADV_009: &str = "ADV-009"; // two sibling nav entries land on one document, no fragment (usage, MobileRead #195)
 pub const ADV_010: &str = "ADV-010"; // an EPUB 2 manifest resource nothing references (usage, MobileRead #221)
+// ADV-011 is where epubcheck's verdict and the spec part ways for good: its
+// DateParser accepts dates W3C-DTF does not, OPF-053/054 follow epubcheck, and
+// the difference is reported here. EPUB 3 only *recommends* W3C-DTF and EPUB 2
+// points at it, so the finding is always true and never a verdict. It will not
+// graduate — epubcheck's leniency is long-standing, not a gap it is closing.
+pub const ADV_011: &str = "ADV-011"; // dc:date epubcheck accepts but W3C-DTF does not (usage, 2,798-book report)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //
@@ -266,8 +272,10 @@ pub enum AdvisoryBasis {
     /// default output under whatever ID epubcheck assigns, and its `ADV-*` code
     /// retires.
     SpecAhead,
-    /// **No specification says anything, but the book is still wrong.** These
-    /// never graduate; they are ours permanently. The bolder of the two claims
+    /// **No specification requires it, but the book is still wrong** — either
+    /// nothing says anything, or a specification only recommends the form the
+    /// book departs from and epubcheck's verdict is the lenient one (ADV-011).
+    /// These never graduate; they are ours permanently. The bolder of the two claims
     /// — nobody is late, we are looking where no one looks — so the bar in
     /// `CLAUDE.md` applies to them most strictly: the finding must be true
     /// every time it fires, and worded as an observation rather than a verdict.

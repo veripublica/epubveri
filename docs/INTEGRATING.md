@@ -238,8 +238,8 @@ separate them if you surface them at all. `NEXT-*` is *spec-ahead*: a published
 specification requires it and epubcheck has not implemented it yet, so it
 becomes an ordinary error the day epubcheck catches up — worth showing to
 someone preparing a book to last. `ADV-*` is *spec-silent*: no specification
-says anything, but the book is still likely wrong, and these never become
-errors. Key on the prefix, or read `data.advisory_basis`, which carries
+requires it (at most one recommends it), but the book is still likely wrong,
+and these never become errors. Key on the prefix, or read `data.advisory_basis`, which carries
 `spec-ahead` or `spec-silent` so you need not know our prefix convention at
 all.
 

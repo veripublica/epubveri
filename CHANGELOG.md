@@ -8,6 +8,38 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`dc:date` is judged the way epubcheck judges it (`OPF-053`/`OPF-054`).**
+  We checked the value against W3C Date and Time Formats; epubcheck runs its
+  own `DateParser`, which is looser. A time with no timezone
+  (`2010-01-01T00:00:00`), one-digit months and days (`2010-1-1`), a year
+  under four digits and an hour with no minutes all pass there and failed
+  here — an error in an EPUB 2 book. 9 books in a reader's 2,798-book library
+  (Blood of the Mantis among them); none on our own shelf. The parser is
+  ported branch for branch and checked against epubcheck 5.4.0 on 29 dates in
+  both versions.
+  - It also runs the other way: `DateParser` checks the date exists, so
+    `2010-02-30` and `2011-02-29` are now reported, as epubcheck reports them.
+  - One place we still differ, on purpose: a value ending in a bare `.`
+    (`…T10:00:00.`) makes epubcheck 5.4.0 throw an exception it does not
+    catch, print a stack trace, and report **no messages at all**. That is not
+    a verdict to copy; the value is not a date, and we keep saying so.
+
+### Added
+
+- **`ADV-011` (with `--advisory`): a `dc:date` epubcheck accepts that is not
+  in the W3C-DTF form.** EPUB 3.3 recommends that form (§5.5.3.2.4) and
+  OPF 2.0.1 names it (§2.2.7), so the observation is true every time it
+  fires, and it never touches the verdict. It is permanent rather than
+  waiting for epubcheck: its leniency here is long-standing, not a gap it is
+  closing. `ADV-*` is now described as "no specification *requires* it"
+  rather than "no specification says anything", because this one is
+  recommended; the `advisory_basis` token stays `spec-silent`, which is what
+  a consumer routes on — ours for good, not temporary.
+
 ## [0.15.1] - 2026-09-17
 
 ### Fixed
