@@ -1029,10 +1029,6 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
     }
 }
 
-/// `ACC-011` (usage): an SVG `<a>` link with no accessible label at all -
-/// no `xlink:title` attribute, no `<title>` child, no `aria-label`, and
-/// no real text content anywhere inside it (confirmed via a real fixture
-/// exercising all four labeling mechanisms as valid, plus a fifth `<a>`
 /// `HTM-062`/`HTM-063`: SVG 2 deprecated `xlink:href` in favour of the
 /// no-namespace `href`, and epubcheck 5.4.0 says so (w3c/epubcheck#1677, which
 /// we filed; `OPSHandler30.getSVGHrefs`).
@@ -1088,6 +1084,10 @@ pub(crate) fn check_deprecated_xlink_href(
     }
 }
 
+/// `ACC-011` (usage): an SVG `<a>` link with no accessible label at all -
+/// no `xlink:title` attribute, no `<title>` child, no `aria-label`, and
+/// no real text content anywhere inside it (confirmed via a real fixture
+/// exercising all four labeling mechanisms as valid, plus a fifth `<a>`
 /// with none of them).
 pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     for a in svg_root.descendants().filter(|n| {
