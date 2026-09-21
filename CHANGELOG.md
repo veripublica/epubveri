@@ -8,7 +8,15 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.16.0] - 2026-09-21
+
+### Changed
+
+- **Breaking, and the reason for the minor bump:** `rng::datatype::Datatype`
+  gains a `Float` variant, so an exhaustive `match` on it downstream no longer
+  compiles, and `Datatype::from` now answers `Float` rather than `Decimal` for
+  the type names `float` and `double`. Nothing in the CLI, the WASM package or
+  the report format changes shape.
 
 ### Added
 
