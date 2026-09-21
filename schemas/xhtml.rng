@@ -739,61 +739,87 @@
     </optional>
   </define>
 
+  <!-- ARIA states and properties, with their VALUE spaces (#134).
+       Until now every one of these was `<data type="string"/>`, so
+       `aria-hidden="ZZZ"` and `aria-level="abc"` passed here and failed in
+       epubcheck - the same shape as the `role` gap one layer up, and the
+       reason this was split out of that work.
+
+       **Derived, not transcribed**, from `mod/html5/aria.rnc` in epubcheck's
+       own schema tree, exactly as the 111 role names were: 49 attributes, of
+       which 33 carry a value space (24 enums, 6 positive integers, 3 floats,
+       and the three `nonNegativeInteger | "-1"` counts) and 16 are genuinely
+       free text or an idref and stay `string`. Re-derive rather than editing a
+       row by hand; the generator reads the RNC's `attribute aria-x { … }`
+       blocks and the numeric aliases resolve through `mod/datatypes.rnc`.
+
+       Two shapes that a hand transcription gets wrong, and did on the first
+       pass here: `aria-autocomplete` and `aria-haspopup` are single-token
+       enums whose VALUES contain the word "list" (`list`, `listbox`), not
+       `list { … }` constructs - only `aria-relevant` is a real token list.
+       And the three counts accept `-1` beside a non-negative integer, which
+       is why they are a `<choice>` rather than a plain `<data>`.
+
+       **The per-element/per-role pairing layer stays out**, as it does for
+       `role`: epubcheck also requires e.g. `aria-level` to sit on an element
+       whose role takes it, answering `element "p" missing required attribute`
+       instead. That is an attribute-set question, not a value one, and it is
+       what made the first probe here unreadable until each case was given its
+       proper role.
+
+       Every row below was measured against epubcheck 5.4.0 on 2026-09-21,
+       one value per run - see the `aria_values` tests. `float` is `xsd:float`
+       and NOT `xsd:decimal`; that distinction is carried in
+       `rng::datatype::Datatype::Float` and has its own test. -->
   <define name="ariaAttrs">
-    <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-busy"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-activedescendant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-atomic"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-autocomplete"><choice><value>both</value><value>inline</value><value>list</value><value>none</value></choice></attribute></optional> <!-- enum: both inline list none -->
+    <optional><attribute name="aria-braillelabel"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-brailleroledescription"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-busy"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-checked"><choice><value>false</value><value>mixed</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false mixed true undefined -->
+    <optional><attribute name="aria-colcount"><choice><data type="nonNegativeInteger"/><value>-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
+    <optional><attribute name="aria-colindex"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
+    <optional><attribute name="aria-colspan"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
     <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-current"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-current"><choice><value>date</value><value>false</value><value>location</value><value>page</value><value>step</value><value>time</value><value>true</value></choice></attribute></optional> <!-- enum: date false location page step time true -->
     <optional><attribute name="aria-describedby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-details"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-disabled"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-disabled"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
     <optional><attribute name="aria-errormessage"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-expanded"><choice><value>false</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false true undefined -->
     <optional><attribute name="aria-flowto"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-haspopup"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-hidden"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-invalid"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-haspopup"><choice><value>dialog</value><value>false</value><value>grid</value><value>listbox</value><value>menu</value><value>tree</value><value>true</value></choice></attribute></optional> <!-- enum: dialog false grid listbox menu tree true -->
+    <optional><attribute name="aria-hidden"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-invalid"><choice><value>false</value><value>grammar</value><value>spelling</value><value>true</value></choice></attribute></optional> <!-- enum: false grammar spelling true -->
     <optional><attribute name="aria-keyshortcuts"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-label"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-labelledby"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-live"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-level"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
+    <optional><attribute name="aria-live"><choice><value>assertive</value><value>off</value><value>polite</value></choice></attribute></optional> <!-- enum: assertive off polite -->
+    <optional><attribute name="aria-modal"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-multiline"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-multiselectable"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-orientation"><choice><value>horizontal</value><value>undefined</value><value>vertical</value></choice></attribute></optional> <!-- enum: horizontal undefined vertical -->
     <optional><attribute name="aria-owns"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-relevant"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
-
-    <!-- #36: the rest of ARIA 1.2's states/properties - #34 slice A only
-           added the *global* ones (per-role-scoped ones were out of scope
-           there). Real epubcheck corpus fixture edupub-heading-aria-role-
-           valid.xhtml uses aria-level outside any role-pairing machinery
-           we implement, so - same as everywhere else in this epic - kept
-           as simple permissive globals rather than building real
-           role/attribute-pairing validation. -->
-    <optional><attribute name="aria-checked"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-expanded"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-pressed"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-selected"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-activedescendant"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-autocomplete"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-colcount"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-colindex"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-colspan"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-level"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-modal"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-multiline"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-multiselectable"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-orientation"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-placeholder"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-posinset"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-setsize"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-readonly"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-required"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-rowcount"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-rowindex"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-rowspan"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-sort"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-valuemax"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-valuemin"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-valuenow"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-posinset"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
+    <optional><attribute name="aria-pressed"><choice><value>false</value><value>mixed</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false mixed true undefined -->
+    <optional><attribute name="aria-readonly"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-relevant"><choice><value>all</value><list><value>additions</value><optional><value>removals</value></optional><optional><value>text</value></optional></list><list><value>additions</value><optional><value>text</value></optional><optional><value>removals</value></optional></list><list><value>removals</value><optional><value>additions</value></optional><optional><value>text</value></optional></list><list><value>removals</value><optional><value>text</value></optional><optional><value>additions</value></optional></list><list><value>text</value><optional><value>additions</value></optional><optional><value>removals</value></optional></list><list><value>text</value><optional><value>removals</value></optional><optional><value>additions</value></optional></list></choice></attribute></optional> <!-- "all" alone, or additions/removals/text combined without repeats: epubcheck spells this as six ordered list branches and so do we -->
+    <optional><attribute name="aria-required"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-rowcount"><choice><data type="nonNegativeInteger"/><value>-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
+    <optional><attribute name="aria-rowindex"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
+    <optional><attribute name="aria-rowspan"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
+    <optional><attribute name="aria-selected"><choice><value>false</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false true undefined -->
+    <optional><attribute name="aria-setsize"><choice><data type="nonNegativeInteger"/><value>-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
+    <optional><attribute name="aria-sort"><choice><value>ascending</value><value>descending</value><value>none</value><value>other</value></choice></attribute></optional> <!-- enum: ascending descending none other -->
+    <optional><attribute name="aria-valuemax"><data type="float"/></attribute></optional> <!-- float -->
+    <optional><attribute name="aria-valuemin"><data type="float"/></attribute></optional> <!-- float -->
+    <optional><attribute name="aria-valuenow"><data type="float"/></attribute></optional> <!-- float -->
     <optional><attribute name="aria-valuetext"><data type="string"/></attribute></optional>
   </define>
 

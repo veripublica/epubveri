@@ -43,6 +43,15 @@ pub enum Datatype {
     NonNegativeInteger,
     PositiveInteger,
     Decimal,
+    /// `xsd:float`, which is **not** `xsd:decimal` and must not be folded into
+    /// it: its lexical space adds an exponent and the three special values
+    /// `INF`, `-INF` and `NaN`. Measured against epubcheck 5.4.0 one value per
+    /// run, on `aria-valuenow` with `role="progressbar"` so the per-element
+    /// pairing could not mask the answer (2026-09-21): `1e3`, `-2.5E-3`,
+    /// `1.0e+3`, `.5`, `INF` and `NaN` are all accepted there, and every one of
+    /// them is rejected by `is_decimal`. Mapping `float` onto `Decimal` would
+    /// therefore have invented an error on six valid shapes.
+    Float,
     DateTime,
     Date,
     Time,
@@ -76,7 +85,8 @@ impl Datatype {
             "integer" | "long" | "int" => Integer,
             "nonNegativeInteger" | "unsignedLong" | "unsignedInt" => NonNegativeInteger,
             "positiveInteger" => PositiveInteger,
-            "decimal" | "double" | "float" => Decimal,
+            "decimal" => Decimal,
+            "float" | "double" => Float,
             "dateTime" => DateTime,
             "date" => Date,
             "time" => Time,
@@ -128,6 +138,7 @@ impl Datatype {
             Datatype::NonNegativeInteger => s.parse::<i128>().is_ok_and(|n| n >= 0),
             Datatype::PositiveInteger => s.parse::<i128>().is_ok_and(|n| n > 0),
             Datatype::Decimal => is_decimal(&s),
+            Datatype::Float => is_float(&s),
             Datatype::DateTime => is_datetime(&s),
             Datatype::Date => strip_tz(&s).map(is_date_core).unwrap_or(false),
             Datatype::Time => strip_tz(&s).map(is_time_core).unwrap_or(false),
@@ -280,6 +291,29 @@ fn is_decimal(s: &str) -> bool {
         && frac.bytes().all(|b| b.is_ascii_digit())
 }
 
+/// `xsd:float`'s lexical space: `INF`, `-INF`, `NaN`, or a decimal mantissa
+/// with an optional `e`/`E` exponent whose own digits are a plain integer.
+/// The mantissa rule is `is_decimal`'s, so `.5` and `5.` stay legal.
+fn is_float(s: &str) -> bool {
+    if matches!(s, "INF" | "+INF" | "-INF" | "NaN") {
+        return true;
+    }
+    let (mantissa, exponent) = match s.split_once(['e', 'E']) {
+        Some((m, e)) => (m, Some(e)),
+        None => (s, None),
+    };
+    if !is_decimal(mantissa) {
+        return false;
+    }
+    match exponent {
+        None => true,
+        Some(e) => {
+            let e = e.strip_prefix(['+', '-']).unwrap_or(e);
+            !e.is_empty() && e.bytes().all(|b| b.is_ascii_digit())
+        }
+    }
+}
+
 fn n_digits(s: &str, n: usize) -> bool {
     s.len() == n && s.bytes().all(|b| b.is_ascii_digit())
 }
@@ -363,6 +397,27 @@ mod tests {
         assert!(D::Date.allows("2026-06-27"));
         assert!(!D::DateTime.allows("2026-06-27")); // missing time part
         assert!(!D::Date.allows("2026/06/27"));
+    }
+
+    /// Every row measured against epubcheck 5.4.0 on 2026-09-21, one value per
+    /// run, on `aria-valuenow` with `role="progressbar"`. The six marked below
+    /// are the ones `is_decimal` rejects, which is why `float` no longer maps
+    /// onto `Decimal`.
+    #[test]
+    fn floats_are_not_decimals() {
+        for ok in [
+            "1.5", "10", ".5", // these `is_decimal` also accepts
+            "1e3", "-2.5E-3", "1.0e+3", "INF", "-INF", "NaN", // these it does not
+        ] {
+            assert!(D::Float.allows(ok), "float should accept {ok:?}");
+        }
+        for bad in ["abc", "", "1e", "e3", "1e2.5", "1.2.3", "INFINITY", "nan"] {
+            assert!(!D::Float.allows(bad), "float should reject {bad:?}");
+        }
+        // the six that separate the two types, stated as the difference itself
+        for exp in ["1e3", "-2.5E-3", "1.0e+3", "INF", "-INF", "NaN"] {
+            assert!(D::Float.allows(exp) && !D::Decimal.allows(exp), "{exp:?}");
+        }
     }
 
     #[test]

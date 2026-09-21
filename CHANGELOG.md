@@ -8,6 +8,52 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **`aria-*` attribute values are checked against the value space their schema
+  gives them** (#134). Every one of the 49 ARIA states and properties was
+  `string` here, so `aria-hidden="ZZZ"`, `aria-level="abc"`, `aria-live="ZZZ"`
+  and `aria-checked="ZZZ"` passed epubveri and failed epubcheck. 33 of them
+  now carry a value space — 24 enumerations, 6 positive integers, 3 floats and
+  the three `aria-colcount`/`rowcount`/`setsize` counts, which accept a
+  non-negative integer or the literal `-1` — and the 16 that are genuinely
+  free text or an idref are untouched. This is the layer below the `role`
+  vocabulary and it is derived from epubcheck's own `mod/html5/aria.rnc` the
+  same way, rather than transcribed.
+
+  **Every row was measured against epubcheck 5.4.0, one value per run**, and
+  the measurement is the whole safety net: across the 474-book shelf exactly
+  three `aria-*` attributes occur — `aria-label`, `aria-labelledby` and
+  `aria-controls`, all free text — so no real book can move, and no real book
+  could have told us a row was wrong.
+
+  Two shapes a hand transcription gets wrong, and both did on the first pass:
+  `aria-haspopup` and `aria-autocomplete` are single tokens whose *values*
+  contain `listbox` and `list`, not lists; and `aria-relevant` is the one real
+  token list, where `all` stands alone and the other three combine in any
+  order without repeating. Eleven values of it were measured to pin that down.
+
+  **The per-element pairing layer is still deliberately out**, as it is for
+  `role`: epubcheck also requires `aria-level` to sit on an element whose role
+  takes it, answering `element "p" missing required attribute "role"`. That is
+  an attribute-set question, not a value one, and it remains the two corpus
+  scenarios we knowingly miss.
+
+### Fixed
+
+- **`xsd:float` is no longer validated as `xsd:decimal`.** The RELAX NG
+  datatype table mapped `float` and `double` onto `Decimal`, whose lexical
+  space has no exponent and no `INF`/`NaN`. No schema used `float` until now,
+  so nothing was mis-validated in a released build — but the `aria-valuenow`
+  family above would have inverted it into invented errors on six valid
+  shapes (`1e3`, `-2.5E-3`, `1.0e+3`, `INF`, `-INF`, `NaN`), every one of
+  which epubcheck accepts.
+
+- The `ACC-011` doc comment had been split in half by an earlier insertion, so
+  four of its lines documented the `xlink:href` check on docs.rs. Doc only.
+
 ## [0.15.2] - 2026-09-18
 
 ### Fixed

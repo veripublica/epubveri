@@ -27023,6 +27023,107 @@ mod tests {
     /// **Held by these tests alone.** All 15 role values across the 474-book
     /// shelf are valid names and no book puts `role` on `<html>`, so
     /// `diff-shelf.sh` cannot see either rule.
+    /// `#134`: an `aria-*` VALUE comes from the space its schema gives it.
+    ///
+    /// Until this landed every `aria-*` was `<data type="string"/>` here, so
+    /// `aria-hidden="ZZZ"` and `aria-level="abc"` passed us and failed
+    /// epubcheck — the same shape as the `role` gap above, one layer down.
+    ///
+    /// **The shelf is not a control for this and cannot become one**: across
+    /// 474 books exactly three `aria-*` attributes occur — `aria-label` (50
+    /// books), `aria-labelledby` (6) and `aria-controls` (1) — and all three
+    /// are free text that this change leaves alone (measured 2026-09-21). So
+    /// nothing here can move a real book, and nothing here could tell us we
+    /// got a row wrong. This test is the whole safety net, which is why every
+    /// case below is a value measured against epubcheck 5.4.0 rather than one
+    /// read off the schema.
+    ///
+    /// **The per-element pairing layer is deliberately still out**, as it is
+    /// for `role`: epubcheck additionally wants `aria-level` on an element
+    /// whose role takes it and answers `element "p" missing required
+    /// attribute` when it does not. That is an attribute-set question rather
+    /// than a value one — and it is why the measurements for the role-scoped
+    /// rows were taken with the role present, or its error would have masked
+    /// the answer being asked for.
+    #[test]
+    fn aria_values_come_from_their_schema_datatypes() {
+        let count = |inner: &str| {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>t</title></head><body>{inner}</body></html>"
+            );
+            crate::validate_bytes(epub_declaring("3.0", "application/xhtml+xml", &ch1, ""))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        let ok = |inner: &str| assert_eq!(count(inner), 0, "should be accepted: {inner}");
+        let bad = |inner: &str| assert_eq!(count(inner), 1, "should be rejected: {inner}");
+
+        // enums, global so they need no role
+        ok(r#"<p aria-hidden="true">x</p>"#);
+        bad(r#"<p aria-hidden="ZZZ">x</p>"#);
+        ok(r#"<p aria-live="polite">x</p>"#);
+        bad(r#"<p aria-live="ZZZ">x</p>"#);
+        bad(r#"<p aria-sort="ZZZ">x</p>"#);
+        ok(r#"<p aria-current="page">x</p>"#);
+        bad(r#"<p aria-current="ZZZ">x</p>"#);
+        ok(r#"<p role="checkbox" aria-checked="mixed">x</p>"#);
+        bad(r#"<p role="checkbox" aria-checked="ZZZ">x</p>"#);
+
+        // `aria-relevant` is the ONE real token list; the "list" and "listbox"
+        // in `aria-autocomplete`/`aria-haspopup` are values, not constructs.
+        // 11 values measured 2026-09-21: "all" stands alone, the other three
+        // combine in any order but never repeat, and the empty value is not a
+        // combination of nothing.
+        for v in [
+            "all",
+            "additions",
+            "removals",
+            "text",
+            "additions removals",
+            "text additions",
+            "removals text additions",
+        ] {
+            ok(&format!(r#"<p aria-relevant="{v}">x</p>"#));
+        }
+        for v in ["all additions", "additions additions", "ZZZ", ""] {
+            bad(&format!(r#"<p aria-relevant="{v}">x</p>"#));
+        }
+        // `aria-haspopup` and `aria-autocomplete` only LOOK like lists: their
+        // values include "listbox" and "list". Measured, they are single
+        // tokens — `aria-haspopup="menu listbox"` is a value error there too.
+        ok(r#"<p aria-haspopup="listbox">x</p>"#);
+        bad(r#"<p aria-haspopup="menu listbox">x</p>"#);
+
+        // positive integers: 0 and -1 are rejected, which is what separates
+        // `positiveInteger` from `nonNegativeInteger`
+        ok(r#"<p role="heading" aria-level="3">x</p>"#);
+        bad(r#"<p role="heading" aria-level="abc">x</p>"#);
+        bad(r#"<p role="heading" aria-level="0">x</p>"#);
+
+        // the three counts: a non-negative integer OR the literal -1
+        ok(r#"<p role="table" aria-colcount="-1">x</p>"#);
+        ok(r#"<p role="table" aria-colcount="0">x</p>"#);
+        bad(r#"<p role="table" aria-colcount="-2">x</p>"#);
+
+        // floats, and the exponent/INF/NaN shapes a decimal would have failed
+        for v in ["1.5", "10", ".5", "1e3", "-2.5E-3", "1.0e+3", "INF", "NaN"] {
+            ok(&format!(
+                r#"<p role="progressbar" aria-valuenow="{v}">x</p>"#
+            ));
+        }
+        bad(r#"<p role="progressbar" aria-valuenow="abc">x</p>"#);
+
+        // the 16 unconstrained ones stay unconstrained: these are free text or
+        // an idref, and narrowing them is what would break real books
+        ok(r#"<p aria-label="ZZZ">x</p>"#);
+        ok(r#"<p aria-roledescription="ZZZ">x</p>"#);
+    }
+
     #[test]
     fn role_values_come_from_a_closed_vocabulary() {
         let count = |version: &str, html_attrs: &str, inner: &str| {
