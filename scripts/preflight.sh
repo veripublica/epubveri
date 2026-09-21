@@ -104,8 +104,11 @@ fi
 # and that extension must be a plain one. Matching " N." anywhere instead
 # flagged `scratchpad/epubveri 0.14.2 re-run.pdf` on 2026-09-21 and held up a
 # release for a file that was exactly what it looked like.
-CONFLICTS=$(find . -path ./target -prune -o -type f -print 2>/dev/null \
-  | grep -v '^./target' \
+# `corpus/` is pruned with `target/`: it is vendored third-party material,
+# and epubcheck's own fixtures include files deliberately named
+# `content 001.xhtml` to test filenames with spaces. Scanning someone else's
+# checkout for our sync damage only produces noise.
+CONFLICTS=$(find . \( -path ./target -o -path ./corpus \) -prune -o -type f -print 2>/dev/null \
   | grep -E '/[^/]* [0-9]+(\.[A-Za-z0-9]+)?$' || true)
 if [ -z "$CONFLICTS" ]; then
   ok "no iCloud sync-conflict copies"
