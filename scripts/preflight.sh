@@ -99,7 +99,14 @@ fi
 
 # iCloud conflict copies: shipped into the 0.7.2 npm tarball, and on
 # 2026-08-03 one inside .git/refs broke `git fetch` outright.
-CONFLICTS=$(find . -path ./target -prune -o \( -name "* [0-9]" -o -name "* [0-9].*" \) -print 2>/dev/null | grep -v '^./target' || true)
+# The suffix iCloud adds is " N" at the END of the stem — "Cargo 2.toml",
+# "refs 2" — so the digits must sit immediately before the final extension,
+# and that extension must be a plain one. Matching " N." anywhere instead
+# flagged `scratchpad/epubveri 0.14.2 re-run.pdf` on 2026-09-21 and held up a
+# release for a file that was exactly what it looked like.
+CONFLICTS=$(find . -path ./target -prune -o -type f -print 2>/dev/null \
+  | grep -v '^./target' \
+  | grep -E '/[^/]* [0-9]+(\.[A-Za-z0-9]+)?$' || true)
 if [ -z "$CONFLICTS" ]; then
   ok "no iCloud sync-conflict copies"
 else
