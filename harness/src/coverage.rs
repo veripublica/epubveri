@@ -229,10 +229,22 @@ const ANN: &[Ann] = &[
          restriction (Presentation-only + `semantics`) and the MathML3 \
          presentation **content models** are implemented - the arity of \
          `mfrac`/`msubsup`/`munderover` and the like, and table containment. \
-         Attribute *values* stay permissive throughout (MathML attributes are \
-         unconstrained, `role` accepts any token, `aria-*` unranged) - a \
-         separate surface with its own false-positive risk and much less to \
-         catch. **The NCX is grammar-validated too** (#83, `schemas/ncx.rng`): \
+         **Attribute *values* are checked for ARIA and left permissive for \
+         MathML**, and that split is the measured one rather than a stage of \
+         a migration. `role` comes from the closed 111-name vocabulary \
+         (2026-09-07) and the 49 `aria-*` states and properties from the value \
+         spaces `mod/html5/aria.rnc` gives them - 24 enumerations, 6 positive \
+         integers, 3 floats and three counts that also take `-1`, with the 16 \
+         free-text or idref ones untouched (#134, 2026-09-21). Both layers are \
+         derived from epubcheck's own schema rather than transcribed. What \
+         stays out on purpose: MathML attribute values, and the per-element \
+         pairing that decides *which* element may carry a given `role` or \
+         `aria-*` - epubcheck answers `element \"p\" missing required \
+         attribute \"role\"` there, which is an attribute-set question rather \
+         than a value one and is the two corpus scenarios we knowingly miss. \
+         The false-positive risk in this surface is real and the shelf cannot \
+         police it: across 474 books only `aria-label`, `aria-labelledby` and \
+         `aria-controls` occur, all three free text, so the tests carry it. **The NCX is grammar-validated too** (#83, `schemas/ncx.rng`): \
          its structure was checked in exactly one place - the `navPoint` \
          content model - and the format's other ~26 constraints not at all, \
          so sixteen shapes epubcheck errors on were silent here. Three \
