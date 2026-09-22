@@ -8,11 +8,11 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.17.0] - 2026-09-23
 
 ### Changed
 
-- **Breaking, and the reason for the next minor bump:** `envelope::Outcome`
+- **Breaking, and the reason for the minor bump:** `envelope::Outcome`
   gains a `Reverted` variant, so an exhaustive `match` on it downstream no
   longer compiles. It serialises as `"reverted"`, the value conventions v0.6.0
   added to FORMATS §1.3's `outcome` set: a fix the tool applied and then undid
