@@ -1,4 +1,4 @@
-//! Thin CLI for epubveri, following the **veripublica CLI convention v0.5**
+//! Thin CLI for epubveri, following the **veripublica CLI convention v0.6**
 //! (<https://github.com/veripublica/conventions>).
 //!
 //! epubveri is a *verifier*: it reads inputs and reports, writing no files and
@@ -98,7 +98,7 @@ EXIT CODES:
     1   every input was processed; at least one has errors.
     2   the tool could not run: a usage error, or an input that could not be read.
 
-Conforms to veripublica conventions v0.5.";
+Conforms to veripublica conventions v0.6.";
 
 /// Both spellings epubcheck accepts for each version, normalized to the bare
 /// major so the library never has to parse a version string. `None` means the

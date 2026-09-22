@@ -14,13 +14,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 - **Breaking, and the reason for the next minor bump:** `envelope::Outcome`
   gains a `Reverted` variant, so an exhaustive `match` on it downstream no
-  longer compiles. It serialises as `"reverted"`, the value conventions#31
+  longer compiles. It serialises as `"reverted"`, the value conventions v0.6.0
   added to FORMATS §1.3's `outcome` set: a fix the tool applied and then undid
   because applying it produced a defect that was not there before. epubveri
   emits only `finding` items and never carries an `outcome`, so nothing in the
   CLI, the WASM package or the report changes shape. The variant exists for
   repairers that build their envelope from this crate. epubsana's per-fix
   rollback (epubsana#7) is the first of them.
+
+- **The JSON envelope's `convention` key is now `"0.6"`**, and `--help` ends
+  "Conforms to veripublica conventions v0.6". Version 0.6 adds `reverted` and
+  nothing else, and a verifier emits no `outcome`, so epubveri already met 0.6
+  and this only says so. A consumer that compares the key with string equality,
+  as FORMATS tells it to, sees the new value. None of the family's plugins reads
+  it.
 
 ### Added
 

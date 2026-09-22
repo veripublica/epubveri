@@ -1,6 +1,6 @@
 //! The `--format json` machine envelope — the veripublica shared output format
 //! ([FORMATS.md](https://github.com/veripublica/conventions/blob/main/FORMATS.md),
-//! convention v0.5). One JSON object per run: a top-level verdict plus one
+//! convention v0.6). One JSON object per run: a top-level verdict plus one
 //! `Input` object per `-i`, each carrying its own findings.
 //!
 //! **This module is the veripublica family's reference implementation of the
@@ -42,7 +42,7 @@ use crate::report::{Message, Report};
 /// routine `epubveri` bump would have made their output claim a convention
 /// version they had not implemented. A defaulted parameter would have preserved
 /// exactly that; the compile error is the notification.
-const CONVENTION: &str = "0.5";
+const CONVENTION: &str = "0.6";
 
 /// The whole run: exactly one of these is printed to stdout in `json` mode.
 /// Generic over the tool-owned `summary` (`S`) and item `data` (`D`) slots
@@ -260,8 +260,8 @@ impl Summary {
 }
 
 /// A transformer item's `outcome` — the closed set FORMATS §1.3 declares
-/// (`applied | skipped | proposed`, plus `reverted` from conventions#31), as a
-/// type rather than as a doc comment.
+/// (`applied | skipped | proposed | reverted`, conventions v0.6), as a type
+/// rather than as a doc comment.
 ///
 /// **Why this is an enum.** The set was previously prose in three comments here
 /// and a `&'static str` on the wire, so `"revert"`, `"Applied"` or `"propsed"`
@@ -280,7 +280,7 @@ impl Summary {
 /// wildcard-free `match` — a `_ =>` arm turns the build error back into
 /// silence, the same trap `violation_kind` carries.
 ///
-/// `reverted` arrived with its emitter, as conventions#31 decided: epubsana#7
+/// `reverted` arrived with its emitter in conventions v0.6.0, as #31 decided: epubsana#7
 /// undoes a fix whose application raised a finding count, and until this
 /// variant existed its CLI refused to write a json report rather than call
 /// that fix `skipped`.
