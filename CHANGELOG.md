@@ -8,6 +8,29 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Breaking, and the reason for the next minor bump:** `envelope::Outcome`
+  gains a `Reverted` variant, so an exhaustive `match` on it downstream no
+  longer compiles. It serialises as `"reverted"`, the value conventions#31
+  added to FORMATS §1.3's `outcome` set: a fix the tool applied and then undid
+  because applying it produced a defect that was not there before. epubveri
+  emits only `finding` items and never carries an `outcome`, so nothing in the
+  CLI, the WASM package or the report changes shape. The variant exists for
+  repairers that build their envelope from this crate. epubsana's per-fix
+  rollback (epubsana#7) is the first of them.
+
+### Added
+
+- **`Outcome::ALL`**, every outcome in one slice, so a consumer can assert the
+  set it knows and notice a new member when it resolves a new version. This is
+  the same tripwire `ViolationKind::ALL` gives. `Outcome` stays exhaustive until
+  1.0, like `ViolationKind`: `#[non_exhaustive]` would force a consumer's
+  `match` into a `_` arm and turn the next new member into silence rather than
+  a build error.
+
 ## [0.16.0] - 2026-09-21
 
 ### Changed

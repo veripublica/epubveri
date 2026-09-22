@@ -260,7 +260,8 @@ impl Summary {
 }
 
 /// A transformer item's `outcome` — the closed set FORMATS §1.3 declares
-/// (`applied | skipped | proposed`), as a type rather than as a doc comment.
+/// (`applied | skipped | proposed`, plus `reverted` from conventions#31), as a
+/// type rather than as a doc comment.
 ///
 /// **Why this is an enum.** The set was previously prose in three comments here
 /// and a `&'static str` on the wire, so `"revert"`, `"Applied"` or `"propsed"`
@@ -279,9 +280,17 @@ impl Summary {
 /// wildcard-free `match` — a `_ =>` arm turns the build error back into
 /// silence, the same trap `violation_kind` carries.
 ///
-/// `reverted` is **not** here: conventions accepted it (#31) and deliberately
-/// did not ship the text, because its emitter (epubsana#7) is unstarted. It
-/// arrives with the batch that carries the mechanism.
+/// `reverted` arrived with its emitter, as conventions#31 decided: epubsana#7
+/// undoes a fix whose application raised a finding count, and until this
+/// variant existed its CLI refused to write a json report rather than call
+/// that fix `skipped`.
+///
+/// **Not `#[non_exhaustive]`, on purpose, until 1.0** — the same call as
+/// [`ViolationKind`](crate::report::ViolationKind). A consumer that `match`es on
+/// this type would be forced into the `_ =>` arm the paragraph above warns
+/// about, trading a build error for silence on the next member; before 1.0 a
+/// new member costs a minor bump, which is cheap. [`ALL`](Outcome::ALL) is the
+/// tripwire that keeps working after the attribute arrives.
 #[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum Outcome {
@@ -291,9 +300,22 @@ pub enum Outcome {
     Skipped,
     /// No decision exists yet — a dry run.
     Proposed,
+    /// Applied, then undone by the tool because applying it produced a defect
+    /// that was not there before. Not in the output, and not declined by the
+    /// caller: the finding it addressed is unrepaired (conventions#31).
+    Reverted,
 }
 
 impl Outcome {
+    /// Every outcome, so a consumer can assert the set it knows about and
+    /// notice a new member the moment it resolves a new version.
+    pub const ALL: &'static [Outcome] = &[
+        Outcome::Applied,
+        Outcome::Skipped,
+        Outcome::Proposed,
+        Outcome::Reverted,
+    ];
+
     /// The lowercase spelling the envelope uses — the same string `Serialize`
     /// emits, exposed for a human report or a log line.
     pub fn as_str(self) -> &'static str {
@@ -301,6 +323,7 @@ impl Outcome {
             Outcome::Applied => "applied",
             Outcome::Skipped => "skipped",
             Outcome::Proposed => "proposed",
+            Outcome::Reverted => "reverted",
         }
     }
 }
@@ -618,6 +641,20 @@ mod tests {
         );
         let v = serde_json::to_value(&item).unwrap();
         assert_eq!(v["outcome"], "skipped", "lowercase, as §1.3 declares");
+    }
+
+    #[test]
+    fn every_outcome_serializes_as_its_as_str() {
+        // The two spellings are written separately, so nothing but this keeps
+        // them the same; and ALL is only a tripwire if it really is every one.
+        for o in Outcome::ALL {
+            assert_eq!(serde_json::to_value(o).unwrap(), o.as_str());
+            match o {
+                Outcome::Applied | Outcome::Skipped | Outcome::Proposed | Outcome::Reverted => {}
+            }
+        }
+        assert_eq!(Outcome::ALL.len(), 4);
+        assert_eq!(Outcome::Reverted.as_str(), "reverted");
     }
 
     #[test]
