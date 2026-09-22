@@ -74,16 +74,10 @@ grep -q "^## \[$VERSION\]" CHANGELOG.md \
 echo "  note: read \`git log v<prev>..HEAD\` against the CHANGELOG section by eye —"
 echo "        0.9.2 shipped with its biggest item (the hostile suite) unmentioned."
 
-# Not a check, because it lives in another repository and needs the network.
-# It is here because an epubveri release is now a change to *running plugin
-# code*: all three fetch the binary from our releases, and their three
-# `client/binary.py` files are byte-identical, so one break hits all three at
-# once without a plugin release. Their own unit suites cannot see it — they
-# build their own envelope fixtures, so a real envelope can change shape under
-# a green suite.
-echo "  note: run the plugin gate before the tag and after it —"
-echo "        ../epubveri-plugins/scripts/verify-release.py --local \"\$(cargo metadata --format-version 1 --no-deps | jq -r .target_directory)/release/epubveri\""
-echo "        ../epubveri-plugins/scripts/verify-release.py --published   # once the assets exist"
+# The plugin gate before the tag is a check now (see "Plugins" below). The one
+# after the tag cannot be: it needs the published assets.
+echo "  note: once the assets exist, run the plugin gate against them —"
+echo "        ../epubveri-plugins/scripts/verify-release.py --published"
 
 # ------------------------------------------------------------------ hygiene --
 head_ "Tree hygiene"
@@ -287,6 +281,68 @@ else
     ok "docs/COVERAGE.md is up to date"
   else
     bad "docs/COVERAGE.md regenerated differently — commit the regenerated file"
+  fi
+fi
+
+# ----------------------------------------------------------------- plugins --
+# An epubveri release is a change to *running plugin code*: all three plugins
+# fetch the binary from our releases, and their three `client/binary.py` files
+# are byte-identical, so one break hits all three at once without a plugin
+# release. Two questions, one check each:
+#
+#   * verify-release --local: does anything a plugin READS differ between the
+#     published binary and this build, on real books? The suites cannot see
+#     this - they build their own envelope fixtures.
+#   * the plugins' own suites, run against this build. These used to be a note
+#     here, and a note is something a release can walk past: the Sigil suite
+#     failed against every release from 0.15.0 to 0.17.0 (RSC-036 on its test
+#     book) and nobody noticed.
+#
+# A skipped test is a failure too: each suite skips only when it has no binary,
+# and we hand it one, so a skip means the suite checked less than it says.
+# A missing repository or calibre is a setup gap and is said out loud, like the
+# shelf above.
+head_ "Plugins"
+
+PLUGINS="${PLUGINS_DIR:-$ROOT/../epubveri-plugins}"
+CALIBRE_DEBUG="${CALIBRE_DEBUG:-/Applications/calibre.app/Contents/MacOS/calibre-debug}"
+BIN="$(jq -r .target_directory <<< "$META")/release/epubveri"
+
+# suite <label> <runner...> - a unittest suite must say OK, with no skips.
+suite() {
+  local label="$1"; shift
+  local out
+  out=$(EPUBVERI_BINARY="$BIN" "$@" 2>&1)
+  local rc=$?
+  local ran
+  ran=$(grep -E '^Ran [0-9]+ tests' <<< "$out" | tail -1)
+  if [ "$rc" -ne 0 ] || ! grep -qE '^OK$' <<< "$out"; then
+    bad "$label: ${ran:-no test count}, not OK"
+    grep -E '^(FAIL|ERROR):|Error:|^OK \(' <<< "$out" | head -10 | sed 's/^/        /'
+    [ -z "$ran" ] && printf '%s\n' "$out" | tail -8 | sed 's/^/        /'
+  else
+    ok "$label: ${ran#Ran }, none skipped"
+  fi
+}
+
+if [ ! -d "$PLUGINS/plugins" ]; then
+  skip "plugins repository not found ($PLUGINS) - the plugin gate did not run"
+else
+  cargo build --release --bin epubveri >/dev/null 2>&1
+  if [ ! -x "$BIN" ]; then
+    bad "no release binary at $BIN to hand the plugins"
+  else
+    check "verify-release --local (what the plugins read, on real books)" \
+      "$PLUGINS/scripts/verify-release.py" --local "$BIN"
+    suite "Sigil plugin suite" python3 "$PLUGINS/plugins/sigil/tests/test_plugin.py"
+    if [ -x "$CALIBRE_DEBUG" ]; then
+      suite "calibre editor plugin suite" \
+        "$CALIBRE_DEBUG" "$PLUGINS/plugins/calibre/tests/test_plugin.py"
+      suite "calibre library plugin suite" \
+        "$CALIBRE_DEBUG" "$PLUGINS/plugins/calibre-library/tests/test_plugin.py"
+    else
+      skip "calibre not installed ($CALIBRE_DEBUG) - two of the three plugin suites did not run"
+    fi
   fi
 fi
 
