@@ -19,6 +19,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   is read. A generated book of 6,000 chapters and 12,000 links went from
   28.5 s to 1.6 s. Reported, with a profile of a 5,970-file book that spent
   40% of its time there, by raeq in #137.
+- **Content-document validation takes about half the time it did in 0.17.4.**
+  Every pattern the XML grammar engine builds is shared through a lookup
+  table, and that table allocated each candidate before checking whether it
+  already existed, hashed with a function designed to resist hostile keys its
+  keys can never be, and rebuilt the three simplest patterns on every call.
+  It now looks up first, hashes cheaply, and builds those three once. On 4 MiB
+  of plain paragraphs 0.62 s became 0.32 s, and the 6,000-chapter book above
+  went from 1.7 s to 0.85 s. Also suggested in #137.
 
 ### Fixed
 

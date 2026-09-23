@@ -15,8 +15,65 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::rc::Rc;
+
+/// A fast, non-cryptographic hasher for the engine's own tables: the
+/// interning set and the derivative memos in `derive.rs`.
+///
+/// Their keys are pattern addresses, small integers and strings that come
+/// from the embedded schemas, never from the book being validated, so the
+/// flooding resistance std's SipHash pays for buys nothing here, and it was a
+/// visible share of validation time. This is the rotate-xor-multiply scheme
+/// rustc uses for its own tables.
+#[derive(Default, Clone, Copy)]
+pub(crate) struct FastHasher(u64);
+
+impl FastHasher {
+    const K: u64 = 0x51_7c_c1_b7_27_22_0a_95;
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::K);
+    }
+}
+
+impl Hasher for FastHasher {
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let (words, rest) = bytes.as_chunks::<8>();
+        for w in words {
+            self.add(u64::from_le_bytes(*w));
+        }
+        if !rest.is_empty() {
+            let mut last = [0u8; 8];
+            last[..rest.len()].copy_from_slice(rest);
+            self.add(u64::from_le_bytes(last));
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, i: u8) {
+        self.add(u64::from(i));
+    }
+    #[inline]
+    fn write_u32(&mut self, i: u32) {
+        self.add(u64::from(i));
+    }
+    #[inline]
+    fn write_u64(&mut self, i: u64) {
+        self.add(i);
+    }
+    #[inline]
+    fn write_usize(&mut self, i: usize) {
+        self.add(i as u64);
+    }
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
+/// `BuildHasher` for [`FastHasher`].
+pub(crate) type FastHash = BuildHasherDefault<FastHasher>;
 
 pub type Pat = Rc<Pattern>;
 
@@ -141,7 +198,13 @@ impl Hash for Pattern {
 }
 
 thread_local! {
-    static INTERN: RefCell<HashSet<Pat>> = RefCell::new(HashSet::new());
+    static INTERN: RefCell<HashSet<Pat, FastHash>> = RefCell::new(HashSet::default());
+    // The three leaves, built once per thread. They were interned on every
+    // call, and `not_allowed()` alone is called for every branch a derivative
+    // rules out.
+    static EMPTY: Pat = intern(Pattern::Empty);
+    static NOT_ALLOWED: Pat = intern(Pattern::NotAllowed);
+    static TEXT: Pat = intern(Pattern::Text);
 }
 
 /// Intern a freshly-built `Pattern`: if a structurally-identical pattern was
@@ -149,16 +212,19 @@ thread_local! {
 /// register this one as canonical. `HashSet<Pat>` hashes/compares through
 /// `Pattern`'s manual impls above via `Rc<T>`'s standard delegating
 /// `Hash`/`Eq` impls, so no wrapper type is needed.
+///
+/// Looked up by value first, so a pattern that already exists, which is most
+/// of them, costs no allocation: `Rc<Pattern>: Borrow<Pattern>`, and `Rc`'s
+/// `Hash`/`Eq` delegate, so the set can be asked with the bare `Pattern`.
 fn intern(p: Pattern) -> Pat {
-    let rc = Rc::new(p);
     INTERN.with(|cell| {
         let mut set = cell.borrow_mut();
-        if let Some(existing) = set.get(&rc) {
-            existing.clone()
-        } else {
-            set.insert(rc.clone());
-            rc
+        if let Some(existing) = set.get(&p) {
+            return existing.clone();
         }
+        let rc = Rc::new(p);
+        set.insert(rc.clone());
+        rc
     })
 }
 
@@ -182,13 +248,13 @@ fn is_empty(p: &Pat) -> bool {
 // --- smart constructors ---
 
 pub fn empty() -> Pat {
-    intern(Pattern::Empty)
+    EMPTY.with(Rc::clone)
 }
 pub fn not_allowed() -> Pat {
-    intern(Pattern::NotAllowed)
+    NOT_ALLOWED.with(Rc::clone)
 }
 pub fn text() -> Pat {
-    intern(Pattern::Text)
+    TEXT.with(Rc::clone)
 }
 
 // `is_na(&a) -> b` and `is_na(&b) -> a` return different values; clippy sees

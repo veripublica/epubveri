@@ -111,7 +111,7 @@ fn apply_after<F: Fn(Pat) -> Pat>(p: &Pat, f: &F) -> Pat {
 /// A memo keyed by a pattern's address (plus whatever else the question
 /// needs). The pattern itself rides in the value, so the address cannot be
 /// freed and handed to a different pattern while the entry exists.
-type PatMemo<K, V> = RefCell<HashMap<K, (Pat, V)>>;
+type PatMemo<K, V> = RefCell<HashMap<K, (Pat, V), FastHash>>;
 
 struct Env<'a> {
     defs: &'a [Pat],
@@ -167,15 +167,15 @@ impl<'a> Env<'a> {
             elem_pool: RefCell::new(None),
             elem_memo: RefCell::new(HashMap::new()),
             attr_ids: RefCell::new(HashMap::new()),
-            carry_memo: RefCell::new(HashMap::new()),
+            carry_memo: RefCell::new(HashMap::default()),
             carry_busy: RefCell::new(HashSet::new()),
             carry_cuts: std::cell::Cell::new(0),
-            close_memo: RefCell::new(HashMap::new()),
-            contents_memo: RefCell::new(HashMap::new()),
+            close_memo: RefCell::new(HashMap::default()),
+            contents_memo: RefCell::new(HashMap::default()),
             contents_busy: RefCell::new(HashSet::new()),
             contents_cut: std::cell::Cell::new(false),
-            deriv_memo: RefCell::new(HashMap::new()),
-            open_top_memo: RefCell::new(HashMap::new()),
+            deriv_memo: RefCell::new(HashMap::default()),
+            open_top_memo: RefCell::new(HashMap::default()),
         }
     }
 
