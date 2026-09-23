@@ -1,4 +1,4 @@
-//! D                    if !out.contains(&n) {rivative-based RELAX NG validation (James Clark's algorithm), driven over
+//! Derivative-based RELAX NG validation (James Clark's algorithm), driven over
 //! a `roxmltree` document. We compute the derivative of the start pattern with
 //! respect to the XML event stream; the document is valid iff the final pattern
 //! is `nullable`.
@@ -10,11 +10,17 @@
 //! `startTagOpenDeriv` are **memoized at `Ref` boundaries** (the reused nodes),
 //! which both bounds the work and guards against pathological unguarded cycles.
 //!
-//! Not yet done: hash-consing all patterns for cross-step memoization (needed to
-//! tame the interleave-heavy XHTML content model at scale), and XSD facets.
+//! Patterns are hash-consed (`pattern::intern`), so a pattern's address is its
+//! identity, and the per-event derivatives are memoized on it: a start tag by
+//! `(pattern, name)`, an attribute by `(pattern, name, value mask)`, the close
+//! of a start tag by pattern. Elements of one kind reach the same interned
+//! pattern, so after the first one the attribute model is looked up rather
+//! than rebuilt; that took a 4 MiB attribute-heavy document from 17 s to 1 s
+//! (2026-09-23). Not yet done: XSD facets.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use super::pattern::*;
 
@@ -102,6 +108,11 @@ fn apply_after<F: Fn(Pat) -> Pat>(p: &Pat, f: &F) -> Pat {
     }
 }
 
+/// A memo keyed by a pattern's address (plus whatever else the question
+/// needs). The pattern itself rides in the value, so the address cannot be
+/// freed and handed to a different pattern while the entry exists.
+type PatMemo<K, V> = RefCell<HashMap<K, (Pat, V)>>;
+
 struct Env<'a> {
     defs: &'a [Pat],
     start: Pat,
@@ -115,6 +126,32 @@ struct Env<'a> {
     elem_memo: RefCell<HashMap<(String, String), Option<Pat>>>,
     /// See `Grammar::custom_elements`.
     custom_elements: bool,
+    /// A small id for each attribute name seen, so [`Env::may_carry`] can key
+    /// its memo on `(pattern, name)` without hashing two strings per node.
+    attr_ids: RefCell<HashMap<String, HashMap<String, u32>>>,
+    /// [`Env::may_carry`]'s answers, keyed by pattern address, attribute id
+    /// and whether `After`'s continuation counts. The pattern itself is kept
+    /// in the value so the address cannot be freed and reused while the
+    /// memo holds it.
+    carry_memo: PatMemo<(usize, u32, bool), bool>,
+    carry_busy: RefCell<HashSet<usize>>,
+    /// How many `Ref` cycles [`Env::may_carry`] has cut. A walk that sees it
+    /// rise below it memoizes nothing, since a cut answer is provisional.
+    carry_cuts: std::cell::Cell<usize>,
+    /// [`Env::start_tag_close_deriv`]'s results by pattern address, with the
+    /// pattern kept alive in the value for the same reason as `carry_memo`.
+    close_memo: PatMemo<usize, Pat>,
+    /// [`Env::attr_contents`]'s answers by `(pattern, attribute id)`.
+    contents_memo: PatMemo<(usize, u32), Rc<Vec<Pat>>>,
+    contents_busy: RefCell<HashSet<usize>>,
+    /// Set when [`Env::attr_contents`] cut a `Ref` cycle; `att_deriv` then
+    /// takes the unmemoized path, which needs no such list.
+    contents_cut: std::cell::Cell<bool>,
+    /// `att_deriv` results by `(pattern, attribute id, value mask)`; see
+    /// [`Env::att_deriv`].
+    deriv_memo: PatMemo<(usize, u32, u64), Pat>,
+    /// [`Env::start_tag_open`]'s results by `(pattern, element name id)`.
+    open_top_memo: PatMemo<(usize, u32), Pat>,
 }
 
 impl<'a> Env<'a> {
@@ -129,7 +166,81 @@ impl<'a> Env<'a> {
             open_busy: RefCell::new(HashSet::new()),
             elem_pool: RefCell::new(None),
             elem_memo: RefCell::new(HashMap::new()),
+            attr_ids: RefCell::new(HashMap::new()),
+            carry_memo: RefCell::new(HashMap::new()),
+            carry_busy: RefCell::new(HashSet::new()),
+            carry_cuts: std::cell::Cell::new(0),
+            close_memo: RefCell::new(HashMap::new()),
+            contents_memo: RefCell::new(HashMap::new()),
+            contents_busy: RefCell::new(HashSet::new()),
+            contents_cut: std::cell::Cell::new(false),
+            deriv_memo: RefCell::new(HashMap::new()),
+            open_top_memo: RefCell::new(HashMap::new()),
         }
+    }
+
+    fn attr_id(&self, ns: &str, local: &str) -> u32 {
+        let mut ids = self.attr_ids.borrow_mut();
+        let next = ids.values().map(HashMap::len).sum::<usize>() as u32;
+        let by_local = ids.entry(ns.to_string()).or_default();
+        if let Some(&id) = by_local.get(local) {
+            return id;
+        }
+        by_local.insert(local.to_string(), next);
+        next
+    }
+
+    /// Whether `p` holds an `Attribute` whose name class admits `ns:local`,
+    /// reached the way [`Env::att_deriv`] reaches one: through the
+    /// compositors and `Ref`s, never into an `Element`, and through only the
+    /// first half of an `After` unless `after_rest` is set (which is how
+    /// [`Env::attr_name_allowed`] walks).
+    ///
+    /// When this is false, `att_deriv(p)` is `NotAllowed` whatever the value:
+    /// every leaf is, and `choice`, `group`, `interleave`, `after` and
+    /// `one_or_more` all keep `NotAllowed`. So `att_deriv` can stop there
+    /// instead of rebuilding the whole attribute model once per attribute,
+    /// which it did: XHTML's global attributes are one long interleave, and
+    /// walking all of it for every attribute of every element was ~80% of
+    /// validation time on attribute-heavy content.
+    ///
+    /// A `Ref` met again while it is still being walked answers true, which
+    /// only costs pruning, never a result, and nothing computed above that
+    /// cut is memoized. A grammar cannot get there anyway: RELAX NG only lets a
+    /// definition recur through an `element`, and this never enters one.
+    fn may_carry(&self, p: &Pat, ns: &str, local: &str, id: u32, after_rest: bool) -> bool {
+        let key = (Rc::as_ptr(p) as usize, id, after_rest);
+        if let Some((_, hit)) = self.carry_memo.borrow().get(&key) {
+            return *hit;
+        }
+        let cuts = self.carry_cuts.get();
+        let r = match &**p {
+            Pattern::Attribute(nc, _) => nc.contains(ns, local),
+            Pattern::Choice(a, b) | Pattern::Group(a, b) | Pattern::Interleave(a, b) => {
+                self.may_carry(a, ns, local, id, after_rest)
+                    || self.may_carry(b, ns, local, id, after_rest)
+            }
+            Pattern::After(a, b) => {
+                self.may_carry(a, ns, local, id, after_rest)
+                    || (after_rest && self.may_carry(b, ns, local, id, after_rest))
+            }
+            Pattern::OneOrMore(a) => self.may_carry(a, ns, local, id, after_rest),
+            Pattern::Ref(i) => {
+                if !self.carry_busy.borrow_mut().insert(*i) {
+                    self.carry_cuts.set(self.carry_cuts.get() + 1);
+                    true
+                } else {
+                    let r = self.may_carry(&self.defs[*i], ns, local, id, after_rest);
+                    self.carry_busy.borrow_mut().remove(i);
+                    r
+                }
+            }
+            _ => false,
+        };
+        if self.carry_cuts.get() == cuts {
+            self.carry_memo.borrow_mut().insert(key, (p.clone(), r));
+        }
+        r
     }
 
     /// The grammar's own model for an element of this name, or `None` if the
@@ -481,6 +592,25 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// [`Env::start_tag_open_deriv`] for a child's start tag, memoized on the
+    /// whole pattern. The inner walk memoizes only at `Ref`s, so the
+    /// compositors above them were rebuilt for every child; but a parent's
+    /// remaining content settles on one interned pattern after a few
+    /// siblings, so a run of `<p>`s asked the same question each time. The
+    /// name gets an id from the same table as attribute names; the two never
+    /// share a memo, so sharing ids is harmless.
+    fn start_tag_open(&self, p: &Pat, ns: &str, local: &str) -> Pat {
+        let key = (Rc::as_ptr(p) as usize, self.attr_id(ns, local));
+        if let Some((_, hit)) = self.open_top_memo.borrow().get(&key) {
+            return hit.clone();
+        }
+        let r = self.start_tag_open_deriv(p, ns, local);
+        self.open_top_memo
+            .borrow_mut()
+            .insert(key, (p.clone(), r.clone()));
+        r
+    }
+
     fn start_tag_open_deriv(&self, p: &Pat, ns: &str, local: &str) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => choice(
@@ -552,34 +682,149 @@ impl<'a> Env<'a> {
         (self.nullable(p) && is_ws(s)) || self.nullable(&self.text_deriv(p, s))
     }
 
+    /// The derivative of `p` by one attribute, memoized.
+    ///
+    /// The value reaches the result only through `value_match` at the
+    /// `Attribute` leaves whose name class admits the name. So the leaves'
+    /// content patterns are listed once per `(pattern, name)`, the value is
+    /// matched against each, and the answers form a mask: two values with
+    /// the same mask (every `id="…"` that is a valid ID) derive to the same
+    /// pattern, and the second one is a lookup. Elements of one kind reach
+    /// the same interned pattern here, so after the first element each
+    /// attribute costs a lookup rather than a rebuild of the attribute model.
     fn att_deriv(&self, p: &Pat, ns: &str, local: &str, val: &str) -> Pat {
+        let id = self.attr_id(ns, local);
+        self.contents_cut.set(false);
+        let contents = self.attr_contents(p, ns, local, id);
+        if self.contents_cut.get() || contents.len() > 64 {
+            return self.att_deriv_id(p, ns, local, id, &|c| self.value_match(c, val));
+        }
+        let mask = contents
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| self.value_match(c, val))
+            .fold(0u64, |m, (i, _)| m | (1 << i));
+        let key = (Rc::as_ptr(p) as usize, id, mask);
+        if let Some((_, hit)) = self.deriv_memo.borrow().get(&key) {
+            return hit.clone();
+        }
+        let matches = |c: &Pat| {
+            contents
+                .iter()
+                .position(|x| Rc::ptr_eq(x, c))
+                .is_some_and(|i| mask & (1 << i) != 0)
+        };
+        let r = self.att_deriv_id(p, ns, local, id, &matches);
+        self.deriv_memo
+            .borrow_mut()
+            .insert(key, (p.clone(), r.clone()));
+        r
+    }
+
+    /// The content patterns of the `Attribute` leaves in `p` that admit
+    /// `ns:local`, reached as [`Env::att_deriv_id`] reaches them, each once.
+    fn attr_contents(&self, p: &Pat, ns: &str, local: &str, id: u32) -> Rc<Vec<Pat>> {
+        let key = (Rc::as_ptr(p) as usize, id);
+        if let Some((_, hit)) = self.contents_memo.borrow().get(&key) {
+            return hit.clone();
+        }
+        if !self.may_carry(p, ns, local, id, false) {
+            return Rc::new(Vec::new());
+        }
+        let union = |a: Rc<Vec<Pat>>, b: Rc<Vec<Pat>>| {
+            let mut v = (*a).clone();
+            for c in b.iter() {
+                if !v.iter().any(|x| Rc::ptr_eq(x, c)) {
+                    v.push(c.clone());
+                }
+            }
+            Rc::new(v)
+        };
+        let r = match &**p {
+            Pattern::Attribute(nc, content) if nc.contains(ns, local) => {
+                Rc::new(vec![content.clone()])
+            }
+            Pattern::Choice(a, b) | Pattern::Group(a, b) | Pattern::Interleave(a, b) => union(
+                self.attr_contents(a, ns, local, id),
+                self.attr_contents(b, ns, local, id),
+            ),
+            Pattern::After(a, _) | Pattern::OneOrMore(a) => self.attr_contents(a, ns, local, id),
+            Pattern::Ref(i) => {
+                if !self.contents_busy.borrow_mut().insert(*i) {
+                    self.contents_cut.set(true);
+                    return Rc::new(Vec::new());
+                }
+                let r = self.attr_contents(&self.defs[*i], ns, local, id);
+                self.contents_busy.borrow_mut().remove(i);
+                r
+            }
+            _ => Rc::new(Vec::new()),
+        };
+        if !self.contents_cut.get() {
+            self.contents_memo
+                .borrow_mut()
+                .insert(key, (p.clone(), r.clone()));
+        }
+        r
+    }
+
+    /// `att_deriv`'s walk, pruned by [`Env::may_carry`] (a branch that cannot
+    /// hold this attribute derives to `NotAllowed`, so it is not walked), with
+    /// the value test at a matching leaf supplied by the caller.
+    fn att_deriv_id(
+        &self,
+        p: &Pat,
+        ns: &str,
+        local: &str,
+        id: u32,
+        value_ok: &dyn Fn(&Pat) -> bool,
+    ) -> Pat {
+        if !self.may_carry(p, ns, local, id, false) {
+            return not_allowed();
+        }
         match &**p {
             Pattern::Choice(a, b) => choice(
-                self.att_deriv(a, ns, local, val),
-                self.att_deriv(b, ns, local, val),
+                self.att_deriv_id(a, ns, local, id, value_ok),
+                self.att_deriv_id(b, ns, local, id, value_ok),
             ),
             Pattern::Group(a, b) => choice(
-                group(self.att_deriv(a, ns, local, val), b.clone()),
-                group(a.clone(), self.att_deriv(b, ns, local, val)),
+                group(self.att_deriv_id(a, ns, local, id, value_ok), b.clone()),
+                group(a.clone(), self.att_deriv_id(b, ns, local, id, value_ok)),
             ),
             Pattern::Interleave(a, b) => choice(
-                interleave(self.att_deriv(a, ns, local, val), b.clone()),
-                interleave(a.clone(), self.att_deriv(b, ns, local, val)),
+                interleave(self.att_deriv_id(a, ns, local, id, value_ok), b.clone()),
+                interleave(a.clone(), self.att_deriv_id(b, ns, local, id, value_ok)),
             ),
-            Pattern::After(a, b) => after(self.att_deriv(a, ns, local, val), b.clone()),
+            Pattern::After(a, b) => after(self.att_deriv_id(a, ns, local, id, value_ok), b.clone()),
             Pattern::OneOrMore(a) => group(
-                self.att_deriv(a, ns, local, val),
+                self.att_deriv_id(a, ns, local, id, value_ok),
                 choice(one_or_more(a.clone()), empty()),
             ),
             Pattern::Attribute(nc, content) => {
-                if nc.contains(ns, local) && self.value_match(content, val) {
+                if nc.contains(ns, local) && value_ok(content) {
                     empty()
                 } else {
                     not_allowed()
                 }
             }
-            Pattern::Ref(i) => self.att_deriv(&self.defs[*i], ns, local, val),
+            Pattern::Ref(i) => self.att_deriv_id(&self.defs[*i], ns, local, id, value_ok),
             _ => not_allowed(),
+        }
+    }
+
+    /// [`Env::attr_name_allowed`], answered from [`Env::may_carry`]'s memo.
+    /// The two walk the same edges (`after_rest` makes `may_carry` follow
+    /// both halves of an `After`, as this does), and differ only on a `Ref`
+    /// cycle, where `may_carry` answers true and this answers false; on the
+    /// cut the memo is not trusted and the original walk decides.
+    fn name_allowed(&self, p: &Pat, ns: &str, local: &str) -> bool {
+        let id = self.attr_id(ns, local);
+        let cuts = self.carry_cuts.get();
+        let r = self.may_carry(p, ns, local, id, true);
+        if self.carry_cuts.get() == cuts {
+            r
+        } else {
+            self.attr_name_allowed(p, ns, local, &mut HashSet::new())
         }
     }
 
@@ -613,7 +858,22 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// Memoized: the result depends on `p` alone, and elements of one kind
+    /// reach the same interned pattern here, so without it the whole
+    /// remaining content model was rebuilt, `Ref`s expanded, once per element.
     fn start_tag_close_deriv(&self, p: &Pat) -> Pat {
+        let key = Rc::as_ptr(p) as usize;
+        if let Some((_, hit)) = self.close_memo.borrow().get(&key) {
+            return hit.clone();
+        }
+        let r = self.start_tag_close_deriv_uncached(p);
+        self.close_memo
+            .borrow_mut()
+            .insert(key, (p.clone(), r.clone()));
+        r
+    }
+
+    fn start_tag_close_deriv_uncached(&self, p: &Pat) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => {
                 choice(self.start_tag_close_deriv(a), self.start_tag_close_deriv(b))
@@ -679,7 +939,7 @@ impl<'a> Env<'a> {
             if n.is_element() {
                 let ns = n.tag_name().namespace().unwrap_or("");
                 let local = n.tag_name().name();
-                if is_not_allowed(&self.start_tag_open_deriv(&cur, ns, local)) {
+                if is_not_allowed(&self.start_tag_open(&cur, ns, local)) {
                     // A custom element is allowed wherever `<span>` is, and the
                     // question has to be asked *of the pattern at this
                     // position* - which is why this sits here rather than at
@@ -702,7 +962,7 @@ impl<'a> Env<'a> {
                     if self.custom_elements
                         && ns == XHTML_NS
                         && local.contains('-')
-                        && !is_not_allowed(&self.start_tag_open_deriv(&cur, XHTML_NS, "span"))
+                        && !is_not_allowed(&self.start_tag_open(&cur, XHTML_NS, "span"))
                     {
                         // Its children are checked against `cur`, the same
                         // "transparent content" the rejection path uses, which
@@ -876,7 +1136,7 @@ impl<'a> Env<'a> {
     ) -> Pat {
         let ns = node.tag_name().namespace().unwrap_or("");
         let local = node.tag_name().name();
-        let mut cur = self.start_tag_open_deriv(p, ns, local);
+        let mut cur = self.start_tag_open(p, ns, local);
         if is_not_allowed(&cur) {
             // Only reached for the root element; sibling name-mismatches are
             // handled (and skipped) in `children_deriv`.
@@ -904,7 +1164,7 @@ impl<'a> Env<'a> {
                 // first is "not allowed here"; the second is a value error, and
                 // the value is worth quoting. `att_deriv` collapses both into
                 // NotAllowed, so re-ask ignoring the value to tell them apart.
-                let fault = if self.attr_name_allowed(&prev, ans, att.name(), &mut HashSet::new()) {
+                let fault = if self.name_allowed(&prev, ans, att.name()) {
                     AttributeFault::InvalidValue
                 } else {
                     AttributeFault::NotAllowed

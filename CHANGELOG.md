@@ -8,6 +8,34 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Performance
+
+- **Content-document validation is several times faster, and a hostile book
+  can no longer turn attributes into minutes of CPU.** The RELAX NG engine
+  rebuilt the whole attribute model of an element for every attribute it
+  read, and rebuilt the parent's remaining content model for every child.
+  XHTML's global attributes are one long interleave, so that walk was ~80% of
+  the validation time on attribute-heavy content. The derivatives are now
+  memoized on the interned patterns, and a branch that cannot hold an
+  attribute is not walked at all. An attribute's value enters the memo only
+  through whether it matches each candidate datatype, so every valid `id`
+  shares one entry. Measured on a 4 MiB chapter:
+
+  | content | before | after |
+  |---|---:|---:|
+  | 16 `data-*` attributes per `<p>` | 14.4 s | 0.7 s |
+  | `class` and `id` on every `<p>` | 17.2 s | 1.0 s |
+  | no attributes | 3.1 s | 0.6 s |
+
+  A valid 300 KB EPUB that inflates to a 60 MiB chapter took 207 s here, and
+  now takes 2.8 s. Memory is unchanged: that case still peaks at ~870 MB,
+  which is the parsed document itself. The 474-book shelf validates in 58 s
+  instead of 99 s, **with byte-identical output on every book**, as do
+  EPUBCheck's test suite and W3C's conformance publications. The 60 MiB
+  book is in the hostile suite as a timing guard, and 0.17.2 times out on it.
+
 ## [0.17.2] - 2026-09-23
 
 ### Security

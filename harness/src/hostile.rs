@@ -344,6 +344,24 @@ fn gen_attribute_count(out: &Path) {
     );
 }
 
+/// A valid book whose one chapter is 60 MiB of paragraphs with 64 attributes
+/// each, deflated to ~300 KB. The RELAX NG engine rebuilt the attribute model
+/// for every attribute of every element and took 207 s on it, reporting VALID;
+/// with its derivatives memoized it takes ~3 s. Kept as a timing guard: if the
+/// memoization is ever lost this runs past the timeout, which is the only way
+/// the suite can see a slowdown. `accept-` because the book is valid.
+fn gen_attribute_heavy(out: &Path) {
+    let attrs: String = (0..64).map(|i| format!(" data-a{i}=\"x\"")).collect();
+    let el = format!("<p{attrs}>x</p>");
+    let body = el.repeat(60 * 1024 * 1024 / el.len());
+    book(
+        &out.join("accept-attribute-heavy.epub"),
+        opf("", ""),
+        nav("", &body),
+        Vec::new(),
+    );
+}
+
 /// A non-ASCII letter beside an `=` in a malformed tag. `à` is C3 A0 and `Å`
 /// is C3 85, and read one byte at a time as `char` those continuation bytes
 /// are NBSP and NEL - Unicode whitespace - so the recovery scanner for
@@ -572,6 +590,7 @@ fn main() {
     gen_xxe(&out);
     gen_entity_expansion(&out);
     gen_attribute_count(&out);
+    gen_attribute_heavy(&out);
     gen_multibyte_equals(&out);
     gen_big_image(&out);
     gen_entry_count(&out);
