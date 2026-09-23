@@ -8,6 +8,11 @@
 //! `HTM-…`, …). A WebAssembly build ships separately as the `epubveri-wasm`
 //! crate.
 
+// No unsafe code exists in this crate, and a validator that parses hostile
+// input has no reason to grow any: this makes that a compile error rather
+// than a convention.
+#![forbid(unsafe_code)]
+
 /// The crate version, carrying git build metadata (`+<short-hash>[.dirty]`)
 /// when built from a checkout — the one string the CLI's `-V`, this crate's
 /// embedders, and the wasm binding's `version()` all print (veripublica

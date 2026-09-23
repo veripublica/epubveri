@@ -15,6 +15,8 @@
 //! Exit codes: `0` = every input valid (no errors), `1` = at least one input
 //! has errors, `2` = usage error or an input could not be read.
 
+#![forbid(unsafe_code)]
+
 use std::path::Path;
 use std::process::ExitCode;
 
