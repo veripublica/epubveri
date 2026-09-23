@@ -668,6 +668,12 @@ impl Ocf {
     /// per-entry cap; an entry over it reads as `None` and is reported by
     /// `check_resource_limits` rather than materialised.
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
+        // Already known to be over the cap: the answer cannot change, and
+        // asking again would inflate another 64 MiB to learn it (a stylesheet
+        // is read from two places, so every oversized one cost that twice).
+        if self.oversized.iter().any(|n| n == name) {
+            return None;
+        }
         let f = self.archive.by_name(name).ok()?;
         let mut buf = Vec::new();
         // One byte past the cap: reading *more* than it is what separates an
