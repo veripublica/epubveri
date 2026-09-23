@@ -36,6 +36,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   because a lost guard on a machine with enough memory shows up as a wrong
   verdict rather than as a crash.
 
+- **Hardening from the same audit.** None of this changes a validation
+  result.
+  - `cargo install epubveri` installs the `epubveri` CLI and nothing else.
+    A development tool, `spike`, used to be auto-discovered as a second
+    binary of the published crate and landed on users' `PATH`. It now lives
+    in the harness, and the crate sets `autobins = false`.
+  - The library and the CLI forbid `unsafe` code at compile time. There was
+    none; now there cannot be any by accident.
+  - Every GitHub Actions step is pinned to a commit rather than to a tag or
+    branch. Two of the references turned out to be branches.
+  - The dependency audit also runs weekly, so an advisory against a
+    dependency already in a release is reported without waiting for a commit.
+  - A deterministic mutation fuzzer (`--bin fuzz` in the harness) runs in the
+    release pre-flight. It is how the crash described above was found.
+  - `SECURITY.md` says how to report a vulnerability privately (GitHub's
+    private reporting is now on) and how to verify a download: the
+    checksum, the build attestation, and npm's provenance.
+- An entry over the 64 MiB limit is no longer decompressed again each time
+  it is asked for. The reports are the same, and 30 such entries validate in
+  less than half the time.
+
 ### Fixed
 
 - **An image larger than 64 MiB no longer makes the book INVALID.** A single
