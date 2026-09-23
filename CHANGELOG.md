@@ -8,9 +8,15 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.17.5] - 2026-09-23
 
 ### Performance
+
+**Validation is about two and a half times as fast, with every report
+unchanged.** The 474 books on our shelf took 47.9 s with 0.17.4 and take 19.0 s
+now; the same reports come out on every one of them, on EPUBCheck's own test
+suite and on W3C's conformance publications. Most of the time went on doing
+the same work again, and the four changes below stop that.
 
 - **A book with many files and many links no longer spends most of its time
   finding them in the manifest.** Every hyperlink scanned the whole manifest
@@ -19,7 +25,7 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   is read. A generated book of 6,000 chapters and 12,000 links went from
   28.5 s to 1.6 s. Reported, with a profile of a 5,970-file book that spent
   40% of its time there, by raeq in #137.
-- **Content-document validation takes about half the time it did in 0.17.4.**
+- **The grammar check of each content document takes about half the time.**
   Every pattern the XML grammar engine builds is shared through a lookup
   table, and that table allocated each candidate before checking whether it
   already existed, hashed with a function designed to resist hostile keys its
@@ -32,18 +38,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   413 files were decompressed 4,777 times, and each chapter parsed its
   stylesheet twice more for its class names and URLs. Decompressed files are
   now kept (up to 64 MiB, which holds every book on our shelf whole) and what
-  a stylesheet contributes is worked out once. Together with the two changes
-  above, the 474-book shelf takes 21.5 s, against 47.3 s in 0.17.4. The
-  price is memory, bounded by the same 64 MiB: a typical book on the shelf
-  peaks 4 MB higher, the one that reads the most (25 MB) 30 MB higher, and
-  the highest peak on the shelf went from 92 MB to 96 MB.
+  a stylesheet contributes is worked out once. The price is memory, bounded
+  by the same 64 MiB: a typical book on the shelf peaks about 4 MB higher,
+  the one that reads the most (25 MB) about 30 MB higher, and the highest
+  peak on the shelf went from 92 MB to 94 MB.
 - **A document that many chapters link into is parsed once, not once per
   chapter.** Checking a link's `#fragment` needs the ids of the document it
   points into, and those were worked out afresh for every chapter that linked
   there: one book's notes file, 210 KB, was parsed 232 times, and another book
   parsed 35 times as much XML as it contains. They are now kept for the whole
-  book. That book went from 3.6 s to 0.23 s, and the 474-book shelf from
-  47.9 s in 0.17.4 to 19.0 s, with every report unchanged.
+  book, and that book went from 3.6 s to 0.23 s.
 
 ### Fixed
 
