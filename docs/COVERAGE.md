@@ -33,7 +33,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
 | **All** | **212** | **4** | **2** | **105** | **218** | **216/218** | |
 
-**epubveri implements 216 of 218 live epubcheck checks (~99%)** — 212 fully, 4 partially — plus 9 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 216 of 218 live epubcheck checks (~99%)** — 212 fully, 4 partially — plus 10 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -446,3 +446,4 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-011 | dc:date epubcheck accepts but W3C-DTF does not (usage, 2,798-book report) | — | Y |
 | ADV-012 | a class selector whose name is not a CSS identifier (usage, 2,798-book report) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
+| LIM-002 | the publication exceeds ocf::MAX_BOOK_BYTES in total; a resource was not checked | — | Y |

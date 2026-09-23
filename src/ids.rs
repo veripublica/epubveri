@@ -324,6 +324,7 @@ pub fn advisory_basis(id: &str) -> Option<AdvisoryBasis> {
 // a `LIM-*` line says "epubveri declined to process this", never "epubcheck
 // would report this".
 pub const LIM_001: &str = "LIM-001"; // a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked
+pub const LIM_002: &str = "LIM-002"; // the publication exceeds ocf::MAX_BOOK_BYTES in total; a resource was not checked
 
 // --- Media Overlays (SMIL) ---
 pub const MED_003: &str = "MED-003"; // a <picture> element's own <img> fallback references a foreign resource

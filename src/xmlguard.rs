@@ -73,6 +73,18 @@ pub const MAX_EXPANSION_BYTES: u64 = crate::ocf::MAX_ENTRY_BYTES;
 /// negligible.
 pub const MAX_ATTRIBUTES: usize = 256;
 
+/// The most elements [`check`] accepts in one document, counting the ones
+/// entity references bring in each time they are referenced.
+///
+/// Memory is spent per element, not per byte: roxmltree keeps a node for
+/// every element and every run of text, and validation keeps more. Measured
+/// here, a 60 MiB chapter of `<b/>` (15.7 million elements, 60 KB deflated)
+/// peaked at 1.27 GB and took 28 s, while 60 MiB of prose paragraphs took
+/// 202 MB. Across the 474-book shelf the most elements in one document is
+/// **20,160**, so a million is ~50x above real books and bounds one document
+/// to ~100 MB and ~2 s.
+pub const MAX_ELEMENTS: usize = 1_000_000;
+
 /// Why [`check`] declined a document. Each variant carries the value the
 /// scan had reached when it stopped, which is a lower bound: it stops at the
 /// first point past the limit.
@@ -85,6 +97,8 @@ pub enum Refusal {
     TooExpansive(u64),
     /// One element carries more than [`MAX_ATTRIBUTES`] attributes.
     TooManyAttributes(usize),
+    /// The document holds more than [`MAX_ELEMENTS`] elements.
+    TooManyElements(usize),
 }
 
 impl std::fmt::Display for Refusal {
@@ -106,6 +120,11 @@ impl std::fmt::Display for Refusal {
                 "an element carries {n} attributes, more than the {MAX_ATTRIBUTES} \
                  allowed on one, so the document was not parsed"
             ),
+            Refusal::TooManyElements(n) => write!(
+                f,
+                "it holds more than the {MAX_ELEMENTS} elements allowed in one document \
+                 (counted {n}), so the document was not parsed"
+            ),
         }
     }
 }
@@ -113,8 +132,9 @@ impl std::fmt::Display for Refusal {
 impl std::error::Error for Refusal {}
 
 /// Whether `text` is safe to hand to `roxmltree` with `allow_dtd: true`:
-/// `Ok` when it nests no deeper than [`MAX_XML_DEPTH`], no element carries
-/// more than [`MAX_ATTRIBUTES`] attributes, and its entities add no more than
+/// `Ok` when it nests no deeper than [`MAX_XML_DEPTH`], holds no more than
+/// [`MAX_ELEMENTS`] elements, no element carries more than
+/// [`MAX_ATTRIBUTES`] attributes, and its entities add no more than
 /// [`MAX_EXPANSION_BYTES`], counting the elements an entity's replacement
 /// text brings with it.
 ///
@@ -130,6 +150,9 @@ pub fn check(text: &str) -> Result<(), Refusal> {
     let deepest = ents.deepest(body, MAX_XML_DEPTH, 0);
     if let Some(n) = ents.too_many_attributes {
         return Err(Refusal::TooManyAttributes(n));
+    }
+    if ents.elements > MAX_ELEMENTS {
+        return Err(Refusal::TooManyElements(ents.elements));
     }
     if deepest > MAX_XML_DEPTH {
         return Err(Refusal::TooDeep(deepest));
@@ -394,11 +417,15 @@ const MAX_ENTITY_NESTING: usize = 64;
 /// The declared general entities, and what each one costs once referenced.
 struct Entities<'a> {
     decls: HashMap<&'a str, &'a str>,
-    depth: HashMap<&'a str, usize>,
+    /// Per entity: how deep its elements nest, and how many there are.
+    depth: HashMap<&'a str, (usize, usize)>,
     len: HashMap<&'a str, u64>,
     /// Set by the scan when an element carries more than [`MAX_ATTRIBUTES`];
     /// the scan stops there, entity values included.
     too_many_attributes: Option<usize>,
+    /// Elements counted so far in the document being scanned; the scan stops
+    /// once this passes [`MAX_ELEMENTS`].
+    elements: usize,
 }
 
 impl<'a> Entities<'a> {
@@ -408,6 +435,7 @@ impl<'a> Entities<'a> {
             depth: HashMap::new(),
             len: HashMap::new(),
             too_many_attributes: None,
+            elements: 0,
         }
     }
 
@@ -429,9 +457,13 @@ impl<'a> Entities<'a> {
                 // elements it holds nest under the current one.
                 if let Some((name, next)) = entity_ref_at(s, i) {
                     if self.decls.contains_key(name) {
-                        let inner = self.depth_of(name, limit, nesting + 1);
+                        let (inner, count) = self.depth_of(name, limit, nesting + 1);
                         max = max.max(depth.saturating_add(inner));
-                        if max > limit || self.too_many_attributes.is_some() {
+                        self.elements = self.elements.saturating_add(count);
+                        if max > limit
+                            || self.too_many_attributes.is_some()
+                            || self.elements > MAX_ELEMENTS
+                        {
                             return max;
                         }
                     }
@@ -477,11 +509,17 @@ impl<'a> Entities<'a> {
             }
             if closing {
                 depth = depth.saturating_sub(1);
-            } else if !self_closing {
-                depth += 1;
-                max = max.max(depth);
-                if max > limit {
+            } else {
+                self.elements += 1;
+                if self.elements > MAX_ELEMENTS {
                     return max;
+                }
+                if !self_closing {
+                    depth += 1;
+                    max = max.max(depth);
+                    if max > limit {
+                        return max;
+                    }
                 }
             }
             i += len;
@@ -489,23 +527,30 @@ impl<'a> Entities<'a> {
         max
     }
 
-    /// How deep the elements in entity `name`'s replacement text nest.
-    fn depth_of(&mut self, name: &'a str, limit: usize, nesting: usize) -> usize {
+    /// How deep the elements in entity `name`'s replacement text nest, and
+    /// how many of them there are, nested references included. The caller
+    /// adds the count once per reference, which is how the parser expands it.
+    fn depth_of(&mut self, name: &'a str, limit: usize, nesting: usize) -> (usize, usize) {
         if let Some(&d) = self.depth.get(name) {
             return d;
         }
         let Some(&value) = self.decls.get(name) else {
-            return 0;
+            return (0, 0);
         };
         if nesting >= MAX_ENTITY_NESTING {
-            return usize::MAX;
+            return (usize::MAX, usize::MAX);
         }
-        // Provisional zero while this entity is being scanned, so a loop
+        // Provisional zeros while this entity is being scanned, so a loop
         // back to it terminates; the parser refuses the loop itself.
-        self.depth.insert(name, 0);
+        self.depth.insert(name, (0, 0));
+        // The scan counts into `elements`; take this entity's share back out,
+        // since it is charged per reference by the caller.
+        let before = self.elements;
         let d = self.deepest(value, limit, nesting);
-        self.depth.insert(name, d);
-        d
+        let count = self.elements - before;
+        self.elements = before;
+        self.depth.insert(name, (d, count));
+        (d, count)
     }
 
     /// The text entity `name` expands to, in bytes, counting the entities
@@ -820,6 +865,39 @@ mod depth_tests {
         let attrs: String = (0..=MAX_ATTRIBUTES).map(|i| format!(" a{i}='x'")).collect();
         let t = format!("<!DOCTYPE r [<!ENTITY e \"<p{attrs}/>\">]><r>&e;</r>");
         assert!(matches!(check(&t), Err(Refusal::TooManyAttributes(_))));
+    }
+
+    /// The element limit counts every start tag, self-closing ones included,
+    /// and charges an entity's elements once per reference, since the parser
+    /// expands each reference in place.
+    #[test]
+    fn elements_are_limited_per_document() {
+        use super::{MAX_ELEMENTS, Refusal};
+        // The root is one element, so MAX_ELEMENTS - 1 children fill it.
+        let at = format!("<r>{}</r>", "<b/>".repeat(MAX_ELEMENTS - 1));
+        assert_eq!(check(&at), Ok(()));
+        let over = format!("<r>{}</r>", "<b/>".repeat(MAX_ELEMENTS));
+        assert!(matches!(check(&over), Err(Refusal::TooManyElements(_))));
+        // Closing tags, comments and CDATA are not elements.
+        let flat = format!(
+            "<r>{}</r>",
+            "<p>x</p><!-- <b/> --><![CDATA[<b/>]]>".repeat(1000)
+        );
+        assert_eq!(check(&flat), Ok(()));
+        // 1,000 elements in an entity, referenced 1,000 times: a small file,
+        // but the parser builds a million and one elements from it.
+        let refs = |n: usize| {
+            format!(
+                "<!DOCTYPE r [<!ENTITY e \"{}\">]><r>{}</r>",
+                "<b/>".repeat(1_000),
+                "&e;".repeat(n)
+            )
+        };
+        assert_eq!(check(&refs(999)), Ok(()), "1 + 999 x 1,000");
+        assert_eq!(
+            check(&refs(1_000)),
+            Err(Refusal::TooManyElements(1_000_001))
+        );
     }
 
     /// Entity depth adds to the depth at the point of reference, and nests

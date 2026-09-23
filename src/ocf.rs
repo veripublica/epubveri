@@ -251,6 +251,16 @@ pub struct Ocf {
     /// Entries [`Ocf::read`] refused for exceeding [`MAX_ENTRY_BYTES`],
     /// drained by [`check_resource_limits`] at the end of the run.
     oversized: Vec<String>,
+    /// Bytes read so far from distinct entries, against [`MAX_BOOK_BYTES`].
+    read_total: u64,
+    /// Entries already charged to `read_total`; reading one again is free.
+    charged: std::collections::HashSet<String>,
+    /// Entries [`Ocf::read`] refused because the book had used up
+    /// [`MAX_BOOK_BYTES`], reported by [`check_resource_limits`].
+    over_budget: Vec<String>,
+    /// The budget itself: [`MAX_BOOK_BYTES`], held here so a test can make
+    /// it small instead of inflating hundreds of MiB.
+    book_budget: u64,
     /// Container paths named by a `<CipherReference>` in
     /// `META-INF/encryption.xml`, filled in by [`check_encryption`].
     encrypted: std::collections::HashSet<String>,
@@ -334,6 +344,20 @@ pub(crate) const SIGNATURE_BYTES: u64 = 64;
 /// 82 MB), so real books have ~30x headroom on their biggest resource.
 pub(crate) const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
+/// How many bytes [`Ocf::read`] inflates for one publication, summed over
+/// distinct entries. Past it, an entry not yet read is refused and reported
+/// as LIM-002.
+///
+/// The entry cap bounds one resource; nothing bounded their number. Time
+/// is spent per byte of markup, so a container of many capped chapters,
+/// each a few hundred KB deflated, validated for as long as it had chapters.
+/// 256 MiB against a measured worst case on the 474-book shelf of
+/// **25.5 MB** read by one book (a mathematics textbook), ~10x.
+///
+/// The check is made before an entry is read, so the last entry admitted may
+/// carry the total past the limit by up to [`MAX_ENTRY_BYTES`].
+pub(crate) const MAX_BOOK_BYTES: u64 = 256 * 1024 * 1024;
+
 impl Ocf {
     pub fn has(&self, name: &str) -> bool {
         self.names.iter().any(|n| n == name)
@@ -347,6 +371,20 @@ impl Ocf {
         // asking again would inflate another 64 MiB to learn it (a stylesheet
         // is read from two places, so every oversized one cost that twice).
         if self.oversized.iter().any(|n| n == name) {
+            return None;
+        }
+        // The book's budget is charged once per entry, on its first read, so
+        // an entry read from several places costs once, and an entry already
+        // read stays readable after the budget runs out: refusing it on a
+        // second read would leave two checks disagreeing about one file.
+        let first_read = !self.charged.contains(name);
+        if first_read && self.read_total > self.book_budget {
+            // Only an entry that exists was refused. Checks also ask for
+            // optional files (`META-INF/encryption.xml`); naming one of those
+            // as "not checked" would be a false statement about the book.
+            if self.has(name) && !self.over_budget.iter().any(|n| n == name) {
+                self.over_budget.push(name.to_string());
+            }
             return None;
         }
         let f = self.archive.by_name(name).ok()?;
@@ -365,6 +403,10 @@ impl Ocf {
             }
             return None;
         }
+        if first_read {
+            self.read_total += buf.len() as u64;
+            self.charged.insert(name.to_string());
+        }
         Some(buf)
     }
 }
@@ -380,6 +422,18 @@ pub(crate) fn check_resource_limits(ocf: &Ocf, report: &mut Report) {
             format!(
                 "resource exceeds the {} MiB size limit and was not checked",
                 MAX_ENTRY_BYTES / (1024 * 1024)
+            ),
+            name.clone(),
+        );
+    }
+    for name in &ocf.over_budget {
+        report.push_at(
+            LIM_002,
+            Severity::Error,
+            format!(
+                "the publication's resources exceed the {} MiB it may read in \
+                 total, so this one was not checked",
+                MAX_BOOK_BYTES / (1024 * 1024)
             ),
             name.clone(),
         );
@@ -681,6 +735,10 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         archive,
         names,
         oversized: Vec::new(),
+        read_total: 0,
+        charged: std::collections::HashSet::new(),
+        over_budget: Vec::new(),
+        book_budget: MAX_BOOK_BYTES,
         encrypted: std::collections::HashSet::new(),
     };
 
@@ -1425,6 +1483,55 @@ mod encryption_content_model_tests {
                 "ocf.encryption.incomplete_content",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod book_budget_tests {
+    use super::{Ocf, check_resource_limits};
+    use crate::ids::LIM_002;
+    use crate::report::Report;
+    use std::io::Write;
+
+    fn container(entries: &[(&str, usize)]) -> Vec<u8> {
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("mimetype", stored).unwrap();
+        z.write_all(b"application/epub+zip").unwrap();
+        for (name, len) in entries {
+            z.start_file(*name, stored).unwrap();
+            z.write_all(&vec![b'x'; *len]).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    /// The budget is charged once per entry on its first read; once it is
+    /// spent, a new entry is refused and reported by name, and an entry
+    /// already read stays readable.
+    #[test]
+    fn a_spent_budget_refuses_new_entries_only() {
+        let bytes = container(&[("a", 10), ("b", 10), ("c", 10)]);
+        let mut report = Report::default();
+        let mut ocf: Ocf = super::open(bytes, &mut report).expect("opens");
+        // `open` has read `mimetype` already; the budget counts from there.
+        ocf.book_budget = ocf.read_total + 15;
+        assert!(ocf.read("a").is_some());
+        assert!(ocf.read("a").is_some(), "a second read is free");
+        assert!(ocf.read("b").is_some(), "10 more read, under 15: admitted");
+        assert!(ocf.read("c").is_none(), "20 more read, past 15: refused");
+        assert!(ocf.read("a").is_some(), "already read, still readable");
+        assert!(ocf.read("c").is_none());
+        assert!(ocf.read("absent").is_none());
+        let mut report = Report::default();
+        check_resource_limits(&ocf, &mut report);
+        let hits: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.id == LIM_002)
+            .map(|m| m.location.clone())
+            .collect();
+        assert_eq!(hits.len(), 1, "c alone, once, by name: {hits:?}");
     }
 }
 

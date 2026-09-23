@@ -362,6 +362,51 @@ fn gen_attribute_heavy(out: &Path) {
     );
 }
 
+/// Memory per element: 60 MiB of `<b/>` is 15.7 million elements from a
+/// 60 KB file, and peaked at 1.27 GB and 28 s before reporting VALID. Guard:
+/// `xmlguard::MAX_ELEMENTS`. Otherwise valid, so a lost guard shows as
+/// ACCEPTED.
+fn gen_element_count(out: &Path) {
+    book(
+        &out.join("refuse-element-count.epub"),
+        opf("", ""),
+        nav("", &"<b/>".repeat(60 * 1024 * 1024 / 4)),
+        Vec::new(),
+    );
+}
+
+/// Many chapters, each under the entry cap: six of 60 MiB of prose, a few
+/// hundred KB deflated in all. Nothing bounded their number, so time grew
+/// with the chapter count. Guard: `ocf::MAX_BOOK_BYTES` (256 MiB). The fifth
+/// chapter starts under it and is read; the sixth is refused and reported as
+/// LIM-002. Otherwise valid, so a lost guard shows as ACCEPTED.
+fn gen_book_budget(out: &Path) {
+    let para = format!("<p>{}</p>", "lorem ipsum dolor sit amet ".repeat(40));
+    let chapter = format!(
+        concat!(
+            r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml">"#,
+            r#"<head><title>c</title></head><body>{}</body></html>"#
+        ),
+        para.repeat(60 * 1024 * 1024 / para.len())
+    );
+    let mut items = String::new();
+    let mut spine = String::new();
+    let mut extra = Vec::new();
+    for i in 0..6 {
+        items.push_str(&format!(
+            r#"<item id="c{i}" href="c{i}.xhtml" media-type="application/xhtml+xml"/>"#
+        ));
+        spine.push_str(&format!(r#"<itemref idref="c{i}"/>"#));
+        extra.push((format!("OEBPS/c{i}.xhtml"), chapter.clone().into_bytes()));
+    }
+    book(
+        &out.join("refuse-book-budget.epub"),
+        opf(&items, &spine),
+        nav("", ""),
+        extra,
+    );
+}
+
 /// A non-ASCII letter beside an `=` in a malformed tag. `à` is C3 A0 and `Å`
 /// is C3 85, and read one byte at a time as `char` those continuation bytes
 /// are NBSP and NEL - Unicode whitespace - so the recovery scanner for
@@ -591,6 +636,8 @@ fn main() {
     gen_entity_expansion(&out);
     gen_attribute_count(&out);
     gen_attribute_heavy(&out);
+    gen_element_count(&out);
+    gen_book_budget(&out);
     gen_multibyte_equals(&out);
     gen_big_image(&out);
     gen_entry_count(&out);

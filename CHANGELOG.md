@@ -10,6 +10,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Security
+
+- **A document may hold at most 1,000,000 elements, and a publication may
+  inflate at most 256 MiB in total.** Memory is spent per element, not per
+  byte: a 60 KB EPUB whose one chapter is 60 MiB of `<b/>` (15.7 million
+  elements) used 1.27 GB and 28 s here, and was reported VALID. Past the
+  element limit, which counts the elements an entity brings in each time it
+  is referenced, the document is reported as `RSC-016` (fatal, "not
+  parsed"). The 64 MiB limit bounded one resource but not how many there
+  were, so a container of many such chapters validated for as long as it
+  had chapters. Past the book limit, each resource not yet read is reported
+  as the new **`LIM-002`** (error, "not checked"), by name. A resource
+  already read stays readable, and a file the book does not contain is never
+  named. Across the 474 books on our shelf, the most elements in one document
+  is 20,160 and the most any book reads is 25.5 MB, so both limits sit
+  roughly 50x and 10x above real books. Measured with a counting allocator,
+  memory does not accumulate across documents: the peak is the largest
+  document, however many there are.
+
 ### Performance
 
 - **Content-document validation is several times faster, and a hostile book
