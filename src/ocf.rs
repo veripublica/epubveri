@@ -261,6 +261,10 @@ pub struct Ocf {
     /// The budget itself: [`MAX_BOOK_BYTES`], held here so a test can make
     /// it small instead of inflating hundreds of MiB.
     book_budget: u64,
+    /// Entries already inflated, so reading one again is a copy rather than
+    /// a second decompression. See [`MAX_READ_CACHE_BYTES`].
+    read_cache: HashMap<String, Vec<u8>>,
+    read_cache_bytes: u64,
     /// Container paths named by a `<CipherReference>` in
     /// `META-INF/encryption.xml`, filled in by [`check_encryption`].
     encrypted: std::collections::HashSet<String>,
@@ -344,6 +348,17 @@ pub(crate) const SIGNATURE_BYTES: u64 = 64;
 /// 82 MB), so real books have ~30x headroom on their biggest resource.
 pub(crate) const MAX_ENTRY_BYTES: u64 = 64 * 1024 * 1024;
 
+/// How many inflated bytes [`Ocf::read`] keeps, so that an entry read again
+/// is copied rather than decompressed again.
+///
+/// The checks ask for the same entry many times: on the shelf, one book's 413
+/// entries were read 4,777 times, its stylesheets about 400 times each, once
+/// per chapter that links them, and decompression was 15% of the whole run.
+/// The largest book on the shelf reads 25.5 MB in all, so 64 MiB holds every
+/// real book whole, while a hostile one can add at most this much to the
+/// peak; past it, entries are simply read the old way.
+pub(crate) const MAX_READ_CACHE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// How many bytes [`Ocf::read`] inflates for one publication, summed over
 /// distinct entries. Past it, an entry not yet read is refused and reported
 /// as LIM-002.
@@ -387,6 +402,9 @@ impl Ocf {
             }
             return None;
         }
+        if let Some(bytes) = self.read_cache.get(name) {
+            return Some(bytes.clone());
+        }
         let f = self.archive.by_name(name).ok()?;
         let mut buf = Vec::new();
         // One byte past the cap: reading *more* than it is what separates an
@@ -406,6 +424,10 @@ impl Ocf {
         if first_read {
             self.read_total += buf.len() as u64;
             self.charged.insert(name.to_string());
+        }
+        if self.read_cache_bytes + buf.len() as u64 <= MAX_READ_CACHE_BYTES {
+            self.read_cache_bytes += buf.len() as u64;
+            self.read_cache.insert(name.to_string(), buf.clone());
         }
         Some(buf)
     }
@@ -739,6 +761,8 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         charged: std::collections::HashSet::new(),
         over_budget: Vec::new(),
         book_budget: MAX_BOOK_BYTES,
+        read_cache: HashMap::new(),
+        read_cache_bytes: 0,
         encrypted: std::collections::HashSet::new(),
     };
 
