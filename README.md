@@ -316,7 +316,14 @@ browser](#use-it-in-the-browser-wasm) — zero download, zero install.)
 
 To build it from source, you'll need [Rust
 installed](https://www.rust-lang.org/tools/install) (the `cargo`
-command). Then, from a clone of this repo:
+command). **On Windows, Rust also needs Microsoft's linker**, which comes
+with [Build Tools for Visual
+Studio](https://visualstudio.microsoft.com/visual-cpp-build-tools/) when you
+tick *Desktop development with C++*. Without it every build, `cargo install
+epubveri` included, stops with ``linker `link.exe` not found``. VS Code is a
+different product and does not provide it. If you only want to run
+epubveri, the pre-built Windows binary above needs none of this. Then, from
+a clone of this repo:
 
 ```sh
 # Build it once:
