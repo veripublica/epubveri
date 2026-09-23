@@ -5637,7 +5637,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let sig = if crate::cmt::signature_can_decide(mt) && !is_remote_url(href) {
                     name_index
                         .get(&nfc(&resolve(&base_dir, href)))
-                        .and_then(|n| ocf.read_content(n))
+                        .and_then(|n| ocf.read_head_content(n, crate::ocf::SIGNATURE_BYTES))
                         .as_deref()
                         .and_then(crate::cmt::font_signature)
                 } else {
@@ -12959,7 +12959,9 @@ fn check_image_signatures(
         let Some(orig) = name_index.get(&nfc(path)).cloned() else {
             continue;
         };
-        let Some(bytes) = ocf.read_content(&orig) else {
+        // The signature only: every decision below reads the first twelve
+        // bytes, and a full read put a 70 MB image over the size limit.
+        let Some(bytes) = ocf.read_head_content(&orig, crate::ocf::SIGNATURE_BYTES) else {
             continue;
         };
         // Mirror epubcheck's `BitmapChecker` branch order (#45):
@@ -15927,6 +15929,26 @@ mod tests {
             !e.contains(&crate::ids::OPF_029),
             "empty should not be OPF-029: {e:?}"
         );
+    }
+
+    /// An image larger than `ocf::MAX_ENTRY_BYTES` is still an image. The
+    /// signature check reads its first bytes only; it used to inflate the
+    /// whole entry, hit the limit, and turn a book EPUBCheck calls valid into
+    /// `ERROR LIM-001` and INVALID (measured on a 70 MB PNG and WebP).
+    #[test]
+    fn an_image_past_the_entry_limit_is_sniffed_not_refused() {
+        let mut big = vec![0u8; crate::ocf::MAX_ENTRY_BYTES as usize + 1024];
+        big[..4].copy_from_slice(&[0xFF, 0xD8, 0xFF, 0xE0]);
+        let r = crate::validate_bytes(epub_with_image(&big));
+        let ids: Vec<&str> = r.messages.iter().map(|m| m.id).collect();
+        assert!(!ids.contains(&crate::ids::LIM_001), "{ids:?}");
+        assert!(r.is_valid(), "{ids:?}");
+        // And the sniff still runs on it: the same size, but not a JPEG.
+        big[..4].copy_from_slice(b"NOPE");
+        let r = crate::validate_bytes(epub_with_image(&big));
+        let ids: Vec<&str> = r.messages.iter().map(|m| m.id).collect();
+        assert!(ids.contains(&crate::ids::OPF_029), "{ids:?}");
+        assert!(!ids.contains(&crate::ids::LIM_001), "{ids:?}");
     }
 
     #[test]

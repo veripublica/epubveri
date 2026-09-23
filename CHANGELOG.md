@@ -36,6 +36,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   because a lost guard on a machine with enough memory shows up as a wrong
   verdict rather than as a crash.
 
+### Fixed
+
+- **An image larger than 64 MiB no longer makes the book INVALID.** A single
+  70 MB PNG or WebP drew `ERROR LIM-001` ("resource exceeds the 64 MiB size
+  limit and was not checked"), and EPUBCheck 5.4.0 reports the same book
+  valid. The image check decides from the file's first twelve bytes, but it
+  decompressed the whole entry to get them, so the size limit meant for the
+  zip-bomb guard applied to it. The check now reads only the signature. The
+  same change applies to the font signature check. The limit still applies
+  to every resource epubveri parses (XHTML, CSS, SVG and the other XML
+  documents), where it is what stops a zip bomb. A book with an 80 MB image
+  now validates in 85 MB of memory instead of 215 MB. The hostile suite gains
+  an `accept-*` shape for this and a `REFUSED` failure: a guard that rejects
+  honest input is a false positive.
+
 ## [0.17.0] - 2026-09-23
 
 ### Changed

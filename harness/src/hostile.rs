@@ -268,6 +268,26 @@ fn gen_multibyte_equals(out: &Path) {
     );
 }
 
+/// The other side of the zip-bomb guard: an image larger than
+/// `ocf::MAX_ENTRY_BYTES` is a valid resource, and EPUBCheck calls such a
+/// book valid. The image check needs its first twelve bytes and used to
+/// inflate the whole entry for them, so the size limit turned a 70 MB PNG
+/// into `ERROR LIM-001`. A guard that refuses honest input is a false
+/// positive, so this shape must be *accepted*.
+fn gen_big_image(out: &Path) {
+    let mut img = vec![0u8; 65 * 1024 * 1024];
+    img[..TINY_PNG.len()].copy_from_slice(TINY_PNG);
+    book(
+        &out.join("accept-image-past-entry-limit.epub"),
+        opf(
+            r#"<item id="img" href="i.png" media-type="image/png"/>"#,
+            "",
+        ),
+        nav("", r#"<p><img src="i.png" alt="i"/></p>"#),
+        vec![("OEBPS/i.png".to_string(), img)],
+    );
+}
+
 /// Many tiny ZIP entries. Measured linear and fast — kept so that stays true,
 /// not because it ever failed.
 fn gen_entry_count(out: &Path) {
@@ -320,6 +340,19 @@ enum Outcome {
     /// memory to survive it. The zip bomb went unnoticed here for exactly
     /// that reason.
     Accepted,
+    /// An `accept-*` shape did not exit 0: a guard refused honest input,
+    /// which to a user is a false positive.
+    Refused,
+}
+
+/// What a shape's verdict must be, from its file-name prefix: `refuse-*`
+/// must not be called valid, `accept-*` must be, anything else only has to
+/// finish without an abort, a panic or a timeout.
+#[derive(Clone, Copy)]
+enum Expect {
+    Refuse,
+    Accept,
+    Survive,
 }
 
 /// Run the validator on one file, bounded by `timeout`.
@@ -329,7 +362,7 @@ enum Outcome {
 /// where the same thing needs a `timeout(1)` that macOS does not ship. The
 /// 1 ms interval bounds the timing error well under the 0.13s floor the scale
 /// ladder measures.
-fn run_one(bin: &Path, epub: &Path, timeout: Duration, must_refuse: bool) -> Outcome {
+fn run_one(bin: &Path, epub: &Path, timeout: Duration, expect: Expect) -> Outcome {
     let start = Instant::now();
     let mut child = match Command::new(bin)
         .arg("-i")
@@ -384,10 +417,11 @@ fn run_one(bin: &Path, epub: &Path, timeout: Duration, must_refuse: bool) -> Out
     if status.code() == Some(101) || err.contains("panicked") {
         return Outcome::Panic;
     }
-    if must_refuse && status.code() == Some(0) {
-        return Outcome::Accepted;
+    match expect {
+        Expect::Refuse if status.code() == Some(0) => Outcome::Accepted,
+        Expect::Accept if status.code() != Some(0) => Outcome::Refused,
+        _ => Outcome::Ok(elapsed),
     }
-    Outcome::Ok(elapsed)
 }
 
 fn main() {
@@ -447,6 +481,7 @@ fn main() {
     gen_xxe(&out);
     gen_entity_expansion(&out);
     gen_multibyte_equals(&out);
+    gen_big_image(&out);
     gen_entry_count(&out);
     if scale {
         gen_scale(&out);
@@ -466,7 +501,14 @@ fn main() {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        match run_one(&bin, f, timeout, name.starts_with("refuse-")) {
+        let expect = if name.starts_with("refuse-") {
+            Expect::Refuse
+        } else if name.starts_with("accept-") {
+            Expect::Accept
+        } else {
+            Expect::Survive
+        };
+        match run_one(&bin, f, timeout, expect) {
             Outcome::Ok(d) if name.starts_with("scale-") => {
                 println!("  ok    {name:<22} {:.2}s", d.as_secs_f64())
             }
@@ -487,6 +529,10 @@ fn main() {
                 println!("  FAIL  {name:<22} ACCEPTED (reported valid; a guard is gone)");
                 failed += 1;
             }
+            Outcome::Refused => {
+                println!("  FAIL  {name:<22} REFUSED (honest input rejected; a false positive)");
+                failed += 1;
+            }
         }
     }
 
@@ -494,5 +540,5 @@ fn main() {
         eprintln!("hostile corpus: {failed} failure(s) above");
         std::process::exit(1);
     }
-    println!("hostile corpus: no aborts, panics, timeouts or accepted refuse-* shapes");
+    println!("hostile corpus: no aborts, panics or timeouts, and every verdict as expected");
 }

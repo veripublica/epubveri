@@ -620,7 +620,30 @@ impl Ocf {
         }
         self.read(name)
     }
+
+    /// The first `n` bytes of an entry, for a check that decides from a
+    /// signature: an image's magic number, a font's first four bytes.
+    /// Encrypted entries are refused exactly as [`Ocf::read_content`] does.
+    ///
+    /// Not subject to [`MAX_ENTRY_BYTES`], because nothing past `n` is read.
+    /// That limit exists for the resources this crate *parses*; applying it
+    /// to a signature check made a 70 MB PNG an `ERROR LIM-001` and the book
+    /// INVALID, while EPUBCheck 5.4.0 reported it valid. The image check
+    /// needs twelve bytes and was inflating the whole entry to get them.
+    pub(crate) fn read_head_content(&mut self, name: &str, n: u64) -> Option<Vec<u8>> {
+        if self.is_encrypted(name) {
+            return None;
+        }
+        let f = self.archive.by_name(name).ok()?;
+        let mut buf = Vec::new();
+        f.take(n).read_to_end(&mut buf).ok()?;
+        Some(buf)
+    }
 }
+
+/// How much of an entry a signature check reads: more than the longest
+/// signature matched (WebP's twelve bytes), with room to spare.
+pub(crate) const SIGNATURE_BYTES: u64 = 64;
 
 /// The most bytes [`Ocf::read`] will materialise for one container entry.
 ///
