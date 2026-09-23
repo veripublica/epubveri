@@ -578,6 +578,14 @@ is the CLI's job, never the library's. `Message::render_human()` gives you the
 exact line the CLI prints, so you can group and order findings however you like
 without your output drifting from ours.
 
+**If you also parse the book's XML yourself**, run each text through
+`epubveri::xmlguard::check` before handing it to `roxmltree`, and after any
+rewrite of it. A document the validator refused is still in the container,
+and a parse of your own is exposed to the same shapes: nesting deep enough to
+abort the process, entities that expand a kilobyte into gigabytes, and one
+element with enough attributes to take minutes. `check` is the scan the validator runs before its own parse, so the
+two cannot drift apart.
+
 epubveri is pre-1.0, so breaking API changes land as minor bumps (`0.x.0`).
 **Pin the minor version, and read the `Breaking` heading in
 [CHANGELOG.md](../CHANGELOG.md) before moving it** — that file is the authority

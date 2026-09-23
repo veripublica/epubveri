@@ -701,8 +701,9 @@ fn declared_entity_names(text: &str) -> Vec<String> {
 /// (the range *between* the brackets, relative to the declaration's start)
 /// if it has one.
 ///
-/// Scanned character by character rather than searched for, because every
-/// shortcut here has a counterexample in a real book:
+/// Read by [`crate::xmlguard::doctype_span`], the lexer the parse guard uses,
+/// rather than searched for, because every shortcut here has a
+/// counterexample in a real book or a hostile one:
 ///
 /// - The declaration's own `>` is not the first `>` after it: an internal
 ///   subset is full of them (`<!ENTITY nbsp "&#160;">`). So `>` only ends
@@ -714,46 +715,15 @@ fn declared_entity_names(text: &str) -> Vec<String> {
 ///   declarations into the middle of the body, breaking 11 real books).
 /// - Neither bracket counts inside a quoted literal — a public identifier
 ///   may contain anything.
+/// - Only the prolog holds a DOCTYPE, and a comment or processing
+///   instruction may hold anything. Searching for `<!DOCTYPE` found one
+///   quoted in a comment ahead of the real one, and a quote inside a subset
+///   comment ran the scan past the subset's end; either way a declared
+///   entity was then reported as undeclared.
 fn doctype_span(text: &str) -> Option<(&str, Option<std::ops::Range<usize>>)> {
-    let start = text.find("<!DOCTYPE")?;
-    let bytes = text.as_bytes();
-    let mut quote: Option<u8> = None;
-    let mut depth = 0usize;
-    let mut subset_open = None;
-    let mut subset: Option<std::ops::Range<usize>> = None;
-    let mut i = start + "<!DOCTYPE".len();
-    while i < bytes.len() {
-        let c = bytes[i];
-        match quote {
-            Some(q) => {
-                if c == q {
-                    quote = None;
-                }
-            }
-            None => match c {
-                b'"' | b'\'' => quote = Some(c),
-                b'[' => {
-                    if depth == 0 {
-                        subset_open = Some(i - start + 1);
-                    }
-                    depth += 1;
-                }
-                b']' => {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0
-                        && let Some(open) = subset_open
-                    {
-                        subset = Some(open..i - start);
-                    }
-                }
-                // The declaration's own '>' - the one at depth 0.
-                b'>' if depth == 0 => return Some((&text[start..=i], subset)),
-                _ => {}
-            },
-        }
-        i += 1;
-    }
-    None
+    let (span, subset) = crate::xmlguard::doctype_span(text)?;
+    let start = span.start;
+    Some((&text[span], subset.map(|r| r.start - start..r.end - start)))
 }
 
 /// Finds the full `<!DOCTYPE ...>` declaration - see [`doctype_span`].
@@ -2508,6 +2478,27 @@ mod tests {
             Some("<!ENTITY x \"]\"><!ENTITY y \"&#66;\">")
         );
         assert_eq!(declared_entity_names(text), vec!["x", "y"]);
+    }
+
+    /// Only the prolog holds the DOCTYPE, and a comment or processing
+    /// instruction holds anything. Each of these made the old scanner miss
+    /// `a`'s declaration and report every `&a;` as an undeclared fatal.
+    #[test]
+    fn doctype_span_reads_the_prolog_as_xml_does() {
+        let subset = "<!ENTITY a \"x\">";
+        for (name, prolog, inside) in [
+            ("doctype in a comment", "<!-- <!DOCTYPE x> -->", ""),
+            ("doctype in a pi", "<?x <!DOCTYPE y> ?>", ""),
+            ("quote in a subset comment", "", "<!-- don't -->"),
+            ("quote in a subset pi", "", "<?x don't?>"),
+        ] {
+            let text = format!("{prolog}<!DOCTYPE html [{inside}{subset}]>\n<p>&a;</p>");
+            let (dt, _) = doctype_span(&text).unwrap();
+            assert!(dt.starts_with("<!DOCTYPE html"), "{name}: {dt}");
+            assert_eq!(declared_entity_names(&text), vec!["a"], "{name}");
+        }
+        // A DOCTYPE after the root element is not the document's.
+        assert!(doctype_span("<r/><!DOCTYPE html>").is_none());
     }
 
     /// The property the whole approach rests on: declarations are injected

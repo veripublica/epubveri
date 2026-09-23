@@ -137,7 +137,7 @@ fn book(path: &Path, opf_xml: String, nav_xml: String, extra: Vec<(String, Vec<u
 
 /// Stack overflow in roxmltree's mutually recursive tokenizer. Aborted at
 /// ~15,000 deep on an 8 MiB main thread and ~4,000 on a 2 MiB worker, from a
-/// file of about 1.1 KB. Guard: `ocf::MAX_XML_DEPTH`.
+/// file of about 1.1 KB. Guard: `xmlguard::MAX_XML_DEPTH`.
 fn gen_xml_depth(out: &Path) {
     let d = 50_000;
     let body = format!("{}x{}", "<div>".repeat(d), "</div>".repeat(d));
@@ -234,26 +234,112 @@ fn gen_xxe(out: &Path) {
 /// Loop-free entity amplification: one 10,000-character entity referenced
 /// 7,000 times, 70 MB of text from a few KB. roxmltree stops entity *loops*
 /// but bounded nothing else, and the full-size shape (50,000 x 50,000) drove
-/// 5 GB of peak RSS and reported VALID. Guard: `ocf::expansion_exceeding`,
-/// reported as RSC-016. Sized just past its 64 MiB limit so that, if the guard
-/// is ever lost, this run costs ~150 MB rather than the 5 GB that found it -
-/// the failure then shows as ACCEPTED, not as exhaustion.
+/// 5 GB of peak RSS and reported VALID. Guard: `xmlguard::check`, reported as
+/// RSC-016. Sized just past its 64 MiB limit so that, if the guard is ever
+/// lost, this run costs ~150 MB rather than the 5 GB that found it - the
+/// failure then shows as ACCEPTED, not as exhaustion.
+///
+/// The other three walked past the 0.17.1 guard to 4.8 GB by hiding the
+/// internal subset from its scan: a `<!DOCTYPE` quoted in a comment or a
+/// processing instruction ahead of the real one, which the scan took for
+/// the real one, and a quote inside a processing instruction in the subset,
+/// which it read as the start of a literal.
+///
+/// **The verdict check is blind to these three.** Against 0.17.1 they came
+/// back INVALID anyway, at 142 MB, because `htm`'s own DOCTYPE scanner was
+/// fooled the same way and called the declared entity undeclared. The two
+/// now share one lexer, so a regression in it would be masked the same way.
+/// What guards them is `xmlguard`'s unit tests; watch memory here.
 fn gen_entity_expansion(out: &Path) {
-    let doc = format!(
-        concat!(
-            r#"<?xml version="1.0"?><!DOCTYPE html [<!ENTITY a "{}">]>"#,
-            r#"<html xmlns="http://www.w3.org/1999/xhtml" "#,
-            r#"xmlns:epub="http://www.idpf.org/2007/ops"><head><title>n</title></head>"#,
-            r#"<body><nav epub:type="toc"><ol><li><a href="n.xhtml">n</a></li></ol></nav>"#,
-            r#"<p>{}</p></body></html>"#
+    for (name, prolog, subset) in [
+        ("entity-expansion", "", ""),
+        (
+            "entity-expansion-doctype-in-comment",
+            "<!-- <!DOCTYPE x> -->",
+            "",
         ),
-        "A".repeat(10_000),
-        "&a;".repeat(7_000)
-    );
+        ("entity-expansion-doctype-in-pi", "<?x <!DOCTYPE y> ?>", ""),
+        ("entity-expansion-pi-in-subset", "", "<?x don't?>"),
+    ] {
+        let doc = format!(
+            concat!(
+                r#"<?xml version="1.0"?>{}<!DOCTYPE html [{}<!ENTITY a "{}">]>"#,
+                r#"<html xmlns="http://www.w3.org/1999/xhtml" "#,
+                r#"xmlns:epub="http://www.idpf.org/2007/ops"><head><title>n</title></head>"#,
+                r#"<body><nav epub:type="toc"><ol><li><a href="n.xhtml">n</a></li></ol></nav>"#,
+                r#"<p>{}</p></body></html>"#
+            ),
+            prolog,
+            subset,
+            "A".repeat(10_000),
+            "&a;".repeat(7_000)
+        );
+        book(
+            &out.join(format!("refuse-{name}.epub")),
+            opf("", ""),
+            doc,
+            Vec::new(),
+        );
+    }
+}
+
+/// Nesting the 0.17.1 depth guard could not see, each 50,000 deep and each
+/// an abort on that release: its scan read a quote or a `[` inside a
+/// processing instruction as the start of a literal and skipped the rest of
+/// the document, read an apostrophe in a subset comment the same way,
+/// stepped over element names that start past ASCII, and never looked
+/// inside an entity value, whose markup the parser expands in place.
+/// Guard: `xmlguard::check`.
+fn gen_xml_depth_hidden(out: &Path) {
+    let d = 50_000;
+    let deep = format!("{}x{}", "<div>".repeat(d), "</div>".repeat(d));
+    let nonascii = format!("{}x{}", "<é>".repeat(d), "</é>".repeat(d));
+    let doc = |prolog: &str, body: &str| {
+        format!(
+            concat!(
+                r#"<?xml version="1.0"?>{}<html xmlns="http://www.w3.org/1999/xhtml" "#,
+                r#"xmlns:epub="http://www.idpf.org/2007/ops"><head><title>n</title></head>"#,
+                r#"<body><nav epub:type="toc"><ol><li><a href="n.xhtml">n</a></li></ol></nav>"#,
+                r#"{}</body></html>"#
+            ),
+            prolog, body
+        )
+    };
+    for (name, xml) in [
+        ("pi-quote", doc("<?x don't?>", &deep)),
+        ("pi-bracket", doc("<?x [?>", &deep)),
+        ("pi-quote-in-body", doc("", &format!("<?x it's?>{deep}"))),
+        (
+            "subset-comment-quote",
+            doc("<!DOCTYPE html [<!-- don't -->]>", &deep),
+        ),
+        ("non-ascii-name", doc("", &nonascii)),
+        (
+            "entity-markup",
+            doc(&format!(r#"<!DOCTYPE html [<!ENTITY a "{deep}">]>"#), "&a;"),
+        ),
+    ] {
+        book(
+            &out.join(format!("refuse-xml-depth-{name}.epub")),
+            opf("", ""),
+            xml,
+            Vec::new(),
+        );
+    }
+}
+
+/// Quadratic time in roxmltree: each attribute is checked against every
+/// earlier one on the same element (RazrFalcon/roxmltree#153, open), so
+/// 40,000 on one `<p>` took 5.3 s and the cost quadruples per doubling.
+/// 100,000 here, deflated to a few hundred KB. Guard:
+/// `xmlguard::MAX_ATTRIBUTES`. The book is otherwise valid, so a lost guard
+/// shows as ACCEPTED, and slowly.
+fn gen_attribute_count(out: &Path) {
+    let attrs: String = (0..100_000).map(|i| format!(" data-a{i}=\"x\"")).collect();
     book(
-        &out.join("refuse-entity-expansion.epub"),
+        &out.join("refuse-attribute-count.epub"),
         opf("", ""),
-        doc,
+        nav("", &format!("<p{attrs}>x</p>")),
         Vec::new(),
     );
 }
@@ -480,10 +566,12 @@ fn main() {
 
     eprintln!("generating into {}", out.display());
     gen_xml_depth(&out);
+    gen_xml_depth_hidden(&out);
     gen_zip_bomb(&out);
     gen_css_nesting(&out);
     gen_xxe(&out);
     gen_entity_expansion(&out);
+    gen_attribute_count(&out);
     gen_multibyte_equals(&out);
     gen_big_image(&out);
     gen_entry_count(&out);

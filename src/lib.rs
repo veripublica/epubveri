@@ -48,6 +48,7 @@ pub mod ssv;
 pub mod svg;
 pub mod url;
 pub mod xmlext;
+pub mod xmlguard;
 use crate::xmlext::NodeExt;
 pub mod xpath;
 
@@ -899,7 +900,8 @@ mod tests {
     /// the 0.7.12-0.7.14 audits kept turning up.
     #[test]
     fn over_limit_nesting_is_reported_with_a_reason() {
-        let report = crate::validate_bytes(epub3_with(&nested_body(crate::ocf::MAX_XML_DEPTH + 1)));
+        let report =
+            crate::validate_bytes(epub3_with(&nested_body(crate::xmlguard::MAX_XML_DEPTH + 1)));
         let hit = report
             .messages
             .iter()

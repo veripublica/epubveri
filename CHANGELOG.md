@@ -8,6 +8,60 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Security
+
+- **The two parse guards 0.17.1 shipped could be walked past, and now
+  cannot.** Both read the document with a scan of their own before the
+  parser sees it, and the scan did not read it the way the parser does. Nine
+  shapes hid what they carried from it. Six hid nesting, and on 500,000
+  levels each one crashed the validator with a stack overflow: a quote or a
+  `[` inside a processing instruction (`<?x don't?>`) in the prolog or the
+  body, an apostrophe inside a comment in the DOCTYPE's internal subset,
+  element names starting with a non-ASCII letter, and markup inside an
+  entity's value, which the parser expands in place. Three hid the entities,
+  and each used 4.8 GB: a `<!DOCTYPE` quoted inside a comment or a processing
+  instruction ahead of the real one, and a quote inside a processing
+  instruction in the subset. The scan now lexes the prolog the way XML
+  defines it, skips a processing instruction only at `?>`, counts any `<`
+  it cannot place, and counts the elements an entity brings with it where
+  the entity is referenced. All nine are refused as `RSC-016` in 5 MB, and
+  they are in the hostile suite and the unit tests. Found while preparing
+  the guard for public use, not reported.
+- **One element may carry at most 256 attributes.** The parser checks each
+  attribute against every earlier one on the same element, so the time an
+  element costs grows with the square of its attribute count
+  (RazrFalcon/roxmltree#153, still open upstream). 40,000 attributes on one
+  `<p>` took 5.3 s here, and the cost quadruples with every doubling, all
+  from a file that deflates to almost nothing. Past the limit, the document
+  is reported as `RSC-016` (fatal, "not parsed"). The most any element
+  carries across the 22,847 XML files on our shelf is 11.
+- **The depth limit now has a measured margin in every environment.** With
+  the limit lifted, whole validation first fails at 12,000 levels on an
+  8 MiB thread, 3,000 on a 2 MiB thread and 2,000 in the WASM package under
+  node's default stack. At the limit, 256, all three give identical results.
+  The WASM figure had never been measured before.
+- **A declared entity is no longer reported as undeclared behind the same
+  three prolog shapes.** The checks that read the internal subset had their
+  own DOCTYPE scanner, which the three entity shapes above fooled the same
+  way, so every `&a;` drew a fatal "entity 'a' was referenced, but not
+  declared" although `a` was declared. They now use the guard's reader.
+
+### Added
+
+- **`epubveri::xmlguard`: the parse guard as public API.** `check(text)`
+  answers whether a text is safe to hand to `roxmltree` with DTDs allowed:
+  `Ok(())`, or a `Refusal` saying which limit it passed (`TooDeep`,
+  `TooExpansive`, `TooManyAttributes`). `MAX_XML_DEPTH`,
+  `MAX_EXPANSION_BYTES` and `MAX_ATTRIBUTES` are public with it. It is for
+  programs that parse EPUB content themselves, such as a repair tool
+  re-reading a document the validator has already refused: that second parse
+  is exposed to all three shapes whatever the validator decided.
+
+No finding changes on any of the 474 books on our shelf (the JSON output is
+byte-identical per book), nor on EPUBCheck's own test suite.
+
 ## [0.17.1] - 2026-09-23
 
 ### Security

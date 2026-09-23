@@ -9,24 +9,7 @@ use zip::ZipArchive;
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
-
-/// The deepest element nesting [`parse_xml`] will accept.
-///
-/// roxmltree's tokenizer is mutually recursive (`parse_element` ↔
-/// `parse_content`), so nesting costs stack in proportion to depth and a
-/// deeply-nested document aborts the process. In Rust a stack overflow is
-/// `SIGABRT`, **not** a catchable panic - `catch_unwind` cannot save an
-/// embedder, so this has to be refused before the parser sees it. Measured
-/// on 0.8.6: ~15,000 deep aborts on the 8 MiB main thread and ~4,000 on a
-/// 2 MiB spawned thread (what an embedder or worker actually runs), from a
-/// 1.1 KB file; wasm's smaller stack is lower again.
-///
-/// 256 comes from data, not taste: across the 65-book local shelf the
-/// deepest document nests **24** elements (median 8, p95 11). That leaves
-/// this ~10x above the worst real book and ~15x below the lowest measured
-/// crash threshold, so no real book can reach it and no hostile one can
-/// reach the abort.
-pub(crate) const MAX_XML_DEPTH: usize = 256;
+use crate::xmlguard;
 
 /// Why [`parse_xml`] refused a document.
 ///
@@ -39,330 +22,27 @@ pub(crate) const MAX_XML_DEPTH: usize = 256;
 #[derive(Debug)]
 pub(crate) enum XmlError {
     Parse(roxmltree::Error),
-    /// Nesting exceeded [`MAX_XML_DEPTH`]; carries the depth reached at the
-    /// point the scan gave up (a lower bound, since it stops early).
-    TooDeep(usize),
-    /// Entity references would expand the document past [`MAX_ENTRY_BYTES`];
-    /// carries the expansion counted when the scan gave up (a lower bound).
-    TooExpansive(u64),
+    /// Declined by [`xmlguard::check`] before the parser saw it.
+    Refused(xmlguard::Refusal),
 }
 
 impl std::fmt::Display for XmlError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             XmlError::Parse(e) => write!(f, "{e}"),
-            XmlError::TooDeep(d) => write!(
-                f,
-                "element nesting is deeper than the {MAX_XML_DEPTH}-element limit \
-                 (reached {d}), so the document was not parsed"
-            ),
-            XmlError::TooExpansive(n) => write!(
-                f,
-                "its entity references would expand it past the {} MiB limit \
-                 (to at least {n} bytes), so the document was not parsed",
-                MAX_ENTRY_BYTES / (1024 * 1024)
-            ),
+            XmlError::Refused(r) => write!(f, "{r}"),
         }
     }
 }
 
 impl XmlError {
     /// The source position to report, mirroring `roxmltree::Error::pos`.
-    /// The depth guard scans bytes rather than tracking rows, so it points
-    /// at the start of the document - the file name is the actionable part.
+    /// The guard scans bytes rather than tracking rows, so it points at the
+    /// start of the document - the file name is the actionable part.
     pub(crate) fn pos(&self) -> roxmltree::TextPos {
         match self {
             XmlError::Parse(e) => e.pos(),
-            XmlError::TooDeep(_) | XmlError::TooExpansive(_) => roxmltree::TextPos::new(1, 1),
-        }
-    }
-}
-
-/// Length of a `<!-- -->`-style region starting at `rest[0]`, measured from
-/// `from` and including `end`; the whole remainder when unterminated.
-fn region_len(rest: &[u8], from: usize, end: &[u8]) -> usize {
-    let start = from.min(rest.len());
-    match rest[start..].windows(end.len()).position(|w| w == end) {
-        Some(p) => start + p + end.len(),
-        None => rest.len(),
-    }
-}
-
-/// Length of a `<?…?>` PI or a `<!…>` declaration. Tracks `[`/`]` so a
-/// DOCTYPE's internal subset (which contains its own `>`-bearing
-/// declarations) doesn't end the scan early.
-fn decl_len(rest: &[u8]) -> usize {
-    let (mut j, mut quote, mut brackets) = (2usize, 0u8, 0usize);
-    while j < rest.len() {
-        let c = rest[j];
-        if quote != 0 {
-            if c == quote {
-                quote = 0;
-            }
-        } else if c == b'"' || c == b'\'' {
-            quote = c;
-        } else if c == b'[' {
-            brackets += 1;
-        } else if c == b']' {
-            brackets = brackets.saturating_sub(1);
-        } else if c == b'>' && brackets == 0 {
-            return j + 1;
-        }
-        j += 1;
-    }
-    rest.len()
-}
-
-/// Length of an element tag, and whether it is self-closing. Quote-aware,
-/// because `>` is legal inside an attribute value (`<a title="a>b">`) and
-/// treating it as the tag end would miss the `/` of a self-closing tag and
-/// over-count depth.
-fn tag_len(rest: &[u8]) -> (usize, bool) {
-    let (mut j, mut quote, mut last) = (1usize, 0u8, 0u8);
-    while j < rest.len() {
-        let c = rest[j];
-        if quote != 0 {
-            if c == quote {
-                quote = 0;
-            }
-        } else if c == b'"' || c == b'\'' {
-            quote = c;
-        } else if c == b'>' {
-            return (j + 1, last == b'/');
-        }
-        if !c.is_ascii_whitespace() {
-            last = c;
-        }
-        j += 1;
-    }
-    (rest.len(), false)
-}
-
-/// The nesting depth reached if it exceeds `limit`, else `None`.
-///
-/// Deliberately a raw-byte scan rather than a parse: the entire point is to
-/// run *before* roxmltree's recursive tokenizer touches the text. It skips
-/// the three regions where `<`/`>` are not markup - comments, CDATA
-/// sections and quoted attribute values - so it can neither over-count a
-/// legitimate document into a false positive nor be walked past by nesting
-/// hidden inside a comment. Malformed input is not its problem: anything it
-/// misreads is still handed to the parser, which reports it properly.
-fn depth_exceeding(text: &str, limit: usize) -> Option<usize> {
-    let b = text.as_bytes();
-    let (mut i, mut depth) = (0usize, 0usize);
-    while i < b.len() {
-        if b[i] != b'<' {
-            i += 1;
-            continue;
-        }
-        let rest = &b[i..];
-        if rest.starts_with(b"<!--") {
-            i += region_len(rest, 4, b"-->");
-            continue;
-        }
-        if rest.starts_with(b"<![CDATA[") {
-            i += region_len(rest, 9, b"]]>");
-            continue;
-        }
-        if rest.starts_with(b"<!") || rest.starts_with(b"<?") {
-            i += decl_len(rest);
-            continue;
-        }
-        let Some(&c) = b.get(i + 1) else { break };
-        let closing = c == b'/';
-        // A `<` that starts no name is stray text, not a tag - the parser
-        // owns that verdict, so just step over it.
-        if !closing && !(c.is_ascii_alphabetic() || c == b'_' || c == b':') {
-            i += 1;
-            continue;
-        }
-        let (len, self_closing) = tag_len(rest);
-        if closing {
-            depth = depth.saturating_sub(1);
-        } else if !self_closing {
-            depth += 1;
-            if depth > limit {
-                return Some(depth);
-            }
-        }
-        i += len;
-    }
-    None
-}
-
-/// How far a document's entity references would inflate it, once that passes
-/// `limit` bytes; `None` while it stays within it.
-///
-/// roxmltree refuses an entity *loop*, and its loop test also stops the
-/// classic billion-laughs file. It bounds nothing else: one 50,000-character
-/// entity referenced 50,000 times is a 1.6 KB EPUB that drove 5 GB of peak
-/// memory here and then reported VALID. EPUBCheck 5.4.0 on the same file
-/// reaches 4.7 GB and dies inside Saxon (`NegativeArraySizeException`) while
-/// printing "0 fatals / 0 errors", so there is no verdict of theirs to match.
-/// The limit is the one a single resource already has, [`MAX_ENTRY_BYTES`]:
-/// 60 million characters of expansion, which EPUBCheck still validates
-/// normally, stays under it.
-///
-/// Exact for what the parser expands, and an upper bound only where the
-/// scan cannot tell: a reference inside a comment or a CDATA section is
-/// counted although it is never expanded. Only the internal
-/// subset of the first `<!DOCTYPE` is read: roxmltree takes declarations from
-/// nowhere else, and it is where `htm::declare_dtd_entities` puts ours.
-fn expansion_exceeding(text: &str, limit: u64) -> Option<u64> {
-    if !text.contains("<!ENTITY") {
-        return None;
-    }
-    let (decls, body_start) = internal_entities(text)?;
-    if decls.is_empty() {
-        return None;
-    }
-    let mut memo = std::collections::HashMap::new();
-    let mut total = 0u64;
-    for name in entity_refs(&text[body_start..]) {
-        total = total.saturating_add(expanded_len(name, &decls, &mut memo, 0));
-        if total > limit {
-            return Some(total);
-        }
-    }
-    None
-}
-
-/// How deep [`expanded_len`] follows entities that reference entities.
-/// It stops a long chain of declarations from turning this guard into a
-/// stack overflow of its own. Past it the count **fails closed**: a chain
-/// this deep is treated as unbounded and the document is refused. roxmltree
-/// happens to refuse such a chain anyway (measured: 8 levels parse, 12 are
-/// reported as a probable loop), but a bound that holds only while a
-/// dependency keeps an undocumented limit is not a bound.
-const MAX_ENTITY_NESTING: usize = 64;
-
-/// The text entity `name` expands to, in bytes, counting the entities its
-/// replacement text references in turn. Undeclared names (the predefined
-/// five, or a typo the parser will report) cost nothing, and so does a loop,
-/// which the parser refuses; nesting past [`MAX_ENTITY_NESTING`] costs
-/// everything.
-fn expanded_len<'a>(
-    name: &'a str,
-    decls: &std::collections::HashMap<&'a str, &'a str>,
-    memo: &mut std::collections::HashMap<&'a str, u64>,
-    depth: usize,
-) -> u64 {
-    if let Some(&n) = memo.get(name) {
-        return n;
-    }
-    let Some(&value) = decls.get(name) else {
-        return 0;
-    };
-    if depth >= MAX_ENTITY_NESTING {
-        return u64::MAX;
-    }
-    // Provisional zero while this entity is being expanded, so a loop back
-    // to it terminates instead of recursing forever.
-    memo.insert(name, 0);
-    // A declared reference is replaced by its expansion, so its own `&name;`
-    // text is not part of the result. Keeping it would compound at every
-    // level: three levels of ten counted 7,440 bytes for 3,000 of text, and an
-    // inflated count is how a book EPUBCheck accepts would be refused here.
-    let mut n = value.len() as u64;
-    for inner in entity_refs(value) {
-        if decls.contains_key(inner) {
-            n = n
-                .saturating_sub(inner.len() as u64 + 2)
-                .saturating_add(expanded_len(inner, decls, memo, depth + 1));
-        }
-    }
-    memo.insert(name, n);
-    n
-}
-
-/// Every `&name;` in `text`, in order; character references (`&#...;`) are
-/// not entities and are skipped.
-fn entity_refs(text: &str) -> impl Iterator<Item = &str> {
-    let b = text.as_bytes();
-    let mut i = 0usize;
-    std::iter::from_fn(move || {
-        while i < b.len() {
-            if b[i] != b'&' {
-                i += 1;
-                continue;
-            }
-            let start = i + 1;
-            i = start;
-            if b.get(start) == Some(&b'#') {
-                continue;
-            }
-            let mut j = start;
-            while j < b.len()
-                && !matches!(b[j], b';' | b'&' | b'<' | b'"' | b'\'')
-                && !b[j].is_ascii_whitespace()
-            {
-                j += 1;
-            }
-            if j < b.len() && b[j] == b';' && j > start {
-                i = j + 1;
-                return Some(&text[start..j]);
-            }
-        }
-        None
-    })
-}
-
-/// The general entities declared in the first `<!DOCTYPE`'s internal
-/// subset, name to replacement text, and the offset where the document
-/// continues after that DOCTYPE. `None` when there is no internal subset, or
-/// it never ends (the parser reports that). The first declaration of a name
-/// wins, as XML says; parameter and external entities are not expanded into
-/// the document's text, so they are not collected.
-fn internal_entities(text: &str) -> Option<(std::collections::HashMap<&str, &str>, usize)> {
-    let b = text.as_bytes();
-    let dt = text.find("<!DOCTYPE")?;
-    // Up to the subset's `[`, stepping over quoted public/system ids.
-    let mut i = dt + 9;
-    loop {
-        match b.get(i)? {
-            b'[' => break,
-            b'>' => return None,
-            &q @ (b'"' | b'\'') => i += 1 + text[i + 1..].find(q as char)?,
-            _ => {}
-        }
-        i += 1;
-    }
-    i += 1;
-    let mut decls = std::collections::HashMap::new();
-    loop {
-        let rest = &b[i..];
-        match rest.first()? {
-            b']' => {
-                let gt = text[i..].find('>')?;
-                return Some((decls, i + gt + 1));
-            }
-            _ if rest.starts_with(b"<!--") => i += region_len(rest, 4, b"-->"),
-            _ if rest.starts_with(b"<!ENTITY") => {
-                let mut j = i + 8;
-                while b.get(j).is_some_and(u8::is_ascii_whitespace) {
-                    j += 1;
-                }
-                if b.get(j) != Some(&b'%') {
-                    let name_start = j;
-                    while b
-                        .get(j)
-                        .is_some_and(|c| !c.is_ascii_whitespace() && *c != b'>')
-                    {
-                        j += 1;
-                    }
-                    let name = &text[name_start..j];
-                    while b.get(j).is_some_and(u8::is_ascii_whitespace) {
-                        j += 1;
-                    }
-                    if let Some(&q @ (b'"' | b'\'')) = b.get(j) {
-                        let end = j + 1 + text[j + 1..].find(q as char)?;
-                        decls.entry(name).or_insert(&text[j + 1..end]);
-                    }
-                }
-                i += decl_len(rest);
-            }
-            _ if rest.starts_with(b"<!") || rest.starts_with(b"<?") => i += decl_len(rest),
-            _ => i += 1,
+            XmlError::Refused(_) => roxmltree::TextPos::new(1, 1),
         }
     }
 }
@@ -371,21 +51,16 @@ fn internal_entities(text: &str) -> Option<(std::collections::HashMap<&str, &str
 /// EPUB content documents commonly have one (e.g. `<!DOCTYPE html>`), and
 /// roxmltree rejects any DTD by default as a security precaution. What makes
 /// allowing one safe is not roxmltree alone: it stops entity *loops*, and
-/// [`expansion_exceeding`] bounds how far loop-free entities may inflate the
+/// [`xmlguard::check`] bounds how far loop-free entities may inflate the
 /// document. Before that guard existed this comment called DOCTYPEs safe on
 /// the strength of the loop check, and a 1.6 KB book used 5 GB.
 ///
 /// Nesting depth is *not* something roxmltree can be asked to bound - its
 /// `nodes_limit` counts total nodes, and a real book has 100k+ of them at
 /// depth 20, so no setting of it separates a deep document from a large
-/// one. Hence the explicit pre-parse guard; see [`MAX_XML_DEPTH`].
+/// one. Hence the explicit pre-parse guard; see [`xmlguard::MAX_XML_DEPTH`].
 pub(crate) fn parse_xml(text: &str) -> Result<roxmltree::Document<'_>, XmlError> {
-    if let Some(d) = depth_exceeding(text, MAX_XML_DEPTH) {
-        return Err(XmlError::TooDeep(d));
-    }
-    if let Some(n) = expansion_exceeding(text, MAX_ENTRY_BYTES) {
-        return Err(XmlError::TooExpansive(n));
-    }
+    xmlguard::check(text).map_err(XmlError::Refused)?;
     let opts = roxmltree::ParsingOptions {
         allow_dtd: true,
         ..Default::default()
@@ -1750,171 +1425,6 @@ mod encryption_content_model_tests {
                 "ocf.encryption.incomplete_content",
             ]
         );
-    }
-}
-
-#[cfg(test)]
-mod expansion_guard_tests {
-    use super::{MAX_ENTRY_BYTES, XmlError, expansion_exceeding, parse_xml};
-
-    /// A document with one entity of `size` characters referenced `refs` times.
-    fn doc(size: usize, refs: usize) -> String {
-        format!(
-            "<!DOCTYPE html [<!ENTITY a \"{}\">]><html><p>{}</p></html>",
-            "A".repeat(size),
-            "&a;".repeat(refs)
-        )
-    }
-
-    /// The file that used 5 GB: refused before the parser sees it, and
-    /// reported as its own reason rather than as a parse error.
-    #[test]
-    fn the_quadratic_shape_is_refused_before_parsing() {
-        let t = doc(50_000, 50_000);
-        assert!(matches!(parse_xml(&t), Err(XmlError::TooExpansive(n)) if n > MAX_ENTRY_BYTES));
-    }
-
-    /// 60 million characters of expansion, which EPUBCheck 5.4.0 validates
-    /// normally, is under the limit, so a book it accepts still parses here.
-    #[test]
-    fn what_epubcheck_accepts_is_not_refused() {
-        assert_eq!(
-            expansion_exceeding(&doc(10_000, 6_000), MAX_ENTRY_BYTES),
-            None
-        );
-        assert!(parse_xml(&doc(10, 10)).is_ok());
-    }
-
-    #[test]
-    fn nested_entities_multiply() {
-        // Three levels of ten: 1,000 copies of a 3-byte leaf, exactly.
-        let t = concat!(
-            "<!DOCTYPE r [<!ENTITY l0 \"abc\">",
-            "<!ENTITY l1 \"&l0;&l0;&l0;&l0;&l0;&l0;&l0;&l0;&l0;&l0;\">",
-            "<!ENTITY l2 \"&l1;&l1;&l1;&l1;&l1;&l1;&l1;&l1;&l1;&l1;\">",
-            "<!ENTITY l3 \"&l2;&l2;&l2;&l2;&l2;&l2;&l2;&l2;&l2;&l2;\">]><r>&l3;</r>"
-        );
-        assert_eq!(expansion_exceeding(t, 2_999), Some(3_000));
-        assert_eq!(expansion_exceeding(t, 3_000), None);
-    }
-
-    /// The guard must not become the thing it guards against: a loop
-    /// terminates, and a long chain of declarations does not overflow the
-    /// stack.
-    #[test]
-    fn loops_and_long_chains_terminate() {
-        // A loop costs nothing here and is left to the parser, which refuses it.
-        let t = "<!DOCTYPE r [<!ENTITY a \"&b;\"><!ENTITY b \"&a;\">]><r>&a;</r>";
-        assert_eq!(expansion_exceeding(t, 0), None);
-        assert!(matches!(parse_xml(t), Err(XmlError::Parse(_))));
-        let mut chain = String::from("<!DOCTYPE r [<!ENTITY e0 \"x\">");
-        for i in 1..100_000 {
-            chain.push_str(&format!("<!ENTITY e{i} \"&e{};\">", i - 1));
-        }
-        chain.push_str("]><r>&e99999;</r>");
-        assert_eq!(expansion_exceeding(&chain, MAX_ENTRY_BYTES), Some(u64::MAX));
-        // Just inside the cap, a chain is counted exactly.
-        let mut short = String::from("<!DOCTYPE r [<!ENTITY e0 \"x\">");
-        for i in 1..super::MAX_ENTITY_NESTING {
-            short.push_str(&format!("<!ENTITY e{i} \"&e{};\">", i - 1));
-        }
-        short.push_str(&format!("]><r>&e{};</r>", super::MAX_ENTITY_NESTING - 1));
-        assert_eq!(expansion_exceeding(&short, 0), Some(1));
-    }
-
-    /// What a naive scan would get wrong: a `]` or `>` inside an entity
-    /// value does not end the subset, a commented-out declaration declares
-    /// nothing, parameter entities and character references are not general
-    /// entities, and the first declaration of a name wins.
-    #[test]
-    fn reads_the_subset_the_way_the_parser_does() {
-        let t = concat!(
-            "<!DOCTYPE r SYSTEM \"x]>y\" [<!ENTITY a \"]>]>\"><!-- <!ENTITY c \"cccc\"> -->",
-            "<!ENTITY % p \"pppppp\"><!ENTITY a \"longer than the first\">]>",
-            "<r>&a;&c;&#x41;&amp;</r>"
-        );
-        assert_eq!(expansion_exceeding(t, 3), Some(4));
-        assert_eq!(expansion_exceeding(t, 4), None);
-    }
-
-    /// No internal subset, no cost: the common EPUB DOCTYPEs are never read.
-    #[test]
-    fn a_plain_doctype_is_not_scanned() {
-        assert_eq!(
-            expansion_exceeding("<!DOCTYPE html><html>&a;</html>", 0),
-            None
-        );
-    }
-}
-
-#[cfg(test)]
-mod depth_guard_tests {
-    use super::{MAX_XML_DEPTH, depth_exceeding};
-
-    fn nested(depth: usize) -> String {
-        format!("{}x{}", "<d>".repeat(depth), "</d>".repeat(depth))
-    }
-
-    /// The guard exists to stop an abort, so the threshold itself is the
-    /// contract: one under the limit parses, one over is refused.
-    #[test]
-    fn triggers_only_past_the_limit() {
-        assert_eq!(depth_exceeding(&nested(MAX_XML_DEPTH), MAX_XML_DEPTH), None);
-        assert!(depth_exceeding(&nested(MAX_XML_DEPTH + 1), MAX_XML_DEPTH).is_some());
-    }
-
-    /// The measured worst case on the 65-book shelf is 24 deep. A guard
-    /// that rejected real books would be a false positive on every one of
-    /// them, which is worse than the bug it fixes.
-    #[test]
-    fn accepts_the_deepest_real_book() {
-        assert_eq!(depth_exceeding(&nested(24), MAX_XML_DEPTH), None);
-    }
-
-    /// Self-closing and closing tags must decrement, or a long *flat*
-    /// document would accumulate depth it doesn't have - the most likely
-    /// shape of a false positive, since real books are wide, not deep.
-    #[test]
-    fn flat_documents_do_not_accumulate_depth() {
-        let flat = "<r>".to_string() + &"<img/><p>t</p>".repeat(5_000) + "</r>";
-        assert_eq!(depth_exceeding(&flat, MAX_XML_DEPTH), None);
-    }
-
-    /// `<` and `>` are not markup inside comments, CDATA or attribute
-    /// values. Miscounting either way is a bug: over-counting rejects a
-    /// valid book, under-counting lets the abort back in.
-    #[test]
-    fn non_markup_regions_are_not_counted() {
-        let commented = format!("<r><!-- {} --></r>", "<d>".repeat(1_000));
-        assert_eq!(depth_exceeding(&commented, MAX_XML_DEPTH), None);
-
-        let cdata = format!("<r><![CDATA[ {} ]]></r>", "<d>".repeat(1_000));
-        assert_eq!(depth_exceeding(&cdata, MAX_XML_DEPTH), None);
-
-        // `>` is legal inside an attribute value; treating it as the tag
-        // end would hide the `/` and count each tag as an open.
-        let attr_gt = "<r>".to_string() + &r#"<a t="x>y"/>"#.repeat(5_000) + "</r>";
-        assert_eq!(depth_exceeding(&attr_gt, MAX_XML_DEPTH), None);
-    }
-
-    /// A DOCTYPE's internal subset carries its own `>`-bearing
-    /// declarations; ending the scan at the first one would leave the rest
-    /// of the subset to be miscounted as elements.
-    #[test]
-    fn doctype_internal_subset_is_skipped() {
-        let doc = format!(
-            "<!DOCTYPE r [ <!ENTITY a \"x\"> <!ENTITY b \"y\"> ]><r>{}</r>",
-            "<d></d>".repeat(100)
-        );
-        assert_eq!(depth_exceeding(&doc, MAX_XML_DEPTH), None);
-    }
-
-    /// Depth hidden inside a comment is skipped, but depth *after* one
-    /// still counts - the skip must not swallow the rest of the document.
-    #[test]
-    fn scanning_resumes_after_a_skipped_region() {
-        let doc = format!("<r><!-- c -->{}</r>", "<d>".repeat(MAX_XML_DEPTH + 5));
-        assert!(depth_exceeding(&doc, MAX_XML_DEPTH).is_some());
     }
 }
 
