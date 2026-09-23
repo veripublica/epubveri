@@ -10,6 +10,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Performance
+
+- **A book with many files and many links no longer spends most of its time
+  finding them in the manifest.** Every hyperlink scanned the whole manifest
+  twice and Unicode-normalised each path on every pass, and six other kinds of
+  reference did the same once. The manifest is now indexed by path while it
+  is read. A generated book of 6,000 chapters and 12,000 links went from
+  28.5 s to 1.6 s. Reported, with a profile of a 5,970-file book that spent
+  40% of its time there, by raeq in #137.
+
+### Fixed
+
+- **A book with two manifest items on one path could get a different report
+  on every run.** Which of the two a reference resolved to was left to the
+  iteration order of a hash map, and that order changes from one process to
+  the next: one test book drew two RSC-010 errors on some runs and three on
+  others. It now resolves to the last of them in manifest order, which is the
+  one epubcheck uses. Such a book already gets OPF-074 for the duplicate.
+  Found while making the change above.
+
 ### Documentation
 
 - **In a debug build the depth limit sits above the crash, and the docs now

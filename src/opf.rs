@@ -865,6 +865,7 @@ fn missing_fragment_id(items: &HashMap<String, (String, String)>, resolved: &str
 fn hyperlink_abort(
     target: &str,
     items: &HashMap<String, (String, String)>,
+    by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
     spine_order: &HashMap<String, usize>,
     is_epub3: bool,
@@ -874,7 +875,7 @@ fn hyperlink_abort(
     // We used the version-blind predicate and reported RSC-011 for an
     // EPUB 2 SVG target — a wrong id on ordinary markup, found while
     // measuring the `data:` URL case (issue #128).
-    if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == *target)
+    if let Some((id, mt)) = by_path.get(target)
         && !is_referenced_content_document_type(mt, is_epub3)
         && !is_deprecated_content_document_type(mt)
         && !fallback_reaches_content_document(id, items, fallback_map, is_epub3)
@@ -898,11 +899,26 @@ fn hyperlink_abort(
     // `items` rather than `name_index`: a reference to something the manifest
     // never declared is aborted earlier still, by
     // `checkUndeclaredReference`'s RSC-007/RSC-008.
-    if items.values().any(|(p, _)| nfc(p) == *target) && !spine_order.contains_key(target) {
+    if by_path.contains_key(target) && !spine_order.contains_key(target) {
         return Some(RSC_011);
     }
     None
 }
+
+/// The manifest keyed by NFC-normalized path: path -> (id, media-type).
+///
+/// Every "which item is this path?" question used to scan `items` and
+/// normalize each path, per reference: [`hyperlink_abort`] twice per
+/// hyperlink, which in a book of 5,970 items and 13,332 links was 40% of
+/// the run (issue #137). Filled once, while the manifest is read.
+///
+/// **It also fixed an answer that changed from run to run.** When two items
+/// share a path (OPF-074), the scan returned whichever one `HashMap`
+/// iteration reached first, and that order is seeded per process: the same
+/// book drew two RSC-010s on some runs and three on others. epubcheck's
+/// `OPFItems` builds its URL map by `put` in manifest order, so the *last*
+/// item with a path is the one every lookup sees, and so is it here.
+type ItemsByPath = HashMap<String, (String, String)>;
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
@@ -3067,6 +3083,7 @@ fn check_guide_references(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
+    items_by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
     is_epub3: bool,
     opf_path: &str,
@@ -3111,7 +3128,7 @@ fn check_guide_references(
         }
         let path_part = href.split(['#', '?']).next().unwrap_or(href);
         let resolved = nfc(&resolve(base_dir, path_part));
-        match items.iter().find(|(_, (p, _))| nfc(p) == resolved) {
+        match items_by_path.get(&resolved) {
             None => {
                 report.push_at_pos(
                     OPF_031,
@@ -3149,7 +3166,7 @@ fn check_guide_references(
                     );
                 }
             }
-            Some((id, (_, mt))) => {
+            Some((id, mt)) => {
                 // epubcheck exempts the *deprecated* content-document types
                 // here as well as the real ones - `OPFChecker`:172 tests
                 // `!isBlessedItemType && !isDeprecatedBlessedItemType` - so a
@@ -3265,6 +3282,7 @@ fn check_ncx_content_fragments(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     items: &HashMap<String, (String, String)>,
+    items_by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
     spine_order: &HashMap<String, usize>,
     is_epub3: bool,
@@ -3361,7 +3379,14 @@ fn check_ncx_content_fragments(
         // Sharing `hyperlink_abort` rather than restating its conditions is
         // the point: this site had already drifted from it once, holding the
         // first arm and not the second.
-        match hyperlink_abort(&resolved, items, fallback_map, spine_order, is_epub3) {
+        match hyperlink_abort(
+            &resolved,
+            items,
+            items_by_path,
+            fallback_map,
+            spine_order,
+            is_epub3,
+        ) {
             Some(id) if id == RSC_010 => {
                 report.push_node(
                     RSC_010,
@@ -5452,6 +5477,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // --- manifest ---
     // id -> (resolved-path, media-type)
     let mut items: HashMap<String, (String, String)> = HashMap::new();
+    // The same items by NFC path, in epubcheck's order; see `ItemsByPath`.
+    let mut items_by_path = ItemsByPath::new();
     // The same (resolved-path, media-type) pairs in **manifest document
     // order**, which `items` cannot preserve.
     //
@@ -6024,6 +6051,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 fallback_map.insert(id.to_string(), fb.trim().to_string());
             }
             manifest_order.push((resolved.clone(), mt.to_string()));
+            items_by_path.insert(nfc(&resolved), (id.to_string(), mt.to_string()));
             items.insert(id.to_string(), (resolved, mt.to_string()));
         }
         if cover_image_count > 1 {
@@ -6102,6 +6130,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         ocf,
         &name_index,
         &items,
+        &items_by_path,
         &fallback_map,
         is_epub3,
         opf_path,
@@ -7082,6 +7111,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 ocf,
                                 &name_index,
                                 &items,
+                                &items_by_path,
                                 &fallback_map,
                                 &spine_order,
                                 is_epub3,
@@ -8797,7 +8827,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // this a hack pending real MIME parsing; matched anyway, because
             // an OPUS book must not draw a warning here from either tool.
             let declared_type = declared_type.split(';').next().unwrap_or("").trim();
-            if let Some((_, actual_type)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
+            if let Some((_, actual_type)) = items_by_path.get(&resolved)
                 && !normalize_opus(actual_type).eq_ignore_ascii_case(declared_type)
             {
                 report.push_at_pos(
@@ -8946,8 +8976,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // gives two errors for one defect, and the second names the
                 // wrong repair: a link into a document that is not in the
                 // spine is not fixed by adding the missing id.
-                if hyperlink_abort(&target_nfc, &items, &fallback_map, &spine_order, is_epub3)
-                    .is_some()
+                if hyperlink_abort(
+                    &target_nfc,
+                    &items,
+                    &items_by_path,
+                    &fallback_map,
+                    &spine_order,
+                    is_epub3,
+                )
+                .is_some()
                 {
                     continue;
                 }
@@ -10275,6 +10312,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     &dir,
                     &crate::opf::ResourceView {
                         items: &items,
+                        items_by_path: &items_by_path,
                         name_index: &name_index,
                     },
                     &path,
@@ -10797,7 +10835,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         //
         // Anchored at the source `<a>` (file + line:column + element path),
         // not the OPF package root, matching where epubcheck points (#22).
-        match hyperlink_abort(target, &items, &fallback_map, &spine_order, is_epub3) {
+        match hyperlink_abort(
+            target,
+            &items,
+            &items_by_path,
+            &fallback_map,
+            &spine_order,
+            is_epub3,
+        ) {
             Some(id) if id == RSC_010 => {
                 report.push_full_path(
                     RSC_010,
@@ -11353,6 +11398,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             &dir,
             &ResourceView {
                 items: &items,
+                items_by_path: &items_by_path,
                 name_index: &name_index,
             },
             &path,
@@ -11470,7 +11516,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // RSC-008 arm. It has one now. This loop keeps only the two
                 // questions nothing else asks of a `url()` - the query
                 // component and the fallback below.
-                if let Some((id, (_, mt))) = items.iter().find(|(_, (p, _))| nfc(p) == target)
+                if let Some((id, mt)) = items_by_path.get(target.as_str())
                     && !font_srcs.contains(&u)
                     && !crate::cmt::is_core_media_type(mt)
                     && !crate::foreign::fallback_reaches_core(id, &items, &fallback_map)
@@ -12049,7 +12095,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // there was a missing check, hidden behind a story about someone
         // else's bug.
         for target in &text_srcs {
-            if let Some((_, mt)) = items.values().find(|(p, _)| nfc(p) == *target)
+            if let Some((_, mt)) = items_by_path.get(target.as_str())
                 && !is_referenced_content_document_type(mt, is_epub3)
             {
                 report.push_at_rule(
@@ -12261,6 +12307,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         profile,
         &dictionary_marked_docs,
         &items,
+        &items_by_path,
         &item_properties,
         &base_dir,
         &name_index,
@@ -12330,6 +12377,7 @@ fn check_dictionaries(
     profile: Option<&str>,
     dictionary_marked_docs: &HashSet<String>,
     items: &HashMap<String, (String, String)>,
+    items_by_path: &ItemsByPath,
     item_properties: &HashMap<String, String>,
     base_dir: &str,
     name_index: &HashMap<String, String>,
@@ -12389,7 +12437,7 @@ fn check_dictionaries(
                 );
                 continue;
             }
-            if let Some((_, target_mt)) = items.values().find(|(p, _)| nfc(p) == resolved)
+            if let Some((_, target_mt)) = items_by_path.get(&resolved)
                 && target_mt != "application/xhtml+xml"
                 && target_mt != "image/svg+xml"
             {
@@ -12652,7 +12700,7 @@ fn check_dictionaries(
             if dictionary_marked_docs.contains(&resolved) {
                 has_dict_content = true;
             }
-            match items.values().find(|(p, _)| nfc(p) == resolved) {
+            match items_by_path.get(&resolved) {
                 None => {
                     report.push_at_pos(
                         OPF_081,
@@ -13105,6 +13153,7 @@ fn blessed_font_type_epub2(mt: &str) -> bool {
 /// something nothing declares is RSC-007's.
 struct ResourceView<'a> {
     items: &'a HashMap<String, (String, String)>,
+    items_by_path: &'a ItemsByPath,
     name_index: &'a HashMap<String, String>,
 }
 
@@ -13211,7 +13260,7 @@ fn check_exempt_font_usage(
             );
             continue;
         }
-        if let Some((_, mt)) = items.values().find(|(ip, _)| nfc(ip) == resolved)
+        if let Some((_, mt)) = res.items_by_path.get(&resolved)
             && !crate::cmt::is_core_media_type(mt)
             && (is_epub3 || !blessed_font_type_epub2(mt))
         {
@@ -16198,11 +16247,16 @@ mod tests {
                 name_index.insert("f.ttf".to_string(), "f.ttf".to_string());
             }
             let mut report = crate::report::Report::default();
+            let items_by_path: super::ItemsByPath = items
+                .iter()
+                .map(|(id, (p, mt))| (super::nfc(p), (id.clone(), mt.clone())))
+                .collect();
             crate::opf::check_exempt_font_usage(
                 css,
                 "",
                 &crate::opf::ResourceView {
                     items: &items,
+                    items_by_path: &items_by_path,
                     name_index: &name_index,
                 },
                 "s.css",
@@ -28495,5 +28549,81 @@ mod tests {
             ids(false).contains(&crate::ids::RSC_016),
             "the same bytes undeclared are still a fatal parse error"
         );
+    }
+}
+
+#[cfg(test)]
+mod items_by_path_tests {
+    use std::io::Write;
+
+    /// A book whose manifest declares `d.xhtml` twice, as XHTML and as CSS,
+    /// in the order given, and whose chapter hyperlinks to it.
+    fn book(first_is_xhtml: bool) -> Vec<u8> {
+        let (x, c) = (
+            r#"<item id="dx" href="d.xhtml" media-type="application/xhtml+xml"/>"#,
+            r#"<item id="dc" href="d.xhtml" media-type="text/css"/>"#,
+        );
+        let dups = if first_is_xhtml {
+            format!("{x}{c}")
+        } else {
+            format!("{c}{x}")
+        };
+        let opf = format!(
+            r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="u"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="u">x</dc:identifier><dc:title>t</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2020-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/>{dups}</manifest><spine><itemref idref="c"/><itemref idref="dx"/></spine></package>"#
+        );
+        let xhtml = |body: &str| {
+            format!(
+                r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>t</title></head><body>{body}</body></html>"#
+            )
+        };
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let stored = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            z.start_file("mimetype", stored).unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = zip::write::SimpleFileOptions::default();
+            for (name, text) in [
+                ("META-INF/container.xml", r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="p.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#.to_string()),
+                ("p.opf", opf),
+                ("nav.xhtml", xhtml(r#"<nav epub:type="toc"><ol><li><a href="c.xhtml">c</a></li></ol></nav>"#)),
+                ("c.xhtml", xhtml(r#"<p><a href="d.xhtml">d</a></p>"#)),
+                ("d.xhtml", xhtml("<p>d</p>")),
+            ] {
+                z.start_file(name, o).unwrap();
+                z.write_all(text.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    fn rsc_010_count(bytes: &[u8]) -> usize {
+        crate::validate_bytes(bytes.to_vec())
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_010)
+            .count()
+    }
+
+    /// Two items sharing a path used to be resolved by `HashMap` iteration
+    /// order, which is seeded afresh for every map, so one book could draw a
+    /// different report on every run. Each map in this process gets its own
+    /// seed, so thirty runs would all but certainly have caught it.
+    /// epubcheck's `OPFItems` keeps the last item in manifest order for a
+    /// URL, and so does `ItemsByPath`.
+    #[test]
+    fn two_items_on_one_path_resolve_to_the_last_every_time() {
+        for (first_is_xhtml, expected) in [(true, 1), (false, 0)] {
+            let bytes = book(first_is_xhtml);
+            let counts: std::collections::BTreeSet<usize> =
+                (0..30).map(|_| rsc_010_count(&bytes)).collect();
+            assert_eq!(
+                counts.into_iter().collect::<Vec<_>>(),
+                vec![expected],
+                "first_is_xhtml={first_is_xhtml}: the last item (CSS if the XHTML came first) decides"
+            );
+        }
     }
 }
