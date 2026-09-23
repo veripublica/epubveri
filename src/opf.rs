@@ -7475,6 +7475,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // maps through `css::CssOrigin` like every other CSS position; the
     // `Option` is for the SVG collector, which has no CSS offsets at all.
     let mut mo_class_sites: Vec<(String, String, Option<Position>)> = Vec::new();
+    // What each linked stylesheet contributes, worked out once per sheet;
+    // see `LinkedSheet`.
+    let mut linked_sheets: HashMap<String, LinkedSheet> = HashMap::new();
     // Whether the (required) toc nav has an epub:type="page-list" nav -
     // for the EDUPUB pagination-source cross-check after this loop.
     let mut has_page_list_nav = false;
@@ -10395,33 +10398,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             {
                 let resolved = resolve(&dir, href);
                 if let Some(orig) = name_index.get(&nfc(&resolved)).cloned()
-                    && let Some(b) = ocf.read_content(&orig)
+                    && let Some(sheet) = match linked_sheets.get(&orig) {
+                        Some(sheet) => Some(sheet),
+                        None => ocf.read_content(&orig).map(|b| {
+                            &*linked_sheets
+                                .entry(orig.clone())
+                                .or_insert_with(|| LinkedSheet::new(&b, &resolved))
+                        }),
+                    }
                 {
-                    let css_text = crate::css::decode_bytes(&b);
-                    let sheet = styloria::Parser::parse_stylesheet(&css_text);
                     doc_class_names
                         .entry(path.clone())
                         .or_default()
-                        .extend(crate::css::selector_class_names(&sheet));
+                        .extend(sheet.classes.iter().cloned());
                     docs_with_css.insert(path.clone());
                     let css_path = nfc(&resolved);
-                    for c in crate::css::selector_class_names_spanned(&css_text) {
-                        if is_media_overlay_class(&c.node) {
-                            mo_class_sites.push((
-                                c.node,
-                                css_path.clone(),
-                                Some(Position::of_offset(&css_text, c.span.start)),
-                            ));
-                        }
+                    for (class, pos) in &sheet.overlay_classes {
+                        mo_class_sites.push((class.clone(), css_path.clone(), Some(*pos)));
                     }
-                    let css_dir = parent_dir(&resolved);
-                    for u in crate::css::stylesheet_urls(&sheet) {
+                    for r in &sheet.refs {
                         // Resolved against the stylesheet's own directory,
                         // not the document that links it.
-                        if !is_external(&u) {
-                            resource_refs
-                                .insert(nfc(&resolve(&css_dir, strip_url_fragment(&u).trim())));
-                        }
+                        resource_refs.insert(r.clone());
                         // A *linked* stylesheet's remote URLs are not this
                         // document's remote references. The manifest pass
                         // over the stylesheet itself already reports them,
@@ -13151,6 +13149,48 @@ fn blessed_font_type_epub2(mt: &str) -> bool {
 /// because this check needs both for the same path and always together: a
 /// declared item whose file is absent is RSC-001's business, a reference to
 /// something nothing declares is RSC-007's.
+/// What one `<link rel="stylesheet">` target contributes to the documents
+/// that link it: its selector class names, the media-overlay classes among
+/// them with where each is written, and the local resources its URLs name,
+/// resolved against the stylesheet's own directory.
+///
+/// All of it depends on the stylesheet alone, and a shared stylesheet is
+/// linked from every chapter: one shelf book read, decoded and parsed its
+/// stylesheet twice per chapter, about 800 parses of one file, and that was
+/// the largest single item in a profile of the whole shelf. Worked out on
+/// the first document that links it; each later one reuses it.
+struct LinkedSheet {
+    classes: HashSet<String>,
+    overlay_classes: Vec<(String, Position)>,
+    refs: Vec<String>,
+}
+
+impl LinkedSheet {
+    fn new(bytes: &[u8], resolved: &str) -> Self {
+        let css_text = crate::css::decode_bytes(bytes);
+        let sheet = styloria::Parser::parse_stylesheet(&css_text);
+        let overlay_classes = crate::css::selector_class_names_spanned(&css_text)
+            .into_iter()
+            .filter(|c| is_media_overlay_class(&c.node))
+            .map(|c| {
+                let pos = Position::of_offset(&css_text, c.span.start);
+                (c.node, pos)
+            })
+            .collect();
+        let css_dir = parent_dir(resolved);
+        let refs = crate::css::stylesheet_urls(&sheet)
+            .into_iter()
+            .filter(|u| !is_external(u))
+            .map(|u| nfc(&resolve(&css_dir, strip_url_fragment(&u).trim())))
+            .collect();
+        LinkedSheet {
+            classes: crate::css::selector_class_names(&sheet),
+            overlay_classes,
+            refs,
+        }
+    }
+}
+
 struct ResourceView<'a> {
     items: &'a HashMap<String, (String, String)>,
     items_by_path: &'a ItemsByPath,

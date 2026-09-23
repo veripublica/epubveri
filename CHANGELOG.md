@@ -27,6 +27,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   It now looks up first, hashes cheaply, and builds those three once. On 4 MiB
   of plain paragraphs 0.62 s became 0.32 s, and the 6,000-chapter book above
   went from 1.7 s to 0.85 s. Also suggested in #137.
+- **A shared stylesheet is read and parsed once per book, not twice per
+  chapter.** The checks asked for the same files over and over: one book's
+  413 files were decompressed 4,777 times, and each chapter parsed its
+  stylesheet twice more for its class names and URLs. Decompressed files are
+  now kept (up to 64 MiB, which holds every book on our shelf whole) and what
+  a stylesheet contributes is worked out once. Together with the two changes
+  above, the 474-book shelf takes 21.5 s, against 47.3 s in 0.17.4. The
+  price is memory, bounded by the same 64 MiB: a typical book on the shelf
+  peaks 4 MB higher, the one that reads the most (25 MB) 30 MB higher, and
+  the highest peak on the shelf went from 92 MB to 96 MB.
 
 ### Fixed
 
