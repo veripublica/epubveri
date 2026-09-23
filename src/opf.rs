@@ -1045,6 +1045,30 @@ fn is_resource_reference(node: roxmltree::Node, attr: &str) -> bool {
 fn target_id_kinds(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
+    cache: &mut TargetIds,
+    target_nfc: &str,
+    is_epub3: bool,
+) -> Option<IdMap> {
+    if let Some(hit) = cache.get(target_nfc) {
+        return hit.clone();
+    }
+    let ids = target_id_kinds_uncached(ocf, name_index, target_nfc, is_epub3);
+    cache.insert(target_nfc.to_string(), ids.clone());
+    ids
+}
+
+/// [`target_id_kinds`]'s answers for the whole book, by target path.
+///
+/// The per-document caches beside each caller are thrown away with the
+/// document, so a file many chapters link into was read, decoded, guarded,
+/// parsed and walked again for every one of them: one shelf book's notes
+/// file, 210 KB, was parsed 232 times, and another book parsed 35 times as
+/// much XML as it holds. The answer depends on the target alone.
+type TargetIds = HashMap<String, Option<IdMap>>;
+
+fn target_id_kinds_uncached(
+    ocf: &mut Ocf,
+    name_index: &HashMap<String, String>,
     target_nfc: &str,
     is_epub3: bool,
 ) -> Option<IdMap> {
@@ -3023,11 +3047,13 @@ fn check_guide_duplicates(doc: &roxmltree::Document, opf_path: &str, report: &mu
 /// Same two exemptions as the guide and content-document sites, and the same
 /// silence when the target cannot be read: whether a fragment resolves in a
 /// document we could not parse is unknown, and unknown is not a finding.
+#[allow(clippy::too_many_arguments)]
 fn check_collection_link_fragments(
     pkg: &roxmltree::Node,
     base_dir: &str,
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
+    target_ids: &mut TargetIds,
     is_epub3: bool,
     opf_path: &str,
     report: &mut Report,
@@ -3056,7 +3082,7 @@ fn check_collection_link_fragments(
         }
         let resolved = nfc(&resolve(base_dir, path_part));
         if !id_cache.contains_key(&resolved) {
-            let ids = target_id_kinds(ocf, name_index, &resolved, is_epub3);
+            let ids = target_id_kinds(ocf, name_index, target_ids, &resolved, is_epub3);
             id_cache.insert(resolved.clone(), ids);
         }
         let Some(ids) = &id_cache[&resolved] else {
@@ -3082,6 +3108,7 @@ fn check_guide_references(
     base_dir: &str,
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
+    target_ids: &mut TargetIds,
     items: &HashMap<String, (String, String)>,
     items_by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
@@ -3242,7 +3269,7 @@ fn check_guide_references(
                     continue;
                 }
                 if !id_cache.contains_key(&resolved) {
-                    let ids = target_id_kinds(ocf, name_index, &resolved, is_epub3);
+                    let ids = target_id_kinds(ocf, name_index, target_ids, &resolved, is_epub3);
                     id_cache.insert(resolved.clone(), ids);
                 }
                 // `None` = the target could not be read/parsed, so whether the
@@ -3281,6 +3308,7 @@ fn check_ncx_content_fragments(
     ncx_path: &str,
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
+    target_ids: &mut TargetIds,
     items: &HashMap<String, (String, String)>,
     items_by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
@@ -3435,7 +3463,7 @@ fn check_ncx_content_fragments(
             continue;
         }
         if !id_cache.contains_key(&resolved) {
-            let ids = target_id_kinds(ocf, name_index, &resolved, is_epub3);
+            let ids = target_id_kinds(ocf, name_index, target_ids, &resolved, is_epub3);
             id_cache.insert(resolved.clone(), ids);
         }
         // `None` = the target could not be read/parsed, so whether the
@@ -5479,6 +5507,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     let mut items: HashMap<String, (String, String)> = HashMap::new();
     // The same items by NFC path, in epubcheck's order; see `ItemsByPath`.
     let mut items_by_path = ItemsByPath::new();
+    let mut target_ids = TargetIds::new();
     // The same (resolved-path, media-type) pairs in **manifest document
     // order**, which `items` cannot preserve.
     //
@@ -6129,6 +6158,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         &base_dir,
         ocf,
         &name_index,
+        &mut target_ids,
         &items,
         &items_by_path,
         &fallback_map,
@@ -6141,6 +6171,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         &base_dir,
         ocf,
         &name_index,
+        &mut target_ids,
         is_epub3,
         opf_path,
         report,
@@ -7110,6 +7141,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 ncx_path,
                                 ocf,
                                 &name_index,
+                                &mut target_ids,
                                 &items,
                                 &items_by_path,
                                 &fallback_map,
@@ -8996,7 +9028,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // The document being walked - already parsed.
                         Some(dom_id_kinds(&d))
                     } else {
-                        target_id_kinds(ocf, &name_index, &target_nfc, is_epub3)
+                        target_id_kinds(ocf, &name_index, &mut target_ids, &target_nfc, is_epub3)
                     };
                     frag_id_cache.insert(target_nfc.clone(), ids);
                 }
@@ -9125,7 +9157,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     let ids = if target_nfc == nfc(&path) {
                         Some(dom_id_kinds(&d))
                     } else {
-                        target_id_kinds(ocf, &name_index, &target_nfc, is_epub3)
+                        target_id_kinds(ocf, &name_index, &mut target_ids, &target_nfc, is_epub3)
                     };
                     frag_id_cache.insert(target_nfc.clone(), ids);
                 }
@@ -9429,8 +9461,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         None => Some(0),
                         Some(f) => {
                             if !id_order_cache.contains_key(&resolved_nfc) {
-                                let order =
-                                    target_id_kinds(ocf, &name_index, &resolved_nfc, is_epub3);
+                                let order = target_id_kinds(
+                                    ocf,
+                                    &name_index,
+                                    &mut target_ids,
+                                    &resolved_nfc,
+                                    is_epub3,
+                                );
                                 id_order_cache.insert(resolved_nfc.clone(), order);
                             }
                             // Missing ids are already caught elsewhere as
@@ -12054,7 +12091,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
             for (target, frag) in &textref_targets {
                 if !id_cache.contains_key(target) {
-                    let ids = target_id_kinds(ocf, &name_index, target, is_epub3);
+                    let ids = target_id_kinds(ocf, &name_index, &mut target_ids, target, is_epub3);
                     id_cache.insert(target.clone(), ids);
                 }
                 // `None` = the target could not be read/parsed, so whether
@@ -12120,7 +12157,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
             for (target, frag) in &targets {
                 if !id_cache.contains_key(target) {
-                    let ids = target_id_kinds(ocf, &name_index, target, is_epub3);
+                    let ids = target_id_kinds(ocf, &name_index, &mut target_ids, target, is_epub3);
                     id_cache.insert(target.clone(), ids);
                 }
                 let Some(target_ids) = &id_cache[target] else {

@@ -37,6 +37,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   price is memory, bounded by the same 64 MiB: a typical book on the shelf
   peaks 4 MB higher, the one that reads the most (25 MB) 30 MB higher, and
   the highest peak on the shelf went from 92 MB to 96 MB.
+- **A document that many chapters link into is parsed once, not once per
+  chapter.** Checking a link's `#fragment` needs the ids of the document it
+  points into, and those were worked out afresh for every chapter that linked
+  there: one book's notes file, 210 KB, was parsed 232 times, and another book
+  parsed 35 times as much XML as it contains. They are now kept for the whole
+  book. That book went from 3.6 s to 0.23 s, and the 474-book shelf from
+  47.9 s in 0.17.4 to 19.0 s, with every report unchanged.
 
 ### Fixed
 
