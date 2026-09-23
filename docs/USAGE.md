@@ -32,24 +32,27 @@ quickest way to try it.
 
 ## Option 2: Inside Sigil or calibre (a plugin does it for you)
 
-If you edit books in **[Sigil](https://sigil-ebook.com/)** or in **calibre's
-Edit Book**, you do not need to download anything from this guide. A plugin
-fetches the epubveri program for you, keeps it up to date, and shows the
-findings inside the editor, beside the file they are about.
+If you edit books in **[Sigil](https://sigil-ebook.com/)** or keep them in
+**[calibre](https://calibre-ebook.com/)**, you do not need to download anything
+from this guide. A plugin fetches the epubveri program for you, keeps it up to
+date, and shows the findings inside the program you already use.
 
-**There are two plugins for each editor**, and they are not the same thing.
+There are two sets of plugins, and they are not the same thing.
 
 ### Ours
 
 [**veripublica/epubveri-plugins**](https://github.com/veripublica/epubveri-plugins),
-GPL-3, written and maintained by us. Install the zip from
-[Releases](https://github.com/veripublica/epubveri-plugins/releases) — the tag
-says which editor it is for.
+GPL-3, written and maintained by us. Three plugins, each with its own version:
 
-| Editor | Release | Install it from |
+| Plugin | What it does | Install it from |
 |---|---|---|
-| Sigil | [`sigil-v0.3.0`](https://github.com/veripublica/epubveri-plugins/releases/tag/sigil-v0.3.0) | Plugins → Manage Plugins → Add Plugin |
-| calibre (Edit Book) | [`calibre-v0.4.2`](https://github.com/veripublica/epubveri-plugins/releases/tag/calibre-v0.4.2) | Preferences → Plugins → Load plugin from file |
+| Sigil | checks the book you are editing | the zip on [Releases](https://github.com/veripublica/epubveri-plugins/releases), then Plugins → Manage Plugins → Add Plugin |
+| calibre, Edit Book | checks the book you are editing | calibre's own plugin list (Preferences → Plugins → Get new plugins), or the zip from Releases |
+| calibre, library | checks every EPUB in your library at once and shows which defects recur across it | the same two places |
+
+The current version of each is on the
+[plugins page](https://github.com/veripublica/epubveri-plugins#readme); the
+release tag says which program a download is for.
 
 They verify the epubveri binary against the release's `SHA256SUMS.txt` before
 running it, and again before every later run. **They show every finding by
@@ -58,18 +61,18 @@ on the command line. In calibre you can turn the usage notes and the advisory
 findings off in *Preferences → Plugins → epubveri → Customize*; Sigil offers a
 plugin no settings screen at all, so its plugin shows everything.
 
-**They are new.** The Sigil one was first released on 2 September 2026 and has
-been run on macOS, Windows and Linux; the calibre one on 3 September 2026, and
-**only on macOS, only on calibre 9.14**. Bugs go to
-[their issue tracker](https://github.com/veripublica/epubveri-plugins/issues).
+**They are young.** The Sigil one was first released on 2 September 2026 and
+has been run on macOS, Windows and Linux. The calibre ones followed from 3
+September. We develop and test those on macOS only: they reach Windows and
+Linux through calibre's plugin list, but we have not run them there ourselves.
+Bugs go to [their issue tracker](https://github.com/veripublica/epubveri-plugins/issues).
 
 ### Doitsu's
 
 Written, unprompted and before ours, by the MobileRead member *Doitsu*; also
-GPL-3. **They have been in people's hands far longer than ours have**, and they
-are the ones listed in the editors' own plugin lists — the [Sigil Plugin
-Index](https://www.mobileread.com/forums/showthread.php?t=247431) and calibre's
-[Index of plugins](https://www.mobileread.com/forums/showthread.php?t=118764).
+GPL-3. **They have been in people's hands longer than ours have**, and his
+Sigil plugin is the one listed in Sigil's
+[Plugin Index](https://www.mobileread.com/forums/showthread.php?t=247431).
 
 | Editor | Plugin thread |
 |---|---|
@@ -85,10 +88,10 @@ broken when that happens.
 ### Which one
 
 If you already have one that works, keep it. Ours is worth trying if you want
-every finding without configuring anything, or if you want the thing you are
-running to be maintained by the people who write epubveri. Doitsu's is the
-safer bet on a platform ours has not been run on yet — which today means
-Windows and Linux for calibre.
+every finding without configuring anything, a check of your whole calibre
+library, or the thing you are running to be maintained by the people who write
+epubveri. Doitsu's is the safer bet where ours has had less use — which today
+means calibre on Windows and Linux.
 
 Everything below — picking an archive, getting past the first-run security
 prompt, typing commands — is about running epubveri yourself. If a plugin

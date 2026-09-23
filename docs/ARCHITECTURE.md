@@ -123,7 +123,12 @@ epubsana/epublift follow in their next releases.
   `META-INF/container.xml`, `encryption.xml`/`signatures.xml`. Also
   home to `parse_xml`, the shared `roxmltree`-based XML parsing helper
   every other module uses (handles `DOCTYPE`-bearing documents, which
-  `roxmltree` rejects by default as an extra security precaution).
+  `roxmltree` rejects by default as an extra security precaution, and
+  runs every text through `xmlguard::check` first). And it holds the two
+  resource limits on reading the container: one entry may inflate to
+  64 MiB (`LIM-001` past it) and one publication to 256 MiB across its
+  entries (`LIM-002`). Neither is a silent skip: a resource refused is
+  named in the report.
 - **`opf.rs`** — the package document: metadata, manifest, spine,
   declared media-types, the navigation-document requirement, broken
   internal references. This is the largest file in the project by a
@@ -160,7 +165,11 @@ implementation would have been.
   interned so `Rc::ptr_eq` becomes a reliable identity check; this
   turned out to be load-bearing, not just an optimization — without it,
   ordinary flowing prose triggers exponential blowup after ~15-20
-  sibling elements), `rng/derive.rs` (the derivative algorithm itself),
+  sibling elements), `rng/derive.rs` (the derivative algorithm itself,
+  with its per-event derivatives memoized on those interned patterns:
+  elements of one kind reach the same pattern, so after the first one an
+  element's attributes and its parent's next step are looked up rather
+  than rebuilt, which made attribute-heavy content ~15x faster),
   `rng/load.rs` (parses the RELAX NG *XML* syntax into the in-memory
   grammar), `rng/datatype.rs` (XSD datatype lexical validation). Used
   to validate the package document against `schemas/package.rng` and
@@ -254,6 +263,15 @@ never touches the corresponding module at all.
   json`), which is a published contract rather than an output format:
   the WASM bindings return the same per-input shape, and epubsana
   consumes it. `docs/INTEGRATING.md` documents it field by field.
+- **`xmlguard.rs`** — the limits a text must meet before it is handed to
+  `roxmltree`, checked by a scan of the raw bytes: nesting depth (the
+  parser recurses, and a stack overflow aborts the process), entity
+  expansion, attributes on one element (the parser's duplicate check is
+  quadratic) and elements in one document (memory is spent per element).
+  Public, because a program that parses EPUB content itself needs the
+  same guard for its own parse; epubsana calls it. The scan has to read
+  the text the way the parser does, or a document can hide from it, so
+  where it cannot place a byte it keeps counting.
 - **`xmlext.rs`** — the small extension trait that pins down
   *namespace-less* attribute access, because `roxmltree`'s bare-`&str`
   lookup matches by local name and so also matches `xml:lang` for
@@ -290,21 +308,24 @@ file *extension* should be lowercase) is filename-based and lives in
 `lib.rs::validate_path`, not `validate_bytes` — the WASM entry point only
 ever sees bytes, never a filename. Everything else is identical to the
 native library, verified by cross-checking `validate()` against the CLI:
-**167 of 167 real books produce identical message IDs and verdicts**
-(2026-08-14, PKG-016 excluded on both sides).
+**474 of 474 real books produce identical message IDs and verdicts**
+(2026-09-23, 0.17.4, PKG-016 excluded on both sides).
 
 The check is worth re-running after anything that touches the WASM boundary
 — the serialization types, the `Report`/`Item` shapes, or the entry point's
 argument list. Build the same crate for Node (`wasm-pack build epubveri-wasm
 --target nodejs`), then for each book call `validate(bytes, null, null,
-null)` and compare the finding codes and `status` against `epubveri -i <book>
---format json`. Note that the CLI wraps its report in `inputs[0]`, while the
-WASM call returns that object directly.
+null)` and compare the finding codes and `status` against `epubveri -u -i
+<book> --format json`. Note that the CLI wraps its report in `inputs[0]`, while
+the WASM call returns that object directly. **The `-u` is not optional**: the
+CLI hides usage-severity findings by default and the WASM call returns every
+finding, so without it about half the books differ by their usage lines alone
+while every status still agrees.
 
 **Check the comparison is not vacuous before believing it.** Most of the
 books on a clean shelf produce no findings at all, and two empty lists
 compare equal — the same failure this project has hit before. The run above
-compared **27,361 findings across the 98 books that produced at least one**.
+compared **54,514 findings across the 364 books that produced at least one**.
 
 ## The `schemas/` directory
 
@@ -325,7 +346,7 @@ even slightly unusual").
 
 There are three distinct layers, answering three different questions:
 
-1. **`cargo test`** (634 tests as of this writing) — ordinary Rust unit
+1. **`cargo test`** (over 700 as of 0.17.4) — ordinary Rust unit
    tests scattered across the modules above, each testing one specific
    function or rule in isolation with a small hand-built input. Answers
    "does this one piece of logic do what I think it does."
@@ -384,6 +405,19 @@ There are three distinct layers, answering three different questions:
    comments) — a handful of message IDs that are real, correct findings
    on the *synthetic wrapper* rather than the fixture under test, and
    are excluded from scoring for that reason alone.
+
+Beyond those three, each harness binary answers one question the others
+cannot, and treating any of them as general is the recurring mistake:
+`hostile` generates EPUBs built to break the validator (abort, panic,
+timeout, a guard that stopped refusing, a guard that refuses honest input);
+`fuzz` mutates real books and fails on any panic; `compare` runs epubcheck
+itself over the same books and diffs the findings by ID, the only instrument
+that sees a disagreement; `epubtests` runs W3C's own conformance
+publications; `coverage` regenerates [`COVERAGE.md`](COVERAGE.md) from both
+tools' sources. Real books are checked per book against a saved baseline,
+never by shelf total, because one pathological book carries enough findings
+to hide a regression. `scripts/preflight.sh` runs all of it before a
+release.
 
 ### A worked example: adding a new check
 

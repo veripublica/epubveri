@@ -58,8 +58,8 @@ One JSON object per run. Trimmed from a real run:
 ```json
 {
   "tool": "epubveri",
-  "tool_version": "0.13.2+254ab72",
-  "convention": "0.5",
+  "tool_version": "0.17.4+7f8746a",
+  "convention": "0.6",
   "status": "problems",
   "inputs": [
     {
@@ -127,7 +127,7 @@ marker: its `status` is `"error"` and there are no counters to qualify.
 `epubveri -V` to find it.** Every envelope carries it, so a tool that already
 parses the JSON has the answer without a second process launch and without
 depending on the shape of a human-readable line we have never promised. It may
-carry build metadata after a `+` (`0.13.2+254ab72`); split on `+` if you want
+carry build metadata after a `+` (`0.17.4+7f8746a`); split on `+` if you want
 the bare version.
 
 **Three fields you will touch first are specified in
@@ -563,7 +563,7 @@ If your tool is Rust, skip the process boundary:
 
 ```toml
 [dependencies]
-epubveri = "0.13"
+epubveri = "0.17"
 ```
 
 ```rust
@@ -582,14 +582,15 @@ without your output drifting from ours.
 `epubveri::xmlguard::check` before handing it to `roxmltree`, and after any
 rewrite of it. A document the validator refused is still in the container,
 and a parse of your own is exposed to the same shapes: nesting deep enough to
-abort the process, entities that expand a kilobyte into gigabytes, and one
-element with enough attributes to take minutes. `check` is the scan the validator runs before its own parse, so the
+abort the process, entities that expand a kilobyte into gigabytes, one element
+with enough attributes to take minutes, and enough elements to take a
+gigabyte. `check` is the scan the validator runs before its own parse, so the
 two cannot drift apart.
 
 epubveri is pre-1.0, so breaking API changes land as minor bumps (`0.x.0`).
-**Pin the minor version, and read the `Breaking` heading in
-[CHANGELOG.md](../CHANGELOG.md) before moving it** — that file is the authority
-on what changed, and this page will not list them.
+**Pin the minor version, and before moving it read every entry in
+[CHANGELOG.md](../CHANGELOG.md) that begins with "Breaking"** — that file is
+the authority on what changed, and this page will not list them.
 
 They have all been of one kind so far: a new field on `report::Message`, or a
 public enum gaining a variant or becoming a struct variant, so a struct literal
