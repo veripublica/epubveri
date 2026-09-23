@@ -47,6 +47,11 @@ styloria = "0.11"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# opt-level 2 is measured, not a default left alone. Against 3, fat LTO and
+# one codegen unit (2026-09-23, issue #137, 474-book shelf plus 4 MiB
+# chapters): the shelf moved by 5% at most, and 3 + LTO made a 4 MiB chapter
+# of plain paragraphs 80% slower (0.32 s -> 0.58 s, seven runs each). LTO did
+# shrink the binary from 3.1 MB to 2.5 MB; that is the only case for it.
 [profile.release]
 opt-level = 2
 
