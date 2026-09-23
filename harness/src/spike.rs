@@ -10,7 +10,7 @@
 //! real epubcheck corpus (see `epubveri-corpus`, the sibling binary, for
 //! that).
 //!
-//! Usage: `cargo run --release --bin spike`
+//! Usage: `cargo run --release -p epubveri-harness --bin spike`
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -587,7 +587,7 @@ fn run_ids(bytes: Vec<u8>) -> Vec<&'static str> {
 }
 
 fn main() -> std::process::ExitCode {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let fix_dir = root.join("tests").join("fixtures");
     if let Err(e) = std::fs::create_dir_all(&fix_dir) {
         eprintln!("cannot create {}: {e}", fix_dir.display());

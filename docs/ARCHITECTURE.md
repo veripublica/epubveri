@@ -87,11 +87,12 @@ This repository is a **Cargo workspace** with three members:
   crate's manifest. It adds no validation logic of its own. See "The
   WASM boundary" below.
 
-There's also a small standalone binary, **`src/bin/spike.rs`**, which
-*is* part of the main `epubveri` crate (Cargo auto-discovers any
-`src/bin/*.rs` file as an extra binary target) — it needs no dependency
-the main crate doesn't already have, so it didn't need its own workspace
-member. See "Testing and measurement" for what it does.
+There's also a small standalone binary, **`spike`**, in the harness
+(`harness/src/spike.rs`). It used to live in the core crate as
+`src/bin/spike.rs`, where Cargo's auto-discovery made it a second binary of
+the published package; the core crate now sets `autobins = false`, so the
+CLI is the only thing `cargo install epubveri` installs. See "Testing and
+measurement" for what it does.
 
 ### Behaviour-bearing dependencies: epubveri is the family anchor
 
@@ -328,7 +329,7 @@ There are three distinct layers, answering three different questions:
    tests scattered across the modules above, each testing one specific
    function or rule in isolation with a small hand-built input. Answers
    "does this one piece of logic do what I think it does."
-2. **`cargo run --release --bin spike`** — builds ~25 small, synthetic,
+2. **`cargo run --release -p epubveri-harness --bin spike`** — builds ~25 small, synthetic,
    deliberately-broken EPUB files (one per high-value structural check,
    e.g. "manifest references a file that doesn't exist"), validates
    each one in-process, and reports whether epubveri caught the

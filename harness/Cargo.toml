@@ -46,6 +46,15 @@ path = "src/versions.rs"
 name = "downgrade"
 path = "src/downgrade.rs"
 
+# Synthetic-fixture sanity check: one small book per high-value check. It used
+# to live in the core crate as src/bin/spike.rs, where Cargo's auto-discovery
+# made it a second binary of the published package: `cargo install epubveri`
+# put a dev tool named `spike` on users' PATH, one that writes into the
+# registry's source directory when run.
+[[bin]]
+name = "spike"
+path = "src/spike.rs"
+
 [dependencies]
 epubveri = { path = ".." }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }

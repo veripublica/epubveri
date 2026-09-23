@@ -10,6 +10,10 @@ homepage = "https://github.com/veripublica/epubveri"
 readme = "README.md"
 keywords = ["epub", "epubcheck", "validator", "ebook", "ocf"]
 categories = ["parser-implementations", "command-line-utilities"]
+# The CLI is the only binary this package installs. Cargo otherwise turns any
+# file under src/bin/ into another one, which is how a dev tool (`spike`)
+# reached users' PATH through `cargo install epubveri`.
+autobins = false
 
 # `harness/` is the epubcheck-corpus measurement tool (Rust port of the
 # former scripts/corpus.py) - kept as a separate workspace member so its
