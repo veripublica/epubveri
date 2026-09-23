@@ -2802,12 +2802,19 @@ pub(crate) fn scan_references(text: &str) -> Vec<(String, usize)> {
                 continue;
             }
             // Back up over the attribute name that this `=` belongs to.
+            //
+            // ASCII whitespace only, and not by accident. `(byte as char)
+            // .is_whitespace()` reads a lone UTF-8 continuation byte as a
+            // Latin-1 code point, and two of those are Unicode whitespace:
+            // 0x85 (NEL) and 0xA0 (NBSP). They sit inside `Å` (C3 85) and `à`
+            // (C3 A0), so the walk stopped mid-character and the slice below
+            // panicked on `<p title=Voilà=oui>`. XML whitespace is ASCII anyway.
             let mut ns = j;
-            while ns > 0 && (b[ns - 1] as char).is_whitespace() {
+            while ns > 0 && b[ns - 1].is_ascii_whitespace() {
                 ns -= 1;
             }
             let name_end = ns;
-            while ns > 0 && !(b[ns - 1] as char).is_whitespace() && b[ns - 1] != b'<' {
+            while ns > 0 && !b[ns - 1].is_ascii_whitespace() && b[ns - 1] != b'<' {
                 ns -= 1;
             }
             let name = &text[ns..name_end];
@@ -2815,7 +2822,7 @@ pub(crate) fn scan_references(text: &str) -> Vec<(String, usize)> {
 
             // Then forward to the quoted value.
             let mut v = j + 1;
-            while v < b.len() && (b[v] as char).is_whitespace() {
+            while v < b.len() && b[v].is_ascii_whitespace() {
                 v += 1;
             }
             if v >= b.len() || (b[v] != b'"' && b[v] != b'\'') {
@@ -2906,6 +2913,27 @@ mod scan_reference_tests {
         let t = r#"<img src="a.png"/>"#;
         let (v, off) = scan_references(t).into_iter().next().expect("one");
         assert_eq!(&t[off..off + v.len()], "a.png");
+    }
+
+    /// Found by fuzzing: a non-ASCII letter whose UTF-8 encoding carries byte
+    /// 0x85 or 0xA0 (`Å`, `à`) next to an `=` stopped the backward walk inside
+    /// the character, and slicing there panicked. Every such letter must be a
+    /// non-event, whatever side of the `=` it lands on.
+    #[test]
+    fn a_multibyte_letter_next_to_an_equals_sign_is_not_a_boundary() {
+        for t in [
+            r#"<p title=Voilà=oui><img src="a.png"/></p>"#,
+            r#"<p title=Å=x href="b.css">"#,
+            r#"<p à="x" src="c.png">"#,
+            "<p x=\u{85}=y src=\"d.png\">",
+            "<p title=\u{A0}\u{A0}= href=\"e.css\">",
+        ] {
+            let _ = scan_references(t);
+        }
+        assert_eq!(
+            vals(r#"<p title=Voilà=oui><img src="a.png"/></p>"#),
+            ["a.png"]
+        );
     }
 
     /// The shape #73 is about: the reference precedes the malformation, so a

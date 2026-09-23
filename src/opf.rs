@@ -4155,7 +4155,7 @@ fn recover_root_start_tag(xml: &str) -> Option<(usize, &str)> {
     let b = xml.as_bytes();
     let mut i = 0usize;
     loop {
-        while i < b.len() && (b[i] as char).is_whitespace() {
+        while i < b.len() && b[i].is_ascii_whitespace() {
             i += 1;
         }
         if i >= b.len() || b[i] != b'<' {
