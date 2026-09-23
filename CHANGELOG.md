@@ -8,6 +8,34 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Security
+
+- **A document whose entity references expand past 64 MiB is refused before
+  it is parsed.** The parser refused entity *loops*, which is what stops the
+  classic "billion laughs" file, but it bounded nothing else. A 1.6 KB EPUB
+  that declares one 50,000-character entity and references it 50,000 times
+  used 5 GB of memory here for 7 seconds and was then reported VALID. A larger
+  one exhausts the machine, the browser tab running the WASM package, or any
+  program that embeds the library. The guard counts, before parsing, how far
+  the internal subset's entities would inflate the document, nested ones
+  included. Past the limit that already applies to any single resource, the
+  document is reported as `RSC-016` (fatal, "not parsed") and uses 5 MB. The
+  limit is set so that no book EPUBCheck accepts is refused: EPUBCheck 5.4.0
+  still validates 60 million characters of expansion, which is under it, and
+  on the 5 GB file it fails itself, printing no findings.
+- **A malformed tag with a non-ASCII letter next to an `=` no longer crashes
+  the validator.** `<p title=Voilà=oui>` stopped epubveri with a panic instead
+  of a report. The scanner that recovers references from an unparseable
+  document read single bytes as characters, and the second bytes of `à` and
+  `Å` are Unicode whitespace when read that way (NBSP and NEL). Found by
+  mutation fuzzing: 3 crashes in 2,400 generated books, all at this site.
+- Both shapes are now in the hostile suite. It also gains an `ACCEPTED`
+  failure for a shape the validator must refuse and instead calls valid,
+  because a lost guard on a machine with enough memory shows up as a wrong
+  verdict rather than as a crash.
+
 ## [0.17.0] - 2026-09-23
 
 ### Changed

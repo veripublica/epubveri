@@ -227,6 +227,47 @@ fn gen_xxe(out: &Path) {
     );
 }
 
+/// Loop-free entity amplification: one 10,000-character entity referenced
+/// 7,000 times, 70 MB of text from a few KB. roxmltree stops entity *loops*
+/// but bounded nothing else, and the full-size shape (50,000 x 50,000) drove
+/// 5 GB of peak RSS and reported VALID. Guard: `ocf::expansion_exceeding`,
+/// reported as RSC-016. Sized just past its 64 MiB limit so that, if the guard
+/// is ever lost, this run costs ~150 MB rather than the 5 GB that found it -
+/// the failure then shows as ACCEPTED, not as exhaustion.
+fn gen_entity_expansion(out: &Path) {
+    let doc = format!(
+        concat!(
+            r#"<?xml version="1.0"?><!DOCTYPE html [<!ENTITY a "{}">]>"#,
+            r#"<html xmlns="http://www.w3.org/1999/xhtml" "#,
+            r#"xmlns:epub="http://www.idpf.org/2007/ops"><head><title>n</title></head>"#,
+            r#"<body><nav epub:type="toc"><ol><li><a href="n.xhtml">n</a></li></ol></nav>"#,
+            r#"<p>{}</p></body></html>"#
+        ),
+        "A".repeat(10_000),
+        "&a;".repeat(7_000)
+    );
+    book(
+        &out.join("refuse-entity-expansion.epub"),
+        opf("", ""),
+        doc,
+        Vec::new(),
+    );
+}
+
+/// A non-ASCII letter beside an `=` in a malformed tag. `à` is C3 A0 and `Å`
+/// is C3 85, and read one byte at a time as `char` those continuation bytes
+/// are NBSP and NEL - Unicode whitespace - so the recovery scanner for
+/// unparseable documents stopped mid-character and panicked. Found by
+/// mutation fuzzing; `htm::scan_references` now tests ASCII whitespace.
+fn gen_multibyte_equals(out: &Path) {
+    book(
+        &out.join("multibyte-equals.epub"),
+        opf("", ""),
+        nav("", r#"<p title=Voilà=oui Å=x><img src="a.png"/></p>"#),
+        Vec::new(),
+    );
+}
+
 /// Many tiny ZIP entries. Measured linear and fast — kept so that stays true,
 /// not because it ever failed.
 fn gen_entry_count(out: &Path) {
@@ -274,6 +315,11 @@ enum Outcome {
     Abort(String),
     Panic,
     Timeout,
+    /// A `refuse-*` shape exited 0: the validator called a hostile book
+    /// valid, which is what a lost guard looks like when the machine has the
+    /// memory to survive it. The zip bomb went unnoticed here for exactly
+    /// that reason.
+    Accepted,
 }
 
 /// Run the validator on one file, bounded by `timeout`.
@@ -283,7 +329,7 @@ enum Outcome {
 /// where the same thing needs a `timeout(1)` that macOS does not ship. The
 /// 1 ms interval bounds the timing error well under the 0.13s floor the scale
 /// ladder measures.
-fn run_one(bin: &Path, epub: &Path, timeout: Duration) -> Outcome {
+fn run_one(bin: &Path, epub: &Path, timeout: Duration, must_refuse: bool) -> Outcome {
     let start = Instant::now();
     let mut child = match Command::new(bin)
         .arg("-i")
@@ -337,6 +383,9 @@ fn run_one(bin: &Path, epub: &Path, timeout: Duration) -> Outcome {
     }
     if status.code() == Some(101) || err.contains("panicked") {
         return Outcome::Panic;
+    }
+    if must_refuse && status.code() == Some(0) {
+        return Outcome::Accepted;
     }
     Outcome::Ok(elapsed)
 }
@@ -396,6 +445,8 @@ fn main() {
     gen_zip_bomb(&out);
     gen_css_nesting(&out);
     gen_xxe(&out);
+    gen_entity_expansion(&out);
+    gen_multibyte_equals(&out);
     gen_entry_count(&out);
     if scale {
         gen_scale(&out);
@@ -415,7 +466,7 @@ fn main() {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        match run_one(&bin, f, timeout) {
+        match run_one(&bin, f, timeout, name.starts_with("refuse-")) {
             Outcome::Ok(d) if name.starts_with("scale-") => {
                 println!("  ok    {name:<22} {:.2}s", d.as_secs_f64())
             }
@@ -432,6 +483,10 @@ fn main() {
                 println!("  FAIL  {name:<22} TIMEOUT (>{}s)", timeout.as_secs());
                 failed += 1;
             }
+            Outcome::Accepted => {
+                println!("  FAIL  {name:<22} ACCEPTED (reported valid; a guard is gone)");
+                failed += 1;
+            }
         }
     }
 
@@ -439,5 +494,5 @@ fn main() {
         eprintln!("hostile corpus: {failed} failure(s) above");
         std::process::exit(1);
     }
-    println!("hostile corpus: no aborts, panics or timeouts");
+    println!("hostile corpus: no aborts, panics, timeouts or accepted refuse-* shapes");
 }
