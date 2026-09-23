@@ -1,0 +1,33 @@
+# Weekly RustSec audit of the lockfile.
+#
+# The audit job in ci.yml runs only on a push or a pull request, so an
+# advisory published against a dependency we already ship stayed invisible
+# until the next commit, which on a quiet week is no commit. This runs the
+# same check on a schedule. On a scheduled run the action opens an issue for
+# each advisory, which is why it needs `issues: write` and nothing else does.
+
+name: Audit
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      checks: write
+    steps:
+      - name: Check out
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Audit dependencies
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
