@@ -8,6 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [0.17.4] - 2026-09-23
+
+### Documentation
+
+- **Building on Windows needs Microsoft's linker, and the README now says
+  so.** A user's `cargo install` stopped with ``linker `link.exe` not found``
+  until Visual Studio's C++ tools were installed. Rust's default toolchain on
+  Windows links every build script, proc-macro and binary with that linker,
+  so no crate installs without it. The build-from-source section names
+  *Build Tools for Visual Studio* with *Desktop development with C++*, notes
+  that VS Code does not provide it, and points anyone who only wants to run
+  epubveri at the pre-built Windows binary, which needs none of this. No code
+  changed; the version exists so the crates.io page carries the text.
+
 ## [0.17.3] - 2026-09-23
 
 ### Security
