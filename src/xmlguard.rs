@@ -50,6 +50,16 @@ use std::ops::Range;
 /// failure (WASM), and all three environments give identical findings at
 /// exactly 256. It bounds our own recursion and roxmltree's; a caller that
 /// walks the parsed tree recursively on a smaller stack needs its own margin.
+///
+/// **All of that is for an optimised build.** Unoptimised, roxmltree spends
+/// roughly twenty times the stack per level: a debug build on a 2 MiB thread,
+/// which is what `cargo test` gives each test, survives 124 levels and aborts
+/// at 125 (found by epubsana, measured here 2026-09-23). Optimising that one
+/// crate is enough — with `[profile.dev.package.roxmltree] opt-level = 1` in
+/// the root manifest, a 256-level document validates fully on the same thread.
+/// Cargo ignores a dependency's profile settings, so a consumer running
+/// epubveri in a debug build has to add those two lines itself; this
+/// workspace has them, and a test fails loudly without them.
 pub const MAX_XML_DEPTH: usize = 256;
 
 /// How many bytes of text [`check`] lets entity references add to a

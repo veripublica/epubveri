@@ -900,14 +900,42 @@ mod tests {
     /// the 0.7.12-0.7.14 audits kept turning up.
     #[test]
     fn over_limit_nesting_is_reported_with_a_reason() {
+        // html > body > divs > p is `depth + 3` levels, so this is one past it.
         let report =
-            crate::validate_bytes(epub3_with(&nested_body(crate::xmlguard::MAX_XML_DEPTH + 1)));
+            crate::validate_bytes(epub3_with(&nested_body(crate::xmlguard::MAX_XML_DEPTH - 2)));
         let hit = report
             .messages
             .iter()
             .find(|m| m.text.contains("nesting is deeper"))
             .expect("depth guard should report");
         assert_eq!(hit.severity, crate::report::Severity::Fatal);
+    }
+
+    /// The deepest document the guard accepts must also *validate* on the
+    /// stack a test thread gets. In a debug build roxmltree's recursion costs
+    /// ~20x more stack, and a 2 MiB thread aborted at 125 levels (found by
+    /// epubsana, 2026-09-23): under the limit, and invisible here because no
+    /// test parsed anything that deep. It passes because the workspace
+    /// manifest sets `[profile.dev.package.roxmltree] opt-level = 1`; an
+    /// abort here means that line is gone.
+    #[test]
+    fn the_deepest_accepted_document_validates_on_a_test_thread() {
+        // html > body > divs > p is `depth + 3` levels: exactly the limit.
+        let body = nested_body(crate::xmlguard::MAX_XML_DEPTH - 3);
+        let report = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || crate::validate_bytes(epub3_with(&body)))
+            .unwrap()
+            .join()
+            .unwrap();
+        assert!(
+            !report
+                .messages
+                .iter()
+                .any(|m| m.text.contains("not parsed")),
+            "a document at the limit must be parsed, not refused: {:?}",
+            report.messages.iter().map(|m| &m.text).collect::<Vec<_>>()
+        );
     }
 
     /// The false-positive direction, and the one that matters more: the

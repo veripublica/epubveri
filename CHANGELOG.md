@@ -8,6 +8,24 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Documentation
+
+- **In a debug build the depth limit sits above the crash, and the docs now
+  say what to do about it.** The XML parser recurses once per level of
+  nesting and, unoptimised, needs about twenty times the stack per level. On
+  the 2 MiB thread `cargo test` gives each test, a debug build aborts at 125
+  levels, below the 256 the depth guard accepts; release builds keep their
+  margin (about 2,000 levels on the same thread). Adding
+  `[profile.dev.package.roxmltree] opt-level = 1` to the root `Cargo.toml` is
+  enough for a 256-level document to validate there. Cargo reads profile
+  settings from the root manifest only, so this is a line for projects that
+  embed epubveri and test in debug: `docs/INTEGRATING.md` and
+  `xmlguard::MAX_XML_DEPTH` now say so. This workspace carries the line, and a
+  new test validates a document at exactly the limit on a 2 MiB thread; without
+  the line it aborts. Found and reported by epubsana.
+
 ## [0.17.4] - 2026-09-23
 
 ### Documentation

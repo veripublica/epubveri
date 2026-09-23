@@ -587,6 +587,22 @@ with enough attributes to take minutes, and enough elements to take a
 gigabyte. `check` is the scan the validator runs before its own parse, so the
 two cannot drift apart.
 
+**If you run epubveri in a debug build** — which includes your own `cargo test`
+— add this to your root `Cargo.toml`:
+
+```toml
+[profile.dev.package.roxmltree]
+opt-level = 1
+```
+
+The XML parser recurses once per level of nesting, and unoptimised it needs
+about twenty times the stack per level. On the 2 MiB thread `cargo test` gives
+each test, a debug build aborts at 125 levels, below the 256 the depth guard
+accepts, and in Rust a stack overflow ends the process rather than failing the
+test. With that one crate optimised, 256 levels validate on the same thread.
+Release builds are unaffected, and a dependency cannot set this for you: Cargo
+reads profile settings from the root manifest only.
+
 epubveri is pre-1.0, so breaking API changes land as minor bumps (`0.x.0`).
 **Pin the minor version, and before moving it read every entry in
 [CHANGELOG.md](../CHANGELOG.md) that begins with "Breaking"** — that file is
