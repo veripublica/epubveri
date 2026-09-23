@@ -50,7 +50,7 @@ jobs:
       id-token: write
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.tag || github.ref_name }}
 
@@ -58,7 +58,7 @@ jobs:
       # newer than some runner images ship; setup-node also writes the .npmrc
       # that points publishing at the registry.
       - name: Set up Node
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"

@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # Done with `rustup` rather than a toolchain action on purpose: rustup is
       # already on the runner, and this repo would rather not take another
@@ -99,7 +99,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Read the declared MSRV
         id: msrv
@@ -126,7 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # The action is the maintained path (it caches the advisory DB and
       # annotates the diff); `cargo install cargo-audit` per run is a slow
@@ -137,8 +137,10 @@ jobs:
       # purpose. Upstream's latest release is v2.0.0 (2024-09-23, `node20`);
       # Node 24 landed on their `main` on 2026-03-20 (PR #48) and has gone
       # unreleased since, with their issue #53 "make new release" open and
-      # unanswered. So there is nothing to bump to - `@v2` still serves
-      # node20.
+      # unanswered. So there is nothing to bump to - v2.0.0 still serves
+      # node20. (Every action in this repo is now pinned to a commit, this
+      # one to v2.0.0's; `v2` upstream is a branch, not a tag, so a pin to
+      # it was never a pin. 2026-09-23.)
       #
       # The decision is to wait, and to pin to `rustsec/audit-check@858dc40f`
       # only if no release comes and GitHub's removal of Node 20 breaks this
@@ -158,6 +160,6 @@ jobs:
       # having left with the move off `tsify-next`. Read it off a run rather
       # than off this comment.)
       - name: Audit dependencies
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
