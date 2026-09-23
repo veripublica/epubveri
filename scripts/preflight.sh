@@ -247,6 +247,13 @@ else
   check "hostile (no abort, panic or timeout)" \
     cargo run --release -q -p epubveri-harness --bin hostile
 
+  # Mutation fuzzing, fixed seeds so the gate is deterministic. Two seeds of
+  # 3,000 because that is what it takes: with the `scan_references` panic put
+  # back, seed 1 first hits it at book 2,270 and seed 2 at book 2,592. Explore
+  # beyond this with other seeds by hand; this line only keeps ground taken.
+  check "fuzz (seeds 1-2, 3,000 mutated books each, no panic)" \
+    bash -c 'for s in 1 2; do cargo run --release -q -p epubveri-harness --bin fuzz -- --seed "$s" --books 3000 || exit 1; done'
+
   # The shelf is local-only and machine-specific, so its absence is not a
   # failure - but a silent absence would be, since it is the only instrument
   # that sees real books.

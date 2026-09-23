@@ -55,6 +55,12 @@ path = "src/downgrade.rs"
 name = "spike"
 path = "src/spike.rs"
 
+# Mutation fuzzer: thousands of corrupted copies of one feature-dense book,
+# each validated in-process under catch_unwind. Deterministic per seed.
+[[bin]]
+name = "fuzz"
+path = "src/fuzz.rs"
+
 [dependencies]
 epubveri = { path = ".." }
 zip = { version = "8.6", default-features = false, features = ["deflate"] }

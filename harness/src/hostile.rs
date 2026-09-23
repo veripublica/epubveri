@@ -22,11 +22,15 @@
 //! it downstream), a **panic**, or a **timeout** (for a hostile input, no
 //! answer is the same denial of service as a crash).
 //!
-//! **What this deliberately does not catch.** Two of the six bugs it was
-//! built from would pass. The zip bomb against v0.8.6 exits 0 and reports
-//! VALID — it merely consumes 1.3 GB doing so, and neither peak memory nor
-//! the verdict is asserted here. Watch memory yourself when adding a shape
-//! whose failure mode is exhaustion rather than a signal.
+//! **What this does not catch, and the half it now does.** Peak memory is
+//! still not measured: the zip bomb against v0.8.6 exited 0 and reported
+//! VALID after consuming 1.3 GB, and the entity-expansion file of 2026-09-23
+//! did the same at 5 GB. What *is* asserted since then is the verdict, by file
+//! name: a `refuse-*` shape must not be called valid (ACCEPTED otherwise) and
+//! an `accept-*` shape must be (REFUSED otherwise). A lost guard on a machine
+//! with memory to spare shows up as the wrong verdict, which is what this
+//! catches; watch memory yourself when adding a shape whose only symptom
+//! would be exhaustion.
 //!
 //! Usage:
 //!     cargo run --release -p epubveri-harness --bin hostile
