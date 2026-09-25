@@ -739,7 +739,10 @@ const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
     // book whose file has a space in its name draws PKG-010 from `ocf.rs`.
     // Found by the partial-hit listing, which the "any expected id" scoring
     // had hidden.
-    ("item-href-contains-spaces-unencoded-error.opf", &["RSC-020"]),
+    (
+        "item-href-contains-spaces-unencoded-error.opf",
+        &["RSC-020"],
+    ),
 ];
 
 /// Fixtures whose expected finding **epubcheck itself does not make** once the

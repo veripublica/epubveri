@@ -19726,13 +19726,17 @@ mod tests {
                 z.start_file("mimetype", stored).unwrap();
                 z.write_all(b"application/epub+zip").unwrap();
                 for (name, data) in [
-                    ("META-INF/container.xml", r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#),
+                    (
+                        "META-INF/container.xml",
+                        r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+                    ),
                     ("OEBPS/content.opf", opf.as_str()),
                     ("OEBPS/nav.xhtml", NAV),
                     ("OEBPS/ch1.xhtml", ch1),
                     ("OEBPS/ch2.xhtml", ch2),
                 ] {
-                    z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                    z.start_file(name, zip::write::SimpleFileOptions::default())
+                        .unwrap();
                     z.write_all(data.as_bytes()).unwrap();
                 }
                 z.finish().unwrap();
@@ -19749,11 +19753,18 @@ mod tests {
         };
         let index = "<dc:type>index</dc:type>";
         assert_eq!(book(index, INDEX, PLAIN), ["OEBPS/ch2.xhtml"]);
-        assert_eq!(book(index, PLAIN, PLAIN), ["OEBPS/ch1.xhtml", "OEBPS/ch2.xhtml"]);
+        assert_eq!(
+            book(index, PLAIN, PLAIN),
+            ["OEBPS/ch1.xhtml", "OEBPS/ch2.xhtml"]
+        );
         assert!(book(index, INDEX, INDEX).is_empty());
         // Not only the first dc:type, and not case-sensitively.
         assert_eq!(
-            book("<dc:type>text</dc:type><dc:type> Index </dc:type>", INDEX, PLAIN),
+            book(
+                "<dc:type>text</dc:type><dc:type> Index </dc:type>",
+                INDEX,
+                PLAIN
+            ),
             ["OEBPS/ch2.xhtml"]
         );
         // Not an index publication: nothing asked.
