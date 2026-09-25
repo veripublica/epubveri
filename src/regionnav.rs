@@ -73,17 +73,20 @@ pub(crate) fn collect_targets(nav_el: roxmltree::Node) -> Vec<String> {
         .collect()
 }
 
-/// The region-based nav's own content model, reverse-engineered from the
-/// real corpus fixture (see CLAUDE.md's dated notes for the derivation):
-/// the `<nav>` must contain exactly one element child, an `<ol>`; each
-/// `<li>`'s first element child must be `<a>` or `<span>`; a `<span>` must
-/// contain exactly two `<a>` elements; an `<a>` may be followed by at most
-/// one more child, which must be an `<ol>` (nested sub-regions); an `<a>`
-/// containing actual text content (not just e.g. a `<meta>` annotation) is
-/// a warning, not an error.
+/// The region-based nav's content model, `datanav-xhtml.sch`'s four
+/// region-based patterns. Each is its own pattern there, so each applies to
+/// every element it names anywhere inside the nav - every `li`, every `a`,
+/// every `span` - and reports at that element. An earlier version walked the
+/// lists instead, so a list item it did not reach, a link inside a `span`,
+/// and a `span` holding an extra non-link element all went unasked; and it
+/// reported a bad first child at the child, where epubcheck points at the
+/// `li` (compared with 5.4.0, 2026-09-25).
 pub(crate) fn check_content_model(nav_el: roxmltree::Node, path: &str, report: &mut Report) {
-    let element_children: Vec<_> = nav_el.children().filter(|n| n.is_element()).collect();
-    if element_children.len() != 1 || element_children[0].tag_name().name() != "ol" {
+    fn elements<'a, 'i>(n: roxmltree::Node<'a, 'i>) -> Vec<roxmltree::Node<'a, 'i>> {
+        n.children().filter(|c| c.is_element()).collect()
+    }
+    let top = elements(nav_el);
+    if !(top.len() == 1 && top[0].tag_name().name() == "ol") {
         report.push_node(
             RSC_005,
             Severity::Error,
@@ -94,87 +97,61 @@ pub(crate) fn check_content_model(nav_el: roxmltree::Node, path: &str, report: &
             Vec::new(),
         );
     }
-    // Still walk whatever <ol> is present (even alongside other, already-
-    // flagged stray children) - confirmed against the real corpus fixture,
-    // which reports both the container-level violation *and* every
-    // violation found inside the ol, not one or the other.
-    if let Some(ol) = element_children
-        .iter()
-        .find(|n| n.tag_name().name() == "ol")
+    for n in nav_el
+        .descendants()
+        .filter(|n| n.is_element() && *n != nav_el)
     {
-        check_ol(*ol, path, report);
-    }
-}
-
-fn check_ol(ol: roxmltree::Node, path: &str, report: &mut Report) {
-    for li in ol
-        .children()
-        .filter(|n| n.is_element() && n.tag_name().name() == "li")
-    {
-        check_li(li, path, report);
-    }
-}
-
-fn check_li(li: roxmltree::Node, path: &str, report: &mut Report) {
-    let children: Vec<_> = li.children().filter(|n| n.is_element()).collect();
-    let Some(first) = children.first() else {
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "the first child of a region-based nav list item must be either an \"a\" or \"span\" element",
-            path,
-            li,
-            "regionnav.li.missing_label",
-            Vec::new(),
-        );
-        return;
-    };
-    match first.tag_name().name() {
-        "a" => {
-            check_a_label(*first, path, report);
-            if children.len() > 1 {
-                if children.len() != 2 || children[1].tag_name().name() != "ol" {
+        match n.tag_name().name() {
+            "li" => {
+                let children = elements(n);
+                let first_ok = children
+                    .first()
+                    .is_some_and(|f| matches!(f.tag_name().name(), "a" | "span"));
+                if !first_ok {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        "the first child of a region-based nav list item must be either an \"a\" or \"span\" element",
+                        path,
+                        n,
+                        "regionnav.li.missing_label",
+                        Vec::new(),
+                    );
+                }
+                if children.len() > 1
+                    && !(children.len() == 2 && children[1].tag_name().name() == "ol")
+                {
                     report.push_node(
                         RSC_005,
                         Severity::Error,
                         "the first child of a region-based nav list item can only be followed by a single \"ol\" element",
                         path,
-                        li,
+                        n,
                         "regionnav.li.a_followed_by_invalid_sibling",
                         Vec::new(),
                     );
-                } else {
-                    check_ol(children[1], path, report);
                 }
             }
-        }
-        "span" => {
-            let a_count = first
-                .children()
-                .filter(|n| n.is_element() && n.tag_name().name() == "a")
-                .count();
-            if a_count != 2 {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    "\"span\" elements in region-based navs must contain exactly two \"a\" elements",
-                    path,
-                    *first,
-                    "regionnav.li.span_wrong_anchor_count",
-                    vec![a_count.to_string()],
-                );
+            "a" => check_a_label(n, path, report),
+            "span" => {
+                let children = elements(n);
+                let links = children
+                    .iter()
+                    .filter(|c| c.tag_name().name() == "a")
+                    .count();
+                if !(children.len() == 2 && links == 2) {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        "\"span\" elements in region-based navs must contain exactly two \"a\" elements",
+                        path,
+                        n,
+                        "regionnav.li.span_wrong_anchor_count",
+                        vec![links.to_string()],
+                    );
+                }
             }
-        }
-        _ => {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "the first child of a region-based nav list item must be either an \"a\" or \"span\" element",
-                path,
-                *first,
-                "regionnav.li.missing_label",
-                Vec::new(),
-            );
+            _ => {}
         }
     }
 }

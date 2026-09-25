@@ -121,6 +121,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   - Compared with epubcheck on 37 dictionary and 10 preview books, all equal
     in ids and lines; the forced `dict`, `idx`, `edupub` and `preview`
     profiles give the same findings in both tools.
+- **Distributable objects, manifest collections and region-based navigation
+  are checked in full.**
+  - A `distributable-object` collection needs metadata with exactly one
+    identifier, a title and a language, at least one link, and at most one
+    manifest collection.
+  - A manifest collection holds only links, and at least one.
+  - A collection now follows the package grammar: a `role`, then either
+    sub-collections or links, so an empty one is incomplete, as in
+    epubcheck.
+  - In a Data Navigation Document's region-based nav, every list item, link
+    and span is checked, not only the ones a well-formed list leads to, and
+    each finding points where epubcheck points.
+  - Compared with epubcheck on 25 books.
 
 ## [0.17.5] - 2026-09-23
 

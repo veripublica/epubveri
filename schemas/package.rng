@@ -130,6 +130,41 @@
     </mixed>
   </define>
 
+  <!-- A collection (EPUB 3 §5.8): a `role`, optional metadata, then either
+       sub-collections only, or sub-collections followed by at least one link.
+       It was `looseContent`, so an empty `<collection role="manifest"/>`
+       passed here where epubcheck's grammar calls it incomplete (compared
+       with 5.4.0, 2026-09-25). The metadata stays loose: what it may hold is
+       a question for its own change. -->
+  <define name="collection">
+    <element name="collection">
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <optional>
+        <attribute name="dir">
+          <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
+        </attribute>
+      </optional>
+      <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
+      <attribute name="role"><data type="string"/></attribute>
+      <optional><element name="metadata"><ref name="looseContent"/></element></optional>
+      <choice>
+        <oneOrMore><ref name="collection"/></oneOrMore>
+        <group>
+          <zeroOrMore><ref name="collection"/></zeroOrMore>
+          <oneOrMore>
+            <element name="link">
+              <attribute name="href"><data type="string"/></attribute>
+              <optional><attribute name="rel"><data type="string"/></attribute></optional>
+              <optional><attribute name="id"><data type="ID"/></attribute></optional>
+              <optional><attribute name="media-type"><data type="string"/></attribute></optional>
+              <empty/>
+            </element>
+          </oneOrMore>
+        </group>
+      </choice>
+    </element>
+  </define>
+
   <!-- `id`, `dir` and `xml:lang`. `dir`'s value set is epubcheck's
        (`opf.dir.attr`), not a free string. -->
   <define name="dcFull-epub3">
@@ -282,7 +317,7 @@
         </oneOrMore>
       </element>
       <element name="bindings"><ref name="looseContent"/></element>
-      <element name="collection"><ref name="looseContent"/></element>
+      <ref name="collection"/>
       <!-- must have at least one <tour> (JSWolf, MobileRead #234; issue #87).
            `opf20.rng`'s `OPF20.tours-content` is `oneOrMore tour-element`, so
            an empty <tours></tours> is an error there and was accepted here.

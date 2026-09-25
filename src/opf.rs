@@ -12475,33 +12475,127 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     check_distributable_objects(&pkg, opf_path, report);
 }
 
-/// EPUB Distributable Objects 1.0, §2.2.3: a `<collection role=
-/// "distributable-object">`'s own nested `<metadata>` must include
-/// exactly one `dc:identifier` (confirmed via a real fixture with zero).
+/// EPUB Distributable Objects and manifest collections: the rules of
+/// `collection-do-30.sch` and `collection-manifest-30.sch`, which epubcheck
+/// runs on every EPUB 3 package.
+///
+/// We had one of the nine (the identifier count, placed at the collection);
+/// the rest were silent. Compared with epubcheck 5.4.0 a book per rule on
+/// 2026-09-25, locations included: the metadata rules report at the
+/// collection's `metadata`, the others at the collection. Roles are matched
+/// by token, as the Schematron's `tokenize(@role)` does.
 fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &mut Report) {
-    for coll in pkg.descendants().filter(|n| {
+    let has_role = |n: roxmltree::Node, role: &str| {
         n.is_element()
             && n.tag_name().name() == "collection"
-            && n.attr_no_ns("role") == Some("distributable-object")
-    }) {
-        let count = coll
+            && n.attr_no_ns("role")
+                .is_some_and(|r| r.split_whitespace().any(|t| t == role))
+    };
+    let children = |n: roxmltree::Node, name: &str| -> usize {
+        n.children()
+            .filter(|c| c.is_element() && c.tag_name().name() == name)
+            .count()
+    };
+    let push = |report: &mut Report,
+                n: roxmltree::Node,
+                text: &str,
+                rule: &'static str,
+                params: Vec<String>| {
+        report.push_node(RSC_005, Severity::Error, text, opf_path, n, rule, params);
+    };
+    for coll in pkg
+        .descendants()
+        .filter(|n| has_role(*n, "distributable-object"))
+    {
+        let metadata = coll
             .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "metadata")
-            .into_iter()
-            .flat_map(|md| md.children())
-            .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
-            .count();
-        if count != 1 {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "A \"distributable-object\" collection must include exactly one identifier",
-                opf_path,
+            .find(|n| n.is_element() && n.tag_name().name() == "metadata");
+        if metadata.is_none() {
+            push(
+                report,
                 coll,
-                "opf.collection.distributable_object_identifier_count",
-                vec![count.to_string()],
+                "a \"distributable-object\" collection has no metadata",
+                "opf.collection.distributable_object_no_metadata",
+                Vec::new(),
             );
         }
+        let manifests = coll
+            .children()
+            .filter(|c| {
+                c.is_element()
+                    && c.tag_name().name() == "collection"
+                    && c.attr_no_ns("role") == Some("manifest")
+            })
+            .count();
+        if manifests > 1 {
+            push(
+                report,
+                coll,
+                "a \"distributable-object\" collection has more than one manifest collection",
+                "opf.collection.distributable_object_manifests",
+                vec![manifests.to_string()],
+            );
+        }
+        if children(coll, "link") == 0 {
+            push(
+                report,
+                coll,
+                "a \"distributable-object\" collection has no link",
+                "opf.collection.distributable_object_no_link",
+                Vec::new(),
+            );
+        }
+        if let Some(md) = metadata {
+            let count = children(md, "identifier");
+            if count != 1 {
+                push(
+                    report,
+                    md,
+                    "A \"distributable-object\" collection must include exactly one identifier",
+                    "opf.collection.distributable_object_identifier_count",
+                    vec![count.to_string()],
+                );
+            }
+            if children(md, "title") == 0 {
+                push(
+                    report,
+                    md,
+                    "a \"distributable-object\" collection's metadata has no title",
+                    "opf.collection.distributable_object_no_title",
+                    Vec::new(),
+                );
+            }
+            if children(md, "language") == 0 {
+                push(
+                    report,
+                    md,
+                    "a \"distributable-object\" collection's metadata has no language",
+                    "opf.collection.distributable_object_no_language",
+                    Vec::new(),
+                );
+            }
+        }
+    }
+    for coll in pkg.descendants().filter(|n| has_role(*n, "manifest")) {
+        if children(coll, "metadata") > 0 || children(coll, "collection") > 0 {
+            push(
+                report,
+                coll,
+                "a manifest collection may hold only links",
+                "opf.collection.manifest_not_only_links",
+                Vec::new(),
+            );
+        }
+        if children(coll, "link") == 0 {
+            push(
+                report,
+                coll,
+                "a manifest collection has no link",
+                "opf.collection.manifest_no_link",
+                Vec::new(),
+            );
+        }
+        // That it sits within another collection is `schemas/package.sch`'s.
     }
 }
 
@@ -19854,6 +19948,71 @@ mod tests {
         assert_eq!(
             found,
             [(crate::ids::OPF_079, "OEBPS/ch1.xhtml".to_string())]
+        );
+    }
+
+    /// `collection-do-30.sch` and `collection-manifest-30.sch`, rule by rule,
+    /// each compared with epubcheck 5.4.0 on a book of its own (2026-09-25).
+    #[test]
+    fn distributable_object_and_manifest_collections_match_epubcheck() {
+        const MD: &str = r#"<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier>urn:x:1</dc:identifier><dc:title>D</dc:title><dc:language>en</dc:language></metadata>"#;
+        const MAN: &str = r#"<collection role="manifest"><link href="ch1.xhtml"/></collection>"#;
+        let rules = |collections: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>{collections}
+</package>"#
+            );
+            let ch1 = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+            let r = crate::validate_bytes(epub_with_opf(Some(&opf), ch1));
+            let mut v: Vec<&str> = r
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .filter_map(|m| m.rule)
+                .filter(|k| k.starts_with("opf.collection."))
+                .collect();
+            v.sort();
+            v
+        };
+        let dobj = |inner: &str| {
+            format!(r#"<collection role="distributable-object">{inner}</collection>"#)
+        };
+        assert!(rules(&dobj(&format!(r#"{MD}{MAN}<link href="ch1.xhtml"/>"#))).is_empty());
+        assert_eq!(
+            rules(&dobj(&format!(r#"{MAN}<link href="ch1.xhtml"/>"#))),
+            ["opf.collection.distributable_object_no_metadata"]
+        );
+        assert_eq!(
+            rules(&dobj(&format!(r#"{MD}{MAN}{MAN}<link href="ch1.xhtml"/>"#))),
+            ["opf.collection.distributable_object_manifests"]
+        );
+        assert_eq!(
+            rules(&dobj(&format!("{MD}{MAN}"))),
+            ["opf.collection.distributable_object_no_link"]
+        );
+        assert_eq!(
+            rules(&dobj(&format!(
+                r#"{}<link href="ch1.xhtml"/>"#,
+                MD.replace("<dc:title>D</dc:title>", "")
+            ))),
+            ["opf.collection.distributable_object_no_title"]
+        );
+        assert_eq!(
+            rules(&dobj(&format!(
+                r#"{MD}<collection role="manifest">{MD}<link href="ch1.xhtml"/></collection><link href="ch1.xhtml"/>"#
+            ))),
+            ["opf.collection.manifest_not_only_links"]
         );
     }
 
