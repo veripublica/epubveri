@@ -15,27 +15,32 @@ fn elem_text(n: roxmltree::Node) -> String {
         .to_string()
 }
 
-/// §2.4/2.5 Preview Identification: a confirmed Preview publication
-/// (`dc:type="preview"`) should (warning) identify its source publication
-/// via `dc:source`, and that source must not be the publication's own
-/// package identifier (confirmed via a real fixture using the exact same
-/// text as `dc:identifier`).
+/// §2.4/2.5 Preview Identification (`preview-pub-opf.sch`), which epubcheck
+/// attaches on the preview profile or on any dc:type matched
+/// case-insensitively (`OPFChecker`'s validator map). Its three rules:
+/// a dc:type of exactly `preview`; a `dc:source` without `refines` (warning);
+/// and each such `dc:source` differing from the package's own identifier,
+/// reported at the `dc:source`.
+///
+/// A forced profile runs all three. This used to stop after the first,
+/// fitted to a fixture; epubcheck 5.4.0 reports the source warning on the
+/// same book as well (measured 2026-09-25).
 pub(crate) fn check_preview_publication(
-    is_preview_pub: bool,
+    dc_types: &[String],
     profile: Option<&str>,
     metadata: Option<roxmltree::Node>,
     package_identifier_text: Option<&str>,
     opf_path: &str,
     report: &mut Report,
 ) {
-    if !is_preview_pub {
-        // The 'preview' CLI profile forces treatment as a Preview
-        // publication for the purpose of *this one* gating check only -
-        // a real fixture (a full EPUB with zero other preview content or
-        // metadata at all) expects exactly this one finding and nothing
-        // else, not the source-identification checks below cascading on
-        // content that was never meant to satisfy them.
-        if profile == Some("preview") {
+    let applies =
+        profile == Some("preview") || dc_types.iter().any(|t| t.eq_ignore_ascii_case("preview"));
+    if !applies {
+        return;
+    }
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let Some(md) = metadata else {
+        if !dc_types.iter().any(|t| t == "preview") {
             report.push_at_rule(
                 RSC_005,
                 Severity::Error,
@@ -46,36 +51,47 @@ pub(crate) fn check_preview_publication(
             );
         }
         return;
+    };
+    if !dc_types.iter().any(|t| t == "preview") {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "An EPUB Preview publication must have a \"preview\" dc:type",
+            opf_path,
+            md,
+            "previews.metadata.missing_dc_type",
+            Vec::new(),
+        );
     }
-    let Some(md) = metadata else { return };
-    let source = md
+    let sources: Vec<_> = md
         .children()
-        .find(|n| n.is_element() && n.tag_name().name() == "source")
-        .map(elem_text);
-    match source {
-        None => {
+        .filter(|n| {
+            n.is_element() && n.tag_name().name() == "source" && n.attr_no_ns("refines").is_none()
+        })
+        .collect();
+    if sources.is_empty() {
+        report.push_node(
+            RSC_017,
+            Severity::Warning,
+            "An EPUB Preview publication should link back to its source Publication",
+            opf_path,
+            md,
+            "previews.metadata.missing_source_link",
+            Vec::new(),
+        );
+    }
+    let own = norm(package_identifier_text.unwrap_or(""));
+    for source in sources {
+        if norm(&elem_text(source)) == own {
             report.push_node(
-                RSC_017,
-                Severity::Warning,
-                "An EPUB Preview publication should link back to its source Publication",
+                RSC_005,
+                Severity::Error,
+                "A Preview Publication must not use the same package identifier as its source Publication",
                 opf_path,
-                md,
-                "previews.metadata.missing_source_link",
+                source,
+                "previews.metadata.identifier_matches_source",
                 Vec::new(),
             );
-        }
-        Some(text) => {
-            if package_identifier_text.is_some_and(|id| id == text) {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    "A Preview Publication must not use the same package identifier as its source Publication",
-                    opf_path,
-                    md,
-                    "previews.metadata.identifier_matches_source",
-                    Vec::new(),
-                );
-            }
         }
     }
 }

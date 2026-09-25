@@ -4817,10 +4817,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // used for the CSS-029/030 cross-referencing pass below.
     let mut media_active_class: Option<String> = None;
     let mut media_playback_active_class: Option<String> = None;
-    // This rendition's own dc:type text, and whether a print-source for
-    // pagination is identified (dc:source + a meta[property=source-of]
-    // refining it to "pagination") - both used by the EDUPUB checks below.
-    let mut opf_dc_type: Option<String> = None;
+    // Whether a print-source for pagination is identified (dc:source + a
+    // meta[property=source-of] refining it to "pagination"), for the EDUPUB
+    // checks below.
     // Every dc:type, trimmed. epubcheck's publication types come from all of
     // them, matched case-insensitively (`OCFCheckerState.addType`), not from
     // the first.
@@ -5148,10 +5147,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 );
             }
         }
-        opf_dc_type = md
-            .children()
-            .find(|n| n.is_element() && n.tag_name().name() == "type")
-            .map(elem_text);
         let dc_types: Vec<String> = md
             .children()
             .filter(|n| n.is_element() && n.tag_name().name() == "type")
@@ -7640,6 +7635,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     let collection_index_paths: HashSet<String> = crate::indexes::linked_paths(&pkg, &base_dir);
     let is_index_pub =
         profile == Some("idx") || opf_dc_types.iter().any(|t| t.eq_ignore_ascii_case("index"));
+    // A dictionary by type (any dc:type, case-insensitively), which is what
+    // OPF-079 asks, and by type or profile, which is what attaches the
+    // dictionary rules (`OPFChecker`/`OPSChecker` validator maps).
+    let is_dictionary_type = opf_dc_types
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("dictionary"));
+    let is_dict_pub = profile == Some("dict") || is_dictionary_type;
+    let mut first_dictionary_marker: Option<(String, Position)> = None;
     // EDUPUB's validators attach on the profile or on any dc:type, matched
     // case-insensitively (`OPSChecker`/`OPFChecker` validator maps) - not on
     // an exact first dc:type, which is what this used to test.
@@ -7858,9 +7861,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         if !is_epub3 {
             crate::htm::check_dom_epub2(&d, &path, report);
         }
-        crate::dict::check_content_doc(&d, &path, report);
-        if crate::dict::has_dictionary_marker(&d) {
+        if is_epub3 && is_dict_pub {
+            crate::dict::check_content_doc(&d, &path, report);
+        }
+        if let Some(marker) = crate::dict::first_dictionary_marker(&d) {
             dictionary_marked_docs.insert(nfc(&path));
+            first_dictionary_marker.get_or_insert((path.clone(), Position::of(marker)));
         }
 
         // ADV-004's content half. Only an EPUB 2 book can be diagnosed this
@@ -10934,14 +10940,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // multi-dictionary publication) happens in `check_dictionaries` below,
     // which also needs the full `dictionary_marked_docs` set, not just a
     // whole-publication bool.
-    let is_dictionary_pub = opf_dc_type.as_deref() == Some("dictionary");
-    if !is_dictionary_pub && !dictionary_marked_docs.is_empty() {
+    let is_dictionary_pub = is_dict_pub;
+    // At the first dictionary-typed element, where epubcheck puts it.
+    if !is_dictionary_type && let Some((path, pos)) = &first_dictionary_marker {
         report.push_at_pos(
             OPF_079,
             Severity::Warning,
             "dictionary content was detected, but the dc:type identifier \"dictionary\" is not declared",
-            opf_path,
-            Position::of(pkg),
+            path.as_str(),
+            *pos,
         );
     }
 
@@ -12444,7 +12451,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     check_dictionaries(
         &pkg,
         is_dictionary_pub,
-        profile,
         &dictionary_marked_docs,
         &items,
         &items_by_path,
@@ -12452,13 +12458,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         &base_dir,
         &name_index,
         ocf,
+        &mut target_ids,
         opf_path,
         report,
     );
     crate::indexes::check_collections(&pkg, &items, &base_dir, opf_path, report);
     crate::previews::check_embedded_preview(&pkg, &items, &base_dir, opf_path, report);
     crate::previews::check_preview_publication(
-        opf_dc_type.as_deref() == Some("preview"),
+        &opf_dc_types,
         profile,
         metadata,
         package_identifier_text.as_deref(),
@@ -12514,7 +12521,6 @@ fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &m
 fn check_dictionaries(
     pkg: &roxmltree::Node,
     is_dictionary_pub: bool,
-    profile: Option<&str>,
     dictionary_marked_docs: &HashSet<String>,
     items: &HashMap<String, (String, String)>,
     items_by_path: &ItemsByPath,
@@ -12522,6 +12528,7 @@ fn check_dictionaries(
     base_dir: &str,
     name_index: &HashMap<String, String>,
     ocf: &mut Ocf,
+    target_ids: &mut TargetIds,
     opf_path: &str,
     report: &mut Report,
 ) {
@@ -12559,7 +12566,7 @@ fn check_dictionaries(
         let Ok(d) = parse_xml(&text) else { continue };
         let skm_dir = parent_dir(path);
         let hrefs = crate::dict::check_skm(&d, path, report);
-        for href in hrefs {
+        for (href, group) in hrefs {
             if is_external(&href) {
                 continue;
             }
@@ -12588,6 +12595,26 @@ fn check_dictionaries(
                     path.as_str(),
                     Position::of(d.root_element()),
                 );
+                continue;
+            }
+            // The fragment, as for every other reference (RSC-012).
+            if let Some((_, frag)) = href.split_once('#')
+                && !frag.is_empty()
+                && !frag.contains(['=', ':', '('])
+                && let Some(ids) = target_id_kinds(ocf, name_index, target_ids, &resolved, true)
+                && !ids.contains_key(frag_key(frag).as_ref())
+            {
+                report.push_at_rule(
+                    RSC_012,
+                    Severity::Error,
+                    format!("fragment identifier '{frag}' is not defined in '{resolved}'"),
+                    path.as_str(),
+                    "opf.dictionary.search_key_group_fragment_not_defined",
+                    vec![frag.to_string(), resolved.clone()],
+                );
+                if let Some(m) = report.messages.last_mut() {
+                    m.position = Some(group);
+                }
             }
         }
     }
@@ -12601,25 +12628,41 @@ fn check_dictionaries(
         })
         .collect();
 
-    if !is_dictionary_pub {
-        // The 'dict' CLI profile forces treatment as a dictionary
-        // publication for the purpose of *this one* gating check only -
-        // real epubcheck's own corpus fixture for this (a bare, single-
-        // Package-Document check with zero other dictionary content at
-        // all) expects exactly this one finding and nothing else, not
-        // the full structural check suite cascading on top of content
-        // that was never meant to satisfy it.
-        if profile == Some("dict") {
+    // `dict-opf.sch` attaches on the dictionary profile or on a dc:type
+    // matched case-insensitively (`is_dictionary_pub`), and its first rule
+    // then asks for the exact value - so `Dictionary` selects the rules and
+    // fails this one, and so does a forced profile on a book of another type.
+    // Measured against 5.4.0: with the profile forced, epubcheck goes on to
+    // every other dictionary rule as well, which is why this no longer stops
+    // here (the early stop was fitted to a single-file fixture).
+    if is_dictionary_pub {
+        let has_exact = pkg
+            .descendants()
+            .filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "type"
+                    && n.tag_name().namespace() == Some("http://purl.org/dc/elements/1.1/")
+                    && n.parent()
+                        .is_some_and(|p| p.tag_name().name() == "metadata")
+            })
+            .any(|n| node_text(n).trim() == "dictionary");
+        if !has_exact {
+            let at = pkg
+                .children()
+                .find(|n| n.is_element() && n.tag_name().name() == "metadata")
+                .unwrap_or(*pkg);
             report.push_node(
                 RSC_005,
                 Severity::Error,
                 "The dc:type identifier \"dictionary\" is required",
                 opf_path,
-                *pkg,
+                at,
                 "opf.dictionary.missing_dc_type",
                 Vec::new(),
             );
         }
+    }
+    if !is_dictionary_pub {
         // ...but the *collection*-scoped rules are not gated on `dc:type` at
         // all. epubcheck's `checkCollections`/`checkCollectionsContent` iterate
         // the collections and test `collection.hasRole(DICTIONARY)` and nothing
@@ -12738,13 +12781,13 @@ fn check_dictionaries(
     // `dictionary-collection-resource-missing-error.opf` - two collections,
     // neither with dictionary content - epubcheck reports OPF-078 three times
     // and we reported two. The third is this one.
+    // Without a position, as epubcheck reports it (`EPUBLocation.of(context)`).
     if dictionary_marked_docs.is_empty() {
-        report.push_node(
+        report.push_at_rule(
             OPF_078,
             Severity::Error,
             "no content document was found with dictionary content",
             opf_path,
-            *pkg,
             "opf.dictionary.no_dictionary_content",
             Vec::new(),
         );
@@ -19787,6 +19830,31 @@ mod tests {
         );
         // Not an index publication: nothing asked.
         assert!(book("", PLAIN, PLAIN).is_empty());
+    }
+
+    /// A `dictionary`-typed element in a book that is not a dictionary draws
+    /// OPF-079 at the element and nothing else: epubcheck attaches the
+    /// dictionary content rules only to a dictionary publication. We used to
+    /// run them everywhere, an error epubcheck never gives (probed against
+    /// 5.4.0, 2026-09-25).
+    #[test]
+    fn dictionary_content_outside_a_dictionary_is_only_opf_079() {
+        let ch1 = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+            <head><title>t</title></head><body><section epub:type=\"dictionary\"><p>x</p></section></body></html>";
+        let r = crate::validate_bytes(epub_with_opf(None, ch1));
+        let found: Vec<_> = r
+            .messages
+            .iter()
+            .filter(|m| {
+                m.id == crate::ids::OPF_079 || m.rule.is_some_and(|k| k.starts_with("dict."))
+            })
+            .map(|m| (m.id, m.location.clone().unwrap_or_default()))
+            .collect();
+        assert_eq!(
+            found,
+            [(crate::ids::OPF_079, "OEBPS/ch1.xhtml".to_string())]
+        );
     }
 
     /// A single-dictionary publication must declare a target language as

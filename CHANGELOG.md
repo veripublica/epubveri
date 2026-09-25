@@ -99,6 +99,28 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     in epubcheck, not at the package.
   - All of it was compared with epubcheck on 53 books, one per rule, and
     both the ids and the lines are equal.
+- **A `dictionary`-typed element in a book that is not a dictionary no longer
+  draws an error.** epubcheck checks the dictionary content rules only in a
+  dictionary publication, or under the `dict` profile. We ran two of them in
+  every book, so such an element drew "must have at least one article child"
+  here and only OPF-079 in epubcheck. OPF-079 now points at that element, as
+  in epubcheck, not at the package.
+- **EPUB Dictionaries and Previews are checked the way epubcheck checks them.**
+  - They apply on the profile or on any `dc:type`, in any case. A forced
+    profile runs all of a profile's rules, and a type that only differs in
+    case fails the exact-value rule.
+  - The dictionary content rules are checked in full: `dictionary` on `body`
+    or `section`; entries on `article` with a `dfn` outside the condensed
+    entry; condensed entries hidden, on an `aside`, within an entry; the
+    part-of-speech, sense, translation, idiom and phrase structures.
+  - A Search Key Map link whose fragment names no id in its document draws
+    RSC-012.
+  - OPF-078 carries no position, as in epubcheck.
+  - A preview is checked against each of its `dc:source` elements, and the
+    one that repeats the package identifier is the one reported.
+  - Compared with epubcheck on 37 dictionary and 10 preview books, all equal
+    in ids and lines; the forced `dict`, `idx`, `edupub` and `preview`
+    profiles give the same findings in both tools.
 
 ## [0.17.5] - 2026-09-23
 
