@@ -4387,6 +4387,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // which is a different state and is why a book with a perfectly
             // good `<dc:identifier>` was told its unique-identifier matched
             // none - see `check_unique_identifier`.
+            // A fault *before* the root start tag is a different case: the
+            // parser never reached the package element, so epubcheck's
+            // version peek finds no version and reports OPF-001, and nothing
+            // about the package's identity - which it never read. Finding the
+            // tag lexically anyway and judging its unique-identifier against
+            // an empty body claimed OPF-030 about a book whose identifier was
+            // fine (probed against 5.4.0 with a misplaced XML declaration,
+            // 2026-09-25).
+            let read_to = offset_at(&text, Position::of_parse_error(&e));
+            if recover_root_start_tag(&text).is_none_or(|(off, _)| read_to <= off) {
+                report.push_at_rule(
+                    OPF_001,
+                    Severity::Error,
+                    "the EPUB version could not be read: the package document is not well-formed before its root element",
+                    opf_path,
+                    "opf.package.version_unreadable",
+                    Vec::new(),
+                );
+                return;
+            }
             if let Some((off, tag)) = recover_root_start_tag(&text) {
                 let selfclosed = format!("{}/>", tag.trim_end_matches('>').trim_end_matches('/'));
                 if let Ok(stub) = roxmltree::Document::parse(&selfclosed) {
@@ -4413,7 +4433,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // `conformance-xml-undeclared-namespace-error`, whose
                         // faults both sit above the identifier. This agrees
                         // with epubcheck on all eight.
-                        let read_to = offset_at(&text, Position::of_parse_error(&e));
                         let body_start = (off + tag.len()).min(read_to);
                         let body = &text[body_start..read_to];
                         let report_unresolved = !root
@@ -20014,6 +20033,23 @@ mod tests {
             ))),
             ["opf.collection.manifest_not_only_links"]
         );
+    }
+
+    /// A package document that fails before its root element: epubcheck
+    /// never reads the version and reports OPF-001 beside the fatal, and
+    /// nothing about the identifier it never reached. We used to recover
+    /// the root tag and claim OPF-030 against an empty body (5.4.0,
+    /// 2026-09-25).
+    #[test]
+    fn a_package_malformed_before_its_root_is_opf_001_not_opf_030() {
+        let opf = "\n<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id\">\
+            <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:identifier id=\"id\">urn:x</dc:identifier></metadata></package>";
+        let ch1 = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+        let r = crate::validate_bytes(epub_with_opf(Some(opf), ch1));
+        let mut ids: Vec<_> = r.messages.iter().map(|m| m.id).collect();
+        ids.sort();
+        assert_eq!(ids, [crate::ids::OPF_001, crate::ids::RSC_016]);
     }
 
     /// A single-dictionary publication must declare a target language as

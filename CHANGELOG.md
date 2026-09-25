@@ -134,6 +134,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     and span is checked, not only the ones a well-formed list leads to, and
     each finding points where epubcheck points.
   - Compared with epubcheck on 25 books.
+- **A package document that breaks before its root element no longer draws
+  a wrong OPF-030.** When the parser failed that early, for example on an
+  XML declaration that is not at the very start, we still found the
+  `package` tag in the text and reported that its `unique-identifier`
+  matched no identifier. That is not true of the book. epubcheck reads no
+  version there and reports OPF-001 beside the fatal error, and so do we
+  now.
 
 ## [0.17.5] - 2026-09-23
 
