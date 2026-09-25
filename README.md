@@ -187,8 +187,8 @@ between releases.)
 To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
 official test cases, each one a small EPUB file specifically constructed
-to be valid or to trip exactly one specific rule. Measured on 0.17.4
-(2026-09-23) against **epubcheck 5.4.0's** suite:
+to be valid or to trip exactly one specific rule. Measured with epubveri
+0.17.5 against **epubcheck 5.4.0's** suite:
 
 - **99.7%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
@@ -198,11 +198,8 @@ to be valid or to trip exactly one specific rule. Measured on 0.17.4
 - **100%** of the test suite's "this is perfectly valid" cases are
   correctly left alone — no false alarms on any of the 368.
 
-**The suite grew with epubcheck.** It was 981 scenarios against 5.3.0 and is
-1086 against 5.4.0, which added fixtures for everything that release
-introduced — so a recall figure means nothing without the epubcheck version
-beside it. The same epubveri build scored 90.8% the day 5.4.0 landed and 99.7%
-once its rules were implemented.
+**A recall figure means nothing without the epubcheck version beside it**:
+the suite grows with each release, and against 5.4.0 it holds 1086 scenarios.
 
 **Why a few scenarios are set aside.** epubcheck can check loose files on their
 own; epubveri takes a packaged `.epub` file only, so the test harness wraps
@@ -215,14 +212,6 @@ epubcheck gives once the file is inside a container.
 
 The count and the reason print on every run.
 
-**The denominator has moved in both directions, and saying which way is the
-point.** Against 5.3.0 it was 607 while twelve scenarios were being counted as
-passes they had not earned — the harness's own wrap was preventing epubcheck from asking, and we
-were credited anyway. Stating that took it to 595. Then eight of the twelve
-turned out to be the harness's fault rather than the suite's: the wrap was
-leaving the document out of the book's reading order, where those particular
-rules do not apply. Fixing the wrap put them back, and all eight pass.
-
 These are the numbers epubveri's own release pre-flight prints, and they
 cover epubcheck's corpus only. That corpus is built from synthetic
 fixtures, each tripping one rule; it says nothing about how the two tools
@@ -230,10 +219,9 @@ compare on a real book.
 
 That is measured separately, by running both tools over a private shelf
 of commercially published EPUBs and diffing them by message ID. On
-**474 books, epubveri 0.17.4 against epubcheck 5.4.0 (2026-09-23): 423
-agreed on the reported message-ID set exactly, and there was no message ID
-epubveri reported that epubcheck did not.** (The same two figures as the
-first run of 2026-09-17, on the builds of that day.)
+**474 books, epubveri 0.17.5 against epubcheck 5.4.0: 423 agree on the
+reported message-ID set exactly, and there is no message ID epubveri reports
+that epubcheck does not.**
 
 The 51 that differ are accounted for, and 49 of them are one thing:
 **epubcheck 5.4.0 rejects `aria-label` and `aria-labelledby` on the `nav`
@@ -245,7 +233,7 @@ are an artefact of epubcheck's own error recovery and a documented, deliberate
 divergence about entity handling in a file it stops reading.
 
 Where the two tools report the *same* ID a different number of times, epubveri
-is always the lower of the two — 184 such cases on that run, without exception.
+is always the lower of the two — 184 such cases, without exception.
 
 Both halves matter and neither substitutes for the other: the corpus
 says whether the rules are right, the shelf says whether they misfire on

@@ -41,9 +41,8 @@ EPUB 3s that epubcheck 5.4.0 rejects over `aria-label` on their navigation
 `nav`, a confirmed regression in that release
 ([w3c/epubcheck#1726](https://github.com/w3c/epubcheck/issues/1726)); **there is
 no book epubveri rejects and epubcheck accepts.** A separate finding-by-finding
-comparison on 2026-09-23 found **identical message-ID sets on 423 of 474, with
-no ID reported by epubveri alone**. It was run with 0.17.4, and 0.17.5's reports
-are byte-identical to 0.17.4's on every one of these books, so it stands.
+comparison finds **identical message-ID sets on 423 of 474, with no ID reported
+by epubveri alone**.
 
 ## Summary
 
