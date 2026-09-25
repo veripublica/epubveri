@@ -8,6 +8,18 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A single dictionary must declare its target language as well as its
+  source language.** epubcheck requires both in the package metadata of an
+  EPUB Dictionary that is not split into dictionary collections. We only
+  required the source language there, and the target language only per
+  collection. A missing target language is now an error at both levels, as in
+  epubcheck, and its message names the target language rather than repeating
+  the source-language wording.
+
 ## [0.17.5] - 2026-09-23
 
 ### Performance

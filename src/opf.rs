@@ -12548,11 +12548,10 @@ fn check_dictionaries(
     // Source/target language declarations - shared shape between the
     // package's own metadata (single-dictionary publications) and each
     // dictionary collection's own nested <metadata> (multi-dictionary
-    // publications). A missing target-language is only enforced at the
-    // collection scope (untested at the package scope) - and, per a real
-    // fixture, uses the *same* message text as a missing source language
-    // (confirmed, if slightly odd - not this project's own wording choice
-    // but what the corpus scenario actually expects).
+    // publications). Both scopes require a target-language as well as a
+    // source-language: `dict-opf.sch`'s `dict.single-dict.lang` asserts both
+    // at the package, `dict-collection.sch` both per collection. The package
+    // half was once left out as "untested", which the source settles.
     let check_languages = |scope: Option<roxmltree::Node>,
                            require_target: bool,
                            report: &mut Report| {
@@ -12598,15 +12597,13 @@ fn check_dictionaries(
         let targets = metas("target-language");
         if targets.is_empty() {
             if require_target {
-                // Note: this reuses the source-language message text
-                // verbatim (matches a real corpus fixture's own
-                // expectation, not this project's wording choice) - `rule`
-                // correctly disambiguates it as the target-language case
-                // despite the misleading shared text.
+                // epubcheck's own text for this says "source language" by a
+                // slip; the corpus scores ids, not wording, so ours says what
+                // is missing.
                 report_here(
                     report,
                     RSC_005,
-                    "a dictionary must declare its source language".to_string(),
+                    "a dictionary must declare its target language".to_string(),
                     "opf.dictionary.missing_target_language",
                     Vec::new(),
                 );
@@ -12648,7 +12645,7 @@ fn check_dictionaries(
         );
     }
     if dictionary_collections.is_empty() {
-        check_languages(metadata, false, report);
+        check_languages(metadata, true, report);
 
         let candidates: Vec<_> = item_properties
             .iter()
@@ -19605,6 +19602,55 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// A single-dictionary publication must declare a target language as
+    /// well as a source language, at the package: `dict.single-dict.lang`
+    /// asserts both. Measured against epubcheck 5.4.0, which reports one
+    /// RSC-005 for each missing declaration.
+    #[test]
+    fn a_single_dictionary_needs_both_languages_at_the_package() {
+        const CH1_MINIMAL: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        let run = |metas: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:type>dictionary</dc:type><dc:language>en</dc:language><dc:language>tr</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>{metas}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let r = crate::validate_bytes(epub_with_opf(Some(&opf), CH1_MINIMAL));
+            let mut rules: Vec<&str> = r
+                .messages
+                .iter()
+                .filter_map(|m| m.rule)
+                .filter(|k| k.ends_with("_language"))
+                .collect();
+            rules.sort();
+            rules
+        };
+        assert_eq!(
+            run(r#"<meta property="source-language">en</meta>"#),
+            vec!["opf.dictionary.missing_target_language"]
+        );
+        assert_eq!(
+            run(r#"<meta property="target-language">tr</meta>"#),
+            vec!["opf.dictionary.missing_source_language"]
+        );
+        assert!(
+            run(r#"<meta property="source-language">en</meta><meta property="target-language">tr</meta>"#)
+                .is_empty()
+        );
     }
 
     fn rsc_016_rules(ch1: &str) -> Vec<&'static str> {
