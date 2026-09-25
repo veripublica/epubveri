@@ -2100,8 +2100,13 @@ fn check_meta_property_scheme_shape(
     {
         if let Some(refines_attr) = attr_no_ns_node(n, "refines") {
             let refines = refines_attr.value().trim();
-            if !refines.is_empty() && !refines.starts_with('#') && !refines.contains("://") {
-                let target = nfc(&resolve("", strip_url_fragment(refines).trim()));
+            // epubcheck resolves the whole value, fragment included, and a
+            // manifest href never carries one (OPF-091), so a value with a
+            // fragment matches no item there. Stripping it here matched
+            // `ch1.xhtml#p` to `ch1.xhtml` and drew a warning epubcheck does not
+            // give (probed against 5.4.0, 2026-09-25).
+            if !refines.is_empty() && !refines.contains('#') && !refines.contains("://") {
+                let target = nfc(&resolve("", refines));
                 let item_id = doc
                     .descendants()
                     .filter(|m| m.is_element() && m.tag_name().name() == "item")
@@ -6336,22 +6341,38 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         package_identifier_text =
             check_unique_identifier(pkg, &identifiers, true, opf_path, Position::of(pkg), report);
     }
+    // The manifest and every item carrying `media-overlay`: where epubcheck's
+    // `package-30.sch` places the media-overlay findings (its rule contexts
+    // are `opf:manifest[…]` and `opf:item[@media-overlay]`), one per item.
+    let manifest_el = pkg
+        .children()
+        .find(|n| n.is_element() && n.tag_name().name() == "manifest");
+    let overlay_items: Vec<(roxmltree::Node, String)> = manifest_el
+        .into_iter()
+        .flat_map(|m| m.children())
+        .filter(|n| n.is_element() && n.tag_name().name() == "item")
+        .filter_map(|n| {
+            n.attr_no_ns("media-overlay")
+                .map(|o| (n, o.trim().to_string()))
+        })
+        .collect();
     // A media-overlay attribute's target item must itself be a Media
     // Overlay Document (application/smil+xml).
-    for (_, overlay_id) in &media_overlay_attrs {
+    for (item, overlay_id) in &overlay_items {
         if let Some((_, mt)) = items.get(overlay_id)
             && mt != "application/smil+xml"
         {
-            report.push_at_rule(
-                    RSC_005,
-                    Severity::Error,
-                    format!(
-                        "media-overlay target '{overlay_id}' must be of the \"application/smil+xml\" type"
-                    ),
-                    opf_path,
-                    "opf.manifest.media_overlay_target_not_smil",
-                    vec![overlay_id.clone()],
-                );
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!(
+                    "media-overlay target '{overlay_id}' must be of the \"application/smil+xml\" type"
+                ),
+                opf_path,
+                *item,
+                "opf.manifest.media_overlay_target_not_smil",
+                vec![overlay_id.clone()],
+            );
         }
     }
     // 9.3.5.2: once any content document declares a media-overlay, (a) a
@@ -6373,16 +6394,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 Severity::Error,
                 "the global media:duration meta element not set",
                 opf_path,
-                md,
+                manifest_el.unwrap_or(md),
                 "opf.metadata.missing_global_media_duration",
                 Vec::new(),
             );
         }
-        let overlay_ids: HashSet<&str> = media_overlay_attrs
-            .iter()
-            .map(|(_, id)| id.as_str())
-            .collect();
-        for overlay_id in overlay_ids {
+        for (item, overlay_id) in &overlay_items {
+            let overlay_id = overlay_id.as_str();
             let has_item_duration = md.children().any(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
@@ -6396,7 +6414,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     Severity::Error,
                     format!("the item media:duration meta element not set for '{overlay_id}'"),
                     opf_path,
-                    md,
+                    *item,
                     "opf.metadata.missing_item_media_duration",
                     vec![overlay_id.to_string()],
                 );
@@ -7316,11 +7334,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     // --- Data Navigation Document (EPUB Region-Based Navigation) ---
     if data_nav_items.len() > 1 {
-        report.push_at_rule(
+        let at = pkg
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "manifest")
+            .unwrap_or(pkg);
+        report.push_node(
             RSC_005,
             Severity::Error,
             "the manifest must not include more than one Data Navigation Document",
             opf_path,
+            at,
             "opf.manifest.multiple_data_nav_documents",
             Vec::new(),
         );
@@ -14982,6 +15005,67 @@ mod tests {
             line_of(TWO_NAVS, "opf.manifest.multiple_nav_documents"),
             Some(11),
             "and so does its sibling, from the same rule"
+        );
+    }
+
+    /// Two spine questions compared with epubcheck 5.4.0 on 2026-09-25.
+    ///
+    /// An itemref naming no manifest item is OPF-049 from the Java side and
+    /// RSC-005 from `package-30.sch`; epubcheck reports both in EPUB 3, and
+    /// we used to report only the first. And a `refines` that points at a
+    /// fragment of a manifest item's document is not a refinement of the
+    /// item itself: the by-fragment warning must stay silent, which it did
+    /// not while the fragment was stripped before the lookup.
+    #[test]
+    fn spine_and_refines_answer_as_epubcheck_does() {
+        let ids = |meta: &str, spine: &str| -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>{meta}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine>{spine}</spine>
+</package>"#
+            );
+            const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                               <head><title>t</title></head><body><p id=\"p\">x</p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH1))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| {
+                    [
+                        crate::ids::OPF_049,
+                        crate::ids::RSC_005,
+                        crate::ids::RSC_017,
+                    ]
+                    .contains(id)
+                })
+                .collect()
+        };
+
+        let mut unknown = ids("", r#"<itemref idref="ch1"/><itemref idref="ghost"/>"#);
+        unknown.sort();
+        assert_eq!(
+            unknown,
+            vec![crate::ids::OPF_049, crate::ids::RSC_005],
+            "an unknown idref is both findings, once each"
+        );
+        assert!(ids("", r#"<itemref idref="ch1"/>"#).is_empty());
+
+        let fragment = r#"
+    <meta refines="ch1.xhtml#p" property="dcterms:description">x</meta>"#;
+        assert!(
+            ids(fragment, r#"<itemref idref="ch1"/>"#).is_empty(),
+            "a refines into a document's fragment is not the item: {:?}",
+            ids(fragment, r#"<itemref idref="ch1"/>"#)
         );
     }
 

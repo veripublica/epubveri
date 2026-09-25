@@ -163,6 +163,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the element. EPUB 2, whose XHTML 1.1 has `noscript`, is unchanged. An
   `audio` or `video` with both a `src` and `source` children is an error in
   epubcheck, and now here too.
+- **A `refines` that points into a content document no longer draws a
+  warning.** A `meta` refining `ch1.xhtml#p` refines an element of that
+  document, not its manifest item, and epubcheck says nothing. We dropped the
+  fragment before looking the target up, found the item, and warned (RSC-017)
+  that a manifest item should be refined by its `#id`. Warnings count toward
+  the verdict, so such a book was invalid here and valid in epubcheck.
+- **The package document's rules were compared with epubcheck one by one.**
+  Fifty books, one for each assertion of epubcheck's EPUB 3 package rules,
+  now draw the same findings on the same lines, except where epubcheck gives
+  no position at all or reports CHK-008 (w3c/epubcheck#1735). An EPUB 3
+  `itemref` that names no manifest item is now an RSC-005 error as well as
+  OPF-049, as in epubcheck. The missing spine `toc` for an NCX is reported at
+  the NCX item, and media-overlay and `data-nav` findings at the item or the
+  manifest they concern, where epubcheck places them.
 
 ## [0.17.5] - 2026-09-23
 

@@ -286,6 +286,18 @@
     </rule>
   </pattern>
 
+  <!-- 5.7 Spine. An itemref whose idref names no manifest item. The Java
+       side of epubcheck reports it as OPF-049 and `package-30.sch` reports it
+       again as RSC-005; epubcheck gives both, and so do we (EPUB 3 only, as
+       that Schematron is; compared with 5.4.0, 2026-09-25). This is the last
+       of epubcheck's corpus scenarios we answered with one id of two. -->
+  <pattern id="opf-itemref-resolves">
+    <rule context="opf:package[starts-with(@version, '3')]/opf:spine/opf:itemref[@idref]">
+      <assert test="/opf:package/opf:manifest/opf:item[normalize-space(@id) = normalize-space(current()/@idref)]"
+        >the itemref's idref names no manifest item</assert>
+    </rule>
+  </pattern>
+
   <!-- 5.9.3 NCX -->
 
   <!-- **EPUB 3 only**, matching epubcheck's `opf.toc.ncx.2`, which lives in
@@ -301,8 +313,11 @@
        at all is reported by epubcheck and by the hand check, and would be
        reported by nothing if this rule were made to serve both. -->
   <pattern id="opf-legacy-ncx-toc-required">
-    <rule context="opf:package[starts-with(@version, '3')][opf:manifest/opf:item[normalize-space(@media-type) = 'application/x-dtbncx+xml']]/opf:spine[not(@toc)]">
-      <assert test="false()"
+    <!-- At the NCX item, one finding per NCX item, as epubcheck's
+         `opf.toc.ncx.2` places it (compared with 5.4.0, 2026-09-25); it used
+         to sit on the spine. -->
+    <rule context="opf:package[starts-with(@version, '3')]/opf:manifest/opf:item[normalize-space(@media-type) = 'application/x-dtbncx+xml']">
+      <assert test="/opf:package/opf:spine[@toc]"
         >the spine "toc" attribute must be set when an NCX document is present</assert>
     </rule>
   </pattern>
