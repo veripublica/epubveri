@@ -729,6 +729,17 @@ const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
     // defect seen from two modes, and the `.opf` half was scoring a mode we
     // cannot run.
     ("version-missing-error.opf", &["OPF-001"]),
+    // A manifest href with an unencoded space, in both versions' suites. The
+    // scenario expects RSC-020 and "warning PKG-010 (side effect of spaces)".
+    // PKG-010 is a *filename* check, and `OPFChecker` runs it on manifest
+    // hrefs only in single-file mode (`!context.container.isPresent()`); in a
+    // publication it runs on the container's own entries, which a wrapped
+    // fixture does not have. Measured against 5.4.0 on both wrapped books
+    // (2026-09-25): RSC-020 and the wrapper's RSC-001s, no PKG-010. A real
+    // book whose file has a space in its name draws PKG-010 from `ocf.rs`.
+    // Found by the partial-hit listing, which the "any expected id" scoring
+    // had hidden.
+    ("item-href-contains-spaces-unencoded-error.opf", &["RSC-020"]),
 ];
 
 /// Fixtures whose expected finding **epubcheck itself does not make** once the
@@ -953,6 +964,11 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
     let mut fp_examples: Vec<(String, Vec<String>)> = Vec::new();
     let mut miss_examples: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     let mut miss_all: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    // Scenarios that count as an exact hit because *one* expected id was
+    // reported, while another expected id was not. `n_exact` cannot see them
+    // - it asks "any of", not "all of" - and they surfaced only as a family
+    // tally that did not add up (PKG 31/33 beside a 100% scenario list).
+    let mut miss_partial: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
     let mut detect_misses: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
 
     for s in scenarios {
@@ -1080,6 +1096,23 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
                 n_exact += 1;
                 for e in &hit {
                     *hit_family.entry(family(e).to_string()).or_insert(0) += 1;
+                }
+                if hit.len() < expected.len() {
+                    let mut missing: Vec<String> = expected
+                        .iter()
+                        .filter(|e| !reported.contains(e.as_str()))
+                        .map(|e| e.to_string())
+                        .collect();
+                    missing.sort();
+                    miss_partial.push((
+                        s.name.clone().unwrap_or_default(),
+                        missing,
+                        if ids.is_empty() {
+                            vec!["(none)".to_string()]
+                        } else {
+                            ids.clone()
+                        },
+                    ));
                 }
             } else {
                 // A genuine exact-ID miss: none of this should-error
@@ -1308,6 +1341,19 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
             println!(
                 "  {name}\n      expected {}  got {}",
                 py_list(exp),
+                py_list(got)
+            );
+        }
+    }
+    if !miss_partial.is_empty() {
+        println!(
+            "\n-- PARTIAL HITS ({} scenarios: counted as exact, but an expected id is missing) --",
+            miss_partial.len()
+        );
+        for (name, missing, got) in &miss_partial {
+            println!(
+                "  {name}\n      missing {}  got {}",
+                py_list(missing),
                 py_list(got)
             );
         }
