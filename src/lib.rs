@@ -67,6 +67,50 @@ fn peek_opf_version(ocf: &mut ocf::Ocf, opf_path: &str) -> Option<String> {
     doc.root_element().attr_no_ns("version").map(String::from)
 }
 
+/// The `dc:type` values of a package document, trimmed, in document order.
+/// What epubcheck's `PackageDocumentPeekerHandler` collects before it picks a
+/// validation profile.
+fn peek_dc_types(ocf: &mut ocf::Ocf, opf_path: &str) -> Vec<String> {
+    let Some(bytes) = ocf.read(opf_path) else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let Ok(doc) = ocf::parse_xml(&text) else {
+        return Vec::new();
+    };
+    doc.descendants()
+        .filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "type"
+                && n.tag_name().namespace() == Some("http://purl.org/dc/elements/1.1/")
+                && n.ancestors().any(|a| a.tag_name().name() == "metadata")
+        })
+        .map(|n| n.text().unwrap_or("").trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
+/// The profile epubcheck validates an EPUB 3 publication under: the one a
+/// `dc:type` implies, in its own order of precedence, or else the one asked
+/// for (`EPUBProfile.makeTypeCompatible`). `None` is the default profile.
+fn type_compatible_profile(
+    types: &[String],
+    requested: Option<&str>,
+) -> Option<(&'static str, &'static str)> {
+    let has = |t: &str| types.iter().any(|x| x.eq_ignore_ascii_case(t));
+    for (ty, profile) in [
+        ("dictionary", "dict"),
+        ("edupub", "edupub"),
+        ("index", "idx"),
+        ("preview", "preview"),
+    ] {
+        if has(ty) {
+            return (requested != Some(profile)).then_some((ty, profile));
+        }
+    }
+    None
+}
+
 /// The EPUB extension-spec profiles this tool recognizes, matching epubcheck's
 /// own `--profile` values. Public because the CLI validates its `--profile`
 /// argument against exactly this list, and PKG-023 asks the same question of
@@ -150,6 +194,42 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
         .and_then(|p| peek_opf_version(&mut container, p))
         .map(|v| v.starts_with('3'));
     ocf::check_encryption(&mut container, &mut report, epub3);
+    // OPF-064: at EPUB 3, a `dc:type` of the first package document selects
+    // the profile, overriding the one asked for, and epubcheck says so once.
+    // The override is real, not only a message: `--profile edupub` on a
+    // dictionary is validated as a dictionary there, so it is here.
+    let validated_as_3 = match options.epub_version.as_deref() {
+        Some(v) => v.starts_with('3'),
+        None => epub3 == Some(true),
+    };
+    let requested = options.profile.as_deref().filter(|p| PROFILES.contains(p));
+    let switched = if validated_as_3 {
+        opf_paths.first().and_then(|p| {
+            let types = peek_dc_types(&mut container, p);
+            type_compatible_profile(&types, requested).map(|sw| (p.clone(), sw))
+        })
+    } else {
+        None
+    };
+    let effective;
+    let options = match &switched {
+        Some((opf_path, (ty, profile))) => {
+            report.push_at_rule(
+                ids::OPF_064,
+                report::Severity::Info,
+                format!("the package declares dc:type \"{ty}\", so it is validated under the {profile} profile"),
+                opf_path.as_str(),
+                "opf.package.profile_from_dc_type",
+                vec![ty.to_string(), profile.to_string()],
+            );
+            effective = Options {
+                profile: Some(profile.to_string()),
+                ..options.clone()
+            };
+            &effective
+        }
+        None => options,
+    };
     // Usually a single rootfile; a multi-rendition package (e.g. EDUPUB
     // with a reflowable + fixed-layout rendition) legitimately declares
     // more than one, each validated as its own, independent OPF.
@@ -461,6 +541,112 @@ mod tests {
                 .any(|id| id == crate::ids::OPF_016 || id == crate::ids::OPF_017),
             "a well-formed rootfile reports neither: {clean:?}"
         );
+    }
+
+    /// A book whose only package document is `opf`, beside a nav and one
+    /// chapter.
+    fn epub_with_opf_text(opf: &str) -> Vec<u8> {
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, data) in [
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+                ),
+                ("OEBPS/content.opf", opf),
+                (
+                    "OEBPS/nav.xhtml",
+                    r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head><body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav></body></html>"#,
+                ),
+                (
+                    "OEBPS/ch1.xhtml",
+                    r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>x</p></body></html>"#,
+                ),
+            ] {
+                z.start_file(name, opts).unwrap();
+                z.write_all(data.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// OPF-064, and the override behind it, as epubcheck 5.4.0 does both
+    /// (`EPUBProfile.makeTypeCompatible`): the first matching `dc:type`, in
+    /// its order, case-insensitively, replaces the profile asked for.
+    #[test]
+    fn a_dc_type_selects_the_profile_and_says_so() {
+        let run = |version: &str, types: &str, profile: Option<&str>| {
+            let opf = format!(
+                r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{types}
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            let r = crate::validate_bytes_with_options(
+                epub_with_opf_text(&opf),
+                &crate::Options {
+                    profile: profile.map(String::from),
+                    ..Default::default()
+                },
+            );
+            let switched: Vec<Vec<String>> = r
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_064)
+                .map(|m| m.params.clone())
+                .collect();
+            let edupub_type_required = r
+                .messages
+                .iter()
+                .any(|m| m.text.contains("\"edupub\" is required"));
+            (switched, edupub_type_required)
+        };
+        let t = |s: &str| format!("<dc:type>{s}</dc:type>");
+        assert_eq!(
+            run("3.0", &t("dictionary"), None).0,
+            [["dictionary", "dict"]]
+        );
+        assert_eq!(
+            run("3.0", &t(" Dictionary "), None).0,
+            [["dictionary", "dict"]]
+        );
+        assert_eq!(run("3.0", &t("index"), None).0, [["index", "idx"]]);
+        assert_eq!(run("3.0", &t("preview"), None).0, [["preview", "preview"]]);
+        // Precedence: a dictionary wins over an edupub.
+        assert_eq!(
+            run("3.0", &(t("edupub") + &t("dictionary")), None).0,
+            [["dictionary", "dict"]]
+        );
+        // Asked for already: nothing to say.
+        assert!(run("3.0", &t("dictionary"), Some("dict")).0.is_empty());
+        // No profile type, or EPUB 2: nothing either.
+        assert!(run("3.0", &t("novel"), None).0.is_empty());
+        assert!(run("2.0", &t("dictionary"), None).0.is_empty());
+        // The override is real: asked to check a dictionary as an edupub,
+        // epubcheck checks it as a dictionary and never asks for the edupub
+        // dc:type.
+        let (switched, edupub_required) = run("3.0", &t("dictionary"), Some("edupub"));
+        assert_eq!(switched, [["dictionary", "dict"]]);
+        assert!(!edupub_required);
     }
 
     #[test]

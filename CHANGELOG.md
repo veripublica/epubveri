@@ -41,6 +41,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   PKG-005 when that entry carries an extra field. We asked only of archives
   that opened, so a broken container drew PKG-008 alone. It now draws the
   same findings as in epubcheck.
+- **A `dc:type` of `dictionary`, `edupub`, `index` or `preview` now selects
+  the validation profile, as in epubcheck, and says so with OPF-064 (info).**
+  epubcheck picks the profile from the first package document's types,
+  case-insensitively and in that order of precedence. The chosen profile
+  replaces any `--profile` that asked for a different one: a dictionary
+  checked with `--profile edupub` is checked as a dictionary. We applied the
+  type's rules but never reported the choice. We also still applied the
+  requested profile's gating check, so that dictionary drew "dc:type
+  edupub is required" here and nothing in epubcheck.
 
 ## [0.17.5] - 2026-09-23
 
