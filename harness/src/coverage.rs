@@ -241,15 +241,14 @@ const ANN: &[Ann] = &[
          spaces `mod/html5/aria.rnc` gives them - 24 enumerations, 6 positive \
          integers, 3 floats and three counts that also take `-1`, with the 16 \
          free-text or idref ones untouched (#134, 2026-09-21). Both layers are \
-         derived from epubcheck's own schema rather than transcribed. What \
-         stays out on purpose: MathML attribute values, and the per-element \
-         pairing that decides *which* element may carry a given `role` or \
-         `aria-*` - epubcheck answers `element \"p\" missing required \
-         attribute \"role\"` there, which is an attribute-set question rather \
-         than a value one and is the two corpus scenarios we knowingly miss. \
-         The false-positive risk in this surface is real and the shelf cannot \
-         police it: across 474 books only `aria-label`, `aria-labelledby` and \
-         `aria-controls` occur, all three free text, so the tests carry it. **The NCX is grammar-validated too** (#83, `schemas/ncx.rng`): \
+         derived from epubcheck's own schema rather than transcribed. \
+         **Which element may take which `role`, and the ARIA attributes a role \
+         requires, are checked since 2026-09-25** (`src/aria_roles.rs`, \
+         extracted from the same grammar, each element's variants united so \
+         none is stricter than epubcheck's): that closed the last two corpus \
+         scenarios. The 52 shelf books that use `role` (16 element/role pairs) \
+         draw nothing new. What stays out on purpose: MathML attribute values. \
+         **The NCX is grammar-validated too** (#83, `schemas/ncx.rng`): \
          its structure was checked in exactly one place - the `navPoint` \
          content model - and the format's other ~26 constraints not at all, \
          so sixteen shapes epubcheck errors on were silent here. Three \

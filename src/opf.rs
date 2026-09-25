@@ -8188,6 +8188,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // IDREF/IDREFS resolution (hand-coded; needs per-token iteration
                 // the Schematron's XPath 1.0 core can't do). EPUB 3 only.
                 crate::htm::check_idref_resolution(&d, &path, report);
+                crate::htm::check_role_placement(&d, &path, report);
             }
         }
 
@@ -27801,8 +27802,8 @@ mod tests {
         assert_eq!(
             count("3.0", "", "<p role=\"doc-cover\">x</p>"),
             0,
-            "epubcheck accepts this too - the per-element layer is not ours, \
-             and this asserts that we did NOT take it"
+            "epubcheck accepts this too: a `p` may take any role (the \
+             per-element layer is `htm::check_role_placement`)"
         );
         assert_eq!(
             count("3.0", "", "<p role=\"doc-noteref button\">x</p>"),

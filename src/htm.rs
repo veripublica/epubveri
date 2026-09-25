@@ -2937,3 +2937,135 @@ mod scan_reference_tests {
         assert!(refs[0].1 < t.find("&bad;").expect("the malformation"));
     }
 }
+
+/// RSC-005: a `role` the element may not take, and an ARIA attribute its role
+/// requires (`aria_roles` has the tables and where they come from). EPUB 3
+/// content documents only, XHTML elements only.
+///
+/// This used to be out of scope on purpose: the vocabulary was checked, the
+/// pairing was not, because being wrong here tells an author that their
+/// accessibility markup invalidates their book. The tables are now extracted
+/// from epubcheck's own grammar, united across an element's variants so that
+/// no variant is stricter here, and compared with 5.4.0 book by book.
+///
+/// Two findings are left to `schemas/xhtml.rng`, which already makes them: a
+/// value that is no role at all, and a `body` role outside its four. What
+/// this adds is a known role on the wrong element, and a value that is right
+/// once trimmed but not as written - epubcheck compares the attribute exactly,
+/// so `role=" doc-chapter"` is invalid there.
+pub(crate) fn check_role_placement(doc: &roxmltree::Document, path: &str, report: &mut Report) {
+    use crate::aria_roles::{ALL_ROLES, ELEMENT_ROLES, REQUIRED_ATTRS};
+    const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
+    const BODY_ROLES: &[&str] = &["application", "document", "none", "presentation"];
+    for el in doc
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(XHTML_NS))
+    {
+        let Some(role) = el.attr_no_ns("role") else {
+            continue;
+        };
+        let name = el.tag_name().name();
+        // Where the extracted table and epubcheck disagree, measured against
+        // 5.4.0 one element at a time (2026-09-25), the measurement wins:
+        // - `html`: `schemas/xhtml.rng` already rejects any role there;
+        // - `noscript`: epubcheck accepts a role on it, in head and in body,
+        //   although its grammar pattern names none;
+        // - `meta`: the extraction united it with another `meta` pattern and
+        //   allowed three roles; epubcheck allows none.
+        const SKIP: &[&str] = &["html", "noscript"];
+        if SKIP.contains(&name) {
+            continue;
+        }
+        let allowed: Option<&[&str]> = if name == "meta" {
+            Some(&[])
+        } else {
+            let Some((_, allowed)) = ELEMENT_ROLES.iter().find(|(e, _)| *e == name) else {
+                continue;
+            };
+            *allowed
+        };
+        let trimmed = role.split_whitespace().collect::<Vec<_>>().join(" ");
+        let known = ALL_ROLES.contains(&trimmed.as_str());
+        // An element that takes any role still takes only a role, spelled
+        // exactly.
+        let fits = |v: &str| allowed.unwrap_or(ALL_ROLES).contains(&v);
+        if !fits(role) {
+            // The grammar already reports an unknown value, and a body role
+            // outside its four; do not say it twice.
+            let grammar_says_it =
+                !known || (name == "body" && !BODY_ROLES.contains(&trimmed.as_str()));
+            if !grammar_says_it {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    format!("value of attribute \"role\" is invalid: \"{name}\" may not take the role \"{role}\""),
+                    path,
+                    el,
+                    "htm.aria.role_not_allowed_on_element",
+                    vec![role.to_string(), name.to_string()],
+                );
+            }
+            continue;
+        }
+        for (_, attr) in REQUIRED_ATTRS.iter().filter(|(r, _)| *r == role) {
+            if el.attr_no_ns(attr).is_none() {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    format!("element \"{name}\" missing required attribute \"{attr}\" (its role is \"{role}\")"),
+                    path,
+                    el,
+                    "htm.aria.role_missing_required_attribute",
+                    vec![attr.to_string(), role.to_string()],
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod role_placement_tests {
+    use crate::report::Report;
+
+    fn rules(body: &str) -> Vec<&'static str> {
+        let xml = format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body>{body}</body></html>"#
+        );
+        let d = crate::ocf::parse_xml(&xml).unwrap();
+        let mut report = Report::new();
+        super::check_role_placement(&d, "c.xhtml", &mut report);
+        report.messages.iter().filter_map(|m| m.rule).collect()
+    }
+
+    /// Each case compared with epubcheck 5.4.0 on a book of its own
+    /// (2026-09-25); the shelf's 52 role-bearing books draw nothing new.
+    #[test]
+    fn role_placement_matches_epubcheck() {
+        const NOT_ALLOWED: &str = "htm.aria.role_not_allowed_on_element";
+        const MISSING: &str = "htm.aria.role_missing_required_attribute";
+        assert!(rules(r#"<section role="doc-chapter"><h1>x</h1></section>"#).is_empty());
+        assert!(rules(r#"<img src="i.png" alt="x" role="doc-cover"/>"#).is_empty());
+        assert!(rules(r#"<div role="figure"><p>x</p></div>"#).is_empty());
+        assert_eq!(
+            rules(r#"<section role="doc-pagefooter"><h1>x</h1></section>"#),
+            [NOT_ALLOWED]
+        );
+        assert_eq!(
+            rules(r#"<section role="button"><h1>x</h1></section>"#),
+            [NOT_ALLOWED]
+        );
+        assert_eq!(rules(r#"<h1 role="note">x</h1>"#), [NOT_ALLOWED]);
+        assert_eq!(rules(r#"<p>a<br role="separator"/>b</p>"#), [NOT_ALLOWED]);
+        // Exact comparison, as in epubcheck.
+        assert_eq!(
+            rules(r#"<div role=" doc-chapter"><p>x</p></div>"#),
+            [NOT_ALLOWED]
+        );
+        // Left to the grammar, which already reports them.
+        assert!(rules(r#"<div role="doc-chapter region"><p>x</p></div>"#).is_empty());
+        // Required attributes, whatever the element.
+        assert_eq!(rules(r#"<h1 role="heading">x</h1>"#), [MISSING]);
+        assert_eq!(rules(r#"<span role="checkbox">x</span>"#), [MISSING]);
+        assert!(rules(r#"<h2 role="heading" aria-level="2">x</h2>"#).is_empty());
+    }
+}

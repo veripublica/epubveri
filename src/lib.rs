@@ -20,6 +20,7 @@
 /// tarball) falls back silently to the plain SemVer, set by `build.rs`.
 pub const VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), env!("EPUBVERI_BUILD"));
 
+pub(crate) mod aria_roles;
 pub mod cmt;
 pub mod css;
 pub mod dict;

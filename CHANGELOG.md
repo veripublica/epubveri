@@ -141,6 +141,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   matched no identifier. That is not true of the book. epubcheck reads no
   version there and reports OPF-001 beside the fatal error, and so do we
   now.
+- **Which element may take which ARIA `role`, and the attributes a role
+  requires, are now checked, as in epubcheck.**
+  - A `section` may not take `button`, an `h1` may not take `note`, and a
+    `br` takes only `none` or `presentation`. A role such as `heading`,
+    `checkbox` or `slider` needs its `aria-level`, `aria-checked` or
+    `aria-valuenow`.
+  - The value is compared exactly, so `role=" doc-chapter"` is invalid.
+  - The tables were extracted from epubcheck's own HTML grammar. An element
+    defined several ways gets the widest of its sets, so it is never stricter
+    here, and each element that takes no role was compared with epubcheck
+    one by one.
+  - This closes the last two scenarios of epubcheck's test suite we missed:
+    exact-ID recall is now 687 of 687.
+  - Of the 474 books on our shelf, 52 use `role`, and none draws anything
+    new.
 
 ## [0.17.5] - 2026-09-23
 
