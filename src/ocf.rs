@@ -530,6 +530,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         bytes.first().copied().unwrap_or(0),
         bytes.get(1).copied().unwrap_or(0),
     );
+    let raw_header: Option<[u8; 38]> = bytes.get(..38).and_then(|h| h.try_into().ok());
     let mut archive = match ZipArchive::new(Cursor::new(bytes)) {
         Ok(a) => a,
         Err(e) => {
@@ -549,6 +550,33 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                     Severity::Fatal,
                     "Not a valid EPUB container (corrupted ZIP header)",
                 );
+            } else if bytes_len >= 58
+                && let Some(h) = raw_header
+            {
+                // The rest of `OCFZipChecker`'s chain, which epubcheck runs on
+                // the raw header whether or not the archive then opens. We
+                // asked these questions only of an archive that did, so a
+                // broken container with a wrong first entry drew PKG-008 alone
+                // here and PKG-006 or PKG-005 beside it there (probed
+                // 2026-09-25). Same order, same else-if: the name length at
+                // offset 26, the extra-field length at 28, the name at 30.
+                let name_len = u16::from_le_bytes([h[26], h[27]]);
+                let extra_len = u16::from_le_bytes([h[28], h[29]]);
+                if name_len != 8 || (extra_len == 0 && &h[30..38] != b"mimetype") {
+                    report.push_rule(
+                        PKG_006,
+                        Severity::Error,
+                        "The 'mimetype' file must be the first entry in the EPUB ZIP",
+                        "ocf.mimetype.not_first_entry",
+                        Vec::new(),
+                    );
+                } else if extra_len != 0 {
+                    report.push(
+                        PKG_005,
+                        Severity::Error,
+                        "The 'mimetype' entry's ZIP header must not have an extra field",
+                    );
+                }
             }
             report.push_rule(
                 PKG_008,
@@ -1624,5 +1652,57 @@ mod unterminated_tag_tests {
         let err = parse_xml(xml).expect_err("must not parse");
         let h = unterminated_element_message(xml, &err).expect("a message");
         assert_eq!(h, "expected </body> but found </p>");
+    }
+}
+
+#[cfg(test)]
+mod unreadable_header_tests {
+    use crate::report::Report;
+
+    /// A local file header naming `name` with an extra field of `extra`
+    /// bytes, then padding: long enough for epubcheck's 58-byte read, with no
+    /// end-of-central-directory record, so no archive reader can open it.
+    fn broken(sig: &[u8; 4], name: &[u8], extra: &[u8]) -> Vec<u8> {
+        let mut b = sig.to_vec();
+        b.extend([10, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        b.extend([0; 4]);
+        b.extend(20u32.to_le_bytes());
+        b.extend(20u32.to_le_bytes());
+        b.extend((name.len() as u16).to_le_bytes());
+        b.extend((extra.len() as u16).to_le_bytes());
+        b.extend(name);
+        b.extend(extra);
+        b.extend(b"application/epub+zip");
+        b.extend([0; 80]);
+        b
+    }
+
+    fn ids(bytes: Vec<u8>) -> Vec<&'static str> {
+        let mut report = Report::new();
+        assert!(super::open(bytes, &mut report).is_none(), "must not open");
+        let mut v: Vec<_> = report.messages.iter().map(|m| m.id).collect();
+        v.sort();
+        v
+    }
+
+    /// Each case measured against epubcheck 5.4.0, one file apiece: the raw
+    /// header is judged even when the archive cannot be read.
+    #[test]
+    fn a_container_that_will_not_open_still_has_its_header_judged() {
+        let pk = b"PK\x03\x04";
+        assert_eq!(ids(broken(pk, b"mimetypeX", b"")), ["PKG-006", "PKG-008"]);
+        assert_eq!(ids(broken(pk, b"mimetypX", b"")), ["PKG-006", "PKG-008"]);
+        assert_eq!(
+            ids(broken(pk, b"mimetype", b"\x01\x02\x03\x04")),
+            ["PKG-005", "PKG-008"]
+        );
+        assert_eq!(ids(broken(pk, b"mimetype", b"")), ["PKG-008"]);
+        // epubcheck tests `header[0] != 'P' && header[1] != 'K'`, so one
+        // matching byte of the signature is enough to reach the rest of the
+        // chain; "PX" is judged on its name like any "PK" header.
+        assert_eq!(
+            ids(broken(b"PX\x03\x04", b"mimetypeX", b"")),
+            ["PKG-006", "PKG-008"]
+        );
     }
 }

@@ -35,6 +35,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   have keys of their own (`opf.manifest_item.malformed_href`,
   `opf.ncx.content_src_malformed_url`, `opf.guide.reference_malformed_url`),
   so a tool that repairs spaces is never handed one of them.
+- **A container that cannot be opened still has its first file header
+  judged.** epubcheck checks the first 58 bytes whether or not the archive
+  opens. There it reports PKG-006 when the first entry is not `mimetype`, and
+  PKG-005 when that entry carries an extra field. We asked only of archives
+  that opened, so a broken container drew PKG-008 alone. It now draws the
+  same findings as in epubcheck.
 
 ## [0.17.5] - 2026-09-23
 
