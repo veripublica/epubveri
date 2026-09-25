@@ -58,7 +58,14 @@ const ANN: &[Ann] = &[
          `toc` names a non-NCX item, the NCXChecker it builds over a non-NCX \
          context throws, so that document is never validated at all - measured \
          with a deliberate error inside it, which epubcheck does not report \
-         and we do (issue #127)."),
+         and we do (issue #127). \
+         **Filed upstream as w3c/epubcheck#1735 (2026-09-25)**, with the source \
+         path (`OPFHandler` marks the toc target as NCX whatever its type; \
+         `NCXChecker`'s `checkState` throws; the catch skips the item) and a \
+         two-book repro in which a chapter's two real errors vanish once \
+         `toc` names it. The proposal there is what we already do: OPF-050 \
+         (and the package RSC-005), then validate the item as its media type \
+         says."),
     // --- PKG (reviewed) ---
     ("PKG-003", None,
         "epubcheck's `OCFZipChecker` reads a **58-byte** header and reports \
