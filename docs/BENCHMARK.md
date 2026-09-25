@@ -3,10 +3,10 @@
 epubveri and epubcheck answer the same question about an EPUB. This document
 measures what each one costs to get there: time, CPU, memory and disk.
 
-**Measured 2026-09-23 (epubcheck) and 2026-09-24 (epubveri 0.17.5), same
-machine, same books.** Every number here is an observation made on one machine
-with one library on one day, not a property of either tool. Re-measure before
-quoting any of it — the last section tells you how.
+**Measured 2026-09-25, both tools in one sitting, same machine, same books.**
+Every number here is an observation made on one machine with one library on one
+day, not a property of either tool. Re-measure before quoting any of it — the
+last section tells you how.
 
 This is a **performance** document only. For what the two tools *find*, see
 [`COVERAGE.md`](COVERAGE.md).
@@ -28,7 +28,7 @@ not printing.
 
 **epubveri's per-book times come from a high-resolution timer**, the median of
 three runs per book, because `/usr/bin/time` *truncates* to 10 ms: it prints a
-26 ms run as `0.02`, which would understate epubveri's typical book by a
+25 ms run as `0.02`, which would understate epubveri's typical book by a
 fifth. The same truncation costs epubcheck's two-second runs under 0.5%, so its figures are
 `/usr/bin/time`'s. Whole-library totals are one long interval each and are
 unaffected.
@@ -45,28 +45,15 @@ comparison on 2026-09-23 found **identical message-ID sets on 423 of 474, with
 no ID reported by epubveri alone**. It was run with 0.17.4, and 0.17.5's reports
 are byte-identical to 0.17.4's on every one of these books, so it stands.
 
-### What changed since the last measurement
-
-The edition of 2026-08-25 (epubveri 0.12.0, epubcheck 5.3.0, 385 books) found
-epubveri about **11x** faster over the whole library; the one of 2026-09-23,
-with 0.17.4, **18x**. It is **36x** here. The first comparison is not a
-controlled experiment, since the library grew and epubcheck moved a version.
-The later steps were, on this library, and both came on 23 September: 0.17.3
-took epubveri from 99 s to 58 s and 0.17.5 from 55 s to 27 s. 0.17.3 stopped its RELAX NG engine rebuilding each element's
-attribute model for every attribute it read; 0.17.5 stopped it repeating work
-across documents: decompressing the same file hundreds of times, re-parsing a
-shared stylesheet for every chapter, and re-parsing a notes file for every
-chapter that links into it.
-
 ## Summary
 
 Whole library, 474 books, each tool running alone:
 
 | | epubveri | epubcheck | ratio |
 |---|---:|---:|---|
-| Wall-clock time | **27 s** | 967 s | **36x** |
-| CPU time | **27 s** | 3 624 s | **135x** |
-| Memory, typical book | **9.0 MiB** | 421 MiB | **47x** |
+| Wall-clock time | **20 s** | 949 s | **47x** |
+| CPU time | **19.5 s** | 3 583 s | **183x** |
+| Memory, typical book | **9.0 MiB** | 414 MiB | **46x** |
 | Install footprint | **3.2 MB** | 418 MB | **133x** |
 
 ## Time
@@ -75,9 +62,9 @@ The same three situations, measured for both tools:
 
 | | epubveri | epubcheck |
 |---|---:|---:|
-| One small book (74 KB) | **8 ms** | 1.83 s |
-| A typical book (median of 474) | **0.026 s** | 1.96 s |
-| The whole 474-book library | **27 s** | 967 s |
+| One small book (74 KB) | **8 ms** | 1.81 s |
+| A typical book (median of 474) | **0.025 s** | 1.93 s |
+| The whole 474-book library | **20 s** | 949 s |
 
 epubcheck's time barely depends on the book. Over a hundredfold range of
 content — 100 KB to 10 MB, which is 98% of this library — its median moves by
@@ -85,21 +72,21 @@ content — 100 KB to 10 MB, which is 98% of this library — its median moves b
 
 | book size | books | epubcheck, median | epubveri, median |
 |---|---:|---:|---:|
-| under 100 KB | 3 | 1.82 s | 0.008 s |
-| 100–500 KB | 198 | 1.90 s | 0.017 s |
-| 0.5–2 MB | 201 | 2.01 s | 0.033 s |
-| 2–10 MB | 66 | 2.02 s | 0.033 s |
-| over 10 MB | 6 | 2.63 s | 0.128 s |
+| under 100 KB | 3 | 1.80 s | 0.008 s |
+| 100–500 KB | 198 | 1.89 s | 0.018 s |
+| 0.5–2 MB | 201 | 1.98 s | 0.033 s |
+| 2–10 MB | 66 | 2.00 s | 0.032 s |
+| over 10 MB | 6 | 2.63 s | 0.129 s |
 
 ## CPU
 
 | | epubveri | epubcheck |
 |---|---:|---:|
-| CPU-seconds, whole library | **27 s** | 3 624 s |
-| Cores busy while running | 1.00 | 3.75 |
+| CPU-seconds, whole library | **19.5 s** | 3 583 s |
+| Cores busy while running | 0.97 | 3.78 |
 
-The CPU gap (135x) is almost four times the wall-clock gap (36x), and the reason
-is measurable: epubcheck keeps about **3.75 cores** busy — JIT compiler and
+The CPU gap (183x) is almost four times the wall-clock gap (47x), and the reason
+is measurable: epubcheck keeps about **3.8 cores** busy — JIT compiler and
 garbage collector threads alongside the work — while epubveri is
 single-threaded. So epubcheck recovers part of the wall-clock difference through
 parallelism, but it takes that back from the rest of the machine.
@@ -112,18 +99,18 @@ and battery life, which tracks CPU-seconds.
 
 | | epubveri | epubcheck |
 |---|---:|---:|
-| Typical book (median) | **9.0 MiB** | 421 MiB |
+| Typical book (median) | **9.0 MiB** | 414 MiB |
 | Worst book | **96 MiB** | 1 684 MiB |
-| Books needing over 512 MiB | **0** | 124 |
+| Books needing over 512 MiB | **0** | 120 |
 | Books needing over 1 GiB | **0** | 4 |
 
 The tail matters more than the average here. In a 512 MB container or inside a
 mobile application, epubcheck's typical book is already near the limit and a
 quarter of this library is past it.
 
-epubveri's own figures rose a little in 0.17.5 (7.9 and 92 MiB with 0.17.4),
-and on purpose: it now keeps each decompressed file instead of decompressing
-it again, up to a fixed 64 MiB, which is part of why it got faster.
+Part of epubveri's figure is deliberate: it keeps each decompressed file, up to
+a fixed 64 MiB, instead of decompressing it again, which costs a few MiB and
+saves time.
 
 ## Disk and deployment
 
@@ -151,7 +138,7 @@ part was measured separately:
 |---|---:|
 | Starting a bare JVM (`java --version`) | 22 ms |
 | Loading epubcheck's classes (`epubcheck --version`) | 66 ms |
-| Validating the smallest book (74 KB) | 1 830 ms |
+| Validating the smallest book (74 KB) | 1 810 ms |
 
 So it is not JVM startup, which is about 1% of a per-book run, and it is not
 work proportional to the book either — the table above shows the time is nearly
@@ -165,7 +152,7 @@ content.
 
 This also states epubcheck's best case fairly. If that 1.75 seconds were shared
 across many books, the two tools would be far closer — subtracting each tool's
-floor, the remaining per-book work is roughly 0.13 s against 0.02 s. But the
+floor, the remaining per-book work is roughly 0.12 s against 0.02 s. But the
 epubcheck command line takes **one file per invocation**, so the fixed cost is
 paid again for every book. Its Java API could amortise it; its CLI cannot.
 

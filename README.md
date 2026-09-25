@@ -54,7 +54,7 @@ tool on a server. It's a real obstacle if you want to:
 - **embed** a validator inside a native desktop/mobile app without
   bundling an entire Java runtime,
 - run validation as part of a **fast, lightweight command-line tool or
-  CI pipeline** — measured at 26 ms against epubcheck's 1.96 s on a
+  CI pipeline** — measured at 25 ms against epubcheck's 1.93 s on a
   typical book, and the difference is the validation work rather than the
   JVM's launch (see "How fast is it?" below), or
 - just avoid the operational overhead of "make sure a compatible JVM is
@@ -255,32 +255,30 @@ books people actually bought.
 
 Both tools were timed over the same 474 real books on an idle machine,
 invoked the same way — one run per book, which is how an editor plugin or an
-ingestion pipeline actually calls them. **Measured with epubveri 0.17.5 on
-2026-09-24 and epubcheck 5.4.0 on 2026-09-23, on the same machine**, and left
+ingestion pipeline actually calls them. **Measured with epubveri 0.17.5 and
+epubcheck 5.4.0 on 2026-09-25, in one sitting on the same machine**, and left
 at that date on purpose: these numbers move with the machine and the books, so
 re-measuring is the only honest way to change them.
 
 | | a typical book (median) | the whole shelf of 474 |
 |---|---|---|
-| epubcheck 5.4.0 | 1.96 s | ~16 min |
-| **epubveri 0.17.5** | **0.026 s** | **27 s** |
+| epubcheck 5.4.0 | 1.93 s | ~16 min |
+| **epubveri 0.17.5** | **0.025 s** | **20 s** |
 
-About **36 times faster** over the whole shelf and about 75 times on a typical
+About **47 times faster** over the whole shelf and about 76 times on a typical
 book, reaching the same verdict on every book where epubcheck is not itself in
-error (see "How good is it right now?" above). Most of that is recent: 0.17.5
-alone halved epubveri's time on this shelf, by no longer doing the same work
-twice.
+error (see "How good is it right now?" above).
 
 One number worth stating precisely, because the obvious guess is wrong:
 this is **not** the JVM being slow to start. epubcheck's startup is
-66 ms of those 1.96 s — about 3% — and the rest is the validation itself,
+66 ms of those 1.93 s — about 3% — and the rest is the validation itself,
 most of it fixed setup it repeats for every book. epubveri's own process
 startup is 2 ms. So the honest claim is that the same work takes a small
 fraction of the time, not that Java is slow to launch.
 
 CPU, memory and install size, with the method to reproduce all of it, are in
 **[`docs/BENCHMARK.md`](./docs/BENCHMARK.md)**: epubcheck keeps nearly four
-cores busy and needs 421 MiB for a typical book, against one core and 9 MiB.
+cores busy and needs 414 MiB for a typical book, against one core and 9 MiB.
 Times move with the machine, the books and the version; measure your own
 before depending on any of this.
 
