@@ -77,14 +77,14 @@ const ANN: &[Ann] = &[
          on an image sniff until 2026-08-18, so 200 random bytes drew the \
          generic PKG-008 alone; the sniff is kept as a second route for a \
          file that is a recognisable other format yet happens to start `PK`."),
-    ("PKG-006", Some("partial"),
-        "Reported from the parsed zip, so it never runs on a container that \
-         fails to open - where epubcheck still reports it, reading the raw \
-         58-byte header (`OCFZipChecker`: filename-size != 8). Measured with \
-         `PX…`/`xK…` headers, which epubcheck calls PKG-006 and we call \
-         PKG-008 alone. Same family as #80 and left as its own change; \
-         PKG-005 reads the same raw header there and is likely the same \
-         shape, unmeasured."),
+    ("PKG-006", None,
+        "Reported from the parsed zip, and **from the raw 58-byte header when the \
+         container will not open**, as epubcheck's `OCFZipChecker` does: a name \
+         length other than 8, or a name other than `mimetype`, is PKG-006; an extra \
+         field is PKG-005. Until 2026-09-25 we asked only an archive that opened, so \
+         a broken container drew PKG-008 alone. Five shapes measured against 5.4.0, \
+         including a `PX…` header, which epubcheck's `&&` signature test lets \
+         through as if it were `PK`."),
     ("PKG-020", Some("na"),
         "Unreachable for the input this tool accepts (verified 2026-08-04). \
          `OPFChecker.checkPackage` asks whether the container holds the \
@@ -146,7 +146,12 @@ const ANN: &[Ann] = &[
         "The stylesheet half of OPF-038: a `text/css` item with no fallback \
          inside an OEBPS 1.2 package, which wants `text/x-oeb1-css`."),
     ("OPF-064", None,
-        "Informational profile-selection message - not emitted."),
+        "Info: a `dc:type` of `dictionary`, `edupub`, `index` or `preview` in the \
+         first package document selects the validation profile at EPUB 3, \
+         case-insensitively and in that precedence (`EPUBProfile.makeTypeCompatible`), \
+         overriding a different `--profile`. Emitted, and the override applied, since \
+         2026-09-25; before that the type's checks ran but the message did not, and a \
+         requested profile's gating check still fired on a book of another type."),
     ("NAV-001", Some("na"),
         "Dead ID - its only call site is `NavChecker`'s constructor under \
          `version == VERSION_2`, but a NavChecker is only built for an item \
@@ -257,54 +262,32 @@ const ANN: &[Ann] = &[
          fixing the order against the one the format itself defines - which \
          its own `ncx_multiNavLabel` Schematron rule contradicts by \
          presupposing several. Reproducing them would mean inventing errors \
-         on valid books."),
+         on valid books. \
+         **Profile Schematrons are the largest open part of this row** (audit, \
+         2026-09-25): of epubcheck's EPUB Indexes content rules (`idx-xhtml.sch`, ~36 \
+         asserts) we run one, of the Dictionaries content rules \
+         (`dict-xhtml.sch`, 14) one, and the EDUPUB structure rules (multiple or empty \
+         ranked headings, empty `aria-label`, section content order) and the \
+         `audienceType` recommendations in `edu-opf.sch` not at all - each probed \
+         against 5.4.0. The core XHTML, package and navigation Schematrons were \
+         probed and match."),
     ("RSC-020", Some("partial"),
-        "Checked: host syntax and scheme (space/comma in host, missing `//`) \
-         on any reference, plus an unencoded space in a manifest href, in a \
-         content-document reference (including SVG `href`/`xlink:href`) and in \
-         an NCX `<content src>`. Not checked: backslashes, malformed \
-         percent-escapes, and the illegal-character set. **Correcting an \
-         earlier note here**: it claimed a path space is valid and that this \
-         matched epubcheck. It does not - epubcheck parses every URL twice \
-         through galimatias, once with a strict error handler that turns \
-         WHATWG's recoverable warnings into errors, and its own two sibling \
-         fixtures settle it (a `%20` href is PKG-010 warning, an unencoded one \
-         is RSC-020 error). What remains unchecked is still deliberate \
-         (2026-07-26): galimatias is a Maven dependency rather than vendored, \
-         so the exact rule cannot be read here, and the corpus carries one \
-         RSC-020 scenario, which we already pass. **The deferral's own \
-         evidence has since expired, twice, which is why the space cases are \
-         now done.** It rested on a scan of 61 real books finding exactly one \
-         malformed relative URL; on a 375-book shelf, 17 books carry unencoded \
-         spaces and one carried 28 in its NCX alone. Each space case was \
-         closed only after measuring our count against epubcheck's per book \
-         and finding it lower, never higher - strictly gap-closing, so none of \
-         them could invent a false positive. **The remaining sites were then \
-         enumerated and measured, and the answer is do nothing** (2026-08-20). \
-         This check is organised per *source* here and per *reference* in \
-         epubcheck, so the honest question is which of our sites it has \
-         joined: RSC-012 runs at all four reference sites (guide, NCX, content \
-         document, media overlay) while RSC-020 runs at three (manifest, \
-         content document, NCX) - leaving the guide, the EPUB 3 navigation \
-         document, media overlays, CSS `url()` and the dictionary's \
-         search-key-group href. Every one of those was scanned across 375 real \
-         books for an interior space and **the population is zero in all of \
-         them**; the NCX was the only site with real books behind it. So these \
-         cells stay empty on evidence rather than on estimate, and the \
-         argument for the remaining *shapes* (backslashes, percent-escapes, \
-         the illegal-character set) is likewise population, not principle. \
-         Re-measure rather than re-deriving this matrix. **And read that zero \
-         for what it is** (owner, 2026-08-21): the shelf is one person's \
-         library — mostly Turkish reflowable trade fiction, almost no \
-         fixed-layout, no media overlays, no dictionary or index profile — so \
-         \"population zero here\" is weak evidence that a case does not exist, \
-         and these five cells are closed on it. The caveat above was written \
-         *and then the decision rested on the measurement it warns about*, \
-         which is decoration rather than a caveat. If one of these is ever \
-         reconsidered, the second source is epubcheck's own corpus: its \
-         fixtures are built to trigger each rule deliberately, which is exactly \
-         the coverage negative evidence needs and exactly what a non-random \
-         sample of real books cannot supply."),
+        "epubcheck strict-parses every reference with galimatias 0.1.3 and reports \
+         the first failure (`URLChecker.resolveURL`). **Outside the host we match it \
+         exactly**: `url::unit_error` reproduces the strict parse (a space, C0/C1 \
+         controls and DEL, the characters `\" < > [ ] ^ { | }`, a backslash and a \
+         backtick, U+FFFD and noncharacters, a `%` \
+         without two hex digits, a second `#`; leading and trailing whitespace \
+         stripped, and all whitespace in a `data:` URL). Its rules were read off the \
+         shipped jar through an oracle, one character per URL position, and the \
+         oracle and the function agree on all 82,400 distinct URLs of the 474-book \
+         shelf (2026-09-25). It runs at every reference site: manifest, NCX, guide, \
+         content documents (relative, absolute and `data:`), SVG and CSS `url()`. \
+         **What stays partial is the host**: `has_syntax_error` matches galimatias \
+         on spaces, `@`, `\\\\`, empty hosts and label length, but not on a \
+         non-numeric port, an unmatched `[`, or a `%` in a host - three shapes the \
+         shelf has never carried. And epubcheck parses the navigation document \
+         twice, so a bad URL there is counted twice there and once here."),
     ("RSC-010", None,
         "Three of epubcheck's four cells. It runs RSC-010 from two places in \
          `ResourceReferencesChecker`: `case HYPERLINK` (:231), where the \
@@ -400,10 +383,11 @@ const ANN: &[Ann] = &[
          PKG-021/022)."),
     ("RSC-024", Some("na"),
         "Not a distinct check - it is the non-normative half of a pair \
-         (`normative ? RSC_017 : RSC_024`, alongside RSC-005/RSC-025). \
-         epubcheck downgrades to it for validations it runs advisorily; we \
-         have no non-normative mode, so it mirrors internal plumbing rather \
-         than catching anything in a book (verified #57)."),
+         (`normative ? RSC_017 : RSC_024`, alongside RSC-005/RSC-025): a *warning* \
+         from a validation epubcheck runs advisorily. Our one advisory validation, \
+         the SVG 1.1 grammar in `src/svg.rs`, reports RSC-025 for its errors, and a \
+         RELAX NG grammar raises no warnings, so there is nothing for RSC-024 to \
+         carry (verified #57)."),
     // --- HTM (reviewed) ---
     ("HTM-002", Some("na"),
         "Dead ID - epubcheck defines a severity for it but never emits it \
@@ -413,9 +397,10 @@ const ANN: &[Ann] = &[
          check."),
     ("HTM-011", Some("na"),
         "Undeclared entity. epubcheck's own code comment says this \"may never \
-         be reported\" - an undeclared entity is a SAX parse error reported as \
-         RSC-005. epubveri catches the same defect as RSC-016 (fatal). The \
-         defect is covered; the ID itself is effectively dead."),
+         be reported\", and it is not: an undeclared entity is a SAX fatal error, \
+         which epubcheck reports as RSC-016, exactly as we do (probed against 5.4.0, \
+         2026-09-25; this note used to say RSC-005, which was wrong about \
+         epubcheck). The defect is covered; the ID itself is dead."),
     ("HTM-044", Some("na"),
         "Dead ID - epubcheck never emits it anywhere in its source. Not a live \
          check."),
