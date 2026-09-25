@@ -584,6 +584,26 @@ pub(crate) fn is_external(href: &str) -> bool {
         || crate::url::scheme(href).is_some()
 }
 
+/// Whether epubcheck's strict parse rejects `v`: the host rules of
+/// [`crate::url::has_syntax_error`] for an absolute URL, and
+/// [`crate::url::unit_error`] everywhere else in it.
+fn is_malformed_url(v: &str) -> bool {
+    crate::url::unit_error(v).is_some()
+        || ((crate::url::is_absolute(v) || is_scheme_relative(v))
+            && crate::url::has_syntax_error(v))
+}
+
+/// RSC-020's message for a reference [`crate::url::unit_error`] rejects. The
+/// space case keeps the wording it has always had, since it is by far the
+/// commonest on real books and a report should not move without a reason;
+/// every other case says what is wrong.
+fn relative_url_message(v: &str, err: crate::url::UnitError) -> String {
+    match err {
+        crate::url::UnitError::Space => format!("URL '{v}' is not conforming"),
+        other => format!("URL '{v}' is not conforming: {}", other.describe()),
+    }
+}
+
 /// `//host/path` — a scheme-relative URL. It has no scheme, so it slipped
 /// past every scheme test and was resolved as a path inside the container:
 /// `<a href="//example.com/x">` drew RSC-007 and RSC-026, two errors, on a
@@ -3152,6 +3172,25 @@ fn check_guide_references(
                 "opf.guide.reference_unencoded_space",
                 vec![href.to_string()],
             );
+        } else if let Some(err) = crate::url::unit_error(href)
+            && let Some(href_attr) = attr_no_ns_node(r, "href")
+        {
+            // Any other strict-parse failure (`url::unit_error`), under its
+            // own rule key: the space case above has a fixer downstream that
+            // percent-encodes spaces, and must not be handed a backslash.
+            report.push_node_attr(
+                RSC_020,
+                Severity::Error,
+                format!(
+                    "guide reference '{href}' is not a valid URL: {}",
+                    err.describe()
+                ),
+                opf_path.to_string(),
+                r,
+                href_attr,
+                "opf.guide.reference_malformed_url",
+                vec![href.to_string()],
+            );
         }
         let path_part = href.split(['#', '?']).next().unwrap_or(href);
         let resolved = nfc(&resolve(base_dir, path_part));
@@ -3364,6 +3403,24 @@ fn check_ncx_content_fragments(
                 n,
                 src_attr,
                 "opf.ncx.content_src_unencoded_space",
+                vec![src.to_string()],
+            );
+        } else if let Some(err) = crate::url::unit_error(src)
+            && let Some(src_attr) = attr_no_ns_node(n, "src")
+        {
+            // Everything else the strict parse rejects, kept off the space
+            // rule's key for the same reason as the guide's.
+            report.push_node_attr(
+                RSC_020,
+                Severity::Error,
+                format!(
+                    "NCX content src '{src}' is not a valid URL: {}",
+                    err.describe()
+                ),
+                ncx_path,
+                n,
+                src_attr,
+                "opf.ncx.content_src_malformed_url",
                 vec![src.to_string()],
             );
         }
@@ -5621,6 +5678,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     item,
                     href_attr,
                     "opf.manifest_item.unencoded_space_in_href",
+                    vec![href.to_string()],
+                );
+            } else if !href.trim_start().starts_with("data:")
+                && let Some(err) = crate::url::unit_error(href)
+            {
+                report.push_node_attr(
+                    RSC_020,
+                    Severity::Error,
+                    format!(
+                        "manifest item href '{href}' is not a valid URL: {}",
+                        err.describe()
+                    ),
+                    opf_path,
+                    item,
+                    href_attr,
+                    "opf.manifest_item.malformed_href",
                     vec![href.to_string()],
                 );
             }
@@ -8925,7 +8998,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     continue;
                 };
                 if crate::url::is_absolute(href) || is_scheme_relative(href) {
-                    if crate::url::has_syntax_error(href) {
+                    if crate::url::has_syntax_error(href) || crate::url::unit_error(href).is_some()
+                    {
                         report.push_node(
                             RSC_020,
                             Severity::Error,
@@ -9687,11 +9761,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // `<image xlink:href="../Images/bes sevgi dili.jpg">` -
                     // a real book - drew the manifest-side RSC-020 and not
                     // the reference-side one epubcheck also reports.
-                    if v.trim().contains(' ') {
+                    if let Some(err) = crate::url::unit_error(v) {
                         report.push_node(
                             RSC_020,
                             Severity::Error,
-                            format!("URL '{v}' is not conforming"),
+                            relative_url_message(v, err),
                             path.clone(),
                             node,
                             "opf.content_document.malformed_relative_url",
@@ -10020,6 +10094,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         }
                     }
                     if is_external(v) {
+                        // epubcheck strict-parses every reference, remote and
+                        // `data:` ones included. An `<a href>` is the anchor
+                        // walk's (with `has_syntax_error`); everything else -
+                        // `img src`, `area href`, `object data` - is asked
+                        // here, where it used to be skipped unasked.
+                        if !(tag == "a" && attr == "href") && is_malformed_url(v) {
+                            report.push_node(
+                                RSC_020,
+                                Severity::Error,
+                                format!("URL '{v}' is not conforming"),
+                                path.clone(),
+                                node,
+                                "opf.content_document.malformed_absolute_url",
+                                vec![v.to_string()],
+                            );
+                        }
                         continue;
                     }
                     // `data` and `poster` are references only on the element
@@ -10092,11 +10182,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // Interior space only - leading/trailing is stripped by
                     // the URL parser and valid (`content-model-a-with-
                     // leading-trailing-spaces-valid` in the corpus).
-                    if v.trim().contains(' ') {
+                    if let Some(err) = crate::url::unit_error(v) {
                         report.push_node(
                             RSC_020,
                             Severity::Error,
-                            format!("URL '{v}' is not conforming"),
+                            relative_url_message(v, err),
                             path.clone(),
                             node,
                             "opf.content_document.malformed_relative_url",
@@ -11498,17 +11588,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
             }
             // RSC-020, same reasoning as the guide and the NCX: a `url()` is a
-            // registered reference and epubcheck validates every one. Probed
-            // 2026-08-21 — `url(i m.png)` draws RSC-020 there and drew nothing
-            // here. Interior space only; leading/trailing is stripped by the
-            // URL parser and valid.
-            if !is_external(&u) && u.trim().contains(' ') {
+            // registered reference and epubcheck strict-parses every one,
+            // remote and `data:` ones included - `url(i m.png)`,
+            // `url("i%zz.png")` and `url("a\\b.png")` all draw it there
+            // (probed 2026-08-21 and 2026-09-25). The rules are
+            // `url::unit_error`'s, read off galimatias itself.
+            if let Some(err) = crate::url::unit_error(&u) {
+                report.push_at_rule(
+                    RSC_020,
+                    Severity::Error,
+                    relative_url_message(&u, err),
+                    path.clone(),
+                    "css.url.malformed_relative_url",
+                    vec![u.clone()],
+                );
+            } else if is_malformed_url(&u) {
+                // An absolute `url()` whose host epubcheck rejects.
                 report.push_at_rule(
                     RSC_020,
                     Severity::Error,
                     format!("URL '{u}' is not conforming"),
                     path.clone(),
-                    "css.url.malformed_relative_url",
+                    "css.url.malformed_absolute_url",
                     vec![u.clone()],
                 );
             }

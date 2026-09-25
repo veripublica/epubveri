@@ -707,6 +707,123 @@ pub(crate) fn is_insecure_remote(href: &str) -> bool {
     !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("file")
 }
 
+/// What epubcheck's second, strict URL parse objects to outside the host.
+///
+/// epubcheck parses every reference twice with galimatias 0.1.3, once
+/// leniently and once with a strict error handler, and reports the first
+/// strict error as RSC-020 (`URLChecker.resolveURL`). The rules below were
+/// read off that jar directly, one character per URL position (relative path,
+/// query and fragment; the same three in an `http` URL; `mailto:`, `data:` and
+/// `urn:` scheme data), not inferred from the WHATWG text, which disagrees
+/// with galimatias on U+FFFD. What it found, identical in every position:
+///
+/// - `"` `<` `>` `[` `\` `]` `^` `` ` `` `{` `|` `}`, a space, every C0 control
+///   and DEL, the C1 controls, U+FFFD and the Unicode noncharacters;
+/// - a `%` not followed by two hexadecimal digits;
+/// - a second `#`, which is legal nowhere but the fragment and illegal there.
+///
+/// Leading and trailing spaces, tabs and line breaks are stripped first and
+/// are fine; other controls are not stripped. A `data:` URL has all of its
+/// whitespace removed before either parse (epubcheck collapses base64 line
+/// wrapping), so a space is never an error in one. Non-ASCII letters are
+/// legal: `çağ.xhtml` is clean.
+///
+/// **The host is skipped on purpose.** `^`, `|`, `{` and friends are legal in
+/// a host there, which is the measured half of [`has_syntax_error`]; that
+/// function owns the authority and this one owns the rest.
+pub(crate) fn unit_error(href: &str) -> Option<UnitError> {
+    let t = href.trim_matches([' ', '\t', '\n', '\r', '\x0c']);
+    let is_data = scheme(t).is_some_and(|s| s.eq_ignore_ascii_case("data"));
+    let owned;
+    let t = if is_data {
+        owned = t.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        owned.as_str()
+    } else {
+        t
+    };
+    // Where the part after the authority begins: past `scheme:` and, for a
+    // hierarchical URL, past `//host`.
+    let mut rest = match scheme(t) {
+        Some(sch) => &t[sch.len() + 1..],
+        None => t,
+    };
+    if let Some(after) = rest.strip_prefix("//") {
+        let end = after.find(['/', '?', '#']).unwrap_or(after.len());
+        rest = &after[end..];
+    }
+    let mut in_fragment = false;
+    for (i, c) in rest.char_indices() {
+        let bad = match c {
+            ' ' => Some(UnitError::Space),
+            '\t' | '\n' | '\r' => Some(UnitError::Control(c)),
+            '\\' => Some(UnitError::Backslash),
+            '#' if in_fragment => Some(UnitError::Illegal(c)),
+            '#' => {
+                in_fragment = true;
+                None
+            }
+            '%' => {
+                let hex = rest[i + 1..]
+                    .chars()
+                    .take(2)
+                    .filter(char::is_ascii_hexdigit)
+                    .count();
+                (hex < 2).then_some(UnitError::BadPercent)
+            }
+            '"' | '<' | '>' | '[' | ']' | '^' | '`' | '{' | '|' | '}' => {
+                Some(UnitError::Illegal(c))
+            }
+            c if (c as u32) < 0x20 || c == '\u{7f}' || ('\u{80}'..='\u{9f}').contains(&c) => {
+                Some(UnitError::Control(c))
+            }
+            '\u{fffd}' => Some(UnitError::Illegal(c)),
+            c if is_noncharacter(c) => Some(UnitError::Illegal(c)),
+            _ => None,
+        };
+        if bad.is_some() {
+            return bad;
+        }
+    }
+    None
+}
+
+fn is_noncharacter(c: char) -> bool {
+    let n = c as u32;
+    (0xFDD0..=0xFDEF).contains(&n) || (n & 0xFFFE) == 0xFFFE
+}
+
+/// The first thing [`unit_error`] found wrong with a URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnitError {
+    Space,
+    Backslash,
+    BadPercent,
+    /// A control character, including a tab or line break inside the URL.
+    Control(char),
+    /// A character galimatias does not allow in a URL.
+    Illegal(char),
+}
+
+impl UnitError {
+    /// The reason, for a message: what is wrong, never how to fix it.
+    pub(crate) fn describe(self) -> String {
+        match self {
+            UnitError::Space => "it contains an unencoded space".to_string(),
+            UnitError::Backslash => "it contains a backslash".to_string(),
+            UnitError::BadPercent => {
+                "a \"%\" is not followed by two hexadecimal digits".to_string()
+            }
+            UnitError::Control(c) => {
+                format!("it contains the control character U+{:04X}", c as u32)
+            }
+            UnitError::Illegal(c) if c.is_ascii_graphic() => {
+                format!("\"{c}\" is not allowed in it")
+            }
+            UnitError::Illegal(c) => format!("U+{:04X} is not allowed in it", c as u32),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -915,6 +1032,73 @@ mod tests {
             "ftp://example.com/f",
         ] {
             assert!(is_insecure_remote(insecure), "{insecure}");
+        }
+    }
+
+    /// The table [`unit_error`] was built from, read off galimatias 0.1.3
+    /// through epubcheck's own jar: one character per position, error or not.
+    #[test]
+    fn unit_error_matches_galimatias_by_position() {
+        let positions = [
+            "a{}b.xhtml",
+            "ch1.xhtml?a{}b",
+            "ch1.xhtml#a{}b",
+            "http://example.com/a{}b",
+            "http://example.com/?a{}b",
+            "http://example.com/#a{}b",
+            "mailto:a{}b@x.com",
+            "data:text/plain,a{}b",
+            "urn:x-a:a{}b",
+        ];
+        let everywhere = "\"<>[\\]^`{|}%\u{fffd}\u{fdd0}\u{fffe}\u{80}\u{9f}";
+        for (p, t) in positions.iter().enumerate() {
+            for c in (0x20u8..0x7f)
+                .map(char::from)
+                .chain("\u{a0}ç".chars())
+                .chain(everywhere.chars())
+            {
+                let url = t.replace("{}", &c.to_string());
+                let expected = everywhere.contains(c)
+                    || (c == ' ' && !t.starts_with("data:"))
+                    || (c == '#' && (p == 2 || p == 5));
+                assert_eq!(unit_error(&url).is_some(), expected, "{url:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn unit_error_edges_match_galimatias() {
+        for ok in [
+            " ch1.xhtml",
+            "ch1.xhtml ",
+            "\tch1.xhtml",
+            "ch1.xhtml\t",
+            "ch1.xhtml# ",
+            "",
+            "#",
+            "?",
+            "ch1.xhtml?#",
+            "a%41b",
+            "çağ.xhtml",
+            "http://exa^mple.com/",
+            "data:image/png;base64,iVBOR\nw0KGgo=",
+        ] {
+            assert_eq!(unit_error(ok), None, "{ok:?}");
+        }
+        for (bad, what) in [
+            ("a\u{1}b.xhtml", UnitError::Control('\u{1}')),
+            ("\u{1}ch1.xhtml", UnitError::Control('\u{1}')),
+            ("a\tb.xhtml", UnitError::Control('\t')),
+            ("# a", UnitError::Space),
+            ("a%2", UnitError::BadPercent),
+            ("a%4g", UnitError::BadPercent),
+            ("ch1.xhtml%", UnitError::BadPercent),
+            ("sub\\ch1.xhtml", UnitError::Backslash),
+            ("//example.com/a^b", UnitError::Illegal('^')),
+            ("../a b", UnitError::Space),
+            ("ch1.xhtml#a#b", UnitError::Illegal('#')),
+        ] {
+            assert_eq!(unit_error(bad), Some(what), "{bad:?}");
         }
     }
 }

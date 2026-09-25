@@ -19,6 +19,22 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   collection. A missing target language is now an error at both levels, as in
   epubcheck, and its message names the target language rather than repeating
   the source-language wording.
+- **RSC-020 now reports every URL epubcheck's strict parse rejects, not only
+  those with spaces.** epubcheck parses each reference a second time with
+  galimatias in strict mode. That rejects a backslash, a `%` not followed by
+  two hexadecimal digits, a second `#`, control characters, and
+  `" < > [ ] ^ \` { | }` anywhere after the host. We checked only for
+  spaces, and in content documents only in relative URLs. The rules were read
+  off the galimatias jar epubcheck ships, character by character in every
+  part of a URL. Across the 82,400 distinct URLs on our 474-book shelf, our
+  check and galimatias agree on every one. Absolute and `data:` references in
+  content documents (`img src`, `object data` and the like) and every CSS
+  `url()` are now checked too. None of this changes a report on our shelf,
+  whose only malformed URLs are the spaces we already found. Existing
+  findings keep their rule keys; the new cases in the manifest, NCX and guide
+  have keys of their own (`opf.manifest_item.malformed_href`,
+  `opf.ncx.content_src_malformed_url`, `opf.guide.reference_malformed_url`),
+  so a tool that repairs spaces is never handed one of them.
 
 ## [0.17.5] - 2026-09-23
 
