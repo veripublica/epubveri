@@ -8,7 +8,13 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.18.0] - 2026-09-25
+
+**More of epubcheck's rules are checked, and four findings epubcheck does not
+give are gone.** EDUPUB, EPUB Dictionaries, Indexes, Previews, collections,
+region-based navigation and ARIA roles are now checked as epubcheck checks
+them, so a book that uses them may draw errors it did not draw before; that is
+why this is a minor release. The library's API is unchanged.
 
 ### Fixed
 
