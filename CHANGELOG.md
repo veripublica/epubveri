@@ -59,6 +59,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   when it is not the first `dc:type` or is written with capitals, as in
   epubcheck. The navigation document is no longer checked against the index
   content model either; epubcheck never does that.
+- **The EPUB Indexes content rules are checked in full.** An index must sit
+  on `body` or a sectioning element and have at most one heading and one
+  `index-headnotes`. Headnotes, legends and groups must be where the
+  specification puts them. An entry must have exactly one term and somewhere
+  to lead, and must not mix a locator list with loose locators or a
+  preferred with a related cross-reference. A locator range holds one or two
+  links. A cross-reference names a term or a term category. We checked one of
+  these rules; epubcheck checks them all. Each was compared with epubcheck
+  on a book of its own, 52 in all, and both the ids and the element each
+  finding lands on are equal. epubcheck's rule that an editor note, a locator
+  list or a cross-reference must sit within an entry never fires, so it is
+  not checked here either.
 
 ## [0.17.5] - 2026-09-23
 
