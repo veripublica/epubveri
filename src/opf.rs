@@ -20053,6 +20053,38 @@ mod tests {
         assert_eq!(ids, [crate::ids::OPF_001, crate::ids::RSC_016]);
     }
 
+    /// Two grammar gaps closed against epubcheck 5.4.0 (2026-09-25): EPUB 3
+    /// has no `noscript` at all, and a media element takes a `src` or
+    /// `source` children, never both.
+    #[test]
+    fn noscript_and_media_sources_follow_epubcheck() {
+        let rsc_005 = |body: &str| {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            crate::validate_bytes(epub_with_ch1(&ch1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        assert_eq!(rsc_005("<noscript><p>x</p></noscript>"), 1);
+        assert_eq!(
+            rsc_005(r#"<video src="v.mp4"><source src="v.mp4" type="video/mp4"/></video>"#),
+            1
+        );
+        assert_eq!(
+            rsc_005(r#"<audio src="a.mp3"><source src="a.mp3" type="audio/mpeg"/></audio>"#),
+            1
+        );
+        assert_eq!(rsc_005(r#"<video src="v.mp4"></video>"#), 0);
+        assert_eq!(
+            rsc_005(r#"<video><source src="v.mp4" type="video/mp4"/><p>fallback</p></video>"#),
+            0
+        );
+    }
+
     /// A single-dictionary publication must declare a target language as
     /// well as a source language, at the package: `dict.single-dict.lang`
     /// asserts both. Measured against epubcheck 5.4.0, which reports one

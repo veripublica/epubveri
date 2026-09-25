@@ -156,6 +156,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     exact-ID recall is now 687 of 687.
   - Of the 474 books on our shelf, 52 use `role`, and none draws anything
     new.
+- **`noscript` is rejected in EPUB 3, and a media element takes either a
+  `src` or `source` children.** epubcheck's EPUB 3 grammar has no
+  `noscript`, and reports it as not allowed in `head` and `body` alike. We
+  accepted it in the body, and in the head reported its content as well as
+  the element. EPUB 2, whose XHTML 1.1 has `noscript`, is unchanged. An
+  `audio` or `video` with both a `src` and `source` children is an error in
+  epubcheck, and now here too.
 
 ## [0.17.5] - 2026-09-23
 

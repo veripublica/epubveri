@@ -1288,7 +1288,9 @@
       <ref name="metaEl"/>
       <ref name="linkEl"/>
       <ref name="scriptEl"/>
-      <element name="noscript"><ref name="globalAttrs"/><ref name="flowContent"/></element>
+      <!-- No `noscript`: epubcheck's EPUB 3 grammar has none, and reports it
+           as not allowed in head and body alike (compared with 5.4.0,
+           2026-09-25). EPUB 2's XHTML 1.1 keeps it, below. -->
       <ref name="formEl"/>
       <ref name="labelEl"/>
       <ref name="buttonEl"/>
@@ -1963,7 +1965,6 @@
   <define name="audioEl">
     <element name="audio">
       <ref name="globalAttrs"/>
-      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="controls"><data type="token"/></attribute></optional>
       <optional><attribute name="autoplay"><data type="token"/></attribute></optional>
       <optional><attribute name="loop"><data type="token"/></attribute></optional>
@@ -1986,7 +1987,14 @@
            the direction this grammar already chose ("PERMISSIVE on nesting
            order", see the header). -->
       <interleave>
-        <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+        <!-- A `src` or `source` children, never both: epubcheck's
+             `media.source` is `media.attrs.src | source.elem*` (media.rnc),
+             so `<video src><source/></video>` draws "element source not
+             allowed here" there (compared with 5.4.0, 2026-09-25). -->
+        <choice>
+          <attribute name="src"><data type="anyURI"/></attribute>
+          <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+        </choice>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
         <ref name="flowContent"/>
       </interleave>
@@ -1996,7 +2004,6 @@
   <define name="videoEl">
     <element name="video">
       <ref name="globalAttrs"/>
-      <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="poster"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="controls"><data type="token"/></attribute></optional>
       <optional><attribute name="autoplay"><data type="token"/></attribute></optional>
@@ -2023,7 +2030,14 @@
            the direction this grammar already chose ("PERMISSIVE on nesting
            order", see the header). -->
       <interleave>
-        <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+        <!-- A `src` or `source` children, never both: epubcheck's
+             `media.source` is `media.attrs.src | source.elem*` (media.rnc),
+             so `<video src><source/></video>` draws "element source not
+             allowed here" there (compared with 5.4.0, 2026-09-25). -->
+        <choice>
+          <attribute name="src"><data type="anyURI"/></attribute>
+          <zeroOrMore><ref name="sourceEl"/></zeroOrMore>
+        </choice>
         <zeroOrMore><ref name="trackEl"/></zeroOrMore>
         <ref name="flowContent"/>
       </interleave>
