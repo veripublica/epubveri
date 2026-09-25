@@ -71,6 +71,34 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   finding lands on are equal. epubcheck's rule that an editor note, a locator
   list or a cross-reference must sit within an entry never fires, so it is
   not checked here either.
+- **A `dc:type` of `teacher-edition` no longer draws a warning on a book that
+  is not an EDUPUB.** The recommendation that a teacher's edition name its
+  student edition in `dc:source` is an EDUPUB rule. epubcheck applies it only
+  to an EDUPUB, and we applied it to any book. Because warnings count toward
+  the verdict, such a book was invalid here and valid in epubcheck. When the
+  rule does apply, it now gives one warning per `teacher-edition` type, as
+  epubcheck does.
+- **EDUPUB is checked the way epubcheck checks it.**
+  - It applies when the profile is `edupub` or any `dc:type` is, in any
+    case, not only when the first `dc:type` is exactly `edupub`. With the
+    profile forced, the accessibility rule and the content rules now run too.
+  - A section, an article or an implied-section body must have exactly one
+    heading of its own, and it must not be blank. An `aria-label` must not be
+    empty or repeat the heading, and nothing but sections may follow a
+    section. A heading counts as the section's own wherever it sits inside
+    it, not only as a direct child. An `aside` or `nav` is not asked, as in
+    epubcheck.
+  - The EDUPUB semantic rules are checked: answers, assessments,
+    bibliography, credits, footnotes and the other collections need their
+    members; a problem needs a question and at most one answer; an ordinal
+    must not contain another.
+  - The EPUB Indexes content rules apply to EDUPUB documents too.
+  - A book whose audience is `schools` draws epubcheck's seven metadata
+    recommendations.
+  - NAV-004 to NAV-008 point at the first link of the table of contents, as
+    in epubcheck, not at the package.
+  - All of it was compared with epubcheck on 53 books, one per rule, and
+    both the ids and the lines are equal.
 
 ## [0.17.5] - 2026-09-23
 

@@ -7640,6 +7640,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     let collection_index_paths: HashSet<String> = crate::indexes::linked_paths(&pkg, &base_dir);
     let is_index_pub =
         profile == Some("idx") || opf_dc_types.iter().any(|t| t.eq_ignore_ascii_case("index"));
+    // EDUPUB's validators attach on the profile or on any dc:type, matched
+    // case-insensitively (`OPSChecker`/`OPFChecker` validator maps) - not on
+    // an exact first dc:type, which is what this used to test.
+    // EPUB 3 only: every one of those content validators is paired with
+    // VERSION_3.
+    let is_edupub_pub = is_epub3
+        && (profile == Some("edupub")
+            || opf_dc_types
+                .iter()
+                .any(|t| t.eq_ignore_ascii_case("edupub")));
     // Every publication resource some document actually *consumes* - drawn,
     // applied, loaded (see `is_resource_reference`). Manifest items that
     // never appear here are what OPF-097 reports. Collected across the whole
@@ -7877,16 +7887,18 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
         }
 
-        if is_epub3 {
+        // The navigation document goes to epubcheck's `NavChecker`, which
+        // attaches no index schema; landmarks there routinely carry
+        // `epub:type="index"` on an `<a>` (Doitsu, MobileRead #72).
+        let declared_index = is_epub3 && {
             let doc_key = nfc(&path);
-            let has_index_elem = !crate::indexes::index_elements(&d).is_empty();
-            // The navigation document goes to epubcheck's `NavChecker`, which
-            // attaches no index schema; landmarks there routinely carry
-            // `epub:type="index"` on an `<a>` (Doitsu, MobileRead #72).
             let is_nav_doc = nav_path.as_deref() == Some(path.as_str());
-            let declared_index = manifest_index_paths.contains(&doc_key)
+            manifest_index_paths.contains(&doc_key)
                 || collection_index_paths.contains(&doc_key)
-                || (is_index_pub && !is_nav_doc);
+                || (is_index_pub && !is_nav_doc)
+        };
+        if is_epub3 {
+            let has_index_elem = !crate::indexes::index_elements(&d).is_empty();
             if !has_index_elem && declared_index {
                 report.push_node(
                     RSC_005,
@@ -7944,7 +7956,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // EDUPUB: microdata attributes aren't allowed in an edupub content
         // document (applies to every content doc uniformly, nav docs
         // included - no fixture suggests otherwise).
-        if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
+        if is_edupub_pub {
             crate::edupub::check_content_doc(&d, &path, report);
             let doc_key = nfc(&path);
             let is_nav = nav_path.as_deref() == Some(path.as_str());
@@ -7978,6 +7990,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 || non_linear_paths.iter().any(|(p, _)| p == &doc_key);
             if !is_fxl && !is_non_linear {
                 crate::edupub::check_sectioning_and_headings(&d, &path, report);
+                crate::edupub::check_semantics(&d, &path, report);
+                // epubcheck attaches the index content rules to every such
+                // document too; an index-declared one already has them.
+                if !declared_index {
+                    crate::indexes::check_index_rules(&d, &path, report);
+                }
             }
             // **The fixed-layout exemption belongs to the sectioning check
             // above and not to this count**, and applying it here was a false
@@ -8015,8 +8033,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     && n.tag_name().name() == "nav"
                     && n.attribute(("http://www.idpf.org/2007/ops", "type")) == Some("page-list")
             });
-            if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
-                nav_completeness.set_nav(&d);
+            if is_edupub_pub {
+                nav_completeness.set_nav(&d, &path);
             }
         } else if data_nav_path.as_deref() == Some(nfc_path.as_str()) {
             // Region-Based Navigation: validate the Data Navigation
@@ -11033,7 +11051,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     }
 
     // --- EDUPUB pagination source / page-list cross-check (NAV-003/OPF-066) ---
-    if crate::edupub::is_edupub(opf_dc_type.as_deref()) {
+    if is_edupub_pub {
         crate::edupub::check_page_list(has_pagination_source, has_page_list_nav, opf_path, report);
         // NAV-004..008: nav-completeness vs content-doc features.
         nav_completeness.check(opf_path, report);
