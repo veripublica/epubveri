@@ -50,6 +50,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   type's rules but never reported the choice. We also still applied the
   requested profile's gating check, so that dictionary drew "dc:type
   edupub is required" here and nothing in epubcheck.
+- **Every content document of an index publication must contain an index.**
+  epubcheck checks each content document other than the navigation document
+  when a `dc:type` is `index` or the `idx` profile is in force, and reports
+  every document that has no index. We asked only that *some* document have
+  one. So we let a second, index-less document through, and reported a book
+  with no index once, against the package. The type is now also recognised
+  when it is not the first `dc:type` or is written with capitals, as in
+  epubcheck. The navigation document is no longer checked against the index
+  content model either; epubcheck never does that.
 
 ## [0.17.5] - 2026-09-23
 

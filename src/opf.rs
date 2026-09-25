@@ -4821,6 +4821,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // pagination is identified (dc:source + a meta[property=source-of]
     // refining it to "pagination") - both used by the EDUPUB checks below.
     let mut opf_dc_type: Option<String> = None;
+    // Every dc:type, trimmed. epubcheck's publication types come from all of
+    // them, matched case-insensitively (`OCFCheckerState.addType`), not from
+    // the first.
+    let mut opf_dc_types: Vec<String> = Vec::new();
     let mut has_pagination_source = false;
     let metadata = pkg
         .children()
@@ -5153,6 +5157,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "type")
             .map(elem_text)
             .collect();
+        opf_dc_types = dc_types.clone();
         crate::edupub::check_teacher_edition_and_accessibility(
             &dc_types,
             profile,
@@ -7619,18 +7624,22 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // EPUB Indexes 1.0: which content documents are specifically
     // identified as indexes (manifest properties="index", or linked from
     // a `<collection role="index"|"index-group">`) - each such document
-    // must itself carry an epub:type="index" marker. Absent either
-    // signal, a confirmed index publication (dc:type=index) instead only
-    // needs *some* content document anywhere to have one (tracked via
-    // `any_index_content` below).
+    // must itself carry an epub:type="index" marker. So must **every** content
+    // document of an index publication (a dc:type of "index", or the idx
+    // profile) other than the navigation document: epubcheck's `OPSChecker`
+    // attaches `idx-xhtml-index.sch` to each of them, and reports each one
+    // that has no index. This used to ask only that *some* document have one,
+    // which let a second, index-less document through and reported a book
+    // with none once, against the package instead of the documents
+    // (probed against 5.4.0, 2026-09-25).
     let manifest_index_paths: HashSet<String> = item_properties
         .iter()
         .filter(|(_, props)| props.split_whitespace().any(|t| t == "index"))
         .map(|(p, _)| p.clone())
         .collect();
     let collection_index_paths: HashSet<String> = crate::indexes::linked_paths(&pkg, &base_dir);
-    let is_index_pub = opf_dc_type.as_deref() == Some("index");
-    let mut any_index_content = false;
+    let is_index_pub =
+        profile == Some("idx") || opf_dc_types.iter().any(|t| t.eq_ignore_ascii_case("index"));
     // Every publication resource some document actually *consumes* - drawn,
     // applied, loaded (see `is_resource_reference`). Manifest items that
     // never appear here are what OPF-097 reports. Collected across the whole
@@ -7871,11 +7880,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         if is_epub3 {
             let doc_key = nfc(&path);
             let has_index_elem = !crate::indexes::index_elements(&d).is_empty();
-            if has_index_elem {
-                any_index_content = true;
-            } else if manifest_index_paths.contains(&doc_key)
+            // The navigation document goes to epubcheck's `NavChecker`, which
+            // attaches no index schema; landmarks there routinely carry
+            // `epub:type="index"` on an `<a>` (Doitsu, MobileRead #72).
+            let is_nav_doc = nav_path.as_deref() == Some(path.as_str());
+            let declared_index = manifest_index_paths.contains(&doc_key)
                 || collection_index_paths.contains(&doc_key)
-            {
+                || (is_index_pub && !is_nav_doc);
+            if !has_index_elem && declared_index {
                 report.push_node(
                     RSC_005,
                     Severity::Error,
@@ -7896,10 +7908,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // ordinary nav document, which OPSChecker/NavChecker leave
             // unvalidated by this schema. Gating on the same signal avoids a
             // false RSC-005 on those landmarks (Doitsu, MobileRead #72).
-            if manifest_index_paths.contains(&doc_key)
-                || collection_index_paths.contains(&doc_key)
-                || is_index_pub
-            {
+            if declared_index {
                 crate::indexes::check_content_model(&d, &path, report);
             }
         }
@@ -10900,29 +10909,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // The last document has no next iteration to correct its findings.
     if let Some((from, p, sh)) = pending_dtd_fix.take() {
         crate::htm::correct_dtd_shift(&mut report.messages[from..], &p, sh);
-    }
-
-    // Whole-publication index fallback: only when neither a manifest
-    // properties="index" item nor an index/index-group collection
-    // narrows things down to specific documents - a confirmed index
-    // publication then just needs *some* content document anywhere with
-    // an epub:type="index" element (confirmed via a real fixture using
-    // dc:type=index alone, with the index marked on an ordinary
-    // <section>, not called out via any manifest/collection signal).
-    if is_index_pub
-        && manifest_index_paths.is_empty()
-        && collection_index_paths.is_empty()
-        && !any_index_content
-    {
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "At least one \"index\" element must be present in a document declared as an index in the OPF",
-            opf_path,
-            pkg,
-            "opf.index.missing_index_element",
-            Vec::new(),
-        );
     }
 
     // dc:type="dictionary" detection - the OPF-078/079 cross-check itself
@@ -19703,6 +19689,75 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// In an index publication every content document but the navigation
+    /// document must carry an index (epubcheck attaches `idx-xhtml-index.sch`
+    /// to each), whichever `dc:type` says so. Each case probed against
+    /// epubcheck 5.4.0 on 2026-09-25.
+    #[test]
+    fn every_document_of_an_index_publication_needs_an_index() {
+        use std::io::Write;
+        const INDEX: &str = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>t</title></head><body epub:type="index"><section epub:type="index"><ul epub:type="index-entry-list"><li epub:type="index-entry"><span epub:type="index-term">a</span><a epub:type="index-locator" href="ch2.xhtml">1</a><ul epub:type="index-entry-list"><li epub:type="index-entry"><span epub:type="index-term">b</span><a epub:type="index-locator" href="ch2.xhtml">2</a></li></ul></li></ul></section></body></html>"#;
+        const PLAIN: &str = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head><body><p>x</p></body></html>"#;
+        const NAV: &str = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head><body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">1</a></li></ol></nav><nav epub:type="landmarks"><ol><li><a epub:type="index" href="ch1.xhtml">Index</a></li></ol></nav></body></html>"#;
+        let book = |types: &str, ch1: &str, ch2: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{types}
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/><itemref idref="ch2"/></spine>
+</package>"#
+            );
+            let mut buf = Vec::new();
+            {
+                let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+                let stored = zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+                z.start_file("mimetype", stored).unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                for (name, data) in [
+                    ("META-INF/container.xml", r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#),
+                    ("OEBPS/content.opf", opf.as_str()),
+                    ("OEBPS/nav.xhtml", NAV),
+                    ("OEBPS/ch1.xhtml", ch1),
+                    ("OEBPS/ch2.xhtml", ch2),
+                ] {
+                    z.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+                    z.write_all(data.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            let r = crate::validate_bytes(buf);
+            let mut missing: Vec<String> = r
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.index.missing_index_element"))
+                .map(|m| m.location.clone().unwrap_or_default())
+                .collect();
+            missing.sort();
+            missing
+        };
+        let index = "<dc:type>index</dc:type>";
+        assert_eq!(book(index, INDEX, PLAIN), ["OEBPS/ch2.xhtml"]);
+        assert_eq!(book(index, PLAIN, PLAIN), ["OEBPS/ch1.xhtml", "OEBPS/ch2.xhtml"]);
+        assert!(book(index, INDEX, INDEX).is_empty());
+        // Not only the first dc:type, and not case-sensitively.
+        assert_eq!(
+            book("<dc:type>text</dc:type><dc:type> Index </dc:type>", INDEX, PLAIN),
+            ["OEBPS/ch2.xhtml"]
+        );
+        // Not an index publication: nothing asked.
+        assert!(book("", PLAIN, PLAIN).is_empty());
     }
 
     /// A single-dictionary publication must declare a target language as
