@@ -11,7 +11,7 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 ## [0.19.0] - 2026-09-30
 
 **References are checked the way epubcheck checks them in more places, and
-validation is about 15% faster.** A book may now draw errors it did not draw
+validation is about 9% faster overall.** A book may now draw errors it did not draw
 before. For example, a `#fragment` into a document the manifest declares but the container
 lacks is RSC-012, as is an overlay text link naming no id, and RSC-010 and
 RSC-011 are reported for every link rather than once per target. That is why
@@ -21,11 +21,18 @@ API is unchanged.
 
 ### Performance
 
-**The 544 books on our shelf take 15% less CPU time, with every report
-unchanged.** 17.7 s before these changes, 15.0 s after; on those books and
-on W3C's 209 conformance publications the output is byte-identical, and no
-book got slower. The slowest book is about a third faster. Found by profiling
-the two slowest books, following #137.
+**The 544 books on our shelf take 9% less CPU time than with 0.18.0**
+(20.2 s with 0.18.0, 18.3 s with 0.19.0; one process per book, the two
+releases measured side by side). The two slowest books are 22% and 36% faster. Found by profiling
+those two books, following #137.
+
+*Corrected after release.* These notes first said 15% and that no book got
+slower. That was measured against a build that already held this release's
+reference changes, not against 0.18.0. Against 0.18.0, seven books with many
+links in one large document got slower, the worst from 0.11 s to 0.37 s: the
+per-link RSC-010/RSC-011 check above worked out a line and column for every
+link. That is fixed for the next release. The speed changes themselves
+changed no report, on those books or on W3C's 209 conformance publications.
 
 - **Text inside paragraphs is no longer re-checked from scratch for every
   run.** Whether a run of text is allowed depends on the text only where the
