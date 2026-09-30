@@ -829,14 +829,38 @@ fn classify_resource_ref(
 /// The SVG namespace, which several checks here have to name.
 /// The declared media type of a resolved container path, if it is a manifest
 /// item.
-fn declared_media_type<'a>(
-    items: &'a HashMap<String, (String, String)>,
-    resolved: &str,
-) -> Option<&'a str> {
-    items
-        .values()
-        .find(|(p, _)| nfc(p) == resolved)
-        .map(|(_, mt)| mt.as_str())
+fn declared_media_type<'a>(media: &'a MediaByPath, resolved: &str) -> Option<&'a str> {
+    media.get(resolved).map(String::as_str)
+}
+
+/// Declared media type by NFC path, over the items epubcheck registers.
+///
+/// [`declared_media_type`] used to scan `items` and normalize every path on
+/// each call, and [`missing_fragment_id`] calls it twice per dangling
+/// fragment: on a book with many of them that was 11% of the run, the same
+/// shape as the scan [`ItemsByPath`] replaced (issue #137). Built once.
+///
+/// **From `items`, not from `items_by_path` alone.** `items` is keyed by id,
+/// so an item shadowed by a later one with the same id is not in it, as it
+/// is not in epubcheck's registry; `items_by_path` holds every `<item>`.
+/// Where two registered items share a path the last in manifest order wins,
+/// as in `ItemsByPath` - the scan returned whichever `HashMap` iteration
+/// reached first.
+type MediaByPath = HashMap<String, String>;
+
+fn media_by_path(
+    items: &HashMap<String, (String, String)>,
+    items_by_path: &ItemsByPath,
+) -> MediaByPath {
+    let mut out: MediaByPath = items_by_path
+        .iter()
+        .filter(|(path, (id, _))| items.get(id).is_some_and(|(p, _)| nfc(p) == **path))
+        .map(|(path, (_, mt))| (path.clone(), mt.clone()))
+        .collect();
+    for (p, mt) in items.values() {
+        out.entry(nfc(p)).or_insert_with(|| mt.clone());
+    }
+    out
 }
 
 /// Which id a *missing* fragment gets, by the target document's media type.
@@ -897,8 +921,8 @@ fn fragment_id_severity(id: &'static str) -> Severity {
     }
 }
 
-fn missing_fragment_id(items: &HashMap<String, (String, String)>, resolved: &str) -> &'static str {
-    match declared_media_type(items, resolved) {
+fn missing_fragment_id(media: &MediaByPath, resolved: &str) -> &'static str {
+    match declared_media_type(media, resolved) {
         Some(mt) if is_content_document_type(mt) => RSC_012,
         Some(mt) if is_deprecated_content_document_type(mt) => RSC_014,
         _ => RSC_012,
@@ -3181,6 +3205,7 @@ fn check_guide_references(
     opf_path: &str,
     report: &mut Report,
 ) {
+    let media = media_by_path(items, items_by_path);
     let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
     for r in doc
         .descendants()
@@ -3364,8 +3389,8 @@ fn check_guide_references(
                 };
                 if !ids.contains_key(frag_key(frag).as_ref()) {
                     report.push_node(
-                        missing_fragment_id(items, &resolved),
-                        fragment_id_severity(missing_fragment_id(items, &resolved)),
+                        missing_fragment_id(&media, &resolved),
+                        fragment_id_severity(missing_fragment_id(&media, &resolved)),
                         format!("fragment identifier '{frag}' is not defined in '{resolved}'"),
                         opf_path,
                         r,
@@ -3401,6 +3426,7 @@ fn check_ncx_content_fragments(
     report: &mut Report,
 ) {
     let dir = parent_dir(ncx_path);
+    let media = media_by_path(items, items_by_path);
     let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
     for n in ncx_doc
         .descendants()
@@ -3573,7 +3599,7 @@ fn check_ncx_content_fragments(
         // RSC-012 is guarded on XHTML/SVG, so a missing fragment there comes
         // out as RSC-014 instead of nothing (#82). The comment this replaces
         // said such a fragment "draws nothing there" - true of RSC-012 only.
-        if !declared_media_type(items, &resolved).is_some_and(|mt| {
+        if !declared_media_type(&media, &resolved).is_some_and(|mt| {
             is_content_document_type(mt) || is_deprecated_content_document_type(mt)
         }) {
             continue;
@@ -3590,8 +3616,8 @@ fn check_ncx_content_fragments(
         };
         if !ids.contains_key(frag_key(frag).as_ref()) {
             report.push_node(
-                missing_fragment_id(items, &resolved),
-                fragment_id_severity(missing_fragment_id(items, &resolved)),
+                missing_fragment_id(&media, &resolved),
+                fragment_id_severity(missing_fragment_id(&media, &resolved)),
                 format!("fragment identifier '{frag}' is not defined in '{target}'"),
                 ncx_path,
                 n,
@@ -7540,6 +7566,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // `css::check` to distinguish RSC-001 (declared but missing) from
     // RSC-007/RSC-008 (undeclared, missing vs. still present).
     let manifest_paths: HashSet<String> = items.values().map(|(p, _)| nfc(p)).collect();
+    let media_types_by_path = media_by_path(&items, &items_by_path);
 
     // OPF-003 (usage): a real container resource that isn't declared as
     // any manifest item at all - `mimetype`/`META-INF/*`/the OPF itself
@@ -9294,8 +9321,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 };
                 if !target_ids.contains_key(frag_key(frag).as_ref()) {
                     report.push_node(
-                        missing_fragment_id(&items, &target_nfc),
-                        fragment_id_severity(missing_fragment_id(&items, &target_nfc)),
+                        missing_fragment_id(&media_types_by_path, &target_nfc),
+                        fragment_id_severity(missing_fragment_id(
+                            &media_types_by_path,
+                            &target_nfc,
+                        )),
                         format!("fragment identifier '{frag}' is not defined in '{target_nfc}'"),
                         path.clone(),
                         a,
@@ -9531,7 +9561,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // is that it's missing its own manifest item, so
                     // this must check manifest declaration (`items`),
                     // not container file existence (`name_index`).
-                    if !items.values().any(|(ip, _)| nfc(ip) == resolved) {
+                    if !manifest_paths.contains(&resolved) {
                         report.push_node_attr(
                             RSC_008,
                             Severity::Error,
@@ -9887,7 +9917,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 && !is_remote_url(src)
             {
                 let key = nfc(&resolve(&dir, strip_url_fragment(src).trim()));
-                if let Some(mt) = declared_media_type(&items, &key) {
+                if let Some(mt) = declared_media_type(&media_types_by_path, &key) {
                     if !is_script_media_type(mt) {
                         report.push_node(
                             RSC_034,
@@ -12546,10 +12576,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // a stylesheet is the RSC-010 above, not a document missing a
             // `media-overlay` attribute. Without this the two error books in
             // the #1679 repro drew a MED-010 epubcheck does not report.
-            let is_content_doc = items
-                .values()
-                .find(|(p, _)| nfc(p) == content_doc_path)
-                .is_some_and(|(_, mt)| is_referenced_content_document_type(mt, is_epub3));
+            let is_content_doc = declared_media_type(&media_types_by_path, &content_doc_path)
+                .is_some_and(|mt| is_referenced_content_document_type(mt, is_epub3));
             if !is_content_doc {
                 continue;
             }

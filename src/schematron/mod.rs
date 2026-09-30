@@ -409,8 +409,32 @@ fn select_context_nodes<'a, 'input>(
         // "everywhere in the document" search space; fall back to empty.
         return Vec::new();
     }
+    // The last step's name, resolved once for the whole walk. Every element
+    // of the document is a candidate for every rule, and nearly all of them
+    // fail on the name alone, but `matches_context_pattern` resolves the
+    // prefix through the namespace map for each: a `HashMap` lookup per
+    // element per rule, 6-8% of the run on the two slowest shelf books
+    // (issue #137). The full match still runs on what passes, so this only
+    // decides sooner what it would decide anyway; an unbound prefix matches
+    // nothing there, and nothing here.
+    let name: Option<(Option<&str>, &str)> = match context.steps.last().map(|s| &s.test) {
+        Some(NameTest::Name(qn)) => match qn.split_once(':') {
+            Some((prefix, local)) => match namespaces.get(prefix) {
+                Some(uri) => Some((Some(uri.as_str()), local)),
+                None => return Vec::new(),
+            },
+            None => Some((None, qn.as_str())),
+        },
+        _ => None,
+    };
     root.descendants()
-        .filter(|n| n.is_element() && matches_context_pattern(*n, &context.steps, root, namespaces))
+        .filter(|n| {
+            n.is_element()
+                && name.is_none_or(|(ns, local)| {
+                    n.tag_name().namespace() == ns && (local == "*" || n.tag_name().name() == local)
+                })
+                && matches_context_pattern(*n, &context.steps, root, namespaces)
+        })
         .collect()
 }
 

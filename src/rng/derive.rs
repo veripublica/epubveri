@@ -128,7 +128,7 @@ struct Env<'a> {
     custom_elements: bool,
     /// A small id for each attribute name seen, so [`Env::may_carry`] can key
     /// its memo on `(pattern, name)` without hashing two strings per node.
-    attr_ids: RefCell<HashMap<String, HashMap<String, u32>>>,
+    attr_ids: RefCell<HashMap<String, HashMap<String, u32, FastHash>, FastHash>>,
     /// [`Env::may_carry`]'s answers, keyed by pattern address, attribute id
     /// and whether `After`'s continuation counts. The pattern itself is kept
     /// in the value so the address cannot be freed and reused while the
@@ -166,7 +166,7 @@ impl<'a> Env<'a> {
             open_busy: RefCell::new(HashSet::new()),
             elem_pool: RefCell::new(None),
             elem_memo: RefCell::new(HashMap::new()),
-            attr_ids: RefCell::new(HashMap::new()),
+            attr_ids: RefCell::new(HashMap::default()),
             carry_memo: RefCell::new(HashMap::default()),
             carry_busy: RefCell::new(HashSet::new()),
             carry_cuts: std::cell::Cell::new(0),
@@ -180,13 +180,18 @@ impl<'a> Env<'a> {
     }
 
     fn attr_id(&self, ns: &str, local: &str) -> u32 {
-        let mut ids = self.attr_ids.borrow_mut();
-        let next = ids.values().map(HashMap::len).sum::<usize>() as u32;
-        let by_local = ids.entry(ns.to_string()).or_default();
-        if let Some(&id) = by_local.get(local) {
+        // Called for every attribute of every element, and nearly always a
+        // hit: look up by `&str` first, so a hit allocates nothing and does
+        // not total the table. It used to build the namespace `String` and
+        // sum every inner map on each call, through SipHash (issue #137).
+        if let Some(&id) = self.attr_ids.borrow().get(ns).and_then(|m| m.get(local)) {
             return id;
         }
-        by_local.insert(local.to_string(), next);
+        let mut ids = self.attr_ids.borrow_mut();
+        let next = ids.values().map(HashMap::len).sum::<usize>() as u32;
+        ids.entry(ns.to_string())
+            .or_default()
+            .insert(local.to_string(), next);
         next
     }
 
