@@ -94,7 +94,8 @@ epubcheck has no verdict on, in two families, both at `usage` severity:
   EPUB 2 package written in EPUB 3, two navigation entries landing on one document, an
   EPUB 2 manifest resource nothing draws, applies or loads, a `dc:date` epubcheck accepts
   that is not in the W3C date format the specifications name, a class selector such as
-  `.-` whose name is not a CSS identifier).
+  `.-` whose name is not a CSS identifier, a cover `meta` whose content is not the id of any
+  manifest item).
 
 It is **off by default**: leaving the argument out, or passing `false`/`undefined`,
 produces a byte-identical report, so existing two-argument callers are unaffected. Neither

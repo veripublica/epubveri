@@ -453,12 +453,14 @@ can tell them apart without reading the message:
   than an omission.** It held four EPUB 3.4 rules; epubcheck 5.4.0 implemented
   all four, so since epubveri 0.15.0 they report under epubcheck's own ids, at
   its severities, with no flag. The next check we reach before epubcheck does
-  will take `NEXT-009`.
+  will take the next number free in both families, since the two share one
+  number line.
 - **`ADV-*` — no specification requires it, but the book is still wrong.**
   Two table-of-contents entries pointing at the same page, so one of them goes
   nowhere useful. A CSS rule styling an element that does not exist. A
   publication date the specification *recommends* writing another way, which
-  epubcheck accepts as it is. Nobody is late here; these are things a validator
+  epubcheck accepts as it is. A cover `meta` naming a manifest item that does
+  not exist. Nobody is late here; these are things a validator
   can notice and nothing obliges it to, and they never become errors.
 
 **What it takes for a check to be admitted**, since an advisory that cries wolf
