@@ -8,7 +8,13 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.19.1] - 2026-09-30
+
+**0.19.0 made a few books slower; this release fixes that, and adds one
+optional check.** Books with many links in one large document took up to
+three and a half times as long as with 0.18.0. They are now faster than with 0.18.0,
+with every report unchanged from 0.19.0. The new `ADV-014` appears only with
+`--advisory` and never affects the verdict.
 
 ### Added
 
