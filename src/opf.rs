@@ -7770,12 +7770,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // 29 where epubcheck reported 35. Probed against 5.4.0 one book per
     // shape: repeated links in one document, across documents, with
     // different fragments, a toc link beside a landmarks link, SVG `<a>`.
+    //
+    // **Only the links that will be reported are kept, and only they get a
+    // position.** `Position::of` counts lines from the start of the document
+    // and `node_path` counts preceding siblings, so taking both for every
+    // link is quadratic in a large file: a 2.9 MB chapter with 1,874 links
+    // went from 0.11 s to 0.37 s when this list stopped deduplicating. The
+    // decision, `hyperlink_abort`, needs only the manifest and the spine, both
+    // complete before the first document is read, so it is made here and the
+    // findings are still emitted after the walk, in the same order.
     struct HyperlinkSource {
         file: String,
         position: Position,
         element_path: crate::xmlext::NodePath,
+        abort: &'static str,
     }
     let mut hyperlink_refs: Vec<(String, HyperlinkSource)> = Vec::new();
+    let opf_own_name_nfc = nfc(opf_path);
     // Whether *any* content document in the whole book uses scripting -
     // mirrors real epubcheck's book-wide `FeatureEnum.HAS_SCRIPTS` (not
     // scoped to any one document): when true, OPF-096's "non-linear
@@ -10544,15 +10555,28 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // as a target of itself.
                         // `a` and `area` alike: both go through epubcheck's
                         // `checkHRef` as a HYPERLINK (probed, 5.4.0).
-                        hyperlink_targets.insert(nfc(&path));
-                        hyperlink_refs.push((
-                            nfc(&path),
-                            HyperlinkSource {
-                                file: path.clone(),
-                                position: Position::of(node),
-                                element_path: crate::xmlext::node_path(node),
-                            },
-                        ));
+                        let target = nfc(&path);
+                        hyperlink_targets.insert(target.clone());
+                        if target != opf_own_name_nfc
+                            && let Some(abort) = hyperlink_abort(
+                                &target,
+                                &items,
+                                &items_by_path,
+                                &fallback_map,
+                                &spine_order,
+                                is_epub3,
+                            )
+                        {
+                            hyperlink_refs.push((
+                                target,
+                                HyperlinkSource {
+                                    file: path.clone(),
+                                    position: Position::of(node),
+                                    element_path: crate::xmlext::node_path(node),
+                                    abort,
+                                },
+                            ));
+                        }
                     } else if !is_external(href) {
                         if href.contains('?') {
                             report.push_node(
@@ -10567,14 +10591,26 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         }
                         let target = nfc(&resolve(&dir, href));
                         hyperlink_targets.insert(target.clone());
-                        hyperlink_refs.push((
-                            target,
-                            HyperlinkSource {
-                                file: path.clone(),
-                                position: Position::of(node),
-                                element_path: crate::xmlext::node_path(node),
-                            },
-                        ));
+                        if target != opf_own_name_nfc
+                            && let Some(abort) = hyperlink_abort(
+                                &target,
+                                &items,
+                                &items_by_path,
+                                &fallback_map,
+                                &spine_order,
+                                is_epub3,
+                            )
+                        {
+                            hyperlink_refs.push((
+                                target,
+                                HyperlinkSource {
+                                    file: path.clone(),
+                                    position: Position::of(node),
+                                    element_path: crate::xmlext::node_path(node),
+                                    abort,
+                                },
+                            ));
+                        }
                     }
                 }
             }
@@ -11145,14 +11181,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     }
 
     // --- Spine reachability (RSC-011/OPF-096) ---
-    let opf_own_name_nfc = nfc(opf_path);
+    // A hyperlink to the package document itself (e.g. a CFI-style
+    // self-reference) isn't a content document that could ever be "in the
+    // spine" - confirmed via a real corpus fixture - so it was never kept.
     for (target, source) in &hyperlink_refs {
-        if *target == opf_own_name_nfc {
-            // A hyperlink to the package document itself (e.g. a CFI-style
-            // self-reference) isn't a content document that could ever be
-            // "in the spine" - confirmed via a real corpus fixture.
-            continue;
-        }
         // RSC-010 and RSC-011 both come from `hyperlink_abort`, which is also
         // what the fragment check consults so that the two cannot drift.
         // epubcheck reports either one *instead of* everything else about the
@@ -11163,15 +11195,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         //
         // Anchored at the source `<a>` (file + line:column + element path),
         // not the OPF package root, matching where epubcheck points (#22).
-        match hyperlink_abort(
-            target,
-            &items,
-            &items_by_path,
-            &fallback_map,
-            &spine_order,
-            is_epub3,
-        ) {
-            Some(id) if id == RSC_010 => {
+        match source.abort {
+            id if id == RSC_010 => {
                 report.push_full_path(
                     RSC_010,
                     Severity::Error,
@@ -11183,7 +11208,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     vec![target.clone()],
                 );
             }
-            Some(_) => {
+            _ => {
                 report.push_full_path(
                     RSC_011,
                     Severity::Error,
@@ -11195,7 +11220,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     vec![target.clone()],
                 );
             }
-            None => {}
         }
     }
     // Reachability is purely "does any <a> hyperlink resolve to this
@@ -12610,25 +12634,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
         let mut last_spine: Option<usize> = None;
         let mut last_anchor: Option<usize> = None;
+        // The offending links in queue order; their positions are looked up
+        // afterwards, for them alone (see `smil::text_link_positions`).
+        let mut out_of_order: Vec<(&String, &crate::smil::TextLink, &'static str)> = Vec::new();
         for (overlay, link) in &overlay_links {
             let Some(&spine) = spine_order.get(&link.target) else {
                 continue;
             };
-            let mut say = |what: &str| {
-                report.push_full_path(
-                    MED_015,
-                    Severity::Usage,
-                    format!(
-                        "media overlay text link '{}' is out of {what} order",
-                        link.src
-                    ),
-                    overlay.clone(),
-                    link.position,
-                    link.element_path.clone(),
-                    "smil.text.out_of_reading_order",
-                    vec![link.src.clone()],
-                );
-            };
+            let mut say = |what: &'static str| out_of_order.push((overlay, link, what));
             if last_spine.is_some_and(|ls| spine < ls) {
                 say("spine");
                 last_spine = Some(spine);
@@ -12651,6 +12664,50 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     say("document");
                 }
                 last_anchor = Some(a);
+            }
+        }
+        let mut positions: HashMap<&String, HashMap<usize, (Position, crate::xmlext::NodePath)>> =
+            HashMap::new();
+        for (overlay, _, _) in &out_of_order {
+            if positions.contains_key(overlay) {
+                continue;
+            }
+            let wanted: HashSet<usize> = out_of_order
+                .iter()
+                .filter(|(o, _, _)| o == overlay)
+                .map(|(_, l, _)| l.index)
+                .collect();
+            let text = name_index
+                .get(&nfc(overlay))
+                .and_then(|orig| ocf.read_content(orig))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
+            positions.insert(overlay, crate::smil::text_link_positions(&text, &wanted));
+        }
+        for (overlay, link, what) in out_of_order {
+            let text = format!(
+                "media overlay text link '{}' is out of {what} order",
+                link.src
+            );
+            match positions.get(overlay).and_then(|m| m.get(&link.index)) {
+                Some((position, element_path)) => report.push_full_path(
+                    MED_015,
+                    Severity::Usage,
+                    text,
+                    overlay.clone(),
+                    *position,
+                    element_path.clone(),
+                    "smil.text.out_of_reading_order",
+                    vec![link.src.clone()],
+                ),
+                None => report.push_at_rule(
+                    MED_015,
+                    Severity::Usage,
+                    text,
+                    overlay.clone(),
+                    "smil.text.out_of_reading_order",
+                    vec![link.src.clone()],
+                ),
             }
         }
     }
@@ -25295,6 +25352,48 @@ mod tests {
         ] {
             assert_eq!(count(second), 1, "{second}");
         }
+    }
+
+    /// MED-015's position is looked up after the queue has run, for the
+    /// offending links only; it must still land on each offending `<text>`,
+    /// in queue order, and nowhere else.
+    #[test]
+    fn media_overlay_reading_order_findings_sit_on_the_offending_links() {
+        use crate::ids::MED_015;
+        let doc = xhtml3(r#"<p id="a">a</p><p id="b">b</p><p id="c">c</p>"#);
+        let smil = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <smil xmlns=\"http://www.w3.org/ns/SMIL\" xmlns:epub=\"http://www.idpf.org/2007/ops\" version=\"3.0\"><body>\n\
+            <par id=\"p0\"><text src=\"ch1.xhtml#c\"/></par>\n\
+            <par id=\"p1\"><text src=\"ch1.xhtml#a\"/></par>\n\
+            <par id=\"p2\"><text src=\"ch1.xhtml#b\"/></par>\n\
+            <par id=\"p3\"><text src=\"ch1.xhtml#a\"/></par>\n\
+            </body></smil>";
+        let opf = opf3(
+            r##"<meta property="media:duration">0:00:01</meta><meta property="media:duration" refines="#m">0:00:01</meta>"##,
+            r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="m"/><item id="m" href="m.smil" media-type="application/smil+xml"/>"#,
+            r#"<itemref idref="c1"/>"#,
+        );
+        let book = zip_book(&[
+            ("content.opf", &opf),
+            ("nav.xhtml", &nav3()),
+            ("ch1.xhtml", &doc),
+            ("m.smil", smil),
+        ]);
+        let lines: Vec<usize> = crate::validate_bytes(book)
+            .messages
+            .iter()
+            .filter(|m| m.id == MED_015)
+            .map(|m| {
+                assert_eq!(m.location.as_deref(), Some("m.smil"));
+                m.position
+                    .expect("MED-015 carries the link's position")
+                    .line as usize
+            })
+            .collect();
+        // Line 1 is the declaration and line 2 opens the body, so the four
+        // `<text>`s sit on lines 3-6; the second and fourth (lines 4 and 6)
+        // are the two that go back in document order.
+        assert_eq!(lines, vec![4, 6]);
     }
 
     #[test]

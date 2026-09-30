@@ -8,7 +8,7 @@
 //! grammar, so that's what's implemented here. Plain XML, so `roxmltree`
 //! (via `ocf::parse_xml`) handles it directly — no new parser needed.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
@@ -239,8 +239,49 @@ pub(crate) struct TextLink {
     pub fragment: Option<String>,
     /// The attribute value as written.
     pub src: String,
-    pub position: Position,
-    pub element_path: crate::xmlext::NodePath,
+    /// Its place in [`text_link_nodes`]'s order, which is how
+    /// [`text_link_positions`] finds it again.
+    pub index: usize,
+}
+
+/// Every text link of an overlay, in element start order, with its value.
+/// The one walk both [`text_links`] and [`text_link_positions`] use, so the
+/// index one hands out is the node the other finds.
+fn text_link_nodes<'a, 'i>(
+    doc: &'a roxmltree::Document<'i>,
+) -> impl Iterator<Item = (roxmltree::Node<'a, 'i>, &'a str)> {
+    doc.descendants()
+        .filter(|n| n.is_element())
+        .filter_map(|n| {
+            let v = match n.tag_name().name() {
+                "body" | "seq" => n.attribute((EPUB_NS, "textref")),
+                "text" => n.attr_no_ns("src"),
+                _ => None,
+            };
+            v.map(|v| (n, v))
+        })
+        .filter(|(_, v)| !is_external(v))
+}
+
+/// Positions and element paths for the text links at `wanted` indices.
+///
+/// Kept apart from [`text_links`] on purpose: `Position::of` counts lines
+/// from the start of the document and `node_path` counts preceding siblings,
+/// so taking both for every link is quadratic in a large overlay - one SMIL
+/// file per book with thousands of `<text>` is the ordinary shape of an
+/// audiobook. Only the links MED-015 reports need them.
+pub(crate) fn text_link_positions(
+    smil_xml: &str,
+    wanted: &HashSet<usize>,
+) -> HashMap<usize, (Position, crate::xmlext::NodePath)> {
+    let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
+        return HashMap::new();
+    };
+    text_link_nodes(&doc)
+        .enumerate()
+        .filter(|(i, _)| wanted.contains(i))
+        .map(|(i, (n, _))| (i, (Position::of(n), crate::xmlext::node_path(n))))
+        .collect()
 }
 
 /// The overlay's text links in the order epubcheck registers them: element
@@ -254,27 +295,18 @@ pub(crate) fn text_links(smil_xml: &str, base_dir: &str) -> Vec<TextLink> {
     let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    for n in doc.descendants().filter(|n| n.is_element()) {
-        let v = match n.tag_name().name() {
-            "body" | "seq" => n.attribute((EPUB_NS, "textref")),
-            "text" => n.attr_no_ns("src"),
-            _ => None,
-        };
-        let Some(v) = v else { continue };
-        if is_external(v) {
-            continue;
-        }
-        let (path_part, frag) = split_fragment(v);
-        out.push(TextLink {
-            target: nfc(&resolve(base_dir, path_part)),
-            fragment: frag.map(str::to_string),
-            src: v.to_string(),
-            position: Position::of(n),
-            element_path: crate::xmlext::node_path(n),
-        });
-    }
-    out
+    text_link_nodes(&doc)
+        .enumerate()
+        .map(|(index, (_, v))| {
+            let (path_part, frag) = split_fragment(v);
+            TextLink {
+                target: nfc(&resolve(base_dir, path_part)),
+                fragment: frag.map(str::to_string),
+                src: v.to_string(),
+                index,
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn resource_refs(smil_xml: &str, base_dir: &str) -> Vec<String> {

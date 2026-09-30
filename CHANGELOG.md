@@ -8,6 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Performance
+
+- **Books with many links in one large document are no longer slower than
+  with 0.18.0.** 0.19.0's per-link RSC-010/RSC-011 check worked out a line,
+  a column and an element path for every hyperlink, and each of those is
+  counted from the start of the document; a 2.9 MB chapter with 1,874 links
+  went from 0.11 s to 0.37 s. Only the links that are reported get a position
+  now, and that book takes 0.08 s. The media overlay reading-order check
+  (MED-015) had the same shape and is fixed the same way. No report changes:
+  the output is byte-identical to 0.19.0 on 797 books. On the 544-book shelf,
+  CPU time is 16% below 0.18.0's, and no book is slower than with 0.18.0.
+
 ## [0.19.0] - 2026-09-30
 
 **References are checked the way epubcheck checks them in more places, and
