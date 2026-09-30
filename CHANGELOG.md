@@ -8,6 +8,41 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A reference to a file the manifest declares but the container lacks is
+  RSC-001 alone, not RSC-001 and RSC-007.** epubcheck keeps every manifest
+  item, present or not, and reports RSC-007 only for a target that is neither
+  declared nor in the container. We looked at the container alone, so an NCX
+  entry, a standalone SVG's image, a media overlay's text or audio, or a
+  dictionary's search-key group pointing at such a file drew an extra error.
+  A `#fragment` into such a document is now RSC-012, as in epubcheck, from
+  every place a fragment is resolved. Found through a user's benchmark of 100
+  books, where it was the one disagreement.
+- **A media overlay's `epub:textref` is checked like its `<text src>`.** It is
+  read on `body` and `seq`, as in epubcheck; a target that is neither declared
+  nor present is RSC-007, and the document it names counts as referenced by
+  the overlay. A content document that an overlay reached only through a
+  `textref` drew MED-013, an error epubcheck does not give.
+- **A `<text src>` fragment that names no id is RSC-012.** Only `textref`
+  fragments were checked.
+- **RSC-010 and RSC-011 are reported for every hyperlink, not once per
+  target**, and an `<area>` counts as a hyperlink. A book with 35 links to
+  images drew 29 findings here and 35 in epubcheck.
+- **Of two manifest items with the same `id`, the first is not declared**, as
+  in epubcheck, so its file is now OPF-003 (usage) as well as RSC-008.
+- **Media overlay reading order (MED-015) follows epubcheck.** All overlays
+  are read as one sequence in manifest order, `textref`s included, checked
+  against spine order and then document order, with one note per link out of
+  order at the link itself. We compared each overlay's text links within one
+  document only and reported once.
+- **The toc's reading order (NAV-011) reads fragments as epubcheck does.** An
+  empty fragment, an `epubcfi(...)` or other scheme-based fragment, a text
+  directive (`#a:~:text=...`) and a percent-encoded id were skipped; each is
+  now placed as epubcheck places it.
+
 ## [0.18.0] - 2026-09-25
 
 **More of epubcheck's rules are checked, and four findings epubcheck does not

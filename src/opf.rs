@@ -338,6 +338,46 @@ fn element_takes_url_attr(element: &str, attr: &str) -> bool {
 /// package document's `<link href="#id">` (OPF-098), which resolves an IDREF
 /// into the manifest rather than an element in a content document. Decoding
 /// there would make us report more, not less, and no book has asked.
+/// Where a link's fragment points in its target document, as epubcheck's
+/// `ResourceRegistry.getIDPosition` answers it for the reading-order checks:
+/// `Some(0)` for no fragment, an empty one, or one that names no id (a
+/// scheme-based `name(...)` or a Media Fragment - `URLFragment` leaves the id
+/// null for both), the 1-based document position of an id that is there,
+/// and `None` for an id that is not, or a target we could not read.
+fn anchor_position(frag: Option<&str>, ids: Option<&IdMap>) -> Option<usize> {
+    let Some(f) = frag else { return Some(0) };
+    // The text-fragment directive is stripped before anything else.
+    let f = f.split(":~:").next().unwrap_or(f);
+    if f.is_empty() || is_scheme_based_fragment(f) || is_media_fragment(f) {
+        return Some(0);
+    }
+    ids?.get(frag_key(f).as_ref()).map(|&(i, _)| i + 1)
+}
+
+/// `(\w+)\(.*\)`, matched whole: `epubcfi(...)`, `xpointer(...)`.
+fn is_scheme_based_fragment(f: &str) -> bool {
+    let Some((name, rest)) = f.split_once('(') else {
+        return false;
+    };
+    !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') && rest.ends_with(')')
+}
+
+/// `(t|xywh|track|id|xyn|xyr)=[^&]+(&[^&=]+=[^&]+)*`, matched whole.
+fn is_media_fragment(f: &str) -> bool {
+    let mut parts = f.split('&');
+    let first_ok = parts
+        .next()
+        .and_then(|p| p.split_once('='))
+        .is_some_and(|(k, v)| {
+            matches!(k, "t" | "xywh" | "track" | "id" | "xyn" | "xyr") && !v.is_empty()
+        });
+    first_ok
+        && parts.all(|p| {
+            p.split_once('=')
+                .is_some_and(|(k, v)| !k.is_empty() && !v.is_empty())
+        })
+}
+
 fn frag_key(frag: &str) -> std::borrow::Cow<'_, str> {
     if frag.contains('%') {
         std::borrow::Cow::Owned(percent_decode(frag))
@@ -3438,7 +3478,21 @@ fn check_ncx_content_fragments(
         } else {
             nfc(&resolve(&dir, target))
         };
-        if !name_index.contains_key(&resolved) {
+        // RSC-007 is for a target the manifest never declared *and* the
+        // container does not hold. `ResourceReferencesChecker`:346-352 asks
+        // the resource registry, and `OPFChecker`:122-125 registers every
+        // manifest item whether or not its file exists, so a declared but
+        // missing target passes that test and the reference is checked on:
+        // RSC-001 already went out at the manifest item, and a `#fragment`
+        // into it draws RSC-012 because the missing document holds no ids.
+        // Probed one book per shape against 5.4.0: declared-and-missing
+        // draws RSC-001 alone, with a fragment RSC-001 + RSC-012,
+        // undeclared-and-missing RSC-007 alone. We drew RSC-007 for all three
+        // and no RSC-012 (a Reddit benchmark, one book of 99). The RSC-012
+        // comes from the seeded `target_ids` (see the manifest pass).
+        let declared_missing =
+            !name_index.contains_key(&resolved) && items_by_path.contains_key(&resolved);
+        if !name_index.contains_key(&resolved) && !declared_missing {
             report.push_node(
                 RSC_007,
                 Severity::Error,
@@ -4099,19 +4153,39 @@ fn declared_resources_of(ocf: &mut Ocf, package_path: &str) -> HashSet<String> {
         return out;
     };
     let dir = parent_dir(package_path);
+    let local = |href: &str| {
+        (!is_external(href) && !is_remote_url(href) && !is_file_url(href))
+            .then(|| nfc(&resolve(&dir, strip_url_fragment(href).trim())))
+    };
+    // **Items are keyed by id, and a repeated id keeps only its last item.**
+    // epubcheck builds its by-URL view from `itemBuilders`, a map keyed by
+    // `id.trim()` (`OPFHandler`:542, `OPFItems.build`), so of two items
+    // sharing an id the first is not declared at all: RSC-008 for a
+    // reference to it and OPF-003 for the file. Our manifest pass already
+    // drops it the same way, which is why we matched on RSC-008; this
+    // re-read counted every `<item href>` and kept the file declared. A
+    // shelf book whose manifest gives two fonts `id="added2"` drew RSC-008 +
+    // OPF-003 from 5.4.0 and RSC-008 alone from us. An item needs both
+    // attributes to register, as there.
+    let mut by_id: HashMap<String, String> = HashMap::new();
     for n in doc.descendants().filter(|n| n.is_element()) {
-        let name = n.tag_name().name();
-        if name != "item" && name != "link" {
-            continue;
-        }
-        if let Some(href) = n.attr_no_ns("href")
-            && !is_external(href)
-            && !is_remote_url(href)
-            && !is_file_url(href)
-        {
-            out.insert(nfc(&resolve(&dir, strip_url_fragment(href).trim())));
+        match n.tag_name().name() {
+            "item" => {
+                if let (Some(id), Some(href)) = (n.attr_no_ns("id"), n.attr_no_ns("href"))
+                    && let Some(path) = local(href)
+                {
+                    by_id.insert(id.trim().to_string(), path);
+                }
+            }
+            "link" => {
+                if let Some(path) = n.attr_no_ns("href").and_then(local) {
+                    out.insert(path);
+                }
+            }
+            _ => {}
         }
     }
+    out.extend(by_id.into_values());
     out
 }
 
@@ -6250,6 +6324,27 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
     }
 
+    // **A declared document whose file is missing has no ids, which is not
+    // the same as ids we could not read.** epubcheck registers every manifest
+    // item whether or not its file exists (`OPFChecker`:122-125), so a
+    // `#fragment` into a missing XHTML or SVG document reaches
+    // `checkFragment`, finds no id, and is RSC-012 - beside the RSC-001 the
+    // manifest item already drew. `target_id_kinds` answers `None` for a file
+    // it cannot read, which every caller treats as "unknown, stay silent", so
+    // we reported nothing. Seeding the book-wide cache here answers every
+    // fragment site at once: hyperlinks, the nav, the NCX, the guide,
+    // collections, overlays. XHTML and SVG only, the types `checkFragment`'s
+    // RSC-012 is gated on. Probed against 5.4.0 one book per site (content
+    // hyperlink, nav, NCX, overlay `text src` and `epub:textref`).
+    for (path, mt) in items.values() {
+        let key = nfc(path);
+        if !name_index.contains_key(&key)
+            && matches!(mt.as_str(), "application/xhtml+xml" | "image/svg+xml")
+        {
+            target_ids.insert(key, Some(IdMap::new()));
+        }
+    }
+
     check_guide_references(
         &doc,
         &base_dir,
@@ -7631,20 +7726,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // EDUPUB nav-completeness (NAV-004..008): content-doc features vs the
     // nav's special-nav lists, accumulated across the loop below.
     let mut nav_completeness = crate::edupub::NavCompleteness::default();
-    // Every local content-doc target hyperlinked from *any* content
-    // document (including the nav) - for RSC-011 (a hyperlink target not
-    // listed in the spine) and OPF-096 (a linear="no" spine item not
-    // reachable via any hyperlink or the nav). Keyed by resolved target, each
-    // remembers the *source* `<a>` that hyperlinks to it (file + position +
-    // element path), captured while its document is still parsed, so RSC-011
-    // can anchor at that link instead of the OPF package root (#22). First
-    // source per target wins.
+    // Every local target hyperlinked from *any* content document (including
+    // the nav), for OPF-096 (a linear="no" spine item not reachable via any
+    // hyperlink or the nav).
+    let mut hyperlink_targets: HashSet<String> = HashSet::new();
+    // The same hyperlinks one per link, in document order, each with the
+    // *source* `<a>`/`<area>` (file + position + element path) captured while
+    // its document is still parsed, so RSC-010/RSC-011 anchor at the link
+    // rather than the OPF package root (#22).
+    //
+    // **One per link, not one per target.** This used to be the map above
+    // with the first source per target winning, so a book linking twenty
+    // times to one out-of-spine document drew one RSC-011 where epubcheck
+    // draws twenty: `ResourceReferencesChecker.checkReference` runs once per
+    // registered reference and nothing deduplicates. A shelf book reported
+    // 29 where epubcheck reported 35. Probed against 5.4.0 one book per
+    // shape: repeated links in one document, across documents, with
+    // different fragments, a toc link beside a landmarks link, SVG `<a>`.
     struct HyperlinkSource {
         file: String,
         position: Position,
         element_path: crate::xmlext::NodePath,
     }
-    let mut hyperlink_targets: HashMap<String, HyperlinkSource> = HashMap::new();
+    let mut hyperlink_refs: Vec<(String, HyperlinkSource)> = Vec::new();
     // Whether *any* content document in the whole book uses scripting -
     // mirrors real epubcheck's book-wide `FeatureEnum.HAS_SCRIPTS` (not
     // scoped to any one document): when true, OPF-096's "non-linear
@@ -9607,31 +9711,29 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     let Some(&spine_idx) = spine_order.get(&resolved_nfc) else {
                         continue;
                     };
-                    let dom_idx = match frag {
-                        None => Some(0),
-                        Some(f) => {
-                            if !id_order_cache.contains_key(&resolved_nfc) {
-                                let order = target_id_kinds(
-                                    ocf,
-                                    &name_index,
-                                    &mut target_ids,
-                                    &resolved_nfc,
-                                    is_epub3,
-                                );
-                                id_order_cache.insert(resolved_nfc.clone(), order);
-                            }
-                            // Missing ids are already caught elsewhere as
-                            // broken references; skip this link here
-                            // rather than letting it break the comparison.
-                            // An unreadable target (`None`) is skipped for
-                            // the same reason - its DOM order is unknown,
-                            // not empty.
-                            id_order_cache[&resolved_nfc]
-                                .as_ref()
-                                .and_then(|o| o.get(f))
-                                .map(|&(idx, _)| idx + 1)
-                        }
-                    };
+                    if frag.is_some() && !id_order_cache.contains_key(&resolved_nfc) {
+                        let order = target_id_kinds(
+                            ocf,
+                            &name_index,
+                            &mut target_ids,
+                            &resolved_nfc,
+                            is_epub3,
+                        );
+                        id_order_cache.insert(resolved_nfc.clone(), order);
+                    }
+                    // `anchor_position`, shared with MED-015: epubcheck asks
+                    // both through one `checkReadingOrder`. An id that is not
+                    // there, or a target we could not read, leaves the
+                    // baseline alone. An empty fragment, a CFI and a text
+                    // directive's prefix are *not* skipped - epubcheck's
+                    // `URLFragment` gives them position 0 or strips the
+                    // directive - and a percent-encoded id is decoded. This
+                    // site looked the raw fragment up and skipped all four;
+                    // probed one book each against 5.4.0, each draws NAV-011.
+                    let dom_idx = anchor_position(
+                        frag,
+                        id_order_cache.get(&resolved_nfc).and_then(Option::as_ref),
+                    );
                     keys.push((spine_idx, dom_idx, a, href.to_string()));
                 }
                 // epubcheck's two-level state machine, rather than a scan of
@@ -10410,15 +10512,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // internal link trick works for any xhtml file listed
                         // as non-linear and always has"). Record the document
                         // as a target of itself.
-                        if node.tag_name().name() == "a" {
-                            hyperlink_targets.entry(nfc(&path)).or_insert_with(|| {
-                                HyperlinkSource {
-                                    file: path.clone(),
-                                    position: Position::of(node),
-                                    element_path: crate::xmlext::node_path(node),
-                                }
-                            });
-                        }
+                        // `a` and `area` alike: both go through epubcheck's
+                        // `checkHRef` as a HYPERLINK (probed, 5.4.0).
+                        hyperlink_targets.insert(nfc(&path));
+                        hyperlink_refs.push((
+                            nfc(&path),
+                            HyperlinkSource {
+                                file: path.clone(),
+                                position: Position::of(node),
+                                element_path: crate::xmlext::node_path(node),
+                            },
+                        ));
                     } else if !is_external(href) {
                         if href.contains('?') {
                             report.push_node(
@@ -10431,15 +10535,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 vec![href.to_string()],
                             );
                         }
-                        if node.tag_name().name() == "a" {
-                            hyperlink_targets
-                                .entry(nfc(&resolve(&dir, href)))
-                                .or_insert_with(|| HyperlinkSource {
-                                    file: path.clone(),
-                                    position: Position::of(node),
-                                    element_path: crate::xmlext::node_path(node),
-                                });
-                        }
+                        let target = nfc(&resolve(&dir, href));
+                        hyperlink_targets.insert(target.clone());
+                        hyperlink_refs.push((
+                            target,
+                            HyperlinkSource {
+                                file: path.clone(),
+                                position: Position::of(node),
+                                element_path: crate::xmlext::node_path(node),
+                            },
+                        ));
                     }
                 }
             }
@@ -10997,7 +11102,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     // --- Spine reachability (RSC-011/OPF-096) ---
     let opf_own_name_nfc = nfc(opf_path);
-    for (target, source) in &hyperlink_targets {
+    for (target, source) in &hyperlink_refs {
         if *target == opf_own_name_nfc {
             // A hyperlink to the package document itself (e.g. a CFI-style
             // self-reference) isn't a content document that could ever be
@@ -11073,7 +11178,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // used to flag (reported by Doitsu on the MobileRead forum). Same class
     // as #9 and #21: an EPUB 3 rule leaking into EPUB 2.
     for (path, itemref_pos) in &non_linear_paths {
-        if is_epub3 && !hyperlink_targets.contains_key(path) {
+        if is_epub3 && !hyperlink_targets.contains(path) {
             // Real epubcheck downgrades this from an error to a usage note
             // when the book uses scripting anywhere - script could add
             // navigation/hyperlinks dynamically that this static analysis
@@ -11249,6 +11354,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             doc_path,
             &parent_dir(doc_path),
             &name_index,
+            &manifest_paths,
             is_epub3,
             report,
         );
@@ -12174,6 +12280,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // content-doc resolved-path -> set of distinct overlay resolved-paths
     // that reference it via <text src>, for the cross-referencing pass below.
     let mut referenced_by: HashMap<String, HashSet<String>> = HashMap::new();
+    // Every overlay's text links, book-wide, in manifest order then element
+    // order - the queue MED-015 walks after the loop.
+    let mut overlay_links: Vec<(String, crate::smil::TextLink)> = Vec::new();
     for path in smil_items {
         let Some(orig) = name_index.get(&nfc(&path)).cloned() else {
             continue;
@@ -12191,6 +12300,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             &name_index,
             &media_type_index,
             report,
+        );
+        overlay_links.extend(
+            crate::smil::text_links(&smil_text, &dir)
+                .into_iter()
+                .map(|l| (path.clone(), l)),
         );
 
         // Vocabulary association (prefix/epub:type), same rules as XHTML/
@@ -12318,6 +12432,34 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let Some(target_ids) = &id_cache[target] else {
                     continue;
                 };
+                // **RSC-012 for a `<text src>` fragment that names no id.**
+                // epubcheck's `checkFragment` asks it of every
+                // `OVERLAY_TEXT_LINK`; we asked it of `epub:textref` only,
+                // because that is the one its fixtures cover
+                // (`mediaoverlays-textref-fragment-unresolved-error`) - so
+                // the corpus could not see the gap. Probed against 5.4.0:
+                // `ch1.xhtml#nope` draws RSC-012 there and drew nothing here.
+                // Gated like the rest of the overlay text link: a target
+                // that is not a content document is RSC-010 above, which
+                // ends the reference; an empty fragment or a scheme-based
+                // one is not an id.
+                if !frag.is_empty()
+                    && !frag.contains(['=', ':', '('])
+                    && !target_ids.contains_key(frag_key(frag).as_ref())
+                    && items_by_path
+                        .get(target.as_str())
+                        .is_some_and(|(_, mt)| is_referenced_content_document_type(mt, is_epub3))
+                {
+                    report.push_at_rule(
+                        RSC_012,
+                        Severity::Error,
+                        format!("fragment identifier '{frag}' is not defined in '{target}'"),
+                        path.clone(),
+                        "opf.smil.text_fragment_not_defined",
+                        vec![frag.clone(), target.clone()],
+                    );
+                    continue;
+                }
                 if let Some(&(_, kind)) = target_ids.get(frag_key(frag).as_ref())
                     && !RefKind::OverlayText.accepts(kind)
                 {
@@ -12362,51 +12504,6 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
         }
 
-        // MED-015: this overlay's <text> targets, in SMIL sequence order,
-        // should appear in the same relative order as the ids they name in
-        // the referenced content document's own DOM. Grouped by content
-        // doc (an overlay typically covers one), order preserved within
-        // each group; only checked once a doc has 2+ referenced ids (a
-        // single id is trivially "in order").
-        let mut doc_groups: HashMap<String, Vec<String>> = HashMap::new();
-        for (content_doc_path, frag) in &targets {
-            doc_groups
-                .entry(content_doc_path.clone())
-                .or_default()
-                .push(frag.clone());
-        }
-        for (content_doc_path, frags) in &doc_groups {
-            if frags.len() < 2 {
-                continue;
-            }
-            let Some(orig) = name_index.get(content_doc_path).cloned() else {
-                continue;
-            };
-            let Some(b) = ocf.read_content(&orig) else {
-                continue;
-            };
-            // DOM-order only, no positions reported - shift irrelevant.
-            let (t, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&b), is_epub3);
-            let Ok(d) = parse_xml(&t) else { continue };
-            let id_order = dom_id_kinds(&d);
-            // Ids the SMIL references but the doc doesn't have are already
-            // separately caught as broken references elsewhere - skip them
-            // here rather than letting a missing id break the comparison.
-            let indices: Vec<usize> = frags
-                .iter()
-                .filter_map(|f| id_order.get(f).map(|&(i, _)| i))
-                .collect();
-            let in_order = indices.windows(2).all(|w| w[0] <= w[1]);
-            if !in_order && indices.len() >= 2 {
-                report.push_at(
-                    MED_015,
-                    Severity::Usage,
-                    "media overlay <text> order does not match the content document's DOM order",
-                    path.clone(),
-                );
-            }
-        }
-
         // **`text_srcs`, not `targets`, and the difference is a whole
         // finding.** "Which documents does this overlay reference" is what
         // MED-010/MED-012/MED-013 turn on, and a `<text src="other.xhtml"/>`
@@ -12434,6 +12531,73 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .entry(content_doc_path)
                 .or_default()
                 .insert(overlay_path.clone());
+        }
+    }
+
+    // MED-015: media overlay text links must follow the reading order.
+    //
+    // **One queue for the whole book, the way epubcheck walks it.**
+    // `ResourceReferencesChecker.checkReadingOrder` takes every
+    // `OVERLAY_TEXT_LINK` in registration order - overlays in manifest order,
+    // links in element order, `epub:textref` included - and runs the same
+    // two-level state machine as the toc's NAV-011 below: a target earlier in
+    // the spine than the last one is out of *spine* order and resets the
+    // document baseline; within one spine item an anchor earlier than the
+    // last is out of *document* order. Targets not in the spine are skipped;
+    // an anchor that does not resolve leaves the baseline untouched.
+    //
+    // Ours grouped the `<text>` fragments of one overlay by document and
+    // reported once per overlay if any pair was out of order. That missed
+    // spine order entirely, the carry-over between overlays, textrefs, and a
+    // fragment-less link (position 0, so it is out of order after any
+    // anchor), and it counted once where epubcheck counts every link.
+    // Probed one book per shape against 5.4.0.
+    {
+        let mut id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
+        let mut last_spine: Option<usize> = None;
+        let mut last_anchor: Option<usize> = None;
+        for (overlay, link) in &overlay_links {
+            let Some(&spine) = spine_order.get(&link.target) else {
+                continue;
+            };
+            let mut say = |what: &str| {
+                report.push_full_path(
+                    MED_015,
+                    Severity::Usage,
+                    format!(
+                        "media overlay text link '{}' is out of {what} order",
+                        link.src
+                    ),
+                    overlay.clone(),
+                    link.position,
+                    link.element_path.clone(),
+                    "smil.text.out_of_reading_order",
+                    vec![link.src.clone()],
+                );
+            };
+            if last_spine.is_some_and(|ls| spine < ls) {
+                say("spine");
+                last_spine = Some(spine);
+                last_anchor = None;
+                continue;
+            }
+            if last_spine != Some(spine) {
+                last_spine = Some(spine);
+                last_anchor = None;
+            }
+            if !id_cache.contains_key(&link.target) {
+                let ids =
+                    target_id_kinds(ocf, &name_index, &mut target_ids, &link.target, is_epub3);
+                id_cache.insert(link.target.clone(), ids);
+            }
+            if let Some(a) =
+                anchor_position(link.fragment.as_deref(), id_cache[&link.target].as_ref())
+            {
+                if last_anchor.is_some_and(|la| a < la) {
+                    say("document");
+                }
+                last_anchor = Some(a);
+            }
         }
     }
 
@@ -12709,7 +12873,11 @@ fn check_dictionaries(
             }
             let path_part = href.split(['#', '?']).next().unwrap_or(&href);
             let resolved = nfc(&resolve(&skm_dir, path_part));
-            if !name_index.contains_key(&resolved) {
+            // Neither declared nor present. A declared item whose file is
+            // missing is RSC-001 at the manifest, and the reference goes on
+            // to its type and fragment checks, as epubcheck's registry does
+            // (probed against 5.4.0: RSC-001 + RSC-012, not RSC-007).
+            if !name_index.contains_key(&resolved) && !items_by_path.contains_key(&resolved) {
                 report.push_node(
                     RSC_007,
                     Severity::Error,
@@ -24508,6 +24676,594 @@ mod tests {
                 "opf.ncx.content_src_unencoded_space",
             ],
             "exactly one finding per site"
+        );
+    }
+
+    /// An EPUB 2 book whose NCX has a second navPoint pointing at `ch2.xhtml`
+    /// (never in the zip), with or without a manifest item for it.
+    fn epub2_ncx_points_at_missing(ncx_src: &str, declare: bool) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+        let item = if declare {
+            r#"<item id="ch2" href="ch2.xhtml" media-type="application/xhtml+xml"/>"#
+        } else {
+            ""
+        };
+        let spine = if declare {
+            r#"<itemref idref="ch2"/>"#
+        } else {
+            ""
+        };
+        let opf = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>{item}
+  </manifest>
+  <spine toc="ncx"><itemref idref="ch1"/>{spine}</spine>
+</package>"#
+        );
+        let ncx = format!(
+            "<?xml version=\"1.0\"?><ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" \
+             version=\"2005-1\"><head><meta name=\"dtb:uid\" \
+             content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+             <docTitle><text>T</text></docTitle><navMap>\
+             <navPoint id=\"n1\" playOrder=\"1\"><navLabel><text>1</text></navLabel>\
+             <content src=\"ch1.xhtml\"/></navPoint>\
+             <navPoint id=\"n2\" playOrder=\"2\"><navLabel><text>2</text></navLabel>\
+             <content src=\"{ncx_src}\"/></navPoint></navMap></ncx>"
+        );
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+            <body><p>x</p></body></html>";
+        const CONTAINER: &str = r#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            for (n, body) in [
+                ("META-INF/container.xml", CONTAINER),
+                ("OEBPS/content.opf", opf.as_str()),
+                ("OEBPS/ch1.xhtml", CH1),
+                ("OEBPS/toc.ncx", ncx.as_str()),
+            ] {
+                z.start_file(n, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// RSC-007 is for an NCX target that is neither declared in the manifest
+    /// nor in the container. A declared but missing one is RSC-001 at the
+    /// manifest and nothing more, and a `#fragment` into it is RSC-012.
+    ///
+    /// epubcheck registers every manifest item whether or not its file
+    /// exists (`OPFChecker`:122-125), and only a target absent from that
+    /// registry reaches `checkUndeclaredReference`. Probed one book per
+    /// shape against 5.4.0: RSC-001 alone, RSC-001 + RSC-012, RSC-007 alone.
+    /// The first shape is a Reddit benchmark's one divergence in 99 books:
+    /// we added an RSC-007 beside the RSC-001.
+    #[test]
+    fn an_ncx_target_that_is_declared_but_missing_is_not_rsc_007() {
+        let ids = |src: &str, declare: bool| {
+            let mut v = crate::validate_bytes(epub2_ncx_points_at_missing(src, declare))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| {
+                    [
+                        crate::ids::RSC_001,
+                        crate::ids::RSC_007,
+                        crate::ids::RSC_012,
+                    ]
+                    .contains(id)
+                })
+                .collect::<Vec<_>>();
+            v.sort_unstable();
+            v
+        };
+        use crate::ids::{RSC_001, RSC_007, RSC_012};
+        assert_eq!(ids("ch2.xhtml", true), vec![RSC_001]);
+        assert_eq!(ids("ch2.xhtml#p1", true), vec![RSC_001, RSC_012]);
+        assert_eq!(ids("ch2.xhtml", false), vec![RSC_007]);
+    }
+
+    /// A zip from `(name, body)` pairs, `mimetype` first and stored. The
+    /// container points at `content.opf` in the root.
+    fn zip_book(files: &[(&str, &str)]) -> Vec<u8> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            z.start_file("META-INF/container.xml", SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(
+                br#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+            )
+            .unwrap();
+            for (n, body) in files {
+                z.start_file(*n, SimpleFileOptions::default()).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// An EPUB 3 package around `items` and `spine`, with `meta` added to the
+    /// metadata; the nav document is declared and supplied by the caller.
+    fn opf3(meta: &str, items: &str, spine: &str) -> String {
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>{meta}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>{items}
+  </manifest>
+  <spine>{spine}</spine>
+</package>"#
+        )
+    }
+
+    fn xhtml3(body: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+             xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>t</title></head>\
+             <body>{body}</body></html>"
+        )
+    }
+
+    fn nav3() -> String {
+        xhtml3(r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">1</a></li></ol></nav>"#)
+    }
+
+    /// The sorted ids among `keep` that a book draws.
+    fn ids_among(book: Vec<u8>, keep: &[&str]) -> Vec<&'static str> {
+        let mut v = crate::validate_bytes(book)
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .filter(|id| keep.contains(id))
+            .collect::<Vec<_>>();
+        v.sort_unstable();
+        v
+    }
+
+    const CH1_ITEM: &str = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#;
+    const CH2_ITEM: &str = r#"<item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml"/>"#;
+
+    /// A `#fragment` into a declared document whose file is missing is
+    /// RSC-012 beside the manifest's RSC-001, from a content document as from
+    /// the nav. epubcheck registers the item with no ids; we treated the
+    /// unreadable file as "unknown" and said nothing. Probed against 5.4.0.
+    #[test]
+    fn a_fragment_into_a_declared_but_missing_document_is_rsc_012() {
+        use crate::ids::{RSC_001, RSC_007, RSC_012};
+        let keep = [RSC_001, RSC_007, RSC_012];
+        let spine = r#"<itemref idref="c1"/><itemref idref="c2"/>"#;
+        let opf = opf3("", &format!("{CH1_ITEM}{CH2_ITEM}"), spine);
+        // The control: the same link without a fragment is RSC-001 alone.
+        for (href, want) in [
+            ("ch2.xhtml", vec![RSC_001]),
+            ("ch2.xhtml#x", vec![RSC_001, RSC_012]),
+        ] {
+            let ch1 = xhtml3(&format!(r#"<p><a href="{href}">a</a></p>"#));
+            let book = zip_book(&[
+                ("content.opf", &opf),
+                ("nav.xhtml", &nav3()),
+                ("ch1.xhtml", &ch1),
+            ]);
+            assert_eq!(ids_among(book, &keep), want, "{href}");
+        }
+    }
+
+    /// A media overlay with `seq_textref` on its `<seq>` and one `<par>`
+    /// holding `<text src="text_src"/>` and, when given, an `<audio>`.
+    fn overlay_book(items: &str, spine: &str, smil: &str, extra: &[(&str, &str)]) -> Vec<u8> {
+        let opf = opf3(
+            r##"<meta property="media:duration">0:00:01</meta><meta property="media:duration" refines="#m">0:00:01</meta>"##,
+            &format!(r#"{items}<item id="m" href="m.smil" media-type="application/smil+xml"/>"#),
+            spine,
+        );
+        let nav = nav3();
+        let mut files = vec![
+            ("content.opf", opf.as_str()),
+            ("nav.xhtml", nav.as_str()),
+            ("m.smil", smil),
+        ];
+        files.extend_from_slice(extra);
+        zip_book(&files)
+    }
+
+    fn smil3(seq_textref: &str, text_src: &str, audio: &str) -> String {
+        let audio = if audio.is_empty() {
+            String::new()
+        } else {
+            format!(r#"<audio src="{audio}"/>"#)
+        };
+        format!(
+            r#"<?xml version="1.0" encoding="utf-8"?><smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0"><body><seq id="s1" epub:textref="{seq_textref}"><par id="p1"><text src="{text_src}"/>{audio}</par></seq></body></smil>"#
+        )
+    }
+
+    /// Overlay references follow the same registry rule: RSC-007 only for a
+    /// target neither declared nor present, whether it is a `<text src>`, an
+    /// `<audio src>` or an `epub:textref`. And a `textref` registers its
+    /// document against the overlay as a `<text src>` does, so a document the
+    /// overlay reaches only that way does not draw MED-013. Every row probed
+    /// one book each against 5.4.0.
+    #[test]
+    fn overlay_references_follow_the_manifest_registry() {
+        use crate::ids::{MED_013, RSC_001, RSC_007, RSC_012};
+        let keep = [MED_013, RSC_001, RSC_007, RSC_012];
+        let ch1 = xhtml3(r#"<p id="a">a</p>"#);
+        let c1_mo = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="m"/>"#;
+        let c2_mo = r#"<item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml" media-overlay="m"/>"#;
+        let both = r#"<itemref idref="c1"/><itemref idref="c2"/>"#;
+        let one = r#"<itemref idref="c1"/>"#;
+        let audio = r#"<item id="au" href="a.mp3" media-type="audio/mpeg"/>"#;
+        let cases: [(&str, String, &str, String, Vec<&str>); 5] = [
+            // `<text src>` into a declared, missing document; ch1 is reached
+            // through the textref alone.
+            (
+                "text src, declared",
+                format!("{c1_mo}{c2_mo}"),
+                both,
+                smil3("ch1.xhtml#a", "ch2.xhtml#x", ""),
+                vec![RSC_001, RSC_012],
+            ),
+            (
+                "text src, undeclared",
+                c1_mo.to_string(),
+                one,
+                smil3("ch1.xhtml#a", "ch9.xhtml#x", ""),
+                vec![RSC_007],
+            ),
+            (
+                "textref, undeclared",
+                c1_mo.to_string(),
+                one,
+                smil3("ch9.xhtml#x", "ch1.xhtml#a", ""),
+                vec![RSC_007],
+            ),
+            (
+                "audio, declared",
+                format!("{c1_mo}{audio}"),
+                one,
+                smil3("ch1.xhtml#a", "ch1.xhtml#a", "a.mp3"),
+                vec![RSC_001],
+            ),
+            (
+                "audio, undeclared",
+                c1_mo.to_string(),
+                one,
+                smil3("ch1.xhtml#a", "ch1.xhtml#a", "a.mp3"),
+                vec![RSC_007],
+            ),
+        ];
+        for (what, items, spine, smil, want) in cases {
+            let book = overlay_book(&items, spine, &smil, &[("ch1.xhtml", &ch1)]);
+            assert_eq!(ids_among(book, &keep), want, "{what}");
+        }
+    }
+
+    /// RSC-012 for a `<text src>` fragment that names no id in a document
+    /// that is there. epubcheck asks it of every overlay text link; we asked
+    /// it of `epub:textref` only, the one its fixtures cover.
+    #[test]
+    fn an_overlay_text_src_fragment_that_names_no_id_is_rsc_012() {
+        use crate::ids::RSC_012;
+        let ch1 = xhtml3(r#"<p id="a">a</p>"#);
+        let c1_mo = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="m"/>"#;
+        let one = r#"<itemref idref="c1"/>"#;
+        let run = |src: &str| {
+            let smil = smil3("ch1.xhtml#a", src, "");
+            ids_among(
+                overlay_book(c1_mo, one, &smil, &[("ch1.xhtml", &ch1)]),
+                &[RSC_012],
+            )
+        };
+        assert!(run("ch1.xhtml#a").is_empty(), "an id that is there");
+        assert_eq!(run("ch1.xhtml#nope"), vec![RSC_012]);
+    }
+
+    /// A search-key-group pointing at a declared glossary document whose
+    /// file is missing: RSC-001 + RSC-012, not RSC-007. Probed against 5.4.0.
+    #[test]
+    fn a_search_key_group_into_a_declared_but_missing_document_is_not_rsc_007() {
+        use crate::ids::{RSC_001, RSC_007, RSC_012};
+        let keep = [RSC_001, RSC_007, RSC_012];
+        let skm = |href: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?><search-key-map xml:lang="en" xmlns="http://www.idpf.org/2007/ops"><search-key-group href="{href}"><match value="w"><value value="w"/></match></search-key-group></search-key-map>"#
+            )
+        };
+        let g1 = r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml" properties="glossary"/>"#;
+        let g2 = r#"<item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml" properties="glossary"/>"#;
+        let map = r#"<item id="skm" href="search.xml" properties="glossary search-key-map" media-type="application/vnd.epub.search-key-map+xml"/>"#;
+        let ch1 = xhtml3(
+            r#"<section epub:type="glossary"><dl><dt id="w">w</dt><dd>d</dd></dl></section>"#,
+        );
+        for (items, spine, want) in [
+            (
+                format!("{g1}{g2}{map}"),
+                r#"<itemref idref="c1"/><itemref idref="c2"/>"#,
+                vec![RSC_001, RSC_012],
+            ),
+            (
+                format!("{g1}{map}"),
+                r#"<itemref idref="c1"/>"#,
+                vec![RSC_007],
+            ),
+        ] {
+            let opf = opf3("", &items, spine);
+            let search = skm("ch2.xhtml#w");
+            let book = zip_book(&[
+                ("content.opf", &opf),
+                ("nav.xhtml", &nav3()),
+                ("ch1.xhtml", &ch1),
+                ("search.xml", &search),
+            ]);
+            assert_eq!(ids_among(book, &keep), want, "{items}");
+        }
+    }
+
+    /// RSC-010 and RSC-011 are reported once per hyperlink, not once per
+    /// target, and an `<area>` is a hyperlink as much as an `<a>`.
+    ///
+    /// epubcheck's `checkReference` runs per registered reference and nothing
+    /// deduplicates; we kept the first source per target. A shelf book drew
+    /// 29 RSC-010 from us and 35 from epubcheck, and now draws 35. Each row
+    /// probed one book against 5.4.0.
+    #[test]
+    fn hyperlink_type_and_spine_findings_are_per_link() {
+        use crate::ids::{RSC_010, RSC_011};
+        let count = |ch1_body: &str, ch2_body: &str| {
+            let items = format!(
+                r#"{CH1_ITEM}{CH2_ITEM}<item id="c3" href="ch3.xhtml" media-type="application/xhtml+xml"/><item id="css" href="s.css" media-type="text/css"/>"#
+            );
+            let opf = opf3("", &items, r#"<itemref idref="c1"/><itemref idref="c2"/>"#);
+            let ch1 = xhtml3(ch1_body);
+            let ch2 = xhtml3(ch2_body);
+            let ch3 = xhtml3(r#"<p id="x">c</p>"#);
+            let book = zip_book(&[
+                ("content.opf", &opf),
+                ("nav.xhtml", &nav3()),
+                ("ch1.xhtml", &ch1),
+                ("ch2.xhtml", &ch2),
+                ("ch3.xhtml", &ch3),
+                ("s.css", "p{}"),
+            ]);
+            let ids = ids_among(book, &[RSC_010, RSC_011]);
+            (
+                ids.iter().filter(|i| **i == RSC_010).count(),
+                ids.iter().filter(|i| **i == RSC_011).count(),
+            )
+        };
+        let p = "<p>b</p>";
+        assert_eq!(
+            count(
+                r#"<p><a href="s.css">1</a><a href="s.css">2</a></p>"#,
+                r#"<p><a href="s.css">3</a></p>"#
+            ),
+            (3, 0),
+            "three links to one stylesheet, across two documents"
+        );
+        assert_eq!(
+            count(
+                r#"<p><a href="ch3.xhtml#x">1</a><a href="ch3.xhtml">2</a></p>"#,
+                p
+            ),
+            (0, 2),
+            "two links to one out-of-spine document"
+        );
+        assert_eq!(
+            count(
+                r##"<p><map name="m"><area shape="rect" coords="0,0,1,1" href="ch3.xhtml" alt="z"/></map></p>"##,
+                p
+            ),
+            (0, 1),
+            "an area is a hyperlink"
+        );
+        assert_eq!(
+            count(r#"<p><a href="ch2.xhtml">1</a></p>"#, p),
+            (0, 0),
+            "control"
+        );
+    }
+
+    /// Of two manifest items sharing an id, only the last is declared, so the
+    /// first one's file is OPF-003 like any undeclared file. epubcheck keys
+    /// its items by `id.trim()`; our OPF-003 pass re-read the package and
+    /// counted every `<item href>`. Measured on a shelf book against 5.4.0.
+    #[test]
+    fn an_item_shadowed_by_a_repeated_id_is_not_declared() {
+        use crate::ids::OPF_003;
+        let run = |second_id: &str| {
+            let items = format!(
+                r#"{CH1_ITEM}<item id="f" href="a.css" media-type="text/css"/><item id="{second_id}" href="b.css" media-type="text/css"/>"#
+            );
+            let opf = opf3("", &items, r#"<itemref idref="c1"/>"#);
+            let ch1 = xhtml3("<p>a</p>");
+            let book = zip_book(&[
+                ("content.opf", &opf),
+                ("nav.xhtml", &nav3()),
+                ("ch1.xhtml", &ch1),
+                ("a.css", "p{}"),
+                ("b.css", "p{}"),
+            ]);
+            crate::validate_bytes(book)
+                .messages
+                .iter()
+                .filter(|m| m.id == OPF_003)
+                .map(|m| m.params.first().cloned().unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+        assert!(run("g").is_empty(), "distinct ids: both declared");
+        assert_eq!(run(" f "), vec!["a.css".to_string()], "the id is trimmed");
+    }
+
+    /// MED-015 walks every overlay text link in the book as one queue, in
+    /// spine order first and document order second, once per offending link,
+    /// `epub:textref` included and a fragment-less link at position 0. Each
+    /// row probed one book against 5.4.0; the old per-overlay, per-document
+    /// grouping got the first row's count wrong and missed the other four.
+    #[test]
+    fn media_overlay_reading_order_is_one_book_wide_queue() {
+        use crate::ids::MED_015;
+        let doc = xhtml3(r#"<p id="a">a</p><p id="b">b</p><p id="c">c</p>"#);
+        let nav = xhtml3(
+            r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">1</a></li><li><a href="ch2.xhtml">2</a></li></ol></nav>"#,
+        );
+        let count = |textref: &str, srcs: &[&str]| {
+            let tr = if textref.is_empty() {
+                String::new()
+            } else {
+                format!(r#" epub:textref="{textref}""#)
+            };
+            let pars: String = srcs
+                .iter()
+                .enumerate()
+                .map(|(i, s)| format!(r#"<par id="p{i}"><text src="{s}"/></par>"#))
+                .collect();
+            let smil = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?><smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0"><body{tr}>{pars}</body></smil>"#
+            );
+            let opf = opf3(
+                r##"<meta property="media:duration">0:00:01</meta><meta property="media:duration" refines="#m">0:00:01</meta>"##,
+                r#"<item id="c1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="m"/><item id="c2" href="ch2.xhtml" media-type="application/xhtml+xml" media-overlay="m"/><item id="m" href="m.smil" media-type="application/smil+xml"/>"#,
+                r#"<itemref idref="c1"/><itemref idref="c2"/>"#,
+            );
+            let book = zip_book(&[
+                ("content.opf", &opf),
+                ("nav.xhtml", &nav),
+                ("ch1.xhtml", &doc),
+                ("ch2.xhtml", &doc),
+                ("m.smil", &smil),
+            ]);
+            ids_among(book, &[MED_015]).len()
+        };
+        assert_eq!(
+            count("", &["ch1.xhtml#a", "ch1.xhtml#b", "ch2.xhtml#a"]),
+            0,
+            "control"
+        );
+        assert_eq!(
+            count(
+                "",
+                &["ch1.xhtml#c", "ch1.xhtml#a", "ch1.xhtml#b", "ch1.xhtml#a"]
+            ),
+            2,
+            "every offending link"
+        );
+        assert_eq!(
+            count("", &["ch2.xhtml#a", "ch1.xhtml#a", "ch1.xhtml#b"]),
+            1,
+            "spine order"
+        );
+        assert_eq!(
+            count("", &["ch1.xhtml#b", "ch1.xhtml"]),
+            1,
+            "no fragment is position 0"
+        );
+        assert_eq!(
+            count("ch1.xhtml#c", &["ch1.xhtml#a", "ch1.xhtml#b"]),
+            1,
+            "textref first"
+        );
+        assert_eq!(
+            count("ch2.xhtml", &["ch1.xhtml#a"]),
+            1,
+            "textref in spine order"
+        );
+        assert_eq!(
+            count("", &["ch1.xhtml#b", "ch1.xhtml#zz", "ch1.xhtml#a"]),
+            1,
+            "an unresolved anchor leaves the baseline"
+        );
+    }
+
+    /// NAV-011 reads a toc link's fragment the way epubcheck's
+    /// `URLFragment` does: after `ch1.xhtml#b`, an empty fragment, a CFI and
+    /// a text directive's prefix all point before it, and `%61` is `a`. We
+    /// skipped all four. Probed one book each against 5.4.0.
+    #[test]
+    fn toc_reading_order_reads_fragments_like_epubcheck() {
+        use crate::ids::NAV_011;
+        let doc = xhtml3(r#"<p id="a">a</p><p id="b">b</p><p id="c">c</p>"#);
+        let count = |second: &str| {
+            let nav = xhtml3(&format!(
+                r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml#b">1</a></li><li><a href="{second}">2</a></li></ol></nav>"#
+            ));
+            let opf = opf3("", CH1_ITEM, r#"<itemref idref="c1"/>"#);
+            let book = zip_book(&[
+                ("content.opf", &opf),
+                ("nav.xhtml", &nav),
+                ("ch1.xhtml", &doc),
+            ]);
+            ids_among(book, &[NAV_011]).len()
+        };
+        assert_eq!(count("ch1.xhtml#c"), 0, "control");
+        for second in [
+            "ch1.xhtml#",
+            "ch1.xhtml#epubcfi(/4/2)",
+            "ch1.xhtml#a:~:text=a",
+            "ch1.xhtml#%61",
+        ] {
+            assert_eq!(count(second), 1, "{second}");
+        }
+    }
+
+    #[test]
+    fn anchor_position_follows_epubchecks_fragment_parser() {
+        let mut ids = super::IdMap::new();
+        ids.insert("x".to_string(), (4, super::IdKind::Generic));
+        assert_eq!(super::anchor_position(None, Some(&ids)), Some(0));
+        assert_eq!(super::anchor_position(Some(""), Some(&ids)), Some(0));
+        assert_eq!(super::anchor_position(Some("x"), Some(&ids)), Some(5));
+        assert_eq!(
+            super::anchor_position(Some("x:~:text=a"), Some(&ids)),
+            Some(5)
+        );
+        assert_eq!(
+            super::anchor_position(Some("epubcfi(/6/4)"), Some(&ids)),
+            Some(0)
+        );
+        assert_eq!(super::anchor_position(Some("t=10,20"), Some(&ids)), Some(0));
+        assert_eq!(super::anchor_position(Some("nope"), Some(&ids)), None);
+        assert_eq!(
+            super::anchor_position(Some("x"), None),
+            None,
+            "unreadable target"
         );
     }
 

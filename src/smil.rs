@@ -117,22 +117,48 @@ pub(crate) fn check(
         );
     }
 
-    // 9.3.2.2: epub:textref on <seq>/<par> - a fragment reference to a
-    // sectioning element in the target content document, resolved by the
-    // caller the same way NCX <content src> fragments are (RSC-012).
+    // 9.3.2.2: epub:textref on <body>/<seq> - a reference to the content
+    // document (and usually a sectioning element in it) the container
+    // narrates. Its fragment is resolved by the caller the same way NCX
+    // <content src> fragments are (RSC-012).
+    //
+    // **epubcheck treats it exactly as a `<text src>`.** `OverlayHandler`
+    // sends `body`/`seq` `epub:textref` and `text/@src` through the same
+    // `processContentDocumentLink`: both register the document against this
+    // overlay (MED-010/011/012/013) and both are `OVERLAY_TEXT_LINK`
+    // references, so a target neither declared nor in the container is
+    // RSC-007. We read it on `seq`/`par`, checked only its fragment, and
+    // never counted it as referencing its document - so a textref to a
+    // missing file said nothing, and a document the overlay reached only
+    // through a textref drew MED-013. Probed against 5.4.0.
     for n in doc.descendants().filter(|n| {
         n.is_element()
-            && matches!(n.tag_name().name(), "seq" | "par")
+            && matches!(n.tag_name().name(), "body" | "seq")
             && n.attribute((EPUB_NS, "textref")).is_some()
     }) {
         let textref = n.attribute((EPUB_NS, "textref")).unwrap();
         if is_external(textref) {
             continue;
         }
-        if let Some((path_part, frag)) = textref.split_once('#')
+        let (path_part, frag) = split_fragment(textref);
+        let resolved_nfc = nfc(&resolve(base_dir, path_part));
+        if !name_index.contains_key(&resolved_nfc) && !media_types.contains_key(&resolved_nfc) {
+            report.push_node(
+                RSC_007,
+                Severity::Error,
+                format!("references a missing resource '{textref}'"),
+                smil_path,
+                n,
+                "smil.textref.missing_resource",
+                vec![textref.to_string()],
+            );
+            continue;
+        }
+        text.srcs.push(resolved_nfc.clone());
+        if let Some(frag) = frag
             && !frag.is_empty()
         {
-            textref_targets.push((nfc(&resolve(base_dir, path_part)), frag.to_string()));
+            textref_targets.push((resolved_nfc, frag.to_string()));
         }
     }
 
@@ -204,6 +230,53 @@ pub(crate) fn check(
 /// nothing fails loudly when it is forgotten. Before adding a reference
 /// kind, ask which per-source lists it must join — and which of them it must
 /// stay out of.
+/// One media overlay text link: a `<text src>`, or an `epub:textref` on
+/// `<body>`/`<seq>`.
+pub(crate) struct TextLink {
+    /// Resolved, NFC-normalized container path.
+    pub target: String,
+    /// The fragment as written, if the link has one.
+    pub fragment: Option<String>,
+    /// The attribute value as written.
+    pub src: String,
+    pub position: Position,
+    pub element_path: crate::xmlext::NodePath,
+}
+
+/// The overlay's text links in the order epubcheck registers them: element
+/// start order, so a `<body>`'s or `<seq>`'s `epub:textref` comes before the
+/// `<text>` elements inside it. That order is what MED-015 walks.
+///
+/// Every `<text>` counts, including a second one in a `<par>` that the
+/// grammar rejects: `OverlayHandler` registers each element it starts, and
+/// the reading-order check sees them all.
+pub(crate) fn text_links(smil_xml: &str, base_dir: &str) -> Vec<TextLink> {
+    let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        let v = match n.tag_name().name() {
+            "body" | "seq" => n.attribute((EPUB_NS, "textref")),
+            "text" => n.attr_no_ns("src"),
+            _ => None,
+        };
+        let Some(v) = v else { continue };
+        if is_external(v) {
+            continue;
+        }
+        let (path_part, frag) = split_fragment(v);
+        out.push(TextLink {
+            target: nfc(&resolve(base_dir, path_part)),
+            fragment: frag.map(str::to_string),
+            src: v.to_string(),
+            position: Position::of(n),
+            element_path: crate::xmlext::node_path(n),
+        });
+    }
+    out
+}
+
 pub(crate) fn resource_refs(smil_xml: &str, base_dir: &str) -> Vec<String> {
     let Ok(doc) = crate::ocf::parse_xml(smil_xml) else {
         return Vec::new();
@@ -287,7 +360,15 @@ fn check_container(
                         Vec::new(),
                     );
                 } else {
-                    check_text(child, smil_path, base_dir, name_index, report, text);
+                    check_text(
+                        child,
+                        smil_path,
+                        base_dir,
+                        name_index,
+                        media_types,
+                        report,
+                        text,
+                    );
                 }
             }
             (true, "audio") => {
@@ -332,6 +413,7 @@ fn check_text(
     smil_path: &str,
     base_dir: &str,
     name_index: &HashMap<String, String>,
+    media_types: &HashMap<String, String>,
     report: &mut Report,
     text: &mut TextLinks,
 ) {
@@ -344,13 +426,17 @@ fn check_text(
     let (path_part, frag) = split_fragment(src);
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
-    if !name_index.contains_key(&resolved_nfc) {
+    // `media_types` is keyed by every manifest item, so it is the "declared"
+    // half of the question: a declared item whose file is missing is RSC-001
+    // at the manifest and nothing here, and the link is still registered.
+    if !name_index.contains_key(&resolved_nfc) && !media_types.contains_key(&resolved_nfc) {
         // **RSC-007, not RSC-001.** epubcheck keeps the two apart: RSC-001 is
         // a *declared* publication resource that is not in the container,
-        // RSC-007 is a **reference** to something that is not there. A SMIL
-        // `src` is a reference. Measured one book per site against 5.3.0, and
-        // the CSS `url()` site next door already had it right - which is what
-        // makes this a slip rather than a decision.
+        // RSC-007 is a **reference** to something that is neither declared
+        // nor there (`checkUndeclaredReference`). A SMIL `src` is a
+        // reference. Measured one book per site against 5.3.0, and the CSS
+        // `url()` site next door already had it right - which is what makes
+        // this a slip rather than a decision.
         report.push_node(
             RSC_007,
             Severity::Error,
@@ -441,7 +527,8 @@ fn check_audio(
     }
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
-    if !name_index.contains_key(&resolved_nfc) {
+    // Declared but missing is RSC-001 at the manifest only, as for `<text>`.
+    if !name_index.contains_key(&resolved_nfc) && !media_types.contains_key(&resolved_nfc) {
         report.push_node(
             RSC_007,
             Severity::Error,

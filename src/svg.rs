@@ -288,6 +288,7 @@ pub(crate) fn check_resource_references(
     path: &str,
     base_dir: &str,
     name_index: &std::collections::HashMap<String, String>,
+    manifest_paths: &std::collections::HashSet<String>,
     is_epub3: bool,
     report: &mut Report,
 ) {
@@ -301,7 +302,12 @@ pub(crate) fn check_resource_references(
         if path_part.is_empty() {
             return;
         }
-        if name_index.contains_key(&nfc(&resolve(base_dir, path_part))) {
+        let resolved = nfc(&resolve(base_dir, path_part));
+        // A manifest item whose file is missing is RSC-001 at the manifest and
+        // nothing more here: epubcheck registers every declared item, so
+        // `checkUndeclaredReference`'s RSC-007 never sees it (probed one book
+        // against 5.4.0, declared-and-missing vs undeclared-and-missing).
+        if name_index.contains_key(&resolved) || manifest_paths.contains(&resolved) {
             return;
         }
         report.push_node(
@@ -1988,7 +1994,7 @@ mod tests {
     /// a naive "does this file exist" check gets wrong.
     #[test]
     fn a_standalone_svg_reference_that_does_not_resolve_is_reported() {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         let mut index = HashMap::new();
         index.insert("EPUB/there.png".to_string(), "EPUB/there.png".to_string());
         index.insert("EPUB/pic.svg".to_string(), "EPUB/pic.svg".to_string());
@@ -2006,6 +2012,7 @@ mod tests {
                 "EPUB/pic.svg",
                 "EPUB",
                 &index,
+                &HashSet::new(),
                 true,
                 &mut report,
             );
@@ -2041,6 +2048,38 @@ mod tests {
             refs(r##"<use xlink:href="gone.png#z"/>"##),
             vec!["gone.png#z".to_string()]
         );
+    }
+
+    /// A reference to a manifest item whose file is missing is RSC-001 at the
+    /// manifest and nothing here; epubcheck registers every declared item, so
+    /// RSC-007 (`checkUndeclaredReference`) is reserved for a target that is
+    /// neither declared nor in the container. Probed one book per shape
+    /// against 5.4.0.
+    #[test]
+    fn a_standalone_svg_reference_to_a_declared_but_missing_item_is_silent() {
+        use std::collections::{HashMap, HashSet};
+        let index: HashMap<String, String> = HashMap::new();
+        let mut declared = HashSet::new();
+        declared.insert("EPUB/pic.png".to_string());
+        let run = |declared: &HashSet<String>| {
+            let d = doc(r#"<svg xmlns="http://www.w3.org/2000/svg"
+                        xmlns:xlink="http://www.w3.org/1999/xlink"
+                        viewBox="0 0 10 10"><title>s</title>
+                        <image xlink:href="pic.png" width="1" height="1"/></svg>"#);
+            let mut report = Report::new();
+            check_resource_references(
+                d.root_element(),
+                "EPUB/pic.svg",
+                "EPUB",
+                &index,
+                declared,
+                true,
+                &mut report,
+            );
+            report.messages.len()
+        };
+        assert_eq!(run(&declared), 0, "declared and missing: RSC-001 only");
+        assert_eq!(run(&HashSet::new()), 1, "undeclared and missing: RSC-007");
     }
 
     /// **Five SVG attributes have a constrained value, and that is the whole
@@ -2124,7 +2163,7 @@ mod tests {
     /// this guards against is the set quietly widening again.
     #[test]
     fn the_svg_reference_set_is_the_one_epubcheck_registers() {
-        use std::collections::HashMap;
+        use std::collections::{HashMap, HashSet};
         let index: HashMap<String, String> = HashMap::new();
         let named_at = |body: &str, is_epub3: bool| -> Vec<String> {
             let xml = format!(
@@ -2139,6 +2178,7 @@ mod tests {
                 "EPUB/pic.svg",
                 "EPUB",
                 &index,
+                &HashSet::new(),
                 is_epub3,
                 &mut report,
             );
