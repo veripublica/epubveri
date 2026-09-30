@@ -171,7 +171,7 @@ fn main() {
         .unwrap_or_else(|_| "/opt/homebrew/opt/openjdk/bin/java".to_string());
     let jar = std::env::var("EPUBCHECK_JAR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| root.join("corpus/tools/epubcheck-5.3.0/epubcheck.jar"));
+        .unwrap_or_else(|_| root.join("corpus/tools/epubcheck-5.4.0/epubcheck.jar"));
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let verbose = args.iter().any(|a| a == "--verbose");
