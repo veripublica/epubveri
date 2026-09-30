@@ -11001,7 +11001,17 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // confirmed via `resources-remote-iframe-undeclared-error` etc.,
         // where only RSC-006 is expected, never RSC-008 too).
         remote_resource_refs.extend(remote_refs.iter().cloned());
-        for r in &remote_refs {
+        // **Sorted before reporting.** These are `HashSet`s, whose iteration
+        // order is seeded per process, and every finding below sits at the
+        // same position (the root element), so nothing downstream restores an
+        // order: one W3C test publication printed its three RSC-006 in a
+        // different order on every run. Found while proving that a #137
+        // speed-up changed no report.
+        let mut remote_sorted: Vec<&String> = remote_refs.iter().collect();
+        remote_sorted.sort();
+        let mut restricted_sorted: Vec<&String> = restricted_remote_refs.iter().collect();
+        restricted_sorted.sort();
+        for r in remote_sorted.iter().copied() {
             if restricted_remote_refs.contains(r) {
                 continue;
             }
@@ -11039,7 +11049,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // note further down.
         // RSC-006: img/iframe/script/stylesheet/non-exempt-object always
         // disallow a remote resource, regardless of manifest declaration.
-        for r in &restricted_remote_refs {
+        for r in restricted_sorted {
             report.push_node(
                 RSC_006,
                 Severity::Error,
@@ -11061,7 +11071,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // on the `else` branch (`ResourceReferencesChecker`). Four corpus
         // scenarios expect RSC-006 "and no other errors or warnings"; we
         // were adding RSC-031 to every one (issue #26).
-        for r in remote_refs.difference(&restricted_remote_refs) {
+        for r in remote_sorted
+            .iter()
+            .copied()
+            .filter(|r| !restricted_remote_refs.contains(*r))
+        {
             if crate::url::is_insecure_remote(r) {
                 report.push_at_pos(
                     RSC_031,
@@ -11222,7 +11236,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         .filter(|(_, mt)| mt == "image/svg+xml")
         .map(|(path, _)| nfc(path))
         .collect();
-    for doc_path in svg_doc_paths
+    // The same documents in manifest order, for the walks below. Iterating
+    // the set itself visited them in the order its hasher chose, which is
+    // seeded per process: a W3C test publication with eight SVG plates
+    // printed their findings in a different order on every run.
+    let svg_docs_in_order: Vec<String> = {
+        let mut seen = HashSet::new();
+        manifest_order
+            .iter()
+            .map(|(p, _)| nfc(p))
+            .filter(|p| svg_doc_paths.contains(p) && seen.insert(p.clone()))
+            .collect()
+    };
+    for doc_path in svg_docs_in_order
         .iter()
         .filter(|p| content_doc_overlay.contains_key(p.as_str()))
     {
@@ -11252,7 +11278,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // would otherwise never run on a bare SVG document at all (confirmed
     // via a real fixture: `content-svg-use-href-no-fragment-error`'s
     // standalone `cover.svg`).
-    for doc_path in &svg_doc_paths {
+    for doc_path in &svg_docs_in_order {
         let Some(orig) = name_index.get(doc_path).cloned() else {
             continue;
         };

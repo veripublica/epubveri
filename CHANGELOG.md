@@ -42,6 +42,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   empty fragment, an `epubcfi(...)` or other scheme-based fragment, a text
   directive (`#a:~:text=...`) and a percent-encoded id were skipped; each is
   now placed as epubcheck places it.
+- **The same book is reported in the same order on every run.** Findings
+  about remote resources (RSC-006, RSC-008, RSC-031) and about standalone SVG
+  documents came out in an order that changed from one run to the next, so
+  two runs of one book could look different when they were not. They are now
+  sorted by URL and in manifest order.
 
 ## [0.18.0] - 2026-09-25
 
