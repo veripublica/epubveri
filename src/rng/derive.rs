@@ -141,6 +141,14 @@ struct Env<'a> {
     /// [`Env::start_tag_close_deriv`]'s results by pattern address, with the
     /// pattern kept alive in the value for the same reason as `carry_memo`.
     close_memo: PatMemo<usize, Pat>,
+    /// [`Env::text_deriv_top`]'s results for patterns [`Env::text_sensitive`]
+    /// clears, by pattern address, the pattern kept alive as above.
+    text_memo: PatMemo<usize, Pat>,
+    /// [`Env::text_sensitive`]'s answers, with its cycle guard and cut count
+    /// working as [`Env::may_carry`]'s do.
+    sens_memo: PatMemo<usize, bool>,
+    sens_busy: RefCell<HashSet<usize>>,
+    sens_cuts: std::cell::Cell<usize>,
     /// [`Env::attr_contents`]'s answers by `(pattern, attribute id)`.
     contents_memo: PatMemo<(usize, u32), Rc<Vec<Pat>>>,
     contents_busy: RefCell<HashSet<usize>>,
@@ -171,6 +179,10 @@ impl<'a> Env<'a> {
             carry_busy: RefCell::new(HashSet::new()),
             carry_cuts: std::cell::Cell::new(0),
             close_memo: RefCell::new(HashMap::default()),
+            text_memo: RefCell::new(HashMap::default()),
+            sens_memo: RefCell::new(HashMap::default()),
+            sens_busy: RefCell::new(HashSet::new()),
+            sens_cuts: std::cell::Cell::new(0),
             contents_memo: RefCell::new(HashMap::default()),
             contents_busy: RefCell::new(HashSet::new()),
             contents_cut: std::cell::Cell::new(false),
@@ -546,6 +558,74 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// [`Env::text_deriv`] for a whole text run or value, memoized where the
+    /// answer cannot depend on the text.
+    ///
+    /// `text_deriv` reads `s` only at `Value`, `Data` and `List`; every other
+    /// leaf gives `text()` or `notAllowed` whatever the text says, and
+    /// `nullable` never looks at it. So when none of the three is reachable
+    /// the derivative is a function of the pattern alone - which is the
+    /// ordinary case, mixed content in a paragraph - and the same interned
+    /// pattern comes back for every text run inside it. It was rebuilt each
+    /// time: 15% of the run on the slowest shelf book, a play of many short
+    /// lines (see #137).
+    ///
+    /// **A memo, not an early return**, like `start_tag_close_deriv`: a hit
+    /// returns the very pattern the full walk built, so everything after it
+    /// walks what it walked before.
+    fn text_deriv_top(&self, p: &Pat, s: &str) -> Pat {
+        if self.text_sensitive(p) {
+            return self.text_deriv(p, s);
+        }
+        let key = Rc::as_ptr(p) as usize;
+        if let Some((_, hit)) = self.text_memo.borrow().get(&key) {
+            return hit.clone();
+        }
+        let r = self.text_deriv(p, s);
+        self.text_memo
+            .borrow_mut()
+            .insert(key, (p.clone(), r.clone()));
+        r
+    }
+
+    /// Whether [`Env::text_deriv`] could read the text anywhere in `p`: a
+    /// `Value`, `Data` or `List` reachable the way it walks. Deliberately
+    /// wider than that walk - both halves of a `Group`, not only when the
+    /// first is nullable - so it can only err towards "sensitive", which
+    /// costs the memo and never the answer. `Element` and `Attribute` are
+    /// leaves to `text_deriv` and are leaves here.
+    fn text_sensitive(&self, p: &Pat) -> bool {
+        let key = Rc::as_ptr(p) as usize;
+        if let Some((_, hit)) = self.sens_memo.borrow().get(&key) {
+            return *hit;
+        }
+        let cuts = self.sens_cuts.get();
+        let r = match &**p {
+            Pattern::Value(..) | Pattern::Data(_) | Pattern::List(_) => true,
+            Pattern::Choice(a, b) | Pattern::Group(a, b) | Pattern::Interleave(a, b) => {
+                self.text_sensitive(a) || self.text_sensitive(b)
+            }
+            Pattern::After(a, _) | Pattern::OneOrMore(a) => self.text_sensitive(a),
+            Pattern::Ref(i) => {
+                if !self.sens_busy.borrow_mut().insert(*i) {
+                    // A cycle that never crosses an element; cut it as
+                    // "sensitive", and memoize nothing that depended on it.
+                    self.sens_cuts.set(self.sens_cuts.get() + 1);
+                    true
+                } else {
+                    let r = self.text_sensitive(&self.defs[*i]);
+                    self.sens_busy.borrow_mut().remove(i);
+                    r
+                }
+            }
+            _ => false,
+        };
+        if self.sens_cuts.get() == cuts {
+            self.sens_memo.borrow_mut().insert(key, (p.clone(), r));
+        }
+        r
+    }
+
     fn text_deriv(&self, p: &Pat, s: &str) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => choice(self.text_deriv(a, s), self.text_deriv(b, s)),
@@ -684,7 +764,7 @@ impl<'a> Env<'a> {
     }
 
     fn value_match(&self, p: &Pat, s: &str) -> bool {
-        (self.nullable(p) && is_ws(s)) || self.nullable(&self.text_deriv(p, s))
+        (self.nullable(p) && is_ws(s)) || self.nullable(&self.text_deriv_top(p, s))
     }
 
     /// The derivative of `p` by one attribute, memoized.
@@ -1059,9 +1139,9 @@ impl<'a> Env<'a> {
                 if is_ws(s) {
                     // Whitespace is harmless: `choice(cur, NA) = cur`, so an
                     // ignorable run never disturbs the pattern.
-                    cur = choice(cur.clone(), self.text_deriv(&cur, s));
+                    cur = choice(cur.clone(), self.text_deriv_top(&cur, s));
                 } else {
-                    let d = self.text_deriv(&cur, s);
+                    let d = self.text_deriv_top(&cur, s);
                     if is_not_allowed(&d) {
                         // Loose text not allowed: report *the run itself* and
                         // skip, keeping `cur`. Blaming `parent` here was #68 -

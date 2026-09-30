@@ -437,6 +437,44 @@ mod tests {
             .collect()
     }
 
+    /// The text-derivative memo must never answer for a pattern that reads
+    /// the text. Here the same `<status>` model takes `"on" | "off"`: were
+    /// that pattern memoized, the first run's answer would be handed to the
+    /// next, and the wrong siblings would be blamed. And inside mixed
+    /// content, which is memoized, every text run is still accepted and an
+    /// element that is not allowed is still found among them.
+    #[test]
+    fn the_text_memo_does_not_answer_for_text_it_did_not_read() {
+        let status = element(
+            local_name("status"),
+            choice(value(Datatype::Token, "on"), value(Datatype::Token, "off")),
+        );
+        let g = Grammar::single(element(local_name("list"), one_or_more(status)));
+        let xml = "<list><status>on</status><status>bogus</status><status>off</status>\
+                   <status>on</status><status>nope</status></list>";
+        let doc = roxmltree::Document::parse(xml).unwrap();
+        let blamed_runs: Vec<&str> = validate_node_report(&g, doc.root_element())
+            .into_iter()
+            .filter_map(|b| match b {
+                Blame::Text { run, .. } => run.text(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blamed_runs, vec!["bogus", "nope"]);
+        let para = element(
+            local_name("p"),
+            interleave(text(), zero_or_more(element(local_name("b"), text()))),
+        );
+        let g = Grammar::single(element(local_name("doc"), one_or_more(para)));
+        assert_eq!(
+            fail_locals(
+                &g,
+                "<doc><p>a<b>x</b>b</p><p>c</p><p>d<i>no</i>e<b>y</b>f</p><p>g</p></doc>"
+            ),
+            vec!["i"],
+        );
+    }
+
     #[test]
     fn toy_grammar_accepts_valid() {
         let g = note_grammar();
