@@ -10,6 +10,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`ADV-014` (with `--advisory`): a `<meta name="cover">` whose content is
+  not the id of any manifest item.** No specification defines this meta
+  (OPF 2.0.1 leaves `meta` as a free name/content pair, and EPUB 3.4 lists it
+  as outdated), but calibre, Kindle and Adobe read its content as a manifest
+  id, so a value naming none is a broken reference by the only convention
+  that gives the element a meaning. The message says only that, and when the
+  value is some item's href it names that item, since the fix is to write the
+  id. It fires in EPUB 2 and EPUB 3 alike and never touches the verdict.
+  Asked for by JSWolf (MobileRead 374286 #362); DNSB counted 11 such books
+  among 17,192 that carry the meta (#370), so it is rare and true every time.
+
 ### Performance
 
 - **Books with many links in one large document are no longer slower than

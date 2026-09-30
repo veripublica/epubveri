@@ -206,6 +206,15 @@ pub const ADV_011: &str = "ADV-011"; // dc:date epubcheck accepts but W3C-DTF do
 // CSS 2.1 {name} as a class, so `span.-` passes there, while a class name has
 // to be an identifier and browsers drop the rule. CSS-008 follows epubcheck.
 pub const ADV_012: &str = "ADV-012"; // a class selector whose name is not a CSS identifier (usage, 2,798-book report)
+// ADV-014: `<meta name="cover" content="X">` where no manifest item has the id
+// X. No specification defines the convention (OPF 2.0.1's `meta` is a free
+// name/content pair; EPUB 3.4 lists it as outdated), but calibre, Kindle and
+// Adobe read `content` as a manifest id, so a value naming none is a broken
+// reference by the only rule that gives the element a meaning. True every time
+// it fires, and rare: 11 of 17,192 books carrying the meta in DNSB's library
+// (MobileRead 374286 #370), none on our shelf. ADV-013 is not reused: it named a
+// held, never-released advisory that the forum discussed by that number.
+pub const ADV_014: &str = "ADV-014"; // cover meta names no manifest item (usage, MobileRead 374286 #362/#370)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

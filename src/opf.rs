@@ -4010,6 +4010,82 @@ struct ContentVersionSignals {
     html5_sectioning: bool,
 }
 
+/// ADV-014: a `<meta name="cover">` whose `content` is not the id of any
+/// manifest item.
+///
+/// The convention is calibre's, Kindle's and Adobe's, not a specification's,
+/// so this is an advisory and says only what is true in every case it fires:
+/// the value names no manifest item. Every `<item id>` in the manifest counts,
+/// not just the ones the manifest pass keeps, so an item that lacks some other
+/// attribute cannot make the finding false. Nothing is claimed about what a
+/// reader then shows. When the value is a path that some item's `href` holds,
+/// the message says which item, since that is the usual mistake and the fix is
+/// to write the id instead.
+fn check_cover_meta_advisory(
+    doc: &roxmltree::Document,
+    base_dir: &str,
+    opf_path: &str,
+    report: &mut Report,
+) {
+    let manifest_items: Vec<roxmltree::Node> = doc
+        .descendants()
+        .filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "item"
+                && n.parent_element()
+                    .is_some_and(|p| p.tag_name().name() == "manifest")
+        })
+        .collect();
+    let ids: HashSet<&str> = manifest_items
+        .iter()
+        .filter_map(|n| n.attr_no_ns("id"))
+        .map(str::trim)
+        .collect();
+    for meta in doc.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().name() == "meta"
+            && n.attr_no_ns("name").is_some_and(|v| v.trim() == "cover")
+    }) {
+        let Some(content) = meta.attr_no_ns("content") else {
+            continue;
+        };
+        let value = content.trim();
+        if ids.contains(value) {
+            continue;
+        }
+        let by_href = (!value.is_empty())
+            .then(|| {
+                let resolved = nfc(&resolve(base_dir, value));
+                manifest_items.iter().find(|n| {
+                    n.attr_no_ns("href").is_some_and(|h| {
+                        h.trim() == value || nfc(&resolve(base_dir, h.trim())) == resolved
+                    })
+                })
+            })
+            .flatten()
+            .and_then(|n| n.attr_no_ns("id"));
+        let text = match by_href {
+            Some(id) => format!(
+                "the cover meta's content '{value}' is not the id of any manifest item; it is the \
+                 href of item '{}', and the convention expects the id",
+                id.trim()
+            ),
+            None => {
+                format!("the cover meta's content '{value}' is not the id of any manifest item")
+            }
+        };
+        report.push_full(
+            ADV_014,
+            Severity::Usage,
+            text,
+            opf_path,
+            Position::of(meta),
+            "opf.meta.cover_names_no_manifest_item",
+            vec![value.to_string()],
+        );
+    }
+}
+
 /// Each signal is structural, and each is illegal in EPUB 2 on its own - no
 /// judgement about intent is being made, only a count.
 ///
@@ -6369,6 +6445,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         {
             target_ids.insert(key, Some(IdMap::new()));
         }
+    }
+
+    if advisory {
+        check_cover_meta_advisory(&doc, &base_dir, opf_path, report);
     }
 
     check_guide_references(
@@ -25394,6 +25474,60 @@ mod tests {
         // `<text>`s sit on lines 3-6; the second and fourth (lines 4 and 6)
         // are the two that go back in document order.
         assert_eq!(lines, vec![4, 6]);
+    }
+
+    /// ADV-014: a cover meta naming no manifest item, advisory only.
+    ///
+    /// The control comes first so a pass cannot mean "it always fires": a
+    /// content that is an item's id is silent. An id that exists nowhere
+    /// fires; a value that is an item's href fires and names that item; an
+    /// `<item>` missing its media-type still counts as naming the id, so the
+    /// finding stays true when the manifest pass skips that item. Without
+    /// `--advisory` nothing fires, and the verdict never moves.
+    #[test]
+    fn a_cover_meta_naming_no_manifest_item_is_advisory_014() {
+        use crate::ids::ADV_014;
+        let book = |content: &str, extra_item: &str| {
+            let opf = opf3(
+                &format!(r#"<meta name="cover" content="{content}"/>"#),
+                &format!(
+                    r#"{CH1_ITEM}<item id="cover_image" href="images/cover.png" media-type="image/png"/>{extra_item}"#
+                ),
+                r#"<itemref idref="c1"/>"#,
+            );
+            let ch1 = xhtml3(r#"<p><img src="images/cover.png" alt="c"/></p>"#);
+            zip_book(&[
+                ("content.opf", &opf),
+                ("nav.xhtml", &nav3()),
+                ("ch1.xhtml", &ch1),
+                ("images/cover.png", "not really a png"),
+            ])
+        };
+        let run = |content: &str, extra_item: &str, advisory: bool| {
+            let opts = crate::Options {
+                advisory,
+                ..Default::default()
+            };
+            let r = crate::validate_bytes_with_options(book(content, extra_item), &opts);
+            r.messages
+                .iter()
+                .filter(|m| m.id == ADV_014)
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+        };
+        assert!(run("cover_image", "", true).is_empty(), "an item's id");
+        assert_eq!(run("fig_backad", "", true).len(), 1, "an id nowhere");
+        let href = run("images/cover.png", "", true);
+        assert_eq!(href.len(), 1);
+        assert!(
+            href[0].contains("'cover_image'"),
+            "names the item: {href:?}"
+        );
+        assert!(
+            run("odd", r#"<item id="odd" href="x.bin"/>"#, true).is_empty(),
+            "an item without a media-type still has the id"
+        );
+        assert!(run("fig_backad", "", false).is_empty(), "advisory only");
     }
 
     #[test]
