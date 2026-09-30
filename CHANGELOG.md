@@ -8,7 +8,35 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.19.0] - 2026-09-30
+
+**References are checked the way epubcheck checks them in more places, and
+validation is about 15% faster.** A book may now draw errors it did not draw
+before. For example, a `#fragment` into a document the manifest declares but the container
+lacks is RSC-012, as is an overlay text link naming no id, and RSC-010 and
+RSC-011 are reported for every link rather than once per target. That is why
+this is a minor release. In the other direction, an RSC-007 that duplicated an
+RSC-001 is gone, and so is a MED-013 epubcheck does not give. The library's
+API is unchanged.
+
+### Performance
+
+**The 544 books on our shelf take 15% less CPU time, with every report
+unchanged.** 17.7 s before these changes, 15.0 s after; on those books and
+on W3C's 209 conformance publications the output is byte-identical, and no
+book got slower. The slowest book is about a third faster. Found by profiling
+the two slowest books, following #137.
+
+- **Text inside paragraphs is no longer re-checked from scratch for every
+  run.** Whether a run of text is allowed depends on the text only where the
+  grammar constrains its value; in ordinary mixed content it does not, and
+  the answer is now kept per position in the grammar.
+- **A dangling fragment no longer rescans the manifest.** Finding the media
+  type of its target went through every manifest item and normalised each
+  path, twice per fragment; it is now a lookup.
+- **The rules written in Schematron skip elements they cannot apply to**
+  before resolving any namespace, and the grammar engine no longer allocates
+  when it looks up an attribute name it has already seen.
 
 ### Fixed
 
