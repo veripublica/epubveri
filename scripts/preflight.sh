@@ -281,6 +281,50 @@ else
     skip "shelf not on this machine ($SHELF) — the only real-book check is absent"
   fi
 
+  # Per-book speed against the PREVIOUS RELEASE binary. 0.19.0's notes said
+  # "no book got slower", measured against a build that already held its own
+  # changes; against 0.18.0 six shelf books were more than 20% slower (worst
+  # 0.11 s -> 0.37 s) while the shelf total went down 9% and hid them. So the
+  # baseline is the published binary, not a local build, and each book is
+  # judged alone. Before the tag, releases/latest *is* the previous release.
+  SHELF_DIR="$(dirname "$SHELF")"
+  if [ ! -d "$SHELF_DIR" ]; then
+    skip "speed vs previous release: no shelf ($SHELF_DIR)"
+  elif ! command -v gh >/dev/null; then
+    skip "speed vs previous release: needs gh to fetch the previous binary"
+  else
+    PREV_TAG=$(gh release view --repo veripublica/epubveri --json tagName --jq .tagName 2>/dev/null)
+    TRIPLE=$(rustc -vV | sed -n 's/^host: //p')
+    TARGET_DIR=$(jq -r .target_directory <<< "$META")
+    PREV_DIR="$TARGET_DIR/prev-release/$PREV_TAG"
+    PREV_BIN="$PREV_DIR/epubveri-$TRIPLE/epubveri"
+    if [ -z "$PREV_TAG" ]; then
+      skip "speed vs previous release: could not read releases/latest"
+    elif [ "$PREV_TAG" = "v$VERSION" ]; then
+      skip "speed vs previous release: v$VERSION is already latest (run this before the tag)"
+    else
+      if [ ! -x "$PREV_BIN" ]; then
+        mkdir -p "$PREV_DIR"
+        gh release download "$PREV_TAG" --repo veripublica/epubveri \
+          --pattern "epubveri-$TRIPLE.tar.gz" --dir "$PREV_DIR" --clobber >/dev/null 2>&1 \
+          && tar xzf "$PREV_DIR/epubveri-$TRIPLE.tar.gz" -C "$PREV_DIR"
+      fi
+      if [ ! -x "$PREV_BIN" ] || ! "$PREV_BIN" --version 2>/dev/null | grep -q "^epubveri ${PREV_TAG#v}+"; then
+        bad "speed vs previous release: could not get the $PREV_TAG binary for $TRIPLE"
+      else
+        cargo build --release -q --bin epubveri >/dev/null 2>&1
+        cargo build --release -q -p epubveri-harness --bin speed >/dev/null 2>&1
+        if SPEED=$("$TARGET_DIR/release/speed" --old "$PREV_BIN" --new "$TARGET_DIR/release/epubveri" "$SHELF_DIR" 2>&1); then
+          ok "speed vs $PREV_TAG: no book more than 20% and 10 ms slower"
+          grep "whole set" <<< "$SPEED" | sed 's/^/      /'
+        else
+          bad "speed vs $PREV_TAG: books got slower — profile them before releasing"
+          printf '%s\n' "$SPEED" | tail -12 | sed 's/^/        /'
+        fi
+      fi
+    fi
+  fi
+
   # docs/COVERAGE.md is generated; a stale one is a published document that
   # disagrees with the code.
   cargo run --release -q -p epubveri-harness --bin coverage >/dev/null 2>&1
