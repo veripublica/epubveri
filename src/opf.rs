@@ -13757,10 +13757,58 @@ fn check_image_signatures(
                         "opf.manifest_item.extension_format_mismatch",
                         vec![ext.clone(), actual.to_string()],
                     );
+                } else if image_dimensions_unreadable(ocf, &orig, actual, &bytes) {
+                    // **PKG-021 for a signature that matches but a header that
+                    // does not reach the dimensions** (#138). epubcheck reads
+                    // the size only when the extension agrees with the format -
+                    // otherwise it stops at PKG-022 - and then asks its reader
+                    // for width and height, which throws on a truncated or
+                    // invalid header. It never decodes the pixels, so this
+                    // does not either: see `image::header`.
+                    report.push_at_rule(
+                        PKG_021,
+                        Severity::Error,
+                        format!(
+                            "image '{path}' is corrupt: its {actual} header ends or breaks \
+                             before the image's width and height"
+                        ),
+                        path.as_str(),
+                        "opf.manifest_item.image_header_unreadable",
+                        vec![path.to_string(), actual.to_string()],
+                    );
                 }
             }
         }
     }
+}
+
+/// Whether an image's header stops before its dimensions, reading only as far
+/// as the answer needs. Most JPEGs put their SOF within the first few hundred
+/// bytes, so the file is read in growing windows rather than whole: a full
+/// read of every image is what once put a 70 MB image over the size limit.
+/// A header that has not settled within the last window is left alone.
+fn image_dimensions_unreadable(ocf: &mut Ocf, name: &str, format: &str, signature: &[u8]) -> bool {
+    // The signature read comes first and settles most files by itself: a
+    // PNG's IHDR ends at byte 29, and every extra read of every image showed
+    // up per book in the pre-flight speed gate.
+    let complete = (signature.len() as u64) < crate::ocf::SIGNATURE_BYTES;
+    match crate::image::header(format, signature, complete) {
+        crate::image::Header::Unreadable => return true,
+        crate::image::Header::Readable => return false,
+        crate::image::Header::NeedMore => {}
+    }
+    for window in [4 << 10, 64 << 10, 1 << 20] {
+        let Some(head) = ocf.read_head_content(name, window) else {
+            return false;
+        };
+        let complete = (head.len() as u64) < window;
+        match crate::image::header(format, &head, complete) {
+            crate::image::Header::Unreadable => return true,
+            crate::image::Header::Readable => return false,
+            crate::image::Header::NeedMore => {}
+        }
+    }
+    false
 }
 
 /// Recognized font Core Media Types, assembled from every real media-type
@@ -24976,6 +25024,8 @@ mod tests {
         assert_eq!(ids("ch2.xhtml", false), vec![RSC_007]);
     }
 
+    const CONTAINER_ROOT_OPF: &str = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+
     /// A zip from `(name, body)` pairs, `mimetype` first and stored. The
     /// container points at `content.opf` in the root.
     fn zip_book(files: &[(&str, &str)]) -> Vec<u8> {
@@ -25528,6 +25578,61 @@ mod tests {
             "an item without a media-type still has the id"
         );
         assert!(run("fig_backad", "", false).is_empty(), "advisory only");
+    }
+
+    /// #138: a JPEG with a valid signature cut before its SOF segment is
+    /// PKG-021, as in epubcheck. The same file cut after its SOF is not, and
+    /// a truncated image whose extension disagrees with its format stops at
+    /// PKG-022 there and here.
+    #[test]
+    fn a_truncated_image_header_is_pkg_021_only_before_its_dimensions() {
+        use crate::ids::{PKG_021, PKG_022};
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        let run = |name: &str, data: &[u8]| {
+            let opf = opf3(
+                "",
+                &format!(r#"{CH1_ITEM}<item id="i" href="{name}" media-type="image/jpeg"/>"#),
+                r#"<itemref idref="c1"/>"#,
+            );
+            let ch1 = xhtml3(&format!(r#"<p><img src="{name}" alt=""/></p>"#));
+            let mut buf = Vec::new();
+            {
+                let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+                let stored =
+                    SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+                z.start_file("mimetype", stored).unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let o = SimpleFileOptions::default();
+                for (n, body) in [
+                    ("META-INF/container.xml", CONTAINER_ROOT_OPF.as_bytes()),
+                    ("content.opf", opf.as_bytes()),
+                    ("nav.xhtml", nav3().as_bytes()),
+                    ("ch1.xhtml", ch1.as_bytes()),
+                    (name, data),
+                ] {
+                    z.start_file(n, o).unwrap();
+                    z.write_all(body).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            ids_among(buf, &[PKG_021, PKG_022])
+        };
+        let app0: &[u8] = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00";
+        let mut after_sof = b"\xff\xd8".to_vec();
+        after_sof.extend_from_slice(
+            b"\xff\xc0\x00\x11\x08\x00\x01\x00\x01\x03\x01\x11\x00\x02\x11\x01\x03\x11\x01",
+        );
+        assert_eq!(run("i.jpg", app0), vec![PKG_021], "the issue's file");
+        assert!(
+            run("i.jpg", &after_sof).is_empty(),
+            "cut after SOF: nothing"
+        );
+        assert_eq!(
+            run("i.png", app0),
+            vec![PKG_022],
+            "wrong extension: PKG-022 alone"
+        );
     }
 
     #[test]

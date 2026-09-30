@@ -8,6 +8,21 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An image whose header stops before its width and height is PKG-021, as
+  in epubcheck.** epubveri checked only an image's signature, so a JPEG cut
+  short before its SOF segment, a PNG with a truncated or invalid IHDR chunk,
+  or a GIF that ends before its first image descriptor passed without a
+  finding. epubcheck asks its image reader for the dimensions and reports
+  PKG-021 when it cannot get them; epubveri now reads the same header. It
+  does not look further: epubcheck never decodes the pixels, so a JPEG cut
+  after its SOF or a PNG with no IEND is still not reported, by either tool.
+  Reported with a reproduction by killo3967 (#138); 43 shapes probed
+  against epubcheck 5.4.0 give the same answer from both.
+
 ## [0.19.1] - 2026-09-30
 
 **0.19.0 made a few books slower; this release fixes that, and adds one
