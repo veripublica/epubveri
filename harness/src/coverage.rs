@@ -493,7 +493,15 @@ const ANN: &[Ann] = &[
          exception - a block with three descriptors gives 3x. Mostly from one \
          producer whose blocks each carry \
          four descriptors - which is why the ratio looks like a suspiciously \
-         exact 4x."),
+         exact 4x. **Re-decided 2026-09-30, still left as is.** No spec \
+         clause covers this note or how often it is counted: EPUB 3.4 never \
+         mentions `@font-face` (fonts are exempt resources, §3.4) and defines \
+         no usage severity (§2.1 maps MUST to errors and SHOULD to warnings); \
+         OPS 2.0.1 §3.4 supports `@font-face` and says nothing about \
+         reporting it. CSS-028 is epubcheck's own informational note \
+         (`CSSHandler`:370), so both counts are true and the choice is a \
+         product one. Per declaration would multiply the note in the plugin \
+         panels, where users already read it as an error (374286 #206, #209)."),
     // --- MED (reviewed) ---
     ("MED-004", None,
         "Reserved for a file too short to contain a 4-byte image header, \
