@@ -8,7 +8,14 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.20.0] - 2026-10-01
+
+**A corrupt image header is now reported as epubcheck reports it.** An
+image whose header stops before its width and height gets PKG-021, an error,
+where epubveri said nothing before; a book with such an image can now fail
+where it passed. That is why this is a minor release. epubveri still reports
+nothing that epubcheck does not: a book epubcheck passes passes here too. The
+library's API is unchanged.
 
 ### Fixed
 
