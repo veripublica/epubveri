@@ -162,7 +162,7 @@ fn check_unreferenced_remote_item(
 /// Type, which is a wider set than a Content Document.
 pub(crate) fn fallback_reaches_content_document(
     start_id: &str,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     fallback_map: &HashMap<String, String>,
     is_epub3: bool,
 ) -> bool {
@@ -848,10 +848,7 @@ fn declared_media_type<'a>(media: &'a MediaByPath, resolved: &str) -> Option<&'a
 /// reached first.
 type MediaByPath = HashMap<String, String>;
 
-fn media_by_path(
-    items: &HashMap<String, (String, String)>,
-    items_by_path: &ItemsByPath,
-) -> MediaByPath {
+fn media_by_path(items: &ManifestItems, items_by_path: &ItemsByPath) -> MediaByPath {
     let mut out: MediaByPath = items_by_path
         .iter()
         .filter(|(path, (id, _))| items.get(id).is_some_and(|(p, _)| nfc(p) == **path))
@@ -948,7 +945,7 @@ fn missing_fragment_id(media: &MediaByPath, resolved: &str) -> &'static str {
 /// having been implemented on the two toc paths only.
 fn hyperlink_abort(
     target: &str,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
     spine_order: &HashMap<String, usize>,
@@ -1003,6 +1000,17 @@ fn hyperlink_abort(
 /// `OPFItems` builds its URL map by `put` in manifest order, so the *last*
 /// item with a path is the one every lookup sees, and so is it here.
 type ItemsByPath = HashMap<String, (String, String)>;
+
+/// The manifest by id: id -> (resolved path, media type).
+///
+/// **Ordered, not hashed.** A dozen checks walk it, and a `HashMap` hands each
+/// of them a different order on every run: findings with no position, or
+/// in different files, then came out shuffled between runs of the same book
+/// (OPF-073, OPF-080, the image checks), and a `values().find(..)` over two
+/// items sharing a path could answer differently. Id order is not manifest
+/// order — `manifest_order` is kept for the loops where that matters — but
+/// it is the same order every time.
+pub(crate) type ManifestItems = std::collections::BTreeMap<String, (String, String)>;
 
 const SVG_NS: &str = "http://www.w3.org/2000/svg";
 
@@ -2326,7 +2334,14 @@ enum PrefixFault {
 /// Known gap: OPF-004f needs whitespace that Guava's `CharMatcher.whitespace()`
 /// accepts but that is not one of space/tab/CR/LF - a vertical tab, say.
 /// Tab-separated mappings are legal and measured as such.
-fn parse_prefix_value(value: &str) -> (HashMap<String, String>, Vec<PrefixFault>) {
+///
+/// The mappings come back in the order they are written, because the
+/// OPF-006/OPF-007 findings are reported by walking them: as a hash map they
+/// came out in a different order on every run (two findings at the same
+/// position on epubcheck's `prefix-reserved-overridden-warning`, six orders in
+/// six runs). A prefix written twice keeps its first place and its last URI,
+/// which is what the map held.
+fn parse_prefix_value(value: &str) -> (Vec<(String, String)>, Vec<PrefixFault>) {
     #[derive(Clone, Copy, PartialEq)]
     enum State {
         Start,
@@ -2357,7 +2372,7 @@ fn parse_prefix_value(value: &str) -> (HashMap<String, String>, Vec<PrefixFault>
     }
 
     let chars: Vec<char> = value.chars().collect();
-    let mut pairs = HashMap::new();
+    let mut pairs: Vec<(String, String)> = Vec::new();
     let mut faults = Vec::new();
     let mut state = State::Start;
     let mut prefix: Option<String> = None;
@@ -2424,7 +2439,10 @@ fn parse_prefix_value(value: &str) -> (HashMap<String, String>, Vec<PrefixFault>
             }
             State::Uri => {
                 if let Some(p) = prefix.take() {
-                    pairs.insert(p, run.clone());
+                    match pairs.iter_mut().find(|(n, _)| *n == p) {
+                        Some((_, uri)) => *uri = run.clone(),
+                        None => pairs.push((p, run.clone())),
+                    }
                 }
                 state = State::Whitespace;
             }
@@ -2696,7 +2714,7 @@ fn check_prefix_declaration(
             );
         }
     }
-    pairs
+    pairs.into_iter().collect()
 }
 
 /// OPF-028: a `prefix:term` token (from an `epub:type`/`property`/
@@ -3198,7 +3216,7 @@ fn check_guide_references(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     target_ids: &mut TargetIds,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     items_by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
     is_epub3: bool,
@@ -3418,7 +3436,7 @@ fn check_ncx_content_fragments(
     ocf: &mut Ocf,
     name_index: &HashMap<String, String>,
     target_ids: &mut TargetIds,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     items_by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
     spine_order: &HashMap<String, usize>,
@@ -5761,7 +5779,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     // --- manifest ---
     // id -> (resolved-path, media-type)
-    let mut items: HashMap<String, (String, String)> = HashMap::new();
+    let mut items = ManifestItems::new();
     // The same items by NFC path, in epubcheck's order; see `ItemsByPath`.
     let mut items_by_path = ItemsByPath::new();
     let mut target_ids = TargetIds::new();
@@ -6378,7 +6396,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             Vec::new(),
         );
     }
-    for target in fallback_map.values() {
+    // Sorted: these carry no position, so their order in the report is the
+    // order they are pushed in, and a hash map's values come out differently
+    // on every run.
+    let mut fallback_targets: Vec<&String> = fallback_map.values().collect();
+    fallback_targets.sort();
+    for target in fallback_targets {
         if !items.contains_key(target) {
             report.push_at(
                 OPF_040,
@@ -6388,7 +6411,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             );
         }
     }
-    for target in fallback_style_map.values() {
+    let mut fallback_style_targets: Vec<&String> = fallback_style_map.values().collect();
+    fallback_style_targets.sort();
+    for target in fallback_style_targets {
         if !items.contains_key(target) {
             report.push_at(
                 OPF_041,
@@ -12795,7 +12820,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
     }
 
-    let all_docs: HashSet<&String> = content_doc_overlay
+    // Sorted, not hashed: each document gets its findings in this loop, and
+    // the first finding a file gets decides where the file sits in the
+    // report. As a hash set this moved files around between runs of the same
+    // book (epubcheck's `mediaoverlays-duration-single-not-defined-error`).
+    let all_docs: std::collections::BTreeSet<&String> = content_doc_overlay
         .keys()
         .chain(referenced_by.keys())
         .collect();
@@ -13017,7 +13046,7 @@ fn check_dictionaries(
     pkg: &roxmltree::Node,
     is_dictionary_pub: bool,
     dictionary_marked_docs: &HashSet<String>,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     items_by_path: &ItemsByPath,
     item_properties: &HashMap<String, String>,
     base_dir: &str,
@@ -13618,7 +13647,7 @@ fn extract_doctype_ids(text: &str) -> Option<(String, String)> {
 /// the NCX public id with an arbitrary, non-DAISY system id).
 fn check_external_identifiers(
     ocf: &mut Ocf,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     name_index: &HashMap<String, String>,
     opf_path: &str,
     is_epub3: bool,
@@ -13675,7 +13704,7 @@ const SNIFFABLE_IMAGE_TYPES: [&str; 4] = ["image/jpeg", "image/png", "image/gif"
 /// against in the first place).
 fn check_image_signatures(
     ocf: &mut Ocf,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     name_index: &HashMap<String, String>,
     report: &mut Report,
 ) {
@@ -13921,7 +13950,7 @@ impl LinkedSheet {
 }
 
 struct ResourceView<'a> {
-    items: &'a HashMap<String, (String, String)>,
+    items: &'a ManifestItems,
     items_by_path: &'a ItemsByPath,
     name_index: &'a HashMap<String, String>,
 }
@@ -14103,7 +14132,7 @@ fn check_encrypted_resources(ocf: &Ocf, manifest_order: &[(String, String)], rep
 
 fn check_font_obfuscation(
     ocf: &mut Ocf,
-    items: &HashMap<String, (String, String)>,
+    items: &ManifestItems,
     name_index: &HashMap<String, String>,
     report: &mut Report,
 ) {
@@ -17065,7 +17094,7 @@ mod tests {
     fn font_face_target_missing_from_the_publication() {
         let css = "@font-face{font-family:X;src:url(f.ttf)}";
         let run = |declared: bool, present: bool| {
-            let mut items = std::collections::HashMap::new();
+            let mut items = super::ManifestItems::new();
             if declared {
                 items.insert(
                     "f".to_string(),
@@ -22576,6 +22605,21 @@ mod tests {
         );
     }
 
+    /// Mappings come back in the order written, so the findings walked out of
+    /// them do too; a prefix written twice keeps its first place and its last
+    /// URI, as the hash map they replace held it.
+    #[test]
+    fn prefix_mappings_keep_their_written_order() {
+        let (pairs, _) = super::parse_prefix_value("b: http://b a: http://a b: http://b2");
+        assert_eq!(
+            pairs,
+            [
+                ("b".to_string(), "http://b2".to_string()),
+                ("a".to_string(), "http://a".to_string()),
+            ]
+        );
+    }
+
     /// OPF-005 (#50): a prefix declaration ending in a name with no URI.
     /// epubcheck reports this *instead of* a syntax error, not alongside one -
     /// its parser ends in the URI state, which is not one of its FINAL_STATES,
@@ -22591,8 +22635,8 @@ mod tests {
             "OPF-005 replaces the syntax error, it doesn't add"
         );
         assert_eq!(
-            pairs.get("foaf").map(String::as_str),
-            Some("http://xmlns.com/foaf/")
+            pairs,
+            [("foaf".to_string(), "http://xmlns.com/foaf/".to_string())]
         );
 
         // A bare ":" names no prefix. The whole value is read as one

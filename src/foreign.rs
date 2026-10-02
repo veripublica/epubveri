@@ -61,7 +61,7 @@ pub(crate) struct ResourceStatus {
 /// Core Media Type.
 pub(crate) fn fallback_reaches_core(
     start_id: &str,
-    items: &HashMap<String, (String, String)>,
+    items: &crate::opf::ManifestItems,
     fallback_map: &HashMap<String, String>,
 ) -> bool {
     let mut cur = start_id;
@@ -85,7 +85,7 @@ pub(crate) fn fallback_reaches_core(
 /// Builds the resolved-resource-key (nfc'd local path, or full remote URL)
 /// -> status map every per-content-doc check below looks resources up in.
 pub(crate) fn build_resource_status(
-    items: &HashMap<String, (String, String)>,
+    items: &crate::opf::ManifestItems,
     fallback_map: &HashMap<String, String>,
     is_epub3: bool,
 ) -> HashMap<String, ResourceStatus> {
@@ -594,7 +594,7 @@ mod tests {
     /// was toothless.
     #[test]
     fn script_src_is_exempt_from_the_fallback_requirement() {
-        let mut items = HashMap::new();
+        let mut items = crate::opf::ManifestItems::new();
         items.insert(
             "w".to_string(),
             ("mod.wasm".to_string(), "application/wasm".to_string()),
@@ -660,7 +660,7 @@ mod tests {
     /// assertion vacuous in the direction that looks like a pass.
     #[test]
     fn a_restricted_remote_reference_is_not_also_asked_for_a_fallback() {
-        let mut items = HashMap::new();
+        let mut items = crate::opf::ManifestItems::new();
         items.insert(
             "v".to_string(),
             (
@@ -731,7 +731,7 @@ mod tests {
     /// - and the positive case is the only thing that changed.
     #[test]
     fn a_video_exempts_its_references_by_position_except_audio() {
-        let mut items = HashMap::new();
+        let mut items = crate::opf::ManifestItems::new();
         items.insert(
             "p".to_string(),
             (
@@ -807,7 +807,7 @@ mod tests {
     /// the negative, so that widening this walk again fails loudly.
     #[test]
     fn iframe_and_input_owe_a_fallback_and_script_does_not() {
-        let mut items = HashMap::new();
+        let mut items = crate::opf::ManifestItems::new();
         items.insert(
             "w".to_string(),
             ("x.bin".to_string(), "application/octet-stream".to_string()),

@@ -1,7 +1,5 @@
 //! EPUB Previews 1.0 checks (<http://idpf.org/epub/previews/>).
 
-use std::collections::HashMap;
-
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
@@ -106,7 +104,7 @@ pub(crate) fn check_preview_publication(
 /// otherwise) and must not use an EPUB CFI fragment (OPF-076).
 pub(crate) fn check_embedded_preview(
     pkg: &roxmltree::Node,
-    items: &HashMap<String, (String, String)>,
+    items: &crate::opf::ManifestItems,
     base_dir: &str,
     opf_path: &str,
     report: &mut Report,

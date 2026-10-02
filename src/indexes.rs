@@ -624,7 +624,7 @@ pub(crate) fn linked_paths(pkg: &roxmltree::Node, base_dir: &str) -> HashSet<Str
 
 fn check_links_are_xhtml(
     coll: roxmltree::Node,
-    items: &std::collections::HashMap<String, (String, String)>,
+    items: &crate::opf::ManifestItems,
     base_dir: &str,
     opf_path: &str,
     report: &mut Report,
@@ -656,7 +656,7 @@ fn check_links_are_xhtml(
 
 fn check_index_group(
     coll: roxmltree::Node,
-    items: &std::collections::HashMap<String, (String, String)>,
+    items: &crate::opf::ManifestItems,
     base_dir: &str,
     opf_path: &str,
     report: &mut Report,
@@ -680,7 +680,7 @@ fn check_index_group(
 
 fn check_index_collection(
     coll: roxmltree::Node,
-    items: &std::collections::HashMap<String, (String, String)>,
+    items: &crate::opf::ManifestItems,
     base_dir: &str,
     opf_path: &str,
     report: &mut Report,
@@ -715,7 +715,7 @@ fn check_index_collection(
 /// targets must resolve to a real XHTML Content Document manifest item.
 pub(crate) fn check_collections(
     pkg: &roxmltree::Node,
-    items: &std::collections::HashMap<String, (String, String)>,
+    items: &crate::opf::ManifestItems,
     base_dir: &str,
     opf_path: &str,
     report: &mut Report,

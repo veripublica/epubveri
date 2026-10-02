@@ -247,6 +247,42 @@ else
   check "hostile (no abort, panic or timeout)" \
     cargo run --release -q -p epubveri-harness --bin hostile
 
+  # Same book, same binary, same bytes. Every other instrument compares id
+  # sets or counts, which cannot see order, so two separate times a check
+  # that walked a hash map shuffled the report between runs of the same
+  # book and nothing noticed: 94 of 385 shelf books once, then (2026-10-02)
+  # OPF-007, MED-013 and every check over the manifest map. Three runs, since
+  # a two-way shuffle repeats itself half the time. epubcheck's fixtures are
+  # where the 2026-10-02 cases showed; the shelf, when present, adds real
+  # books.
+  DET_BOOKS="$(jq -r .target_directory <<< "$META")/determinism-books"
+  check "determinism (corpus fixtures + shelf, 3 runs each, identical output)" \
+    bash -c '
+      set -e
+      cargo build --release -q --bin epubveri
+      bin="$1/release/epubveri"
+      rm -rf "$2"
+      cargo run --release -q -p epubveri-harness --bin corpus -- --dump-books "$2" >/dev/null 2>&1
+      n=0; unstable=0
+      while IFS= read -r -d "" f; do
+        n=$((n+1)); first=""
+        for i in 1 2 3; do
+          out=$("$bin" -u --advisory --format json -i "$f" 2>/dev/null || true)
+          # Empty output on every run would compare equal; that is a binary
+          # that did not run, not a deterministic one.
+          if ! printf "%s" "$out" | jq -e .inputs >/dev/null 2>&1; then
+            echo "no report for: $f"; exit 1
+          fi
+          h=$(printf "%s" "$out" | cksum)
+          if [ -z "$first" ]; then first=$h
+          elif [ "$h" != "$first" ]; then echo "differs between runs: $f"; unstable=$((unstable+1)); break; fi
+        done
+      done < <(find "$2" "$3" -name "*.epub" -print0 2>/dev/null)
+      echo "$n books, $unstable unstable"
+      [ "$n" -gt 0 ] && [ "$unstable" -eq 0 ]
+    ' _ "$(jq -r .target_directory <<< "$META")" "$DET_BOOKS" \
+      "${SHELF_DIR_FOR_DETERMINISM:-$HOME/Documents/Projects/ebook-shelf}"
+
   # Mutation fuzzing, fixed seeds so the gate is deterministic. Two seeds of
   # 3,000 because that is what it takes: with the `scan_references` panic put
   # back, seed 1 first hits it at book 2,270 and seed 2 at book 2,592. Explore

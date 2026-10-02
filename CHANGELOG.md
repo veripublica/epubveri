@@ -43,6 +43,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   books, is identical to 0.20.0's, and the shelf as a whole runs 1.4% faster
   with no book slower. The hostile corpus gained three shapes sized so that
   the old behaviour times out.
+- **The same book gives the same report on every run.** Findings at the same
+  position, or with no position at all, came out in an order that changed
+  from run to run whenever the check that found them walked a hash map. The
+  same happened to the order of files when a file's first finding came from
+  such a check. Seen on epubcheck's own test publications: two `prefix`
+  findings at one spot came out in six different orders in six runs, and
+  two `media-overlay` findings swapped files. The set of findings was always
+  the same, so verdicts and counts never moved, but a report that reshuffles
+  itself cannot be diffed. The manifest map behind a dozen checks (image
+  sniffing, DOCTYPE identifiers, Search Key Maps, fallbacks) and the prefix
+  mappings are now walked in a fixed order. Every corpus fixture and shelf
+  book now gives byte-identical output across repeated runs, and the
+  pre-flight checks this.
 - **A declaration written directly inside `@media` (or `@supports`, …) is no
   longer CSS-008.** `@media print { color: red }` was reported as a rule that
   never got its block. epubcheck says nothing there, so a book epubcheck
