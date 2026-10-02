@@ -17,25 +17,22 @@
 //!   **RSC-001**, matching the existing XHTML broken-reference check's
 //!   message shape, since a missing resource is a missing resource
 //!   regardless of which document type found it) — this also reaches
-//!   nested rules inside e.g. `@media` blocks for free, since styloria's
-//!   core grammar represents a nested rule's `{ ... }` as an ordinary
-//!   `ComponentValue::Block` that the walk below already recurses into.
+//!   nested rules inside e.g. `@media` blocks, since the walk below
+//!   descends into every block styloria parses.
 //!
-//! The finding-emitting pass (`check`) walks styloria's **span-carrying**
-//! parse tree (`styloria::spanned`), so every CSS finding now reports the
+//! Every pass here walks styloria's one parse tree, which carries a span on
+//! every node (styloria 0.12), so every CSS finding reports the
 //! exact `line:column` of the offending token — the last finding family in
 //! epubveri that used to carry only a file path (issue #1; Kevin Hendricks /
-//! Sigil asked for CSS positions specifically). The position-less pub
-//! helpers below (`stylesheet_urls`, `import_targets`, `selector_class_names`,
-//! `font_face_src_urls_spanned`) are still consumed by `opf.rs` off the plain
-//! `styloria::Stylesheet`, so they keep the plain parser — they don't need
-//! positions.
+//! Sigil asked for CSS positions specifically). The pub helpers
+//! `opf.rs` calls (`stylesheet_urls`, `import_targets`, `selector_class_names`)
+//! read the same tree and drop the spans they have no use for.
 
 use std::collections::{HashMap, HashSet};
 
 use styloria::{
-    BlockKind, ComponentValue, DiagnosticKind, Parser, Rule, Span, Spanned, Token, spanned,
-    validate_declaration_list, validate_stylesheet,
+    Block, BlockItem, ComponentValue, Declaration, DiagnosticKind, Rule, Span, Spanned, Stylesheet,
+    SyntaxError, SyntaxErrorKind, Token, validate_parsed_stylesheet,
 };
 
 use crate::ids::*;
@@ -217,7 +214,7 @@ pub(crate) fn check(
         CssOrigin::Inline { doc, .. } => Some(LocationIndex::scope(doc)),
         CssOrigin::Opaque(_) => None,
     };
-    let (sheet, syntax_errs) = spanned::parse_stylesheet_with_errors(css);
+    let (sheet, syntax_errs) = styloria::parse_stylesheet(css);
 
     // Encoding checks only make sense for a standalone CSS file - see
     // `CssOrigin::File`, which is why the bytes live there rather than
@@ -274,10 +271,10 @@ pub(crate) fn check(
     let mut urls: Vec<Spanned<String>> = Vec::new();
     // **A rule whose block never closed does not get its declarations
     // second-guessed.** An unclosed `{` swallows everything after it — the
-    // next rule's selector and braces included — so the "declaration list"
-    // inside it is not a declaration list at all, and every shape complaint
-    // it produces is a consequence of the one defect the parser has already
-    // reported as `UnterminatedBlock`.
+    // next rule's selector and braces included — so what the parser finds
+    // inside it is not what the author wrote as one block, and every shape
+    // complaint it produces is a consequence of the one defect the parser has
+    // already reported as `UnterminatedBlock`.
     //
     // Measured on `content-css-syntax-error`, which has two unclosed blocks:
     // styloria reports exactly two errors and so does epubcheck; the third
@@ -290,18 +287,29 @@ pub(crate) fn check(
     // Positions still differ from epubcheck's and that is left alone: it
     // points at the token that got confused (or at EOF), we point at the `{`
     // that was never closed, which is the one an author has to fix.
+    //
+    // It holds at any depth: a rule inside `@media` whose block a broken
+    // string left open is the same case one level down.
     let unterminated: Vec<usize> = syntax_errs
         .iter()
-        .filter(|e| e.kind == spanned::SyntaxErrorKind::UnterminatedBlock)
+        .filter(|e| e.kind == SyntaxErrorKind::UnterminatedBlock)
         .map(|e| e.span.start)
         .collect();
-    let block_never_closed =
-        |start: usize, end: usize| unterminated.iter().any(|u| start <= *u && *u < end);
+    let ctx = Ctx {
+        css,
+        css_path,
+        origin,
+        is_epub3,
+        unterminated: &unterminated,
+    };
+    // Spans whose inner syntax errors are already accounted for: see
+    // `Quiet`.
+    let mut quiet = Quiet::default();
     for rule in &sheet.rules {
         match &rule.node {
-            spanned::Rule::Qualified(q) => {
-                collect_urls_spanned(&q.prelude, css, &mut urls);
-                collect_urls_spanned(&q.block.node.values, css, &mut urls);
+            Rule::Qualified(q) => {
+                collect_urls_spanned(&q.prelude, &mut urls);
+                collect_block_urls(&q.block.node, &mut urls);
                 // A style rule with no selector at all - a stray `{ … }` after
                 // a complete rule. CSS Syntax parses it as a qualified rule
                 // with an empty prelude, and Selectors requires at least one
@@ -319,42 +327,17 @@ pub(crate) fn check(
                         Vec::new(),
                     );
                 }
-                if !block_never_closed(rule.span.start, rule.span.end) {
-                    check_declaration_shapes_spanned(
-                        &q.block.node.values,
-                        css,
-                        css_path,
-                        origin,
-                        is_epub3,
-                        report,
-                    );
-                }
+                walk_rule_block(rule, &q.block, ctx, &mut quiet, report);
             }
-            spanned::Rule::At(a) => {
-                collect_urls_spanned(&a.prelude, css, &mut urls);
+            Rule::At(a) => {
+                collect_urls_spanned(&a.prelude, &mut urls);
                 if let Some(block) = &a.block {
                     if a.name.eq_ignore_ascii_case("font-face") {
-                        check_font_face_spanned(
-                            &block.node.values,
-                            a.name_span,
-                            css,
-                            css_path,
-                            origin,
-                            report,
-                        );
+                        check_font_face(block, a.name_span, ctx, report);
                     } else {
-                        collect_urls_spanned(&block.node.values, css, &mut urls);
+                        collect_block_urls(&block.node, &mut urls);
                     }
-                    check_at_rule_block_spanned(
-                        &a.name,
-                        &block.node.values,
-                        css,
-                        css_path,
-                        origin,
-                        advisory,
-                        is_epub3,
-                        report,
-                    );
+                    walk_at_rule_block(&a.name, &block.node, ctx, &mut quiet, report);
                 }
                 if a.name.eq_ignore_ascii_case("import")
                     && let Some(target) = import_target_spanned(&a.prelude)
@@ -366,21 +349,9 @@ pub(crate) fn check(
     }
 
     // CSS-008: the syntax errors styloria's (error-recovering) parser
-    // recovered from - bad string/url tokens, and unterminated rules/blocks -
-    // now surfaced by styloria 0.4's `syntax_errors` rather than re-derived
-    // here. In-block malformed declaration *shapes* aren't in this set (a
-    // rule block is parsed as raw component values; the declaration split
-    // happens in `check_declaration_shapes_spanned` below, which still emits
-    // its own CSS-008 for those).
-    report_syntax_errors(
-        collapse_selector_errors(&syntax_errs, &sheet.rules),
-        &sheet.rules,
-        css,
-        css_path,
-        origin,
-        advisory,
-        report,
-    );
+    // recovered from, anywhere in the tree, less the ones a walk above has
+    // already answered for (`quiet`).
+    report_syntax_errors(&syntax_errs, &sheet, &quiet, ctx, advisory, report);
     for u in urls {
         let url = u.node;
         let pos = origin.position(css, u.span.start);
@@ -479,8 +450,8 @@ pub(crate) fn check(
     // which epubcheck does not check. Off by default, so the default output is
     // byte-identical. Positions map through `origin` like every CSS finding.
     if advisory {
-        for r in styloria::spanned::parse_stylesheet(css).rules {
-            let styloria::spanned::Rule::Qualified(q) = &r.node else {
+        for r in &sheet.rules {
+            let Rule::Qualified(q) = &r.node else {
                 continue;
             };
             for name in styloria::type_selector_names(&q.prelude) {
@@ -502,7 +473,7 @@ pub(crate) fn check(
                 );
             }
         }
-        for d in validate_stylesheet(css) {
+        for d in validate_parsed_stylesheet(&sheet) {
             let (id, rule, text, params) = advisory_fields(&d);
             report.push_full(
                 id,
@@ -623,12 +594,19 @@ fn advisory_fields(d: &styloria::Diagnostic) -> (&'static str, &'static str, Str
     }
 }
 
-/// A `style="..."` attribute value is a plain declaration list (no
-/// enclosing braces) - reuses `check_declaration_shapes` (built for a CSS
-/// rule's block contents) by wrapping the text in a throwaway rule so
-/// styloria's existing tokenizer/parser produces the same
-/// `&[ComponentValue]` shape, rather than adding a new styloria entry
-/// point for a one-off caller.
+/// A `style="..."` attribute value: the contents of a block with no braces,
+/// which is what styloria's `parse_block_contents` reads.
+///
+/// Findings here anchor at the file, not a line:column: the attribute value
+/// reaches us unescaped, so an offset into it is not an offset into the
+/// document.
+///
+/// **Only a malformed item is CSS-008 here, as it was before styloria 0.12.**
+/// That is a declaration that is not `name: value` (styloria's
+/// `MalformedDeclaration` / `UnexpectedToken`) or a rule where a declaration
+/// belongs. A broken string or url inside an otherwise well-shaped
+/// declaration was never reported on this path, and widening that is a
+/// question for epubcheck parity, not a side effect of a parser change.
 pub(crate) fn check_style_attribute(
     value: &str,
     path: &str,
@@ -636,172 +614,209 @@ pub(crate) fn check_style_attribute(
     is_epub3: bool,
     report: &mut Report,
 ) {
-    let wrapped = format!("x{{{value}}}");
-    let sheet = Parser::parse_stylesheet(&wrapped);
-    if let Some(Rule::Qualified(q)) = sheet.rules.first() {
-        check_declaration_shapes(&q.block.values, path, is_epub3, report);
+    let (items, errors) = styloria::parse_block_contents(value);
+    for e in errors.iter().filter(|e| {
+        matches!(
+            e.kind,
+            SyntaxErrorKind::MalformedDeclaration | SyntaxErrorKind::UnexpectedToken
+        )
+    }) {
+        report.push_at_rule(
+            CSS_008,
+            Severity::Error,
+            syntax_error_text(value, e, None),
+            path,
+            "css.declaration.malformed_shape",
+            Vec::new(),
+        );
+    }
+    for item in &items {
+        match item {
+            BlockItem::Declaration(d) => {
+                check_style_attribute_declaration(&d.node, path, is_epub3, report)
+            }
+            BlockItem::Rule(r) => {
+                let text = match value.get(r.span.start..r.span.end).and_then(quote_css) {
+                    Some(q) => {
+                        format!("CSS syntax error: '{q}' is not a 'property: value' declaration")
+                    }
+                    None => "CSS syntax error".to_string(),
+                };
+                report.push_at_rule(
+                    CSS_008,
+                    Severity::Error,
+                    text,
+                    path,
+                    "css.declaration.malformed_shape",
+                    Vec::new(),
+                );
+            }
+        }
     }
 
-    // Opt-in advisory pass. A style attribute is a bare declaration list;
-    // styloria 0.3 validates one directly. No document byte-offset is available
-    // here, so the finding anchors at the file (path), not a line:column.
+    // Opt-in advisory pass. No document byte-offset is available here, so the
+    // finding anchors at the file (path), not a line:column.
     if advisory {
-        for d in validate_declaration_list(value) {
+        for d in styloria::validate_parsed_block(&items) {
             let (id, rule, text, params) = advisory_fields(&d);
             report.push_at_rule(id, Severity::Usage, text, path, rule, params);
         }
     }
 }
 
-const FLAGGED_PROPERTIES: [&str; 2] = ["direction", "unicode-bidi"];
-
-fn is_effectively_empty_spanned(values: &[Spanned<spanned::ComponentValue>]) -> bool {
-    values
-        .iter()
-        .all(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)))
-}
-
-/// Collapse a rule's `InvalidSelector` errors to one, keeping every other
-/// kind untouched.
-///
-/// styloria reports one per comma-separated selector, which is the right
-/// granularity for a CSS library and was settled deliberately in its #3.
-/// epubcheck's unit is the whole selector *list*: `. a, . b, . c { … }` is
-/// three findings there and one here (#81). A real book made the gap visible:
-/// `. h-100, . y-100 { … }` repeated down a stylesheet gave 22 CSS-008
-/// against epubcheck's 12. The CSS really is broken either way, but inventing
-/// ten extra errors on one file reads exactly like a false positive to anyone
-/// diffing the two tools.
-///
-/// The library keeps its answer; the consumer adapts. That is this project's
-/// standing rule about where epubcheck parity belongs.
-///
-/// Grouping is by the rule whose span encloses the error. Errors arrive
-/// sorted by position and rule spans do not overlap at one level, so
-/// remembering the last claimed rule is enough - no map needed.
-fn collapse_selector_errors<'a>(
-    errors: &'a [spanned::SyntaxError],
-    rules: &[Spanned<spanned::Rule>],
-) -> Vec<&'a spanned::SyntaxError> {
-    let mut out = Vec::new();
-    let mut claimed: Option<(usize, usize)> = None;
-    for e in errors {
-        if e.kind != spanned::SyntaxErrorKind::InvalidSelector {
-            out.push(e);
-            continue;
-        }
-        let owner = rule_at(rules, e.span.start).map(|r| (r.span.start, r.span.end));
-        match owner {
-            // A second bad selector in a rule already reported.
-            Some(o) if claimed == Some(o) => {}
-            Some(o) => {
-                claimed = Some(o);
-                out.push(e);
-            }
-            // No enclosing rule: not a selector-list error in practice, and
-            // dropping it would be the silent-skip trade this project keeps
-            // having to undo.
-            None => out.push(e),
-        }
-    }
-    out
-}
-
-/// Report styloria's syntax errors as CSS-008 — except a selector whose only
-/// fault is a class name that is not a CSS identifier (`.-`, `.-1`).
-///
-/// **The verdict there is epubcheck's.** Its scanner reads `.` followed by
-/// any CSS 2.1 `{name}` as a class (`CssScanner._classname`), so `span.-`
-/// passes; Selectors, CSS 2.1 and every browser want an *identifier*, which
-/// `-` and `-1` are not, and drop the whole rule. The spec is on our side and
-/// the verdict is not ours to move, so the finding becomes ADV-012 behind
-/// `--advisory` — a reader's 2,798-book library had one book flip on it.
-///
-/// "Only fault" is tested, not assumed: the prelude is re-validated with
-/// each such class name swapped for a placeholder identifier, and anything
-/// still wrong keeps its CSS-008.
-fn report_syntax_errors(
-    errors: Vec<&spanned::SyntaxError>,
-    rules: &[Spanned<spanned::Rule>],
-    css: &str,
-    css_path: &str,
-    origin: CssOrigin,
-    advisory: bool,
+/// The EPUB rules about one declaration in a `style` attribute: the
+/// stylesheet walk's [`check_declaration`] without positions.
+fn check_style_attribute_declaration(
+    d: &Declaration,
+    path: &str,
+    is_epub3: bool,
     report: &mut Report,
 ) {
-    for e in errors {
-        // Not a syntax error to epubcheck: its scanner reads the url, and the
-        // url checks report what is wrong with it. See `bad_url_target`. What
-        // CSS says about it is ADV-015, which leaves the verdict alone.
-        if e.kind == spanned::SyntaxErrorKind::BadUrl {
-            if advisory && let Some(token) = css.get(e.span.start..e.span.end) {
-                report.push_full(
-                    ADV_015,
-                    Severity::Usage,
-                    bad_url_text(token),
-                    css_path,
-                    origin.position(css, e.span.start),
-                    "css.url.bad_url_token",
-                    vec![token.to_string()],
-                );
-            }
-            continue;
-        }
-        let classes = (e.kind == spanned::SyntaxErrorKind::InvalidSelector)
-            .then(|| epubcheck_only_class_names(css, rules, e.span.start))
-            .flatten();
-        let Some(classes) = classes else {
-            report.push_full(
-                CSS_008,
-                Severity::Error,
-                syntax_error_text(css, e, rules),
-                css_path,
-                origin.position(css, e.span.start),
-                syntax_error_slug(e.kind),
-                Vec::new(),
-            );
-            continue;
-        };
-        if !advisory {
-            continue;
-        }
-        for (start, end) in classes {
-            let class = &css[start..end];
-            report.push_full(
-                ADV_012,
-                Severity::Usage,
-                format!(
-                    "'{class}' is not a class selector: a class name must be a CSS \
-                     identifier, so browsers ignore this whole rule"
-                ),
-                css_path,
-                origin.position(css, start),
-                "css.selector.class_not_identifier",
-                vec![class.to_string()],
-            );
-        }
+    let name = &d.name;
+    // `OBS-001`, the same rule the stylesheet walk applies. A `style`
+    // attribute is where W3C's own `css-epub-hyphens`,
+    // `css-epub-text-align-last` and `css-epub-word-break` tests put
+    // their prefixed properties, and the epub-tests run was the only
+    // instrument that could see the omission: no stylesheet on any
+    // shelf here carries one.
+    if name.starts_with("-epub-") {
+        report.push_at_rule(
+            OBS_001,
+            Severity::Usage,
+            format!("usage of the CSS prefixed property '{name}' is outdated"),
+            path,
+            "css.outdated_prefixed_property",
+            vec![name.to_string()],
+        );
+    } else if name.eq_ignore_ascii_case("text-transform") && has_epub_fullwidth(&d.value) {
+        report.push_at_rule(
+            OBS_001,
+            Severity::Usage,
+            "usage of the CSS prefixed value '-epub-fullwidth' is outdated",
+            path,
+            "css.outdated_prefixed_value",
+            vec!["-epub-fullwidth".to_string()],
+        );
+    }
+    if is_epub3
+        && FLAGGED_PROPERTIES
+            .iter()
+            .any(|p| name.eq_ignore_ascii_case(p))
+    {
+        report.push_at(
+            CSS_001,
+            Severity::Error,
+            format!("use of the '{name}' property is not recommended"),
+            path,
+        );
+    } else if name.eq_ignore_ascii_case("position") && is_position_fixed(&d.value) {
+        report.push_at(
+            CSS_006,
+            Severity::Usage,
+            "use of 'position: fixed' is not recommended".to_string(),
+            path,
+        );
     }
 }
 
-/// The rule in `rules` whose span holds `offset`. Rules at one level are in
-/// source order and do not overlap, so this is a binary search: a linear one
-/// per syntax error made a stylesheet of 100,000 malformed rules quadratic.
-fn rule_at<'r, 'c>(
-    rules: &'r [Spanned<spanned::Rule<'c>>],
-    offset: usize,
-) -> Option<&'r Spanned<spanned::Rule<'c>>> {
-    let i = rules.partition_point(|r| r.span.end <= offset);
-    rules.get(i).filter(|r| r.span.start <= offset)
+const FLAGGED_PROPERTIES: [&str; 2] = ["direction", "unicode-bidi"];
+
+/// What every walk below needs about the stylesheet it is reporting on.
+#[derive(Clone, Copy)]
+struct Ctx<'a> {
+    css: &'a str,
+    css_path: &'a str,
+    origin: CssOrigin<'a>,
+    is_epub3: bool,
+    /// Where each `UnterminatedBlock` starts, in order.
+    unterminated: &'a [usize],
 }
 
-/// The selector of the qualified rule in `rules` holding `offset`, and the
-/// byte offset in `css` where it starts.
-fn enclosing_prelude<'c>(
-    css: &'c str,
-    rules: &[Spanned<spanned::Rule>],
+impl Ctx<'_> {
+    /// Whether a `{` that never closed starts inside `span`: a binary search,
+    /// since a hostile sheet can hold one per rule.
+    fn never_closed(&self, span: Span) -> bool {
+        let i = self.unterminated.partition_point(|u| *u < span.start);
+        self.unterminated.get(i).is_some_and(|u| *u < span.end)
+    }
+}
+
+/// Spans of the tree whose inner shape errors a walk has already answered
+/// for, so `report_syntax_errors` does not report them a second time.
+///
+/// **This is how the 0.11 behaviour survives the 0.12 tree.** styloria
+/// 0.11 left a nested rule unparsed: `p { a { … } }` was one malformed
+/// declaration and nothing inside it was read. 0.12 parses it as a rule,
+/// with its own selector and declarations, and reports what is wrong
+/// inside. epubveri still reports the nested rule once (CSS Nesting is not
+/// in the CSS EPUB defers to; see `walk_style_block`), so what styloria
+/// finds inside it is a consequence of that one finding, not more findings.
+/// The same holds for a block that never closed, and for rules inside an
+/// at-rule whose block holds descriptors, which 0.11 skipped in silence.
+///
+/// Only the shape kinds are quieted. A broken string, url or unicode-range,
+/// an unclosed `{` and the nesting guard are about tokens, and were reported
+/// wherever they sat.
+#[derive(Default)]
+struct Quiet(Vec<Span>);
+
+impl Quiet {
+    fn push(&mut self, span: Span) {
+        self.0.push(span);
+    }
+
+    fn covers(&self, e: &SyntaxError) -> bool {
+        matches!(
+            e.kind,
+            SyntaxErrorKind::MalformedDeclaration
+                | SyntaxErrorKind::UnexpectedToken
+                | SyntaxErrorKind::InvalidSelector
+        ) && self
+            .0
+            .iter()
+            .any(|s| s.start <= e.span.start && e.span.start < s.end)
+    }
+}
+
+/// The innermost rule anywhere in `rules` whose span holds `offset`.
+///
+/// Rules and the items of a block are in source order and do not overlap at
+/// one level, so each level is a binary search: a linear one per syntax
+/// error made a stylesheet of 100,000 malformed rules quadratic.
+fn innermost_rule<'r, 'c>(
+    rules: &'r [Spanned<Rule<'c>>],
     offset: usize,
-) -> Option<(usize, &'c str)> {
-    let spanned::Rule::Qualified(q) = &rule_at(rules, offset)?.node else {
+) -> Option<&'r Spanned<Rule<'c>>> {
+    let i = rules.partition_point(|r| r.span.end <= offset);
+    let rule = rules.get(i).filter(|r| r.span.start <= offset)?;
+    Some(
+        rule.node
+            .block()
+            .and_then(|b| innermost_in_block(&b.node, offset))
+            .unwrap_or(rule),
+    )
+}
+
+fn innermost_in_block<'r, 'c>(
+    items: &'r [BlockItem<'c>],
+    offset: usize,
+) -> Option<&'r Spanned<Rule<'c>>> {
+    let i = items.partition_point(|it| it.span().end <= offset);
+    let BlockItem::Rule(rule) = items.get(i).filter(|it| it.span().start <= offset)? else {
+        return None;
+    };
+    Some(
+        rule.node
+            .block()
+            .and_then(|b| innermost_in_block(&b.node, offset))
+            .unwrap_or(rule),
+    )
+}
+
+/// A rule's selector as written, and the byte offset in `css` where it
+/// starts. `None` for an at-rule or an empty prelude.
+fn prelude_source<'c>(css: &'c str, rule: &Spanned<Rule>) -> Option<(usize, &'c str)> {
+    let Rule::Qualified(q) = &rule.node else {
         return None;
     };
     let start = q.prelude.first()?.span.start;
@@ -809,20 +824,135 @@ fn enclosing_prelude<'c>(
     Some((start, css.get(start..end)?))
 }
 
-/// The class names epubcheck accepts and CSS does not in the selector of the
-/// rule holding `offset`, as byte ranges of `css` (dot included) — or `None`
-/// when there are none, or when the selector is still invalid without them.
-fn epubcheck_only_class_names(
-    css: &str,
-    rules: &[Spanned<spanned::Rule>],
-    offset: usize,
-) -> Option<Vec<(usize, usize)>> {
-    let (start, prelude) = enclosing_prelude(css, rules, offset)?;
+/// Report styloria's syntax errors as CSS-008 — except a selector whose only
+/// fault is a class name that is not a CSS identifier (`.-`, `.-1`), a bad
+/// url, and what `quiet` covers.
+///
+/// **The verdict on a class name is epubcheck's.** Its scanner reads `.`
+/// followed by any CSS 2.1 `{name}` as a class (`CssScanner._classname`), so
+/// `span.-` passes; Selectors, CSS 2.1 and every browser want an
+/// *identifier*, which `-` and `-1` are not, and drop the whole rule. The
+/// spec is on our side and the verdict is not ours to move, so the finding
+/// becomes ADV-012 behind `--advisory` — a reader's 2,798-book library had
+/// one book flip on it. "Only fault" is tested, not assumed: the prelude is
+/// re-validated with each such class name swapped for a placeholder
+/// identifier, and anything still wrong keeps its CSS-008.
+///
+/// **One finding per selector list.** styloria reports one `InvalidSelector`
+/// per comma-separated selector, which is the right granularity for a CSS
+/// library and was settled deliberately in its #3. epubcheck's unit is the
+/// whole selector *list*: `. a, . b, . c { … }` is three findings there and
+/// one here (#81). A real book made the gap visible: `. h-100, . y-100 { … }`
+/// repeated down a stylesheet gave 22 CSS-008 against epubcheck's 12. Errors
+/// arrive sorted, and one rule's selector errors are contiguous, so
+/// remembering the last rule reported is enough. The library keeps its
+/// answer; the consumer adapts.
+///
+/// The slug says where the error sat: styloria's docs pin
+/// `MalformedDeclaration` and `UnexpectedToken` to the inside of a block,
+/// which is the `css.declaration.malformed_shape` epubveri has always used
+/// for them, and every other kind to `syntax_error_slug`.
+fn report_syntax_errors(
+    errors: &[SyntaxError],
+    sheet: &Stylesheet,
+    quiet: &Quiet,
+    ctx: Ctx,
+    advisory: bool,
+    report: &mut Report,
+) {
+    let Ctx {
+        css,
+        css_path,
+        origin,
+        ..
+    } = ctx;
+    let mut claimed: Option<Span> = None;
+    for e in errors {
+        if quiet.covers(e) {
+            continue;
+        }
+        match e.kind {
+            // Not a syntax error to epubcheck: its scanner reads the url, and
+            // the url checks report what is wrong with it. See
+            // `bad_url_target`. What CSS says about it is ADV-015, which
+            // leaves the verdict alone.
+            SyntaxErrorKind::BadUrl => {
+                if advisory && let Some(token) = css.get(e.span.start..e.span.end) {
+                    report.push_full(
+                        ADV_015,
+                        Severity::Usage,
+                        bad_url_text(token),
+                        css_path,
+                        origin.position(css, e.span.start),
+                        "css.url.bad_url_token",
+                        vec![token.to_string()],
+                    );
+                }
+                continue;
+            }
+            // A top-level `--foo:hover { … }`, which CSS Syntax drops without
+            // naming a parse error. epubcheck is silent on it and so were we.
+            SyntaxErrorKind::DroppedCustomPropertyRule => continue,
+            _ => {}
+        }
+        let owner = (e.kind == SyntaxErrorKind::InvalidSelector)
+            .then(|| innermost_rule(&sheet.rules, e.span.start))
+            .flatten();
+        if let Some(rule) = owner {
+            if claimed == Some(rule.span) {
+                continue;
+            }
+            claimed = Some(rule.span);
+        }
+        let prelude = owner.and_then(|r| prelude_source(css, r));
+        if let Some(classes) = prelude.and_then(epubcheck_only_class_names) {
+            if advisory {
+                for (start, end) in classes {
+                    let class = &css[start..end];
+                    report.push_full(
+                        ADV_012,
+                        Severity::Usage,
+                        format!(
+                            "'{class}' is not a class selector: a class name must be a CSS \
+                             identifier, so browsers ignore this whole rule"
+                        ),
+                        css_path,
+                        origin.position(css, start),
+                        "css.selector.class_not_identifier",
+                        vec![class.to_string()],
+                    );
+                }
+            }
+            continue;
+        }
+        let slug = match e.kind {
+            SyntaxErrorKind::MalformedDeclaration | SyntaxErrorKind::UnexpectedToken => {
+                "css.declaration.malformed_shape"
+            }
+            kind => syntax_error_slug(kind),
+        };
+        report.push_full(
+            CSS_008,
+            Severity::Error,
+            syntax_error_text(css, e, prelude.map(|(_, p)| p)),
+            css_path,
+            origin.position(css, e.span.start),
+            slug,
+            Vec::new(),
+        );
+    }
+}
+
+/// The class names epubcheck accepts and CSS does not in a selector, given as
+/// it is written and where it starts, as byte ranges of the stylesheet (dot
+/// included) — or `None` when there are none, or when the selector is still
+/// invalid without them.
+fn epubcheck_only_class_names((start, prelude): (usize, &str)) -> Option<Vec<(usize, usize)>> {
     let (relaxed, found) = relax_class_names(prelude);
     if found.is_empty() {
         return None;
     }
-    let (_, errors) = spanned::parse_stylesheet_with_errors(&format!("{relaxed}{{}}"));
+    let (_, errors) = styloria::parse_stylesheet(&format!("{relaxed}{{}}"));
     errors.is_empty().then(|| {
         found
             .into_iter()
@@ -910,32 +1040,34 @@ fn relax_class_names(prelude: &str) -> (String, Vec<(usize, usize)>) {
 /// Shared by the top-level pass and the nested one, so a rule inside an
 /// `@media` is keyed the same as the identical rule outside it - the two had
 /// no reason to differ, and only one of them existed before styloria 0.9.
-fn syntax_error_slug(kind: spanned::SyntaxErrorKind) -> &'static str {
+fn syntax_error_slug(kind: SyntaxErrorKind) -> &'static str {
     match kind {
-        spanned::SyntaxErrorKind::BadString | spanned::SyntaxErrorKind::BadUrl => {
-            "css.stylesheet.bad_token"
+        SyntaxErrorKind::BadString | SyntaxErrorKind::BadUrl => "css.stylesheet.bad_token",
+        SyntaxErrorKind::UnterminatedRule | SyntaxErrorKind::UnterminatedBlock => {
+            "css.stylesheet.unterminated"
         }
-        spanned::SyntaxErrorKind::UnterminatedRule
-        | spanned::SyntaxErrorKind::UnterminatedBlock => "css.stylesheet.unterminated",
-        spanned::SyntaxErrorKind::MalformedDeclaration
-        | spanned::SyntaxErrorKind::UnexpectedToken => "css.stylesheet.malformed",
+        SyntaxErrorKind::MalformedDeclaration | SyntaxErrorKind::UnexpectedToken => {
+            "css.stylesheet.malformed"
+        }
         // styloria 0.5 reads a qualified rule's prelude as a selector
         // list. Its own slug, so the finding says which half of the rule
         // was wrong: epubcheck reports both as CSS-008, but "the selector
         // is malformed" and "the declarations are malformed" send an
         // author to different places.
-        spanned::SyntaxErrorKind::InvalidSelector => "css.stylesheet.invalid_selector",
+        SyntaxErrorKind::InvalidSelector => "css.stylesheet.invalid_selector",
         // Its own slug for the same reason as the selector one: epubcheck
         // reports every CSS parse problem as CSS-008, but "the range is
         // malformed" points somewhere quite different from "the block is".
-        spanned::SyntaxErrorKind::InvalidUnicodeRange => "css.stylesheet.invalid_unicode_range",
+        SyntaxErrorKind::InvalidUnicodeRange => "css.stylesheet.invalid_unicode_range",
         // styloria 0.7's nesting bound. Its own slug because this one is
         // not a defect in the CSS the way the others are - it says the
         // parser declined to descend further, and the stylesheet below
         // that point went unchecked. Real stylesheets nest 2 deep, so
         // reaching 256 means generated or hostile input; reporting it
         // under a shared "malformed" slug would hide which it was.
-        spanned::SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
+        SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
+        // Never reported: `report_syntax_errors` skips it before asking.
+        SyntaxErrorKind::DroppedCustomPropertyRule => "css.stylesheet.dropped_rule",
     }
 }
 
@@ -948,19 +1080,14 @@ fn syntax_error_slug(kind: spanned::SyntaxErrorKind) -> &'static str {
 /// all along, but only the `rule` slug carried it, where a person reading the
 /// report never looks. The wording is ours; the facts are the span styloria
 /// already reports, which is the offending token itself.
-fn syntax_error_text(
-    css: &str,
-    e: &spanned::SyntaxError,
-    rules: &[Spanned<spanned::Rule>],
-) -> String {
-    use spanned::SyntaxErrorKind as K;
+fn syntax_error_text(css: &str, e: &SyntaxError, selector: Option<&str>) -> String {
+    use SyntaxErrorKind as K;
     let token = quote_css(&css[e.span.start..e.span.end]);
     let detail = match (e.kind, &token) {
         (K::InvalidSelector, _) => {
             // The token alone can be a lone `.` or even a space (`p, {`), so
             // the whole selector is what tells the reader which rule it is.
-            let selector =
-                enclosing_prelude(css, rules, e.span.start).and_then(|(_, p)| quote_css(p));
+            let selector = selector.and_then(quote_css);
             match (selector, &token) {
                 (Some(s), Some(t)) if s != *t => format!("invalid selector '{s}' at '{t}'"),
                 (Some(s), _) => format!("invalid selector '{s}'"),
@@ -980,10 +1107,12 @@ fn syntax_error_text(
         }
         (K::NestingTooDeep, _) => format!(
             "blocks nested more than {} deep; what they hold was not checked",
-            styloria::parser::MAX_NESTING_DEPTH
+            styloria::MAX_NESTING_DEPTH
         ),
         (K::MalformedDeclaration, Some(t)) => format!("'{t}' is not followed by ':'"),
         (K::UnexpectedToken, Some(t)) => format!("'{t}' where a declaration was expected"),
+        // Never reported: `report_syntax_errors` skips it before asking.
+        (K::DroppedCustomPropertyRule, Some(t)) => format!("'{t}' is dropped"),
         // Every span above is a token, which is never blank; this is the
         // floor for one that is, not a shape anything is known to produce.
         (_, None) => return "CSS syntax error".to_string(),
@@ -1007,25 +1136,108 @@ fn quote_css(source: &str) -> Option<String> {
     Some(format!("{}…", cut.trim_end()))
 }
 
-/// Walk an at-rule's block, whatever it holds — nested rules for a
-/// conditional-group rule or `@keyframes`, declarations for everything else.
+/// Whitespace only - what an empty selector prelude looks like once the
+/// tokenizer has kept everything. Comments are not component values in
+/// styloria's output, so they need no arm here.
+fn is_blank_component(v: &ComponentValue) -> bool {
+    matches!(v, ComponentValue::Token(Token::Whitespace))
+}
+
+/// Walk a style rule's block: the EPUB rules for each declaration, and one
+/// CSS-008 for each rule nested in it.
 ///
-/// **Which of those a given at-rule holds is styloria's question now** (its
-/// issue #4). This function used to consult a `GROUPING_AT_RULES` list kept
-/// here, and the trouble with a CSS table living in an EPUB validator is not
-/// theoretical: the list knew the conditional-group rules and had never
-/// heard of `@keyframes`, so a keyframe block was read as declarations and
-/// `0% { opacity: 0 }` became a malformed declaration. That is CSS-008 on
-/// valid CSS, on a construct in every animated fixed-layout book, and
-/// epubcheck reports nothing there. `@-webkit-keyframes`, `@starting-style`
-/// and any at-rule newer than the list failed the same way.
+/// **A nested rule is one finding, and what is inside it is not read.** The
+/// only rules that can sit in a style rule's block are nested ones, which is
+/// CSS Nesting, and nesting is in §2.4 of the CSS Snapshot ("modules with
+/// rough interoperability"), not in the official definition of CSS that EPUB
+/// 3.3 defers to. epubcheck reports it. styloria 0.11 read `p { a { … } }`
+/// as one malformed declaration; 0.12 follows the 2026 CSS Syntax CRD and
+/// reads a rule, so the finding is ours to make now, and `quiet` keeps what
+/// styloria finds inside the rule from becoming more findings. A nested
+/// at-rule had its own slug already; a nested style rule gets the matching
+/// one.
+fn walk_style_block(items: &[BlockItem], ctx: Ctx, quiet: &mut Quiet, report: &mut Report) {
+    let Ctx {
+        css,
+        css_path,
+        origin,
+        ..
+    } = ctx;
+    for item in items {
+        match item {
+            BlockItem::Declaration(d) => check_declaration(d, ctx, report),
+            BlockItem::Rule(r) => {
+                quiet.push(r.span);
+                let (text, at, slug) = match &r.node {
+                    Rule::At(a) => (
+                        format!(
+                            "CSS syntax error: at-rule '{}' inside a style rule",
+                            &css[a.name_span.start..a.name_span.end]
+                        ),
+                        a.name_span.start,
+                        "css.declaration.nested_at_rule",
+                    ),
+                    Rule::Qualified(_) => (
+                        match prelude_source(css, r).and_then(|(_, p)| quote_css(p)) {
+                            Some(s) => format!("CSS syntax error: rule '{s}' inside a style rule"),
+                            None => "CSS syntax error: a rule inside a style rule".to_string(),
+                        },
+                        r.span.start,
+                        "css.declaration.nested_rule",
+                    ),
+                };
+                report.push_full(
+                    CSS_008,
+                    Severity::Error,
+                    text,
+                    css_path,
+                    origin.position(css, at),
+                    slug,
+                    Vec::new(),
+                );
+            }
+        }
+    }
+}
+
+/// Walk a style rule's block — unless a `{` inside the rule never closed, in
+/// which case what the parser found in the block is the unclosed brace's
+/// doing, and the block is quieted instead (see `check`).
+fn walk_rule_block(
+    rule: &Spanned<Rule>,
+    block: &Block,
+    ctx: Ctx,
+    quiet: &mut Quiet,
+    report: &mut Report,
+) {
+    if ctx.never_closed(rule.span) {
+        quiet.push(block.span);
+    } else {
+        walk_style_block(&block.node, ctx, quiet, report);
+    }
+}
+
+/// Walk an at-rule's block: the EPUB rules for each declaration, a style
+/// rule's walk for each rule nested in it, and the same walk again for each
+/// nested at-rule.
 ///
-/// Adding the names would not have fixed it, which is the part worth
-/// keeping: `@keyframes` holds rules whose preludes are `from`/`to`/`0%`,
-/// correct under CSS Animations 1 §3 and malformed under Selectors 4, so
-/// routing it through a selector-validating rule list trades one invented
-/// error for two. It needed a third reading, and a third reading is a fact
-/// about CSS rather than about this validator.
+/// **Which at-rule holds what is not asked here.** styloria 0.12 reads every
+/// block the same way (CSS Syntax CRD 2026-10-01, §5.5.5), so a block is
+/// whatever is written in it, and this walk reports on that. It used to ask
+/// styloria's table whether a block held rules or declarations, and before
+/// that a `GROUPING_AT_RULES` list kept here, and the trouble with a CSS table
+/// living in an EPUB validator was not theoretical. That list had never heard
+/// of `@keyframes`, so `0% { opacity: 0 }` became a malformed declaration:
+/// CSS-008 on valid CSS, in every animated fixed-layout book. A `@keyframes`
+/// block is now rules like any other, and styloria does not read their
+/// preludes as selectors.
+///
+/// **`@font-face` is the one exception, because epubcheck makes it one.** A
+/// rule inside `@font-face { … }` draws CSS-008 there (measured, 5.4.0), so
+/// it is reported as it would be in a style rule. Elsewhere, a declaration
+/// sitting directly in `@media` is not reported: epubcheck is silent on it,
+/// and styloria 0.11's reading of it as an unterminated rule was a false
+/// positive here.
 ///
 /// Nested rules still get the prelude check styloria 0.9's `parse_rule_list`
 /// brought (its issue #2): `. foo { }` was once reported at the top level
@@ -1034,405 +1246,139 @@ fn quote_css(source: &str) -> Option<String> {
 /// epubcheck reported 11 CSS-008 and we reported 0, every one a selector
 /// inside an `@media`, invisible in the totals because declaration errors in
 /// the same blocks were reported normally.
-/// Whitespace only - what an empty selector prelude looks like once the
-/// tokenizer has kept everything. Comments are not component values in
-/// styloria's output, so they need no arm here.
-fn is_blank_component(v: &spanned::ComponentValue) -> bool {
-    matches!(
-        v,
-        spanned::ComponentValue::Token(styloria::Token::Whitespace)
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn check_at_rule_block_spanned(
+fn walk_at_rule_block(
     name: &str,
-    block_values: &[Spanned<spanned::ComponentValue>],
-    css: &str,
-    css_path: &str,
-    origin: CssOrigin,
-    advisory: bool,
-    is_epub3: bool,
+    items: &[BlockItem],
+    ctx: Ctx,
+    quiet: &mut Quiet,
     report: &mut Report,
 ) {
-    let (contents, errors) = styloria::parse_at_rule_block(name, block_values);
-    match contents {
-        // A declaration block is reported exactly as a style rule's is,
-        // including the `rule` slug: a malformed declaration is the same
-        // finding inside `@font-face` as outside it, and a consumer keying on
-        // the slug has no reason to care which held it.
-        styloria::BlockContents::Declarations(items) => {
-            report_declarations(
-                &items,
-                &errors,
-                DeclarationsIn::AtRule,
-                css,
-                css_path,
-                origin,
-                is_epub3,
-                report,
-            );
-        }
-        styloria::BlockContents::Rules(rules) => {
-            report_syntax_errors(
-                collapse_selector_errors(&errors, &rules),
-                &rules,
-                css,
-                css_path,
-                origin,
-                advisory,
-                report,
-            );
-            for r in &rules {
-                match &r.node {
-                    spanned::Rule::Qualified(q) => {
-                        check_declaration_shapes_spanned(
-                            &q.block.node.values,
-                            css,
-                            css_path,
-                            origin,
-                            is_epub3,
-                            report,
-                        );
-                    }
-                    spanned::Rule::At(a) => {
-                        let Some(block) = &a.block else { continue };
-                        // **`@font-face` is `@font-face` wherever it sits.**
-                        // The top-level walk calls this and the nested one did
-                        // not, so `@media all { @font-face { … } }` skipped
-                        // every `@font-face` rule - CSS-028 among them, which
-                        // epubcheck reports there (measured, one book). A
-                        // conditional group is a container, not a different
-                        // language.
-                        if a.name.eq_ignore_ascii_case("font-face") {
-                            check_font_face_spanned(
-                                &block.node.values,
-                                a.name_span,
-                                css,
-                                css_path,
-                                origin,
-                                report,
-                            );
-                        }
-                        check_at_rule_block_spanned(
-                            &a.name,
-                            &block.node.values,
-                            css,
-                            css_path,
-                            origin,
-                            advisory,
-                            is_epub3,
-                            report,
-                        );
-                    }
-                }
+    if name.eq_ignore_ascii_case("font-face") {
+        // A nested at-rule here was silent before 0.12 and has not been
+        // measured against epubcheck, so it stays silent; only the rule,
+        // which was, is reported.
+        for item in items {
+            match item {
+                BlockItem::Rule(r) if matches!(r.node, Rule::At(_)) => quiet.push(r.span),
+                _ => walk_style_block(std::slice::from_ref(item), ctx, quiet, report),
             }
+        }
+        return;
+    }
+    for item in items {
+        match item {
+            BlockItem::Declaration(d) => check_declaration(d, ctx, report),
+            BlockItem::Rule(r) => match &r.node {
+                Rule::Qualified(q) => walk_rule_block(r, &q.block, ctx, quiet, report),
+                Rule::At(a) => {
+                    let Some(block) = &a.block else { continue };
+                    // **`@font-face` is `@font-face` wherever it sits.** The
+                    // top-level walk calls this and the nested one did not, so
+                    // `@media all { @font-face { … } }` skipped every
+                    // `@font-face` rule - CSS-028 among them, which epubcheck
+                    // reports there (measured, one book). A conditional group
+                    // is a container, not a different language.
+                    if a.name.eq_ignore_ascii_case("font-face") {
+                        check_font_face(block, a.name_span, ctx, report);
+                    }
+                    walk_at_rule_block(&a.name, &block.node, ctx, quiet, report);
+                }
+            },
         }
     }
 }
 
-/// Span-carrying twin of [`check_declaration_shapes`] used by the
-/// finding-emitting `check` pass, so CSS-008 (malformed declaration) and
-/// CSS-001 (flagged property) point at the exact token. The plain
-/// [`check_declaration_shapes`] is kept for `check_style_attribute`, whose
-/// fragment-relative offsets don't map back to a document position.
-fn check_declaration_shapes_spanned(
-    block_values: &[Spanned<spanned::ComponentValue>],
-    css: &str,
-    css_path: &str,
-    origin: CssOrigin,
-    is_epub3: bool,
-    report: &mut Report,
-) {
-    // The declaration walk lives in styloria now (its issue #4). This used to
-    // split on semicolons and decide "is this `ident :`" here, which is a CSS
-    // syntax question sitting outside the CSS crate - and the reason it sat
-    // here was an API asymmetry rather than a decision: `parse_rule_list`
-    // took component values, its declaration twin did not exist, and a caller
-    // holding a block has values and not source text.
-    //
-    // The `rule` slug stays `css.declaration.malformed_shape` rather than
-    // becoming styloria's kind name. The slug is epubveri's key for
-    // consumers; the crate boundary moving is not their business.
-    let (items, errors) = styloria::parse_declaration_list_from_values(block_values);
-    report_declarations(
-        &items,
-        &errors,
-        DeclarationsIn::StyleRule,
+/// The EPUB rules about one declaration: `OBS-001`, `CSS-001`, `CSS-006`.
+///
+/// None of them is a CSS rule — CSS has nothing against `direction` — which
+/// is why they live here rather than in styloria.
+fn check_declaration(d: &Spanned<Declaration>, ctx: Ctx, report: &mut Report) {
+    let Ctx {
         css,
         css_path,
         origin,
         is_epub3,
-        report,
-    );
-}
-
-/// What holds a declaration list, which decides whether an at-rule inside it
-/// is misplaced.
-///
-/// `@page { @top-center { … } }` and `@font-feature-values { @styleset { … } }`
-/// are ordinary CSS: an at-rule's block may contain at-rules. A *style
-/// rule's* block may not — the only at-rule that can appear there is a
-/// nested one, which is CSS Nesting, and nesting sits in §2.4 of the CSS
-/// Snapshot ("modules with rough interoperability"), not in the official
-/// definition of CSS that EPUB 3.3 defers to. epubcheck reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum DeclarationsIn {
-    StyleRule,
-    AtRule,
-}
-
-/// Report a parsed declaration list: CSS-008 for what would not parse, then
-/// the two EPUB rules about the declarations that did.
-///
-/// Beyond outright `BadString`/`BadUrl` tokens, real-world "CSS syntax
-/// error" cases are more often a malformed *declaration* — one that isn't
-/// shaped `ident: ...;` (e.g. `span.bold: bold;`, where the stray `.`
-/// breaks the name into two tokens with no colon following the first) — or
-/// an unclosed rule that swallows a subsequent rule whole (a `{`-block
-/// that's missing its `}` makes everything up to the next real `}`,
-/// including what was meant to be an unrelated sibling rule, part of the
-/// unclosed block's own contents, which then obviously doesn't parse as a
-/// clean declaration list either). Both reach styloria as "this
-/// semicolon-delimited chunk doesn't start with `ident :`."
-#[allow(clippy::too_many_arguments)]
-fn report_declarations(
-    items: &[styloria::spanned::DeclarationListItem],
-    errors: &[spanned::SyntaxError],
-    held_by: DeclarationsIn,
-    css: &str,
-    css_path: &str,
-    origin: CssOrigin,
-    is_epub3: bool,
-    report: &mut Report,
-) {
-    for e in errors {
-        // The url checks own a bad url, as at the stylesheet level.
-        if e.kind == spanned::SyntaxErrorKind::BadUrl {
-            continue;
-        }
+        ..
+    } = ctx;
+    let name = &d.node.name;
+    let at = origin.position(css, d.node.name_span.start);
+    // `OBS-001`: EPUB 3.4 marks the `-epub-` prefixed properties, and the
+    // `-epub-fullwidth` value of `text-transform`, as outdated
+    // (epubcheck 5.4.0, `CSSHandler.java`:277-287). Usage severity and
+    // ungated by version — epubcheck asks this before its own EPUB 3
+    // branch below, so an EPUB 2 stylesheet gets it too.
+    if name.starts_with("-epub-") {
         report.push_full(
-            CSS_008,
-            Severity::Error,
-            syntax_error_text(css, e, &[]),
+            OBS_001,
+            Severity::Usage,
+            format!("usage of the CSS prefixed property '{name}' is outdated"),
             css_path,
-            origin.position(css, e.span.start),
-            "css.declaration.malformed_shape",
-            Vec::new(),
+            at,
+            "css.outdated_prefixed_property",
+            vec![name.to_string()],
+        );
+    } else if name.eq_ignore_ascii_case("text-transform") && has_epub_fullwidth(&d.node.value) {
+        report.push_full(
+            OBS_001,
+            Severity::Usage,
+            "usage of the CSS prefixed value '-epub-fullwidth' is outdated",
+            css_path,
+            at,
+            "css.outdated_prefixed_value",
+            vec!["-epub-fullwidth".to_string()],
         );
     }
-    for item in items {
-        let d = match item {
-            styloria::spanned::DeclarationListItem::Declaration(d) => d,
-            // A nested at-rule. Its own slug rather than the malformed-shape
-            // one: this is not a parse error — CSS Syntax §5.4.2 consumes an
-            // at-rule in a declaration list quite happily — but a construct
-            // outside the CSS that EPUB 3.3 accepts. Different reason,
-            // different key.
-            styloria::spanned::DeclarationListItem::AtRule(a)
-                if held_by == DeclarationsIn::StyleRule =>
-            {
-                report.push_full(
-                    CSS_008,
-                    Severity::Error,
-                    format!(
-                        "CSS syntax error: at-rule '{}' inside a style rule",
-                        &css[a.node.name_span.start..a.node.name_span.end]
-                    ),
-                    css_path,
-                    origin.position(css, a.node.name_span.start),
-                    "css.declaration.nested_at_rule",
-                    Vec::new(),
-                );
-                continue;
-            }
-            styloria::spanned::DeclarationListItem::AtRule(_) => continue,
-        };
-        let name = &d.node.name;
-        // CSS-001 is EPUB 3 only. epubcheck guards it with
-        // `if (version == EPUBVersion.VERSION_3)` (CSSHandler.java:288) and
-        // keeps its fixtures under `src/test/resources/epub3/`; its two
-        // neighbours in the same method - CSS-006 below and the @font-face
-        // work - are not guarded, so this is the whole class, not a sample.
-        // We had no gate at all, which invented an error on an EPUB 2 book
-        // carrying `<h1 style="direction: inherit">`.
-        //
-        // Both of these stay here rather than moving with the walk: "is
-        // `direction` discouraged" is an EPUB rule, not a CSS one. CSS has
-        // nothing against either property.
-        // `OBS-001`: EPUB 3.4 marks the `-epub-` prefixed properties, and the
-        // `-epub-fullwidth` value of `text-transform`, as outdated
-        // (epubcheck 5.4.0, `CSSHandler.java`:277-287). Usage severity and
-        // ungated by version — epubcheck asks this before its own EPUB 3
-        // branch below, so an EPUB 2 stylesheet gets it too.
-        if name.starts_with("-epub-") {
-            report.push_full(
-                OBS_001,
-                Severity::Usage,
-                format!("usage of the CSS prefixed property '{name}' is outdated"),
-                css_path,
-                origin.position(css, d.node.name_span.start),
-                "css.outdated_prefixed_property",
-                vec![name.to_string()],
-            );
-        } else if name.eq_ignore_ascii_case("text-transform")
-            && d.node.value.iter().any(|v| {
-                matches!(&v.node, spanned::ComponentValue::Token(Token::Ident(x))
-                    if x.eq_ignore_ascii_case("-epub-fullwidth"))
-            })
-        {
-            report.push_full(
-                OBS_001,
-                Severity::Usage,
-                "usage of the CSS prefixed value '-epub-fullwidth' is outdated",
-                css_path,
-                origin.position(css, d.node.name_span.start),
-                "css.outdated_prefixed_value",
-                vec!["-epub-fullwidth".to_string()],
-            );
-        }
-        if is_epub3
-            && FLAGGED_PROPERTIES
-                .iter()
-                .any(|p| name.eq_ignore_ascii_case(p))
-        {
-            report.push_at_pos(
-                CSS_001,
-                Severity::Error,
-                format!("use of the '{name}' property is not recommended"),
-                css_path,
-                origin.position(css, d.node.name_span.start),
-            );
-        } else if name.eq_ignore_ascii_case("position")
-            && d.node
-                .value
-                .iter()
-                .find(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)))
-                .is_some_and(|v| {
-                    matches!(&v.node, spanned::ComponentValue::Token(Token::Ident(x))
-                        if x.eq_ignore_ascii_case("fixed"))
-                })
-        {
-            // CSS-006: `position: fixed` (matches epubcheck, which compares
-            // the first value component to "fixed", case-insensitively).
-            report.push_at_pos(
-                CSS_006,
-                Severity::Usage,
-                "use of 'position: fixed' is not recommended".to_string(),
-                css_path,
-                origin.position(css, d.node.name_span.start),
-            );
-        }
+    // CSS-001 is EPUB 3 only. epubcheck guards it with
+    // `if (version == EPUBVersion.VERSION_3)` (CSSHandler.java:288) and
+    // keeps its fixtures under `src/test/resources/epub3/`; its two
+    // neighbours in the same method - CSS-006 below and the @font-face
+    // work - are not guarded, so this is the whole class, not a sample.
+    // We had no gate at all, which invented an error on an EPUB 2 book
+    // carrying `<h1 style="direction: inherit">`.
+    if is_epub3
+        && FLAGGED_PROPERTIES
+            .iter()
+            .any(|p| name.eq_ignore_ascii_case(p))
+    {
+        report.push_at_pos(
+            CSS_001,
+            Severity::Error,
+            format!("use of the '{name}' property is not recommended"),
+            css_path,
+            at,
+        );
+    } else if name.eq_ignore_ascii_case("position") && is_position_fixed(&d.node.value) {
+        // CSS-006: `position: fixed` (matches epubcheck, which compares
+        // the first value component to "fixed", case-insensitively).
+        report.push_at_pos(
+            CSS_006,
+            Severity::Usage,
+            "use of 'position: fixed' is not recommended".to_string(),
+            css_path,
+            at,
+        );
     }
 }
 
-fn check_declaration_shapes(
-    block_values: &[ComponentValue],
-    css_path: &str,
-    is_epub3: bool,
-    report: &mut Report,
-) {
-    for chunk in block_values.split(|v| matches!(v, ComponentValue::Token(Token::Semicolon))) {
-        let mut iter = chunk
-            .iter()
-            .filter(|v| !matches!(v, ComponentValue::Token(Token::Whitespace)));
-        let first = iter.next();
-        let malformed = match first {
-            None => false,
-            Some(ComponentValue::Token(Token::Ident(_))) => {
-                !matches!(iter.next(), Some(ComponentValue::Token(Token::Colon)))
-            }
-            Some(_) => true,
-        };
-        if malformed {
-            // No source offsets on this path, so the chunk is quoted as
-            // styloria serializes it: the reader's own text up to spacing.
-            let mut source = String::new();
-            for v in chunk {
-                styloria::serialize::serialize_component_value(v, &mut source);
-            }
-            let text = match quote_css(&source) {
-                Some(q) => {
-                    format!("CSS syntax error: '{q}' is not a 'property: value' declaration")
-                }
-                None => "CSS syntax error".to_string(),
-            };
-            report.push_at_rule(
-                CSS_008,
-                Severity::Error,
-                text,
-                css_path,
-                "css.declaration.malformed_shape",
-                Vec::new(),
-            );
-        } else if let Some(ComponentValue::Token(Token::Ident(name))) = first {
-            // `OBS-001`, the same rule the stylesheet walk applies. A `style`
-            // attribute is where W3C's own `css-epub-hyphens`,
-            // `css-epub-text-align-last` and `css-epub-word-break` tests put
-            // their prefixed properties, and the epub-tests run was the only
-            // instrument that could see the omission: no stylesheet on any
-            // shelf here carries one. The finding anchors at the file, as
-            // everything on this path does — no document offset reaches here.
-            if name.starts_with("-epub-") {
-                report.push_at_rule(
-                    OBS_001,
-                    Severity::Usage,
-                    format!("usage of the CSS prefixed property '{name}' is outdated"),
-                    css_path,
-                    "css.outdated_prefixed_property",
-                    vec![name.to_string()],
-                );
-            } else if name.eq_ignore_ascii_case("text-transform")
-                && chunk.iter().any(|v| {
-                    matches!(v, ComponentValue::Token(Token::Ident(x))
-                        if x.eq_ignore_ascii_case("-epub-fullwidth"))
-                })
-            {
-                report.push_at_rule(
-                    OBS_001,
-                    Severity::Usage,
-                    "usage of the CSS prefixed value '-epub-fullwidth' is outdated",
-                    css_path,
-                    "css.outdated_prefixed_value",
-                    vec!["-epub-fullwidth".to_string()],
-                );
-            }
-            if is_epub3
-                && FLAGGED_PROPERTIES
-                    .iter()
-                    .any(|p| name.eq_ignore_ascii_case(p))
-            {
-                report.push_at(
-                    CSS_001,
-                    Severity::Error,
-                    format!("use of the '{name}' property is not recommended"),
-                    css_path,
-                );
-            } else if name.eq_ignore_ascii_case("position")
-                && matches!(
-                    iter.next(),
-                    Some(ComponentValue::Token(Token::Ident(v))) if v.eq_ignore_ascii_case("fixed")
-                )
-            {
-                report.push_at(
-                    CSS_006,
-                    Severity::Usage,
-                    "use of 'position: fixed' is not recommended".to_string(),
-                    css_path,
-                );
-            }
-        }
-        // A malformed chunk can still contain a nested block (e.g. an
-        // unclosed rule swallowing a whole well-formed sibling rule) —
-        // recurse so declarations inside it still get checked too.
-        for v in chunk {
-            if let ComponentValue::Block(b) = v
-                && b.kind == BlockKind::Curly
-            {
-                check_declaration_shapes(&b.values, css_path, is_epub3, report);
-            }
-        }
-    }
+/// A `text-transform` value naming `-epub-fullwidth` at its top level.
+fn has_epub_fullwidth(value: &[Spanned<ComponentValue>]) -> bool {
+    value.iter().any(|v| {
+        matches!(&v.node, ComponentValue::Token(Token::Ident(x))
+            if x.eq_ignore_ascii_case("-epub-fullwidth"))
+    })
+}
+
+/// A `position` value whose first component is `fixed`, as epubcheck reads
+/// it. styloria trims a value's leading whitespace, so the first component is
+/// the first word.
+fn is_position_fixed(value: &[Spanned<ComponentValue>]) -> bool {
+    value
+        .iter()
+        .find(|v| !matches!(&v.node, ComponentValue::Token(Token::Whitespace)))
+        .is_some_and(|v| {
+            matches!(&v.node, ComponentValue::Token(Token::Ident(x))
+                if x.eq_ignore_ascii_case("fixed"))
+        })
 }
 
 /// A `file:` URL, by scheme. Shared so the generic `url()` pass and the
@@ -1442,14 +1388,13 @@ fn is_file_url_str(url: &str) -> bool {
     url.trim_start().starts_with("file:")
 }
 
-fn check_font_face_spanned(
-    block_values: &[Spanned<spanned::ComponentValue>],
-    name_span: Span,
-    css: &str,
-    css_path: &str,
-    origin: CssOrigin,
-    report: &mut Report,
-) {
+fn check_font_face(block: &Block, name_span: Span, ctx: Ctx, report: &mut Report) {
+    let Ctx {
+        css,
+        css_path,
+        origin,
+        ..
+    } = ctx;
     // CSS-028 (usage): purely informational - real epubcheck notes every
     // `@font-face` it sees, so a reader comparing the two outputs isn't
     // left wondering which tool missed an embedded font. Anchored at the
@@ -1468,7 +1413,12 @@ fn check_font_face_spanned(
     // Reported before the emptiness test rather than after it, which is why
     // this hid: the early `return` below is what makes the block empty *and*
     // makes it look handled.
-    if !is_effectively_empty_spanned(block_values) {
+    //
+    // "Empty" is whitespace between the braces, read off the source rather
+    // than off the parsed items: a lone `;` is no item to styloria but was
+    // never an empty block here.
+    let empty = block_is_blank(css, block);
+    if !empty {
         report.push_full(
             CSS_028,
             Severity::Usage,
@@ -1479,7 +1429,7 @@ fn check_font_face_spanned(
             Vec::new(),
         );
     }
-    if is_effectively_empty_spanned(block_values) {
+    if empty {
         // An empty block has no token to point at, so anchor CSS-019 at the
         // `@font-face` keyword itself.
         report.push_at_pos(
@@ -1491,25 +1441,9 @@ fn check_font_face_spanned(
         );
         return;
     }
-    for chunk in
-        block_values.split(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Semicolon)))
-    {
-        let mut iter = chunk
-            .iter()
-            .filter(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)));
-        let Some(f) = iter.next() else { continue };
-        let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node else {
-            continue;
-        };
-        if !name.eq_ignore_ascii_case("src") {
-            continue;
-        }
-        let Some(colon) = iter.next() else { continue };
-        if !matches!(&colon.node, spanned::ComponentValue::Token(Token::Colon)) {
-            continue;
-        }
+    for src in font_face_src_declarations(&block.node) {
         let mut src_urls = Vec::new();
-        collect_urls_spanned(chunk, css, &mut src_urls);
+        collect_urls_spanned(&src.value, &mut src_urls);
         // RSC-030 has to be asked here as well as in the generic `urls` pass,
         // because that pass deliberately skips `@font-face` blocks and hands
         // them to this function — so every question it asks about a url has
@@ -1540,6 +1474,28 @@ fn check_font_face_spanned(
     }
 }
 
+/// Nothing but whitespace (and comments, which the tokenizer drops) between
+/// a block's braces. A block that never closed has no `}` to leave out.
+fn block_is_blank(css: &str, block: &Block) -> bool {
+    let inner = css
+        .get(block.span.start..block.span.end)
+        .unwrap_or("")
+        .strip_prefix('{')
+        .unwrap_or("");
+    let inner = inner.strip_suffix('}').unwrap_or(inner);
+    styloria::Tokenizer::new(inner).all(|t| matches!(t, Token::Whitespace))
+}
+
+/// The `src` declarations of a `@font-face` block.
+fn font_face_src_declarations<'b, 'c>(
+    items: &'b [BlockItem<'c>],
+) -> impl Iterator<Item = &'b Declaration<'c>> {
+    items.iter().filter_map(|item| match item {
+        BlockItem::Declaration(d) if d.node.name.eq_ignore_ascii_case("src") => Some(&d.node),
+        _ => None,
+    })
+}
+
 /// The `url()` target of every `@font-face`'s `src` declaration, each with
 /// the span of the token it came from - unlike the generic `collect_urls`
 /// pass (which deliberately skips `@font-face` blocks, handling them via
@@ -1552,87 +1508,63 @@ fn check_font_face_spanned(
 /// is wrong" leaves the reader to find which, and a stylesheet can declare
 /// many.
 pub(crate) fn font_face_src_urls_spanned(css: &str) -> Vec<Spanned<String>> {
-    let sheet = spanned::parse_stylesheet(css);
+    let (sheet, _) = styloria::parse_stylesheet(css);
     let mut out = Vec::new();
     for rule in &sheet.rules {
-        let spanned::Rule::At(a) = &rule.node else {
+        let Rule::At(a) = &rule.node else {
             continue;
         };
         if !a.name.eq_ignore_ascii_case("font-face") {
             continue;
         }
         let Some(block) = &a.block else { continue };
-        for chunk in block
-            .node
-            .values
-            .split(|v| matches!(&v.node, spanned::ComponentValue::Token(Token::Semicolon)))
-        {
-            let mut iter = chunk
-                .iter()
-                .filter(|v| !matches!(&v.node, spanned::ComponentValue::Token(Token::Whitespace)));
-            let Some(f) = iter.next() else { continue };
-            let spanned::ComponentValue::Token(Token::Ident(name)) = &f.node else {
-                continue;
-            };
-            if !name.eq_ignore_ascii_case("src") {
-                continue;
-            }
-            let Some(colon) = iter.next() else { continue };
-            if !matches!(&colon.node, spanned::ComponentValue::Token(Token::Colon)) {
-                continue;
-            }
-            collect_urls_spanned(chunk, css, &mut out);
+        for src in font_face_src_declarations(&block.node) {
+            collect_urls_spanned(&src.value, &mut out);
         }
     }
     out.retain(|u| !u.node.is_empty());
     out
 }
 
-/// `@import`'s target is either a bare string (`@import "foo.css";`) or a
-/// `url()` (`@import url(foo.css);`, already covered by the generic
-/// `collect_urls` pass) — only the bare-string form needs special-casing
-/// here, since a generic scanner can't tell a URL string apart from any
-/// other string literal without knowing it's specifically in `@import`'s
-/// prelude.
-fn import_target(prelude: &[ComponentValue]) -> Option<String> {
-    prelude.iter().find_map(|v| match v {
-        ComponentValue::Token(Token::String(s)) => Some(s.to_string()),
-        _ => None,
-    })
-}
-
-/// Span-carrying twin of [`collect_urls`]: each collected `url()` target
-/// keeps the span of the `url(...)` token/function it came from, so the
-/// deferred RSC-00x resource findings can report its position. The whole
-/// `url(...)` span is used (not just the inner string) so the caret lands
-/// on the construct a reader looks for.
-fn collect_urls_spanned(
-    values: &[Spanned<spanned::ComponentValue>],
-    css: &str,
-    out: &mut Vec<Spanned<String>>,
-) {
-    for v in values {
-        match &v.node {
-            spanned::ComponentValue::Token(Token::Url(s)) => {
-                out.push(Spanned::new(s.to_string(), v.span))
-            }
-            spanned::ComponentValue::Token(Token::BadUrl) => {
-                if let Some(target) = css.get(v.span.start..v.span.end).map(bad_url_target) {
-                    out.push(Spanned::new(target, v.span));
+/// Every `url()` in a block, at any depth: its declarations' values, and
+/// the preludes and blocks of the rules nested in it.
+fn collect_block_urls(items: &[BlockItem], out: &mut Vec<Spanned<String>>) {
+    for item in items {
+        match item {
+            BlockItem::Declaration(d) => collect_urls_spanned(&d.node.value, out),
+            BlockItem::Rule(r) => {
+                collect_urls_spanned(r.node.prelude(), out);
+                if let Some(block) = r.node.block() {
+                    collect_block_urls(&block.node, out);
                 }
             }
-            spanned::ComponentValue::Function { name, args } => {
+        }
+    }
+}
+
+/// Each `url()` target in `values`, with the span of the `url(...)`
+/// token or function it came from, so the deferred RSC-00x resource findings
+/// can report its position. The whole `url(...)` span is used (not just the
+/// inner string) so the caret lands on the construct a reader looks for.
+fn collect_urls_spanned(values: &[Spanned<ComponentValue>], out: &mut Vec<Spanned<String>>) {
+    for v in values {
+        match &v.node {
+            ComponentValue::Token(Token::Url(s)) => out.push(Spanned::new(s.to_string(), v.span)),
+            ComponentValue::Token(Token::BadUrl(raw)) => {
+                out.push(Spanned::new(bad_url_target(raw), v.span))
+            }
+            ComponentValue::Function { name, args } => {
                 if name.eq_ignore_ascii_case("url") {
                     if let Some(first) = args.first()
-                        && let spanned::ComponentValue::Token(Token::String(s)) = &first.node
+                        && let ComponentValue::Token(Token::String(s)) = &first.node
                     {
                         out.push(Spanned::new(s.to_string(), v.span));
                     }
                 } else {
-                    collect_urls_spanned(args, css, out);
+                    collect_urls_spanned(args, out);
                 }
             }
-            spanned::ComponentValue::Block(b) => collect_urls_spanned(&b.values, css, out),
+            ComponentValue::Block(b) => collect_urls_spanned(&b.values, out),
             _ => {}
         }
     }
@@ -1682,71 +1614,32 @@ fn is_css_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C')
 }
 
-/// The targets of every `<bad-url-token>` in `css`, read as epubcheck reads
-/// them (see [`bad_url_target`]). The plain [`Stylesheet`] the unspanned
-/// walk holds keeps no text for such a token, so the source is tokenized
-/// again here - only by a caller that has met one.
-///
-/// [`Stylesheet`]: styloria::Stylesheet
-fn bad_url_targets(css: &str) -> Vec<String> {
-    styloria::Tokenizer::new(css)
-        .spanned()
-        .filter(|t| matches!(t.node, Token::BadUrl))
-        .filter_map(|t| css.get(t.span.start..t.span.end).map(bad_url_target))
-        .collect()
-}
-
-/// Span-carrying twin of [`import_target`] for `@import "foo.css";` (the
-/// bare-string form). The `url()` form is already covered by
-/// [`collect_urls_spanned`].
-fn import_target_spanned(prelude: &[Spanned<spanned::ComponentValue>]) -> Option<Spanned<String>> {
+/// `@import`'s bare-string target (`@import "foo.css";`), with its span. The
+/// `url()` form is already covered by [`collect_urls_spanned`].
+fn import_target_spanned(prelude: &[Spanned<ComponentValue>]) -> Option<Spanned<String>> {
     prelude.iter().find_map(|v| match &v.node {
-        spanned::ComponentValue::Token(Token::String(s)) => {
-            Some(Spanned::new(s.to_string(), v.span))
-        }
+        ComponentValue::Token(Token::String(s)) => Some(Spanned::new(s.to_string(), v.span)),
         _ => None,
     })
 }
 
-/// `saw_bad_url` is set on meeting a `<bad-url-token>`, whose text this
-/// walk cannot see; see [`bad_url_targets`].
-fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>, saw_bad_url: &mut bool) {
-    for v in values {
-        match v {
-            ComponentValue::Token(Token::Url(s)) => out.push(s.to_string()),
-            ComponentValue::Token(Token::BadUrl) => *saw_bad_url = true,
-            ComponentValue::Function { name, args } => {
-                if name.eq_ignore_ascii_case("url") {
-                    if let Some(ComponentValue::Token(Token::String(s))) = args.first() {
-                        out.push(s.to_string());
-                    }
-                } else {
-                    collect_urls(args, out, saw_bad_url);
-                }
-            }
-            ComponentValue::Block(b) => collect_urls(&b.values, out, saw_bad_url),
-            _ => {}
-        }
-    }
-}
-
-/// Just the target(s) of top-level `@import` rules, not every `url()` in
-/// the sheet (unlike `stylesheet_urls` below) - used where callers need
+/// Just the `url()` target(s) of top-level `@import` rules, not every `url()`
+/// in the sheet (unlike `stylesheet_urls` below) - used where callers need
 /// to tell "this points at another stylesheet to also parse" apart from
 /// an ordinary resource reference like `background: url(x.png)` (e.g.
 /// `opf.rs`'s SVG active-class CSS scan, CSS-029/030, which needs to
 /// merge an `@import`ed sheet's own selector class names, not just note
 /// its existence as a used resource).
-pub(crate) fn import_targets(sheet: &styloria::Stylesheet) -> Vec<String> {
+pub(crate) fn import_targets(sheet: &Stylesheet) -> Vec<String> {
     let mut urls = Vec::new();
     for rule in &sheet.rules {
-        if let Rule::At(a) = rule
+        if let Rule::At(a) = &rule.node
             && a.name.eq_ignore_ascii_case("import")
         {
-            collect_urls(&a.prelude, &mut urls, &mut false);
+            collect_urls_spanned(&a.prelude, &mut urls);
         }
     }
-    urls
+    urls.into_iter().map(|u| u.node).collect()
 }
 
 /// Every `url()` reference anywhere in a stylesheet (rule preludes,
@@ -1755,40 +1648,31 @@ pub(crate) fn import_targets(sheet: &styloria::Stylesheet) -> Vec<String> {
 /// remote-resources content-property scan (OPF-014/018), so a document's
 /// remote references aren't just its raw attribute values but also its
 /// own CSS.
-pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet, css: &str) -> Vec<String> {
+pub(crate) fn stylesheet_urls(sheet: &Stylesheet) -> Vec<String> {
     let mut urls = Vec::new();
-    let mut saw_bad_url = false;
     for rule in &sheet.rules {
-        match rule {
-            Rule::Qualified(q) => {
-                collect_urls(&q.prelude, &mut urls, &mut saw_bad_url);
-                collect_urls(&q.block.values, &mut urls, &mut saw_bad_url);
-            }
-            Rule::At(a) => {
-                // @namespace's "url(...)" declares an XML namespace URI
-                // for selectors (e.g. `@namespace xlink
-                // url('http://www.w3.org/1999/xlink')`) - it's never a
-                // fetchable resource reference, unlike every other at-rule
-                // that can carry a url().
-                if a.name.eq_ignore_ascii_case("namespace") {
-                    continue;
-                }
-                collect_urls(&a.prelude, &mut urls, &mut saw_bad_url);
-                if let Some(block) = &a.block {
-                    collect_urls(&block.values, &mut urls, &mut saw_bad_url);
-                }
-                if a.name.eq_ignore_ascii_case("import")
-                    && let Some(target) = import_target(&a.prelude)
-                {
-                    urls.push(target);
-                }
-            }
+        // @namespace's "url(...)" declares an XML namespace URI for
+        // selectors (e.g. `@namespace xlink
+        // url('http://www.w3.org/1999/xlink')`) - it's never a fetchable
+        // resource reference, unlike every other at-rule that can carry a
+        // url().
+        if let Rule::At(a) = &rule.node
+            && a.name.eq_ignore_ascii_case("namespace")
+        {
+            continue;
+        }
+        collect_urls_spanned(rule.node.prelude(), &mut urls);
+        if let Some(block) = rule.node.block() {
+            collect_block_urls(&block.node, &mut urls);
+        }
+        if let Rule::At(a) = &rule.node
+            && a.name.eq_ignore_ascii_case("import")
+            && let Some(target) = import_target_spanned(&a.prelude)
+        {
+            urls.push(target);
         }
     }
-    if saw_bad_url {
-        urls.extend(bad_url_targets(css));
-    }
-    urls
+    urls.into_iter().map(|u| u.node).collect()
 }
 
 /// Class names used as selectors in a stylesheet's top-level qualified
@@ -1796,25 +1680,10 @@ pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet, css: &str) -> Vec<St
 /// top-level rule preludes are scanned, not nested at-rule blocks (the
 /// real media-overlay class fixtures this supports are flat, unnested
 /// CSS); a class selector is a `Token::Delim('.')` immediately followed
-/// by `Token::Ident(name)` in the raw prelude token stream — styloria's
-/// phase-1 output has no selector grammar, so this is a token-level scan,
-/// same style as `collect_urls` above.
-pub(crate) fn selector_class_names(sheet: &styloria::Stylesheet) -> HashSet<String> {
-    let mut names = HashSet::new();
-    for rule in &sheet.rules {
-        if let Rule::Qualified(q) = rule {
-            for pair in q.prelude.windows(2) {
-                if let [
-                    ComponentValue::Token(Token::Delim('.')),
-                    ComponentValue::Token(Token::Ident(name)),
-                ] = pair
-                {
-                    names.insert(name.to_string());
-                }
-            }
-        }
-    }
-    names
+/// by `Token::Ident(name)` in the raw prelude token stream — a token-level
+/// scan, same style as `collect_urls_spanned` above.
+pub(crate) fn selector_class_names(sheet: &Stylesheet) -> HashSet<String> {
+    class_names(sheet).map(|n| n.node).collect()
 }
 
 /// Every class selector in `css`, each with the span of the name token -
@@ -1825,21 +1694,29 @@ pub(crate) fn selector_class_names(sheet: &styloria::Stylesheet) -> HashSet<Stri
 /// stylesheet, so pointing at the content document that merely links that
 /// stylesheet sends the reader to a file the name does not appear in.
 pub(crate) fn selector_class_names_spanned(css: &str) -> Vec<Spanned<String>> {
-    let sheet = spanned::parse_stylesheet(css);
-    let mut names = Vec::new();
-    for rule in &sheet.rules {
-        if let spanned::Rule::Qualified(q) = &rule.node {
-            for pair in q.prelude.windows(2) {
-                if let [dot, ident] = pair
-                    && matches!(&dot.node, spanned::ComponentValue::Token(Token::Delim('.')))
-                    && let spanned::ComponentValue::Token(Token::Ident(name)) = &ident.node
-                {
-                    names.push(Spanned::new(name.to_string(), dot.span));
+    class_names(&styloria::parse_stylesheet(css).0).collect()
+}
+
+fn class_names<'s>(sheet: &'s Stylesheet) -> impl Iterator<Item = Spanned<String>> + 's {
+    sheet
+        .rules
+        .iter()
+        .filter_map(|rule| match &rule.node {
+            Rule::Qualified(q) => Some(q.prelude.windows(2)),
+            Rule::At(_) => None,
+        })
+        .flatten()
+        .filter_map(|pair| match pair {
+            [dot, ident] if matches!(&dot.node, ComponentValue::Token(Token::Delim('.'))) => {
+                match &ident.node {
+                    ComponentValue::Token(Token::Ident(name)) => {
+                        Some(Spanned::new(name.to_string(), dot.span))
+                    }
+                    _ => None,
                 }
             }
-        }
-    }
-    names
+            _ => None,
+        })
 }
 
 #[cfg(test)]
@@ -1986,16 +1863,17 @@ mod tests {
             &"CSS syntax error: string '\"abc' is broken by an unescaped line break".to_string()
         ));
 
-        // A style attribute has no source offsets; the chunk is quoted as
-        // styloria serializes it.
+        // A style attribute says the same, quoting the attribute's own text;
+        // it has no position in the document, so none is given.
         let mut report = Report::new();
         check_style_attribute("color red", "doc.xhtml", false, true, &mut report);
         let t: Vec<_> = report.messages.iter().filter(|m| m.id == CSS_008).collect();
         assert_eq!(t.len(), 1);
         assert_eq!(
             t[0].text,
-            "CSS syntax error: 'color red' is not a 'property: value' declaration"
+            "CSS syntax error: 'color' is not followed by ':'"
         );
+        assert_eq!(t[0].position, None);
     }
 
     /// A `<bad-url-token>` is read as epubcheck reads it and goes to the url
@@ -2083,12 +1961,11 @@ mod tests {
     #[test]
     fn stylesheet_urls_includes_a_bad_url_target() {
         let css = "p { background: url(q'q.png) } @media print { a { b: url(x y.png) } }";
-        let sheet = Parser::parse_stylesheet(css);
-        assert_eq!(stylesheet_urls(&sheet, css), vec!["q'q.png", "x y.png"]);
-        // No bad url, no second pass, same answer as before.
+        let sheet = styloria::parse_stylesheet(css).0;
+        assert_eq!(stylesheet_urls(&sheet), vec!["q'q.png", "x y.png"]);
         let css = "p { background: url(ok.png) }";
         assert_eq!(
-            stylesheet_urls(&Parser::parse_stylesheet(css), css),
+            stylesheet_urls(&styloria::parse_stylesheet(css).0),
             vec!["ok.png"]
         );
     }
@@ -2135,7 +2012,7 @@ mod tests {
 
     #[test]
     fn selector_class_names_basic() {
-        let sheet = Parser::parse_stylesheet(".foo { color: red; }");
+        let sheet = styloria::parse_stylesheet(".foo { color: red; }").0;
         assert_eq!(
             selector_class_names(&sheet),
             HashSet::from(["foo".to_string()])
@@ -2144,7 +2021,7 @@ mod tests {
 
     #[test]
     fn selector_class_names_comma_list() {
-        let sheet = Parser::parse_stylesheet(".foo, .bar { color: red; }");
+        let sheet = styloria::parse_stylesheet(".foo, .bar { color: red; }").0;
         assert_eq!(
             selector_class_names(&sheet),
             HashSet::from(["foo".to_string(), "bar".to_string()])
@@ -2153,13 +2030,13 @@ mod tests {
 
     #[test]
     fn selector_class_names_no_class() {
-        let sheet = Parser::parse_stylesheet("body { color: red; } #id { color: blue; }");
+        let sheet = styloria::parse_stylesheet("body { color: red; } #id { color: blue; }").0;
         assert!(selector_class_names(&sheet).is_empty());
     }
 
     #[test]
     fn selector_class_names_empty_stylesheet() {
-        let sheet = Parser::parse_stylesheet("");
+        let sheet = styloria::parse_stylesheet("").0;
         assert!(selector_class_names(&sheet).is_empty());
     }
 
@@ -2808,9 +2685,9 @@ mod tests {
         }
     }
 
-    /// An at-rule styloria has no table entry for is read as declarations,
-    /// and a nested rule inside it is not blamed. This is the direction the
-    /// unknown case has to fail in: CSS keeps gaining at-rules, so any
+    /// An at-rule nobody has a table entry for holds whatever is written in
+    /// it, and a nested rule inside it is not blamed. This is the direction
+    /// the unknown case has to fail in: CSS keeps gaining at-rules, so any
     /// table is permanently behind the language, and a validator must not
     /// turn that into an error on a valid stylesheet. A malformed
     /// declaration is still caught — epubcheck agrees on both halves.
@@ -2818,6 +2695,66 @@ mod tests {
     fn an_unknown_at_rule_holding_rules_is_not_a_syntax_error() {
         assert!(run("@future { p { color: red } }", &empty_index()).is_empty());
         assert_eq!(run("@future { color red }", &empty_index()), vec![CSS_008]);
+    }
+
+    /// What styloria 0.12 (CSS Syntax CRD 2026-10-01) changed, each against
+    /// epubcheck 5.4.0 on the same text.
+    #[test]
+    fn what_the_2026_block_parse_changed() {
+        let report = |css: &str| run_report(css, &empty_index());
+        let css008 = |css: &str| -> Vec<(String, &'static str)> {
+            report(css)
+                .messages
+                .into_iter()
+                .filter(|m| m.id == CSS_008)
+                .map(|m| (m.text, m.rule.unwrap_or_default()))
+                .collect()
+        };
+        // A declaration directly in `@media`: silent in epubcheck, and was
+        // CSS-008 here (0.11 read it as a rule that never got its block).
+        assert!(css008("@media print { color: red }").is_empty());
+        // A rule inside `@font-face`, and a value with a `{}` in it: both
+        // CSS-008 in epubcheck, and both missed here before.
+        assert_eq!(
+            css008("@font-face { font-family: f; p { color: red } }"),
+            vec![(
+                "CSS syntax error: rule 'p' inside a style rule".to_string(),
+                "css.declaration.nested_rule"
+            )]
+        );
+        assert_eq!(css008("p { color: red {} }").len(), 1);
+        // A nested rule is one finding however broken its own selector and
+        // block are; what styloria finds inside it is quieted.
+        assert_eq!(
+            css008("p { a. q { color red; . r { } } }"),
+            vec![(
+                "CSS syntax error: rule 'a. q' inside a style rule".to_string(),
+                "css.declaration.nested_rule"
+            )]
+        );
+        // The declaration after a nested rule is read now (0.11 swallowed it
+        // up to the `;`), so the EPUB rules reach it.
+        assert!(
+            report("p { a { } direction: rtl; }")
+                .messages
+                .iter()
+                .any(|m| m.id == CSS_001)
+        );
+        // A block a broken string left open inside `@media` is quieted like
+        // one at the top level: the string and the two `{` are the findings.
+        let kinds: Vec<_> = css008("@media print { p { content: \"a\n\" } . s { } }\n. t { }")
+            .into_iter()
+            .map(|(_, slug)| slug)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                "css.stylesheet.unterminated",
+                "css.stylesheet.unterminated",
+                "css.stylesheet.bad_token",
+                "css.stylesheet.bad_token"
+            ]
+        );
     }
 
     #[test]

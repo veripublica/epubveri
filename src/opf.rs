@@ -2827,7 +2827,7 @@ fn read_stylesheet_classes(
         return HashSet::new();
     };
     let text = crate::css::decode_bytes(&b);
-    let sheet = styloria::Parser::parse_stylesheet(&text);
+    let sheet = styloria::parse_stylesheet(&text).0;
     crate::css::selector_class_names(&sheet)
 }
 
@@ -2892,7 +2892,7 @@ fn collect_svg_class_names(
                 .filter(|n| n.is_text())
                 .filter_map(|n| n.text())
                 .collect();
-            let sheet = styloria::Parser::parse_stylesheet(&css_text);
+            let sheet = styloria::parse_stylesheet(&css_text).0;
             classes.extend(crate::css::selector_class_names(&sheet));
             for import_url in crate::css::import_targets(&sheet) {
                 classes.extend(read_stylesheet_classes(&import_url, dir, name_index, ocf));
@@ -10780,7 +10780,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     is_epub3,
                     report,
                 );
-                let sheet = styloria::Parser::parse_stylesheet(&css_text);
+                let sheet = styloria::parse_stylesheet(&css_text).0;
                 let inline_classes = crate::css::selector_class_names(&sheet);
                 if inline_classes.iter().any(|c| is_media_overlay_class(c)) {
                     for c in crate::css::selector_class_names_spanned(&css_text) {
@@ -10818,7 +10818,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         restricted_remote_refs.insert(strip_url_fragment(u));
                     }
                 }
-                for u in crate::css::stylesheet_urls(&sheet, &css_text) {
+                for u in crate::css::stylesheet_urls(&sheet) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
                     // OPF-097 below. Inline <style> resolves against this
@@ -11646,7 +11646,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter(|t| t.is_text())
                     .filter_map(|t| t.text())
                     .collect();
-                let sheet = styloria::Parser::parse_stylesheet(&css_text);
+                let sheet = styloria::parse_stylesheet(&css_text).0;
                 for import_url in crate::css::import_targets(&sheet) {
                     if is_remote_url(&import_url) || is_file_url(&import_url) {
                         report.push_node(
@@ -11854,7 +11854,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             is_epub3,
             report,
         );
-        let sheet = styloria::Parser::parse_stylesheet(&css_text);
+        let sheet = styloria::parse_stylesheet(&css_text).0;
         // Whether the stylesheet references anything outside the container —
         // the fact both `remote-resources` questions turn on.
         //
@@ -11903,7 +11903,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .map(|s| s.node)
                 .collect();
         let mut css_has_remote = false;
-        for u in crate::css::stylesheet_urls(&sheet, &css_text) {
+        for u in crate::css::stylesheet_urls(&sheet) {
             // Consumed resources, for OPF-097 - a font is "used" if any
             // stylesheet in the manifest asks for it, exactly as epubcheck
             // registers references from every CSS resource it checks.
@@ -13897,7 +13897,7 @@ struct LinkedSheet {
 impl LinkedSheet {
     fn new(bytes: &[u8], resolved: &str) -> Self {
         let css_text = crate::css::decode_bytes(bytes);
-        let sheet = styloria::Parser::parse_stylesheet(&css_text);
+        let sheet = styloria::parse_stylesheet(&css_text).0;
         let overlay_classes = crate::css::selector_class_names_spanned(&css_text)
             .into_iter()
             .filter(|c| is_media_overlay_class(&c.node))
@@ -13907,7 +13907,7 @@ impl LinkedSheet {
             })
             .collect();
         let css_dir = parent_dir(resolved);
-        let refs = crate::css::stylesheet_urls(&sheet, &css_text)
+        let refs = crate::css::stylesheet_urls(&sheet)
             .into_iter()
             .filter(|u| !is_external(u))
             .map(|u| nfc(&resolve(&css_dir, strip_url_fragment(&u).trim())))

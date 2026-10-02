@@ -43,8 +43,32 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   books, is identical to 0.20.0's, and the shelf as a whole runs 1.4% faster
   with no book slower. The hostile corpus gained three shapes sized so that
   the old behaviour times out.
+- **A declaration written directly inside `@media` (or `@supports`, …) is no
+  longer CSS-008.** `@media print { color: red }` was reported as a rule that
+  never got its block. epubcheck says nothing there, so a book epubcheck
+  passes could fail here.
+- **A rule inside `@font-face`, and a declaration whose value holds a `{ }`
+  block (`p { color: red {} }`), are now CSS-008, as in epubcheck.** Both
+  went unreported before.
 
 ### Changed
+
+- **CSS is now read with styloria 0.12, which follows the CSS Syntax
+  Candidate Recommendation Draft of 1 October 2026.** Every block is parsed
+  the same way, so epubveri no longer keeps a table of which at-rules hold
+  rules and which hold declarations. The two Fixed entries above come from
+  this. Otherwise the output is unchanged: on a 544-book shelf and on
+  epubcheck's 1,086 test publications every finding is identical to the
+  previous build, message included (the one exception is the `style`
+  attribute wording below). The same holds for W3C's 209 epub-tests
+  publications. The shelf runs 2.5% faster than 0.20.0, and no book is slower.
+- **A rule nested in a style rule is reported as one, with its own `rule`
+  key.** `p { a { color: blue } }` is still one CSS-008, but it now reads
+  "rule 'a' inside a style rule", keyed `css.declaration.nested_rule` beside
+  the existing `css.declaration.nested_at_rule`. It used to read "'a' is not
+  followed by ':'", keyed `css.declaration.malformed_shape`. CSS Nesting is
+  not in the part of the CSS Snapshot that EPUB defers to, so a nested rule
+  stays an error. A tool dispatching on `rule` should add the new key.
 
 - **A CSS syntax error now says what is wrong, and quotes it.** Every
   CSS-008 used to read "CSS syntax error" and nothing more, whatever the
@@ -52,12 +76,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   names the problem and the source it is about: `invalid selector '. h-10,
   . y-10' at '.'`, `'{' is never closed`, `'margin-right' is not followed by
   ':'`, `string '"abc' is broken by an unescaped line break`, and so on, one
-  wording per kind. A `style` attribute has no source positions, so its
-  declaration is quoted as parsed. Long text is cut at 60 characters. Only
-  the text changed: the same CSS-008s fire at the same positions, with the
-  same `rule` and `params`, which was checked on every book of a 544-book
-  shelf against 0.20.0. Raised by a reader comparing the two tools on their
-  library.
+  wording per kind. A `style` attribute gets the same wording, quoting the
+  attribute's own text; it still has no position in the document. Long text
+  is cut at 60 characters. Only the text changed: the same CSS-008s fire at
+  the same positions, with the same `rule` and `params`, which was checked
+  on every book of a 544-book shelf against 0.20.0. Raised by a reader
+  comparing the two tools on their library.
 
 ## [0.20.0] - 2026-10-01
 
