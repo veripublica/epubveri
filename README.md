@@ -460,7 +460,8 @@ can tell them apart without reading the message:
   nowhere useful. A CSS rule styling an element that does not exist. A
   publication date the specification *recommends* writing another way, which
   epubcheck accepts as it is. A cover `meta` naming a manifest item that does
-  not exist. Nobody is late here; these are things a validator
+  not exist. An unquoted `url()` with a space or a quote in it, which browsers
+  never load and epubcheck reads as a URL. Nobody is late here; these are things a validator
   can notice and nothing obliges it to, and they never become errors.
 
 **What it takes for a check to be admitted**, since an advisory that cries wolf

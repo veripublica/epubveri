@@ -293,8 +293,8 @@ pub(crate) fn check(
     for rule in &sheet.rules {
         match &rule.node {
             spanned::Rule::Qualified(q) => {
-                collect_urls_spanned(&q.prelude, &mut urls);
-                collect_urls_spanned(&q.block.node.values, &mut urls);
+                collect_urls_spanned(&q.prelude, css, &mut urls);
+                collect_urls_spanned(&q.block.node.values, css, &mut urls);
                 // A style rule with no selector at all - a stray `{ … }` after
                 // a complete rule. CSS Syntax parses it as a qualified rule
                 // with an empty prelude, and Selectors requires at least one
@@ -324,7 +324,7 @@ pub(crate) fn check(
                 }
             }
             spanned::Rule::At(a) => {
-                collect_urls_spanned(&a.prelude, &mut urls);
+                collect_urls_spanned(&a.prelude, css, &mut urls);
                 if let Some(block) = &a.block {
                     if a.name.eq_ignore_ascii_case("font-face") {
                         check_font_face_spanned(
@@ -336,7 +336,7 @@ pub(crate) fn check(
                             report,
                         );
                     } else {
-                        collect_urls_spanned(&block.node.values, &mut urls);
+                        collect_urls_spanned(&block.node.values, css, &mut urls);
                     }
                     check_at_rule_block_spanned(
                         &a.name,
@@ -726,6 +726,23 @@ fn report_syntax_errors(
     report: &mut Report,
 ) {
     for e in errors {
+        // Not a syntax error to epubcheck: its scanner reads the url, and the
+        // url checks report what is wrong with it. See `bad_url_target`. What
+        // CSS says about it is ADV-015, which leaves the verdict alone.
+        if e.kind == spanned::SyntaxErrorKind::BadUrl {
+            if advisory && let Some(token) = css.get(e.span.start..e.span.end) {
+                report.push_full(
+                    ADV_015,
+                    Severity::Usage,
+                    bad_url_text(token),
+                    css_path,
+                    origin.position(css, e.span.start),
+                    "css.url.bad_url_token",
+                    vec![token.to_string()],
+                );
+            }
+            continue;
+        }
         let classes = (e.kind == spanned::SyntaxErrorKind::InvalidSelector)
             .then(|| epubcheck_only_class_names(css, rules, e.span.start))
             .flatten();
@@ -1176,6 +1193,10 @@ fn report_declarations(
     report: &mut Report,
 ) {
     for e in errors {
+        // The url checks own a bad url, as at the stylesheet level.
+        if e.kind == spanned::SyntaxErrorKind::BadUrl {
+            continue;
+        }
         report.push_full(
             CSS_008,
             Severity::Error,
@@ -1474,7 +1495,7 @@ fn check_font_face_spanned(
             continue;
         }
         let mut src_urls = Vec::new();
-        collect_urls_spanned(chunk, &mut src_urls);
+        collect_urls_spanned(chunk, css, &mut src_urls);
         // RSC-030 has to be asked here as well as in the generic `urls` pass,
         // because that pass deliberately skips `@font-face` blocks and hands
         // them to this function — so every question it asks about a url has
@@ -1546,7 +1567,7 @@ pub(crate) fn font_face_src_urls_spanned(css: &str) -> Vec<Spanned<String>> {
             if !matches!(&colon.node, spanned::ComponentValue::Token(Token::Colon)) {
                 continue;
             }
-            collect_urls_spanned(chunk, &mut out);
+            collect_urls_spanned(chunk, css, &mut out);
         }
     }
     out.retain(|u| !u.node.is_empty());
@@ -1573,12 +1594,18 @@ fn import_target(prelude: &[ComponentValue]) -> Option<String> {
 /// on the construct a reader looks for.
 fn collect_urls_spanned(
     values: &[Spanned<spanned::ComponentValue>],
+    css: &str,
     out: &mut Vec<Spanned<String>>,
 ) {
     for v in values {
         match &v.node {
             spanned::ComponentValue::Token(Token::Url(s)) => {
                 out.push(Spanned::new(s.to_string(), v.span))
+            }
+            spanned::ComponentValue::Token(Token::BadUrl) => {
+                if let Some(target) = css.get(v.span.start..v.span.end).map(bad_url_target) {
+                    out.push(Spanned::new(target, v.span));
+                }
             }
             spanned::ComponentValue::Function { name, args } => {
                 if name.eq_ignore_ascii_case("url") {
@@ -1588,13 +1615,71 @@ fn collect_urls_spanned(
                         out.push(Spanned::new(s.to_string(), v.span));
                     }
                 } else {
-                    collect_urls_spanned(args, out);
+                    collect_urls_spanned(args, css, out);
                 }
             }
-            spanned::ComponentValue::Block(b) => collect_urls_spanned(&b.values, out),
+            spanned::ComponentValue::Block(b) => collect_urls_spanned(&b.values, css, out),
             _ => {}
         }
     }
+}
+
+/// The target epubcheck reads out of an unquoted `url( … )` that CSS calls a
+/// `<bad-url-token>`, given the token's source text.
+///
+/// **The verdict on such a url is epubcheck's.** CSS Syntax §4.3.6 makes
+/// `url(a b.png)`, `url(q'q.png)` and `url(p(p.png)` bad-url tokens, which a
+/// browser drops along with their declaration. epubcheck's scanner
+/// (`CssScanner._uri`) has no such state: past `url(` and any whitespace it
+/// reads every character up to the first `)`, trims trailing whitespace, and
+/// hands the rest on as an ordinary URL. So `a b.png` draws RSC-020 there, a
+/// missing target RSC-007, and `q'q.png` naming a file in the container draws
+/// nothing at all. We reported CSS-008 for all three, which failed a book
+/// epubcheck passes; this reads the url the way it does instead, and the
+/// usual url checks take it from there (measured against 5.4.0).
+fn bad_url_target(token: &str) -> String {
+    let inner = token.find('(').map_or("", |at| &token[at + 1..]);
+    let inner = inner.trim_start_matches(is_css_whitespace);
+    let inner = inner.find(')').map_or(inner, |end| &inner[..end]);
+    inner.trim_end_matches(is_css_whitespace).to_string()
+}
+
+/// The text of an ADV-015, given a `<bad-url-token>`'s source.
+///
+/// Every claim in it holds wherever the token sits. CSS Syntax §4.3.6 makes
+/// it a bad-url token whatever surrounds it, and no CSS grammar accepts one,
+/// so a browser never fetches it. Whether the declaration, the rule or only
+/// a descriptor is what gets dropped depends on where it is, so the text
+/// does not say which.
+fn bad_url_text(token: &str) -> String {
+    let shown = quote_css(token).unwrap_or_else(|| "url(".to_string());
+    format!(
+        "'{shown}' is not a url() a browser can read: an unquoted url cannot contain \
+         unescaped spaces, quotes, parentheses, control characters or a \
+         backslash before a line break, so it is \
+         never loaded (epubcheck reads it as '{}')",
+        bad_url_target(token)
+    )
+}
+
+/// CSS Syntax's whitespace: space, tab and the newlines. Not
+/// `char::is_whitespace`, which also takes in U+00A0 and friends.
+fn is_css_whitespace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C')
+}
+
+/// The targets of every `<bad-url-token>` in `css`, read as epubcheck reads
+/// them (see [`bad_url_target`]). The plain [`Stylesheet`] the unspanned
+/// walk holds keeps no text for such a token, so the source is tokenized
+/// again here - only by a caller that has met one.
+///
+/// [`Stylesheet`]: styloria::Stylesheet
+fn bad_url_targets(css: &str) -> Vec<String> {
+    styloria::Tokenizer::new(css)
+        .spanned()
+        .filter(|t| matches!(t.node, Token::BadUrl))
+        .filter_map(|t| css.get(t.span.start..t.span.end).map(bad_url_target))
+        .collect()
 }
 
 /// Span-carrying twin of [`import_target`] for `@import "foo.css";` (the
@@ -1609,20 +1694,23 @@ fn import_target_spanned(prelude: &[Spanned<spanned::ComponentValue>]) -> Option
     })
 }
 
-fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>) {
+/// `saw_bad_url` is set on meeting a `<bad-url-token>`, whose text this
+/// walk cannot see; see [`bad_url_targets`].
+fn collect_urls(values: &[ComponentValue], out: &mut Vec<String>, saw_bad_url: &mut bool) {
     for v in values {
         match v {
             ComponentValue::Token(Token::Url(s)) => out.push(s.to_string()),
+            ComponentValue::Token(Token::BadUrl) => *saw_bad_url = true,
             ComponentValue::Function { name, args } => {
                 if name.eq_ignore_ascii_case("url") {
                     if let Some(ComponentValue::Token(Token::String(s))) = args.first() {
                         out.push(s.to_string());
                     }
                 } else {
-                    collect_urls(args, out);
+                    collect_urls(args, out, saw_bad_url);
                 }
             }
-            ComponentValue::Block(b) => collect_urls(&b.values, out),
+            ComponentValue::Block(b) => collect_urls(&b.values, out, saw_bad_url),
             _ => {}
         }
     }
@@ -1641,7 +1729,7 @@ pub(crate) fn import_targets(sheet: &styloria::Stylesheet) -> Vec<String> {
         if let Rule::At(a) = rule
             && a.name.eq_ignore_ascii_case("import")
         {
-            collect_urls(&a.prelude, &mut urls);
+            collect_urls(&a.prelude, &mut urls, &mut false);
         }
     }
     urls
@@ -1653,13 +1741,14 @@ pub(crate) fn import_targets(sheet: &styloria::Stylesheet) -> Vec<String> {
 /// remote-resources content-property scan (OPF-014/018), so a document's
 /// remote references aren't just its raw attribute values but also its
 /// own CSS.
-pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
+pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet, css: &str) -> Vec<String> {
     let mut urls = Vec::new();
+    let mut saw_bad_url = false;
     for rule in &sheet.rules {
         match rule {
             Rule::Qualified(q) => {
-                collect_urls(&q.prelude, &mut urls);
-                collect_urls(&q.block.values, &mut urls);
+                collect_urls(&q.prelude, &mut urls, &mut saw_bad_url);
+                collect_urls(&q.block.values, &mut urls, &mut saw_bad_url);
             }
             Rule::At(a) => {
                 // @namespace's "url(...)" declares an XML namespace URI
@@ -1670,9 +1759,9 @@ pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
                 if a.name.eq_ignore_ascii_case("namespace") {
                     continue;
                 }
-                collect_urls(&a.prelude, &mut urls);
+                collect_urls(&a.prelude, &mut urls, &mut saw_bad_url);
                 if let Some(block) = &a.block {
-                    collect_urls(&block.values, &mut urls);
+                    collect_urls(&block.values, &mut urls, &mut saw_bad_url);
                 }
                 if a.name.eq_ignore_ascii_case("import")
                     && let Some(target) = import_target(&a.prelude)
@@ -1681,6 +1770,9 @@ pub(crate) fn stylesheet_urls(sheet: &styloria::Stylesheet) -> Vec<String> {
                 }
             }
         }
+    }
+    if saw_bad_url {
+        urls.extend(bad_url_targets(css));
     }
     urls
 }
@@ -1861,11 +1953,6 @@ mod tests {
             "CSS syntax error: '{' is never closed"
         );
         assert_eq!(
-            one("p { background: url(a b.png) }"),
-            "CSS syntax error: 'url(a b.png)' is malformed: an unquoted url() cannot \
-             contain unescaped spaces, quotes or parentheses"
-        );
-        assert_eq!(
             one("@font-face { font-family: x; unicode-range: U+1234567; }"),
             "CSS syntax error: unicode-range 'U+1234567' has more than six hex digits"
         );
@@ -1894,6 +1981,101 @@ mod tests {
         assert_eq!(
             t[0].text,
             "CSS syntax error: 'color red' is not a 'property: value' declaration"
+        );
+    }
+
+    /// A `<bad-url-token>` is read as epubcheck reads it and goes to the url
+    /// checks, never to CSS-008. The two silent shapes are the reason:
+    /// epubcheck passes them, and a CSS-008 error failed the book here.
+    #[test]
+    fn a_bad_url_is_read_as_epubcheck_reads_it() {
+        let files = ["OEBPS/q'q.png", "OEBPS/p(p.png", "OEBPS/ok.png"];
+        let idx: HashMap<_, _> = files
+            .iter()
+            .map(|f| (f.to_string(), f.to_string()))
+            .collect();
+        let manifest: HashSet<_> = files.iter().map(|f| f.to_string()).collect();
+        let ids = |css: &str| {
+            let mut report = Report::new();
+            check(
+                css,
+                "style.css",
+                "OEBPS",
+                &idx,
+                &manifest,
+                CssOrigin::File { bytes: None },
+                false,
+                true,
+                &mut report,
+            );
+            // Usage aside: CSS-028 names the @font-face, not a fault.
+            report
+                .messages
+                .iter()
+                .filter(|m| m.severity != Severity::Usage)
+                .map(|m| m.id)
+                .collect::<Vec<_>>()
+        };
+        for silent in [
+            "p { background: url(q'q.png) }",
+            "p { background: url(p(p.png) }",
+            "p { background: url(  q'q.png  ) }",
+            "@font-face { font-family: f; src: url(q'q.png) }",
+        ] {
+            assert!(ids(silent).is_empty(), "{silent:?}: {:?}", ids(silent));
+        }
+        // A missing target is RSC-007, inside @media as well.
+        for missing in [
+            "p { background: url(ok.png x) }",
+            "@media print { p { background: url(gone x.png) } }",
+        ] {
+            assert_eq!(ids(missing), vec![RSC_007], "{missing:?}");
+        }
+
+        // What CSS says about it is ADV-015, behind --advisory only, once per
+        // token, and never an error.
+        let css = "p { background: url(q'q.png) }\n@media print { a { b: url(x y) } }";
+        let adv = run_advisory(css);
+        let found: Vec<_> = adv.messages.iter().filter(|m| m.id == ADV_015).collect();
+        assert_eq!(found.len(), 2);
+        assert!(found.iter().all(|m| m.severity == Severity::Usage));
+        assert_eq!(
+            found[0].text,
+            "'url(q'q.png)' is not a url() a browser can read: an unquoted url cannot \
+             contain unescaped spaces, quotes, parentheses, control characters or a \
+             backslash before a line break, so it is never loaded (epubcheck reads it \
+             as 'q'q.png')"
+        );
+        assert_eq!(found[0].params, vec!["url(q'q.png)".to_string()]);
+        assert!(
+            !run_report(css, &idx)
+                .messages
+                .iter()
+                .any(|m| m.id == ADV_015)
+        );
+
+        assert_eq!(bad_url_target("url(a b.png)"), "a b.png");
+        assert_eq!(bad_url_target("url(\n a b.png \t)"), "a b.png");
+        assert_eq!(bad_url_target("URL(p(p.png)"), "p(p.png");
+        // At EOF there is no `)`: everything after the whitespace is kept.
+        assert_eq!(bad_url_target("url(a b.png"), "a b.png");
+        // U+00A0 is not CSS whitespace, so it is part of the url.
+        assert_eq!(bad_url_target("url(\u{a0}a b)"), "\u{a0}a b");
+    }
+
+    /// The unspanned walk, which `opf.rs` uses to count references, sees a
+    /// bad url too - otherwise its target is "declared but never referenced"
+    /// (OPF-097), which epubcheck does not say.
+    #[test]
+    fn stylesheet_urls_includes_a_bad_url_target() {
+        let css = "p { background: url(q'q.png) } @media print { a { b: url(x y.png) } }";
+        let sheet = Parser::parse_stylesheet(css);
+        assert_eq!(stylesheet_urls(&sheet, css), vec!["q'q.png", "x y.png"]);
+        // No bad url, no second pass, same answer as before.
+        let css = "p { background: url(ok.png) }";
+        assert_eq!(
+            stylesheet_urls(&Parser::parse_stylesheet(css), css),
+            vec!["ok.png"]
         );
     }
 
@@ -2654,6 +2836,34 @@ mod tests {
         let css = "body { content: \"unterminated\n }";
         let findings = run(css, &empty_index());
         assert!(findings.contains(&CSS_008));
+    }
+
+    /// A string broken by a line break is read as CSS Syntax reads it, and
+    /// that is three findings where epubcheck reports one. Kept on purpose
+    /// (owner's decision, 2026-10-02): the spec ends the string at the line
+    /// break, so the quote meant to close it opens a second string, which
+    /// swallows the `}`, and that block really is never closed. Each finding
+    /// is something a browser does. epubcheck instead skips from the line
+    /// break to the next `;`, `{` or `}` (`CssScanner._string`, then
+    /// `reader.forward(TERMINATOR)`), a recovery no specification describes.
+    /// The verdict is the same either way.
+    #[test]
+    fn a_broken_string_is_read_as_the_spec_reads_it() {
+        let report = run_report("p { content: \"abc\n\" }\n", &empty_index());
+        let texts: Vec<_> = report
+            .messages
+            .iter()
+            .filter(|m| m.id == CSS_008)
+            .map(|m| m.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            vec![
+                "CSS syntax error: '{' is never closed",
+                "CSS syntax error: string '\"abc' is broken by an unescaped line break",
+                "CSS syntax error: string '\" }' is broken by an unescaped line break",
+            ]
+        );
     }
 
     #[test]

@@ -10,6 +10,30 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **ADV-015, behind `--advisory`: an unquoted `url()` that CSS reads as
+  malformed.** A space, a quote, a parenthesis, a control character or a
+  backslash before a line break inside an unquoted `url( … )` makes it a
+  bad-url token, which no browser loads. epubcheck reads such a url as an
+  ordinary URL, and so does epubveri for its verdict (see Fixed below); the
+  advisory says what CSS says, quotes the token, and names what epubcheck
+  read from it. Usage severity, never the verdict or the exit code.
+
+### Fixed
+
+- **An unquoted `url()` that CSS calls malformed no longer fails a book
+  epubcheck passes.** `url(q'q.png)` or `url(p(p.png)` naming a file in the
+  book was a CSS-008 error here and nothing at all in epubcheck, whose CSS
+  reader takes everything up to the first `)` as the URL. epubveri now reads
+  such a url the same way and lets the usual url checks speak: `url(a b.png)`
+  is RSC-020 as in epubcheck (it was CSS-008), a missing target is RSC-007,
+  and the file it names counts as referenced, so it no longer draws OPF-097.
+  This ends a divergence kept deliberately since 0.9.29 on the reading that only
+  the ID differed. The silent shapes were not measured then. Found while
+  probing CSS-008 wording against epubcheck 5.4.0; no book on a 544-book
+  shelf and no epubcheck fixture contains one.
+
 ### Changed
 
 - **A CSS syntax error now says what is wrong, and quotes it.** Every

@@ -421,10 +421,17 @@ const ANN: &[Ann] = &[
         "`position: fixed` (USAGE) - matches epubcheck's first-value-component \
          == \"fixed\" test."),
     ("CSS-008", None,
-        "Covers bad-string/bad-url tokens, unterminated rules/blocks, \
+        "Covers bad-string tokens, unterminated rules/blocks, \
          malformed declaration shapes, malformed selector lists (styloria 0.5) \
          and over-long `U+` unicode-ranges (styloria 0.6) - epubcheck's whole \
-         live CSS error surface. Two of its error codes are dead and never \
+         live CSS error surface. A bad url is not one: epubcheck reads it as a \
+         URL and so do we (2026-10-02), so the url checks report it; the \
+         spec defect is ADV-015 behind --advisory. A broken string is three \
+         findings here and one there, deliberately: CSS ends it at the line \
+         break, so the closing quote opens a second string that swallows the \
+         `}`, while epubcheck skips to the next `;`, `{` or `}`, a recovery no \
+         spec describes (decided 2026-10-02). Two of \
+         its error codes are dead and never \
          raised (`GRAMMAR_INVALID_SELECTOR`, `SCANNER_MALFORMED_ESCAPE`); \
          selector errors reach CSS-008 via `GRAMMAR_EXPECTING_TOKEN`, and \
          epubcheck does *not* validate at-rule preludes at all (its \

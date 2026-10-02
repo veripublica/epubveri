@@ -86,7 +86,9 @@ OPTIONS:
                                      not a CSS identifier (browsers drop the
                                      rule; epubcheck accepts it), a cover
                                      meta whose content is not the id of any
-                                     manifest item.
+                                     manifest item, an unquoted url() CSS
+                                     reads as malformed (browsers never load
+                                     it; epubcheck reads it as a URL).
                            Off by default; neither ever affects the verdict or
                            the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
@@ -914,7 +916,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            9,
+            10,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

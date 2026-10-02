@@ -177,7 +177,7 @@ pub const CSS_005: &str = "CSS-005"; // a stylesheet link's class conflicts betw
 pub const CSS_006: &str = "CSS-006"; // a 'position: fixed' declaration (usage)
 pub const CSS_003: &str = "CSS-003"; // a stylesheet is UTF-16 encoded
 pub const CSS_004: &str = "CSS-004"; // @charset value isn't utf-8 or utf-16
-pub const CSS_008: &str = "CSS-008"; // CSS syntax error (bad string/url token)
+pub const CSS_008: &str = "CSS-008"; // CSS syntax error (a bad url goes to the url checks, as in epubcheck)
 pub const CSS_015: &str = "CSS-015"; // an alternate stylesheet link is missing or has an empty title
 pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block
 pub const CSS_028: &str = "CSS-028"; // a @font-face declaration is present (usage)
@@ -215,6 +215,13 @@ pub const ADV_012: &str = "ADV-012"; // a class selector whose name is not a CSS
 // (MobileRead 374286 #370), none on our shelf. ADV-013 is not reused: it named a
 // held, never-released advisory that the forum discussed by that number.
 pub const ADV_014: &str = "ADV-014"; // cover meta names no manifest item (usage, MobileRead 374286 #362/#370)
+// ADV-015 is ADV-012's shape again, for url(): CSS Syntax makes an unquoted
+// url holding a space, a quote, a parenthesis, a control character or a bad
+// escape a <bad-url-token>, which no browser loads. epubcheck's scanner reads
+// up to the first `)` instead and checks what it read as an ordinary URL, so
+// the verdict and the RSC ids follow that reading and this says what CSS says.
+// True wherever it fires: no grammar accepts the token.
+pub const ADV_015: &str = "ADV-015"; // an unquoted url() CSS reads as a bad-url token (usage)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

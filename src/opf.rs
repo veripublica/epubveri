@@ -10815,7 +10815,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         restricted_remote_refs.insert(strip_url_fragment(u));
                     }
                 }
-                for u in crate::css::stylesheet_urls(&sheet) {
+                for u in crate::css::stylesheet_urls(&sheet, &css_text) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
                     // OPF-097 below. Inline <style> resolves against this
@@ -11900,7 +11900,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .map(|s| s.node)
                 .collect();
         let mut css_has_remote = false;
-        for u in crate::css::stylesheet_urls(&sheet) {
+        for u in crate::css::stylesheet_urls(&sheet, &css_text) {
             // Consumed resources, for OPF-097 - a font is "used" if any
             // stylesheet in the manifest asks for it, exactly as epubcheck
             // registers references from every CSS resource it checks.
@@ -13904,7 +13904,7 @@ impl LinkedSheet {
             })
             .collect();
         let css_dir = parent_dir(resolved);
-        let refs = crate::css::stylesheet_urls(&sheet)
+        let refs = crate::css::stylesheet_urls(&sheet, &css_text)
             .into_iter()
             .filter(|u| !is_external(u))
             .map(|u| nfc(&resolve(&css_dir, strip_url_fragment(&u).trim())))
@@ -17704,14 +17704,16 @@ mod tests {
     /// epubcheck report it" needs a probe, always answers, and is the only
     /// question a parity gap actually turns on.
     ///
-    /// **One divergence stays and is deliberate**: `url(i m.png)` *unquoted*.
-    /// An unescaped space makes that an invalid url-token, so styloria does not
-    /// produce a URL from it and neither the reference nor this check sees one;
-    /// epubcheck's older parser extracts it anyway. Same class as the CSS-008
-    /// empty-declaration divergence — their parser predates the spec it is
-    /// judged against, and teaching our CSS layer to recover from invalid
-    /// syntax to match it would be the detector serving parity. The quoted
-    /// form, which is valid CSS, is the case that matters and it agrees.
+    /// **`url(i m.png)` *unquoted* was a deliberate divergence until
+    /// 2026-10-02, and the reason for ending it is the verdict.** CSS makes it
+    /// a bad-url token; epubcheck's scanner reads it as a URL anyway. We
+    /// reported CSS-008 instead of RSC-020, which looked like a difference of
+    /// ID only, because both are errors. It was not: the same token without a
+    /// space, `url(q'q.png)` naming a file that exists, is silent in epubcheck
+    /// and was a CSS-008 error here, which fails a book epubcheck passes. The
+    /// CSS-008 policy itself is "malformed under the current spec *and*
+    /// flagged by epubcheck". So a bad url is now read the way epubcheck reads
+    /// it (`css::bad_url_target`), and the url checks report what they find.
     #[test]
     fn rsc_020_reaches_the_guide_and_css_url_sites() {
         let rules = |css: &str, guide_href: &str| {
@@ -17756,10 +17758,12 @@ mod tests {
             vec!["css.url.malformed_relative_url"],
             "a spaced url() in a stylesheet, quoted so it is valid CSS"
         );
-        // The deliberate divergence: unquoted, so not a url-token at all.
-        assert!(
-            rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
-            "an unquoted url with a space is invalid CSS and yields no URL"
+        // Unquoted, so a bad-url token to CSS, and still RSC-020, as in
+        // epubcheck.
+        assert_eq!(
+            rules("body { background: url(i m.png); }", "ch1.xhtml"),
+            vec!["css.url.malformed_relative_url"],
+            "an unquoted url with a space is read as epubcheck reads it"
         );
     }
 
