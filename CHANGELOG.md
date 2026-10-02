@@ -8,6 +8,23 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Changed
+
+- **A CSS syntax error now says what is wrong, and quotes it.** Every
+  CSS-008 used to read "CSS syntax error" and nothing more, whatever the
+  problem was; only the JSON `rule` field told the kinds apart. The text now
+  names the problem and the source it is about: `invalid selector '. h-10,
+  . y-10' at '.'`, `'{' is never closed`, `'margin-right' is not followed by
+  ':'`, `string '"abc' is broken by an unescaped line break`, and so on, one
+  wording per kind. A `style` attribute has no source positions, so its
+  declaration is quoted as parsed. Long text is cut at 60 characters. Only
+  the text changed: the same CSS-008s fire at the same positions, with the
+  same `rule` and `params`, which was checked on every book of a 544-book
+  shelf against 0.20.0. Raised by a reader comparing the two tools on their
+  library.
+
 ## [0.20.0] - 2026-10-01
 
 **A corrupt image header is now reported as epubcheck reports it.** An

@@ -733,7 +733,7 @@ fn report_syntax_errors(
             report.push_full(
                 CSS_008,
                 Severity::Error,
-                "CSS syntax error",
+                syntax_error_text(css, e, rules),
                 css_path,
                 origin.position(css, e.span.start),
                 syntax_error_slug(e.kind),
@@ -762,6 +762,22 @@ fn report_syntax_errors(
     }
 }
 
+/// The selector of the qualified rule in `rules` holding `offset`, and the
+/// byte offset in `css` where it starts.
+fn enclosing_prelude<'c>(
+    css: &'c str,
+    rules: &[Spanned<spanned::Rule>],
+    offset: usize,
+) -> Option<(usize, &'c str)> {
+    let q = rules.iter().find_map(|r| match &r.node {
+        spanned::Rule::Qualified(q) if r.span.start <= offset && offset < r.span.end => Some(q),
+        _ => None,
+    })?;
+    let start = q.prelude.first()?.span.start;
+    let end = q.prelude.last()?.span.end;
+    Some((start, css.get(start..end)?))
+}
+
 /// The class names epubcheck accepts and CSS does not in the selector of the
 /// rule holding `offset`, as byte ranges of `css` (dot included) — or `None`
 /// when there are none, or when the selector is still invalid without them.
@@ -770,13 +786,7 @@ fn epubcheck_only_class_names(
     rules: &[Spanned<spanned::Rule>],
     offset: usize,
 ) -> Option<Vec<(usize, usize)>> {
-    let q = rules.iter().find_map(|r| match &r.node {
-        spanned::Rule::Qualified(q) if r.span.start <= offset && offset < r.span.end => Some(q),
-        _ => None,
-    })?;
-    let start = q.prelude.first()?.span.start;
-    let end = q.prelude.last()?.span.end;
-    let prelude = css.get(start..end)?;
+    let (start, prelude) = enclosing_prelude(css, rules, offset)?;
     let (relaxed, found) = relax_class_names(prelude);
     if found.is_empty() {
         return None;
@@ -896,6 +906,74 @@ fn syntax_error_slug(kind: spanned::SyntaxErrorKind) -> &'static str {
         // under a shared "malformed" slug would hide which it was.
         spanned::SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
     }
+}
+
+/// The text of a CSS-008: what kind of syntax error, and the source it is
+/// about.
+///
+/// It was a bare "CSS syntax error" for every kind until a reader comparing
+/// the two tools on their library pointed out that epubcheck says which token
+/// it choked on and we said nothing (Reddit, 2026-10-02). The kind was known
+/// all along, but only the `rule` slug carried it, where a person reading the
+/// report never looks. The wording is ours; the facts are the span styloria
+/// already reports, which is the offending token itself.
+fn syntax_error_text(
+    css: &str,
+    e: &spanned::SyntaxError,
+    rules: &[Spanned<spanned::Rule>],
+) -> String {
+    use spanned::SyntaxErrorKind as K;
+    let token = quote_css(&css[e.span.start..e.span.end]);
+    let detail = match (e.kind, &token) {
+        (K::InvalidSelector, _) => {
+            // The token alone can be a lone `.` or even a space (`p, {`), so
+            // the whole selector is what tells the reader which rule it is.
+            let selector =
+                enclosing_prelude(css, rules, e.span.start).and_then(|(_, p)| quote_css(p));
+            match (selector, &token) {
+                (Some(s), Some(t)) if s != *t => format!("invalid selector '{s}' at '{t}'"),
+                (Some(s), _) => format!("invalid selector '{s}'"),
+                (None, Some(t)) => format!("invalid selector at '{t}'"),
+                (None, None) => "invalid selector".to_string(),
+            }
+        }
+        (K::UnterminatedBlock, Some(t)) => format!("'{t}' is never closed"),
+        (K::UnterminatedRule, _) => "the stylesheet ends before this rule's { } block".to_string(),
+        (K::BadString, Some(t)) => format!("string '{t}' is broken by an unescaped line break"),
+        (K::BadUrl, Some(t)) => format!(
+            "'{t}' is malformed: an unquoted url() cannot contain unescaped spaces, \
+             quotes or parentheses"
+        ),
+        (K::InvalidUnicodeRange, Some(t)) => {
+            format!("unicode-range '{t}' has more than six hex digits")
+        }
+        (K::NestingTooDeep, _) => format!(
+            "blocks nested more than {} deep; what they hold was not checked",
+            styloria::parser::MAX_NESTING_DEPTH
+        ),
+        (K::MalformedDeclaration, Some(t)) => format!("'{t}' is not followed by ':'"),
+        (K::UnexpectedToken, Some(t)) => format!("'{t}' where a declaration was expected"),
+        // Every span above is a token, which is never blank; this is the
+        // floor for one that is, not a shape anything is known to produce.
+        (_, None) => return "CSS syntax error".to_string(),
+    };
+    format!("CSS syntax error: {detail}")
+}
+
+/// `source` as a message quotes it: whitespace runs folded to one space (a
+/// selector list is often written one selector per line) and long text cut
+/// with an ellipsis. `None` when nothing but whitespace is left.
+fn quote_css(source: &str) -> Option<String> {
+    const MAX_CHARS: usize = 60;
+    let folded = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    if folded.is_empty() {
+        return None;
+    }
+    if folded.chars().count() <= MAX_CHARS {
+        return Some(folded);
+    }
+    let cut: String = folded.chars().take(MAX_CHARS).collect();
+    Some(format!("{}…", cut.trim_end()))
 }
 
 /// Walk an at-rule's block, whatever it holds — nested rules for a
@@ -1101,7 +1179,7 @@ fn report_declarations(
         report.push_full(
             CSS_008,
             Severity::Error,
-            "CSS syntax error",
+            syntax_error_text(css, e, &[]),
             css_path,
             origin.position(css, e.span.start),
             "css.declaration.malformed_shape",
@@ -1122,7 +1200,10 @@ fn report_declarations(
                 report.push_full(
                     CSS_008,
                     Severity::Error,
-                    "CSS syntax error",
+                    format!(
+                        "CSS syntax error: at-rule '{}' inside a style rule",
+                        &css[a.node.name_span.start..a.node.name_span.end]
+                    ),
                     css_path,
                     origin.position(css, a.node.name_span.start),
                     "css.declaration.nested_at_rule",
@@ -1229,10 +1310,22 @@ fn check_declaration_shapes(
             Some(_) => true,
         };
         if malformed {
+            // No source offsets on this path, so the chunk is quoted as
+            // styloria serializes it: the reader's own text up to spacing.
+            let mut source = String::new();
+            for v in chunk {
+                styloria::serialize::serialize_component_value(v, &mut source);
+            }
+            let text = match quote_css(&source) {
+                Some(q) => {
+                    format!("CSS syntax error: '{q}' is not a 'property: value' declaration")
+                }
+                None => "CSS syntax error".to_string(),
+            };
             report.push_at_rule(
                 CSS_008,
                 Severity::Error,
-                "CSS syntax error",
+                text,
                 css_path,
                 "css.declaration.malformed_shape",
                 Vec::new(),
@@ -1728,6 +1821,93 @@ mod tests {
                 .and_then(|m| m.rule),
             Some("css.stylesheet.invalid_selector")
         );
+    }
+
+    /// Every CSS-008 says what kind of syntax error it is and quotes the
+    /// source it is about, rather than the bare "CSS syntax error" each one
+    /// used to be. One shape per kind and per call site.
+    #[test]
+    fn a_css_syntax_error_says_what_and_where() {
+        let idx = HashMap::new();
+        let texts = |css: &str| -> Vec<String> {
+            run_report(css, &idx)
+                .messages
+                .into_iter()
+                .filter(|m| m.id == CSS_008)
+                .map(|m| m.text)
+                .collect()
+        };
+        let one = |css: &str| {
+            let t = texts(css);
+            assert_eq!(t.len(), 1, "{css:?}: {t:?}");
+            t.into_iter().next().unwrap()
+        };
+        assert_eq!(
+            one(". foo { color: red }"),
+            "CSS syntax error: invalid selector '. foo' at '.'"
+        );
+        // The offending token is a space here; the selector is what says
+        // which rule, and a space is not worth quoting.
+        assert_eq!(
+            one("p,\n  { color: red }"),
+            "CSS syntax error: invalid selector 'p,'"
+        );
+        assert_eq!(
+            one("@media print { h1,\n h2 >>> b { color: red } }"),
+            "CSS syntax error: invalid selector 'h1, h2 >>> b' at '>'"
+        );
+        assert_eq!(
+            one("p { color: red"),
+            "CSS syntax error: '{' is never closed"
+        );
+        assert_eq!(
+            one("p { background: url(a b.png) }"),
+            "CSS syntax error: 'url(a b.png)' is malformed: an unquoted url() cannot \
+             contain unescaped spaces, quotes or parentheses"
+        );
+        assert_eq!(
+            one("@font-face { font-family: x; unicode-range: U+1234567; }"),
+            "CSS syntax error: unicode-range 'U+1234567' has more than six hex digits"
+        );
+        assert_eq!(
+            one("p { color red; }"),
+            "CSS syntax error: 'color' is not followed by ':'"
+        );
+        assert_eq!(
+            one("h1 { 12px: x }"),
+            "CSS syntax error: '12px' where a declaration was expected"
+        );
+        assert_eq!(
+            one("p { @media print { color: red } }"),
+            "CSS syntax error: at-rule '@media' inside a style rule"
+        );
+        assert!(texts("p { content: \"abc\n\" }").contains(
+            &"CSS syntax error: string '\"abc' is broken by an unescaped line break".to_string()
+        ));
+
+        // A style attribute has no source offsets; the chunk is quoted as
+        // styloria serializes it.
+        let mut report = Report::new();
+        check_style_attribute("color red", "doc.xhtml", false, true, &mut report);
+        let t: Vec<_> = report.messages.iter().filter(|m| m.id == CSS_008).collect();
+        assert_eq!(t.len(), 1);
+        assert_eq!(
+            t[0].text,
+            "CSS syntax error: 'color red' is not a 'property: value' declaration"
+        );
+    }
+
+    #[test]
+    fn a_quoted_css_snippet_is_folded_and_capped() {
+        assert_eq!(quote_css("  "), None);
+        assert_eq!(quote_css("h1,\n\t h2").as_deref(), Some("h1, h2"));
+        let long = "a".repeat(80);
+        let q = quote_css(&long).unwrap();
+        assert_eq!(q.chars().count(), 61);
+        assert!(q.ends_with('…'));
+        // Cut on a char boundary, never mid-code-point.
+        let wide = "é".repeat(80);
+        assert_eq!(quote_css(&wide).unwrap().chars().count(), 61);
     }
 
     /// The two shapes that must stay silent, both of which are ordinary CSS
