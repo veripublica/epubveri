@@ -3,7 +3,9 @@
 epubveri and epubcheck answer the same question about an EPUB. This document
 measures what each one costs to get there: time, CPU, memory and disk.
 
-**Measured 2026-09-30, both tools in one sitting, same machine, same books.**
+**epubveri 0.21.0 measured 2026-10-02; epubcheck 5.4.0 measured 2026-09-30.**
+Same machine, same 544 books. epubcheck and the library have not changed since
+its run, so its figures stand; only epubveri was measured again.
 Every number here is an observation made on one machine with one library on one
 day, not a property of either tool. Re-measure before quoting any of it — the
 last section tells you how.
@@ -15,7 +17,7 @@ This is a **performance** document only. For what the two tools *find*, see
 
 | | |
 |---|---|
-| epubveri | 0.19.0, release build of the tagged commit |
+| epubveri | 0.21.0, release build of the tagged commit |
 | epubcheck | 5.4.0, official distribution |
 | JVM | OpenJDK 26.0.2, default heap settings |
 | Machine | Apple M2 Pro, 10 cores, 32 GiB RAM, macOS 27.0.1 |
@@ -31,8 +33,9 @@ high-resolution clock around each process for wall time, and the kernel's own
 accounting for that one process (`wait4`) for CPU time and peak memory. Not
 `/usr/bin/time`, which *truncates* to 10 ms: it prints a 25 ms run as `0.02`,
 which would understate epubveri's typical book by a fifth. Whole-library totals
-are the sum of the per-book times. epubveri's pass was run twice and the second
-is reported (the first came to 19.4 s). Both tools ran on a warm page cache.
+are the sum of the per-book times. epubveri's pass was run four times, which
+took 17.3 to 18.9 s for the whole library, and the figures here come from the
+pass nearest the median. Both tools ran on a warm page cache.
 
 ### Both tools did the same work
 
@@ -51,13 +54,14 @@ Whole library, 544 books, each tool running alone:
 
 | | epubveri | epubcheck | ratio |
 |---|---:|---:|---|
-| Wall-clock time | **19.1 s** | 1 100 s | **58x** |
-| CPU time | **18.4 s** | 4 133 s | **225x** |
-| Memory, typical book | **9.2 MiB** | 423 MiB | **46x** |
-| Install footprint | **3.3 MB** | 434 MB | **131x** |
+| Wall-clock time | **17.6 s** | 1 100 s | **62x** |
+| CPU time | **16.9 s** | 4 133 s | **244x** |
+| Memory, typical book | **9.5 MiB** | 423 MiB | **44x** |
+| Install footprint | **3.4 MB** | 434 MB | **127x** |
 
 **epubveri was the faster tool and the smaller one on every one of the 544
-books.** The narrowest per-book margins were 4x on time and 7x on memory.
+books.** The narrowest per-book margins were at least 3x on time and 6x on
+memory.
 
 ## Time
 
@@ -65,9 +69,9 @@ The same three situations, measured for both tools:
 
 | | epubveri | epubcheck |
 |---|---:|---:|
-| The smallest book (66 KB) | **7 ms** | 1.87 s |
-| A typical book (median of 544) | **0.023 s** | 1.97 s |
-| The whole 544-book library | **19.1 s** | 1 100 s |
+| The smallest book (66 KB) | **6 ms** | 1.87 s |
+| A typical book (median of 544) | **0.022 s** | 1.97 s |
+| The whole 544-book library | **17.6 s** | 1 100 s |
 
 epubcheck's time barely depends on the book. Over a hundredfold range of
 content — 100 KB to 10 MB, which is 98% of this library — its median moves by
@@ -75,20 +79,20 @@ content — 100 KB to 10 MB, which is 98% of this library — its median moves b
 
 | book size | books | epubcheck, median | epubveri, median |
 |---|---:|---:|---:|
-| under 100 KB | 4 | 1.81 s | 0.008 s |
-| 100–500 KB | 231 | 1.92 s | 0.016 s |
-| 0.5–2 MB | 223 | 2.01 s | 0.029 s |
+| under 100 KB | 4 | 1.81 s | 0.007 s |
+| 100–500 KB | 231 | 1.92 s | 0.015 s |
+| 0.5–2 MB | 223 | 2.01 s | 0.028 s |
 | 2–10 MB | 80 | 2.04 s | 0.029 s |
-| over 10 MB | 6 | 2.66 s | 0.103 s |
+| over 10 MB | 6 | 2.66 s | 0.094 s |
 
 ## CPU
 
 | | epubveri | epubcheck |
 |---|---:|---:|
-| CPU-seconds, whole library | **18.4 s** | 4 133 s |
+| CPU-seconds, whole library | **16.9 s** | 4 133 s |
 | Cores busy while running | 0.96 | 3.76 |
 
-The CPU gap (225x) is almost four times the wall-clock gap (58x), and the reason
+The CPU gap (244x) is almost four times the wall-clock gap (62x), and the reason
 is measurable: epubcheck keeps about **3.8 cores** busy — JIT compiler and
 garbage collector threads alongside the work — while epubveri is
 single-threaded. So epubcheck recovers part of the wall-clock difference through
@@ -102,7 +106,7 @@ and battery life, which tracks CPU-seconds.
 
 | | epubveri | epubcheck |
 |---|---:|---:|
-| Typical book (median) | **9.2 MiB** | 423 MiB |
+| Typical book (median) | **9.5 MiB** | 423 MiB |
 | Worst book | **96 MiB** | 1 684 MiB |
 | Books needing over 512 MiB | **0** | 138 |
 | Books needing over 1 GiB | **0** | 4 |
@@ -119,14 +123,14 @@ saves time.
 
 | | size |
 |---|---:|
-| epubveri CLI — one file, no runtime needed | **3.3 MB** |
+| epubveri CLI — one file, no runtime needed | **3.4 MB** |
 | epubveri release archive, per platform | 1.2–1.5 MB |
-| epubveri WASM, for the browser | **561 KB** brotli (2.1 MB raw) |
+| epubveri WASM, for the browser | **575 KB** brotli (2.1 MB raw) |
 | epubcheck distribution | 36.2 MB (`epubcheck.jar` plus 39 dependency jars) |
 | — plus the required JVM | 398 MB |
 | **epubcheck total** | **434 MB** |
 
-In a browser there is nothing to compare: 561 KB over the wire against a JVM
+In a browser there is nothing to compare: 575 KB over the wire against a JVM
 that is not an option but a prerequisite.
 
 Disk traffic during validation was not a differentiator — with a warm page cache
@@ -150,8 +154,8 @@ validation path**, most likely compiling the RELAX NG and Schematron schemas and
 the JIT warm-up over that work.
 
 epubveri has no equivalent because its schemas are **compiled into the binary**.
-Its process starts in 3 ms, its floor is 7 ms, and its time then grows with the
-content.
+Its process starts in about 2 ms, its floor is 6 ms, and its time then grows with
+the content.
 
 This also states epubcheck's best case fairly. If that 1.8 seconds were shared
 across many books, the two tools would be far closer — subtracting each tool's
