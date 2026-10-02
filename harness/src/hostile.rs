@@ -362,6 +362,40 @@ fn gen_attribute_heavy(out: &Path) {
     );
 }
 
+/// Time per finding: every position used to rescan its file from the top,
+/// and every element path recounted the element's siblings, so one file
+/// with N findings cost N². Found 2026-10-02: 100,000 malformed selectors in
+/// one stylesheet took 23 s against 5.9 s for half as many, and 50,000
+/// misplaced elements 12.5 s. Each shape here is sized so that the quadratic
+/// build runs past the default 120 s timeout while the linear one takes
+/// seconds, so a regression shows as TIMEOUT rather than as a slower number
+/// nobody reads. Guard: `report::LocationIndex`, and `css::rule_at` for the
+/// per-error rule lookup.
+fn gen_finding_count(out: &Path) {
+    let css = ". x { color: red }\n".repeat(300_000);
+    book(
+        &out.join("findings-css-selectors.epub"),
+        opf(r#"<item id="s" href="s.css" media-type="text/css"/>"#, ""),
+        nav(
+            r#"<link rel="stylesheet" href="s.css" type="text/css"/>"#,
+            "",
+        ),
+        vec![("OEBPS/s.css".to_string(), css.into_bytes())],
+    );
+    book(
+        &out.join("findings-xhtml-elements.epub"),
+        opf("", ""),
+        nav("", &"<foo/>\n".repeat(200_000)),
+        Vec::new(),
+    );
+    book(
+        &out.join("findings-xhtml-entities.epub"),
+        opf("", ""),
+        nav("", &"<p>a &bogus; b</p>\n".repeat(400_000)),
+        Vec::new(),
+    );
+}
+
 /// Memory per element: 60 MiB of `<b/>` is 15.7 million elements from a
 /// 60 KB file, and peaked at 1.27 GB and 28 s before reporting VALID. Guard:
 /// `xmlguard::MAX_ELEMENTS`. Otherwise valid, so a lost guard shows as
@@ -641,6 +675,7 @@ fn main() {
     gen_multibyte_equals(&out);
     gen_big_image(&out);
     gen_entry_count(&out);
+    gen_finding_count(&out);
     if scale {
         gen_scale(&out);
     }

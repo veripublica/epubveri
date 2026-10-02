@@ -40,7 +40,7 @@ use styloria::{
 
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
-use crate::report::{Position, Report, Severity};
+use crate::report::{LocationIndex, Position, Report, Severity};
 
 /// Decode raw CSS bytes, honoring a UTF-16 BOM if present. Without this, a
 /// legitimately UTF-16-encoded stylesheet (real, and `@charset`-declarable
@@ -210,6 +210,13 @@ pub(crate) fn check(
     // line:column of the offending token (via `Position::of_offset`, the
     // same byte-offset→line:col helper the rest of epubveri uses, so CSS
     // positions count columns in chars just like every other finding).
+    // A stylesheet can carry a finding per rule, so positions come from an
+    // index over the text they are counted in (see `LocationIndex`).
+    let _positions = match origin {
+        CssOrigin::File { .. } => Some(LocationIndex::scope(css)),
+        CssOrigin::Inline { doc, .. } => Some(LocationIndex::scope(doc)),
+        CssOrigin::Opaque(_) => None,
+    };
     let (sheet, syntax_errs) = spanned::parse_stylesheet_with_errors(css);
 
     // Encoding checks only make sense for a standalone CSS file - see
@@ -683,10 +690,7 @@ fn collapse_selector_errors<'a>(
             out.push(e);
             continue;
         }
-        let owner = rules
-            .iter()
-            .find(|r| r.span.start <= e.span.start && e.span.start < r.span.end)
-            .map(|r| (r.span.start, r.span.end));
+        let owner = rule_at(rules, e.span.start).map(|r| (r.span.start, r.span.end));
         match owner {
             // A second bad selector in a rule already reported.
             Some(o) if claimed == Some(o) => {}
@@ -779,6 +783,17 @@ fn report_syntax_errors(
     }
 }
 
+/// The rule in `rules` whose span holds `offset`. Rules at one level are in
+/// source order and do not overlap, so this is a binary search: a linear one
+/// per syntax error made a stylesheet of 100,000 malformed rules quadratic.
+fn rule_at<'r, 'c>(
+    rules: &'r [Spanned<spanned::Rule<'c>>],
+    offset: usize,
+) -> Option<&'r Spanned<spanned::Rule<'c>>> {
+    let i = rules.partition_point(|r| r.span.end <= offset);
+    rules.get(i).filter(|r| r.span.start <= offset)
+}
+
 /// The selector of the qualified rule in `rules` holding `offset`, and the
 /// byte offset in `css` where it starts.
 fn enclosing_prelude<'c>(
@@ -786,10 +801,9 @@ fn enclosing_prelude<'c>(
     rules: &[Spanned<spanned::Rule>],
     offset: usize,
 ) -> Option<(usize, &'c str)> {
-    let q = rules.iter().find_map(|r| match &r.node {
-        spanned::Rule::Qualified(q) if r.span.start <= offset && offset < r.span.end => Some(q),
-        _ => None,
-    })?;
+    let spanned::Rule::Qualified(q) = &rule_at(rules, offset)?.node else {
+        return None;
+    };
     let start = q.prelude.first()?.span.start;
     let end = q.prelude.last()?.span.end;
     Some((start, css.get(start..end)?))

@@ -8099,6 +8099,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 continue;
             }
         };
+        // One document can carry a schema finding per element; positions
+        // in it come from an index over `t` (see `LocationIndex`).
+        let _positions = crate::report::LocationIndex::scope(&t);
 
         // **A viewport meta in a document that is not in the spine.**
         // `check_reflowable_viewport` runs in the spine-itemref loop above,

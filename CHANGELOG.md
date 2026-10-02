@@ -33,6 +33,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the ID differed. The silent shapes were not measured then. Found while
   probing CSS-008 wording against epubcheck 5.4.0; no book on a 544-book
   shelf and no epubcheck fixture contains one.
+- **A file with many findings no longer takes time proportional to the
+  square of their number.** Every line:column was counted from the top of
+  its file and every element path recounted the element's siblings, so
+  100,000 malformed selectors in one stylesheet took 23 s, 50,000 misplaced
+  elements in one document 12.5 s, and 50,000 bad entity references 3.5 s.
+  Each of those now takes under a second. Positions and paths are unchanged:
+  on a 544-book shelf every finding, including 52,338 element paths in 303
+  books, is identical to 0.20.0's, and the shelf as a whole runs 1.4% faster
+  with no book slower. The hostile corpus gained three shapes sized so that
+  the old behaviour times out.
 
 ### Changed
 

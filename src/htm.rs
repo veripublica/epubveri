@@ -37,6 +37,8 @@ fn offset_in(haystack: &str, needle: &str) -> usize {
 /// EPUB2 fixtures across the corpus reuse exactly this doctype as their
 /// standard template).
 pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, report: &mut Report) {
+    // A finding per entity reference is possible; see `LocationIndex`.
+    let _positions = crate::report::LocationIndex::scope(text);
     // Entity well-formedness (RSC-016) is a basic XML concern, not an
     // EPUB-3-specific one - a real EPUB 2 fixture (an unknown named
     // entity reference) expects it too. EPUB 2 is passed the version flag

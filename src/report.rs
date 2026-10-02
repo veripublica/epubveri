@@ -83,11 +83,10 @@ impl Position {
     /// The same principle settled #68, where stray text runs were collapsed
     /// onto their parent's single line:column and are now blamed at the run.
     pub(crate) fn of(node: roxmltree::Node) -> Position {
-        let p = node.document().text_pos_at(node.range().start);
-        Position {
-            line: p.row,
-            column: p.col,
-        }
+        // roxmltree counts rows and columns exactly as `of_offset` does (rows
+        // by `\n`, columns in chars since it), so going through `of_offset`
+        // changes no answer and lets a `LocationIndex` scope serve it.
+        Self::of_offset(node.document().input_text(), node.range().start)
     }
 
     /// Position of `attr` itself - the first character of its name - rather
@@ -104,11 +103,7 @@ impl Position {
     /// the character *after* the start tag's `>`, so its column pointed at
     /// neither the element nor the attribute and ours never matched it.
     pub(crate) fn of_attr(node: roxmltree::Node, attr: roxmltree::Attribute) -> Position {
-        let p = node.document().text_pos_at(attr.range().start);
-        Position {
-            line: p.row,
-            column: p.col,
-        }
+        Self::of_offset(node.document().input_text(), attr.range().start)
     }
 
     /// Position of a byte `offset` into raw `text`. For checks that scan
@@ -120,7 +115,21 @@ impl Position {
     /// (which delegates to `roxmltree`'s own char-based column counting) -
     /// counting bytes instead would silently disagree with `of` on any line
     /// containing multi-byte UTF-8 text before the offset.
+    ///
+    /// Each call scans `text` up to `offset`, so a file with many findings
+    /// pays for its length once per finding. A caller that reports many
+    /// positions in one text opens a [`LocationIndex::scope`] over it first,
+    /// and the calls inside answer from that instead.
     pub(crate) fn of_offset(text: &str, offset: usize) -> Position {
+        if let Some(p) = LocationIndex::lookup(text, offset) {
+            return p;
+        }
+        Self::scan(text, offset)
+    }
+
+    /// [`of_offset`](Self::of_offset) without the index: the definition the
+    /// index has to agree with.
+    fn scan(text: &str, offset: usize) -> Position {
         let before = &text[..offset.min(text.len())];
         let line = before.bytes().filter(|&b| b == b'\n').count() as u32 + 1;
         let column = match before.rfind('\n') {
@@ -141,6 +150,143 @@ impl Position {
             line: p.row,
             column: p.col,
         }
+    }
+}
+
+/// Line starts for a text that many [`Position::of_offset`] calls are about,
+/// so that each call costs a binary search instead of a scan from the top.
+///
+/// **Why it exists:** one stylesheet with 100,000 malformed selectors took
+/// 23 s in 0.20.0, and twice the findings took four times as long, because
+/// every position rescanned the file. A hostile book can do that on
+/// purpose; a real one with a broken generator can do it by accident.
+///
+/// **Why a scope and not a cache keyed on the text:** a text is recognised
+/// by its address and length, which is only an identity while the text is
+/// alive and unchanged. The guard borrows it, so for exactly as long as the
+/// index can be consulted, the text it was built from cannot be freed or
+/// written, and no other string can turn up at that address.
+///
+/// Columns are counted forward from the previous answer when it was on the
+/// same line and earlier, since findings mostly arrive in document order.
+/// That is what keeps a minified stylesheet, all on one line, linear.
+///
+/// **Element paths have the same shape and share the scope.** The `p[3]` in
+/// an element path counts same-named siblings before the element, and
+/// counting them per finding made 50,000 schema findings among siblings take
+/// 12 s. Inside a scope over a document's text, the first question about a
+/// parent numbers all its element children in one pass.
+pub(crate) struct LocationIndex {
+    ptr: usize,
+    len: usize,
+    /// Byte offset of each line's first character, built on first use.
+    line_starts: std::cell::OnceCell<Vec<usize>>,
+    /// The last answer: byte offset, line, column.
+    cursor: std::cell::Cell<(usize, u32, u32)>,
+    /// Element node id to its 1-based index among same-named siblings, filled
+    /// a parent at a time.
+    element_indexes: std::cell::RefCell<std::collections::HashMap<usize, usize>>,
+}
+
+/// Removes its index from the thread's stack when dropped.
+pub(crate) struct LocationScope<'t> {
+    _text: std::marker::PhantomData<&'t str>,
+}
+
+thread_local! {
+    static LOCATION_INDEXES: std::cell::RefCell<Vec<LocationIndex>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl LocationIndex {
+    /// Answer `of_offset` calls about `text` from an index until the
+    /// returned guard drops. Scopes nest; an inner one over a different text
+    /// does not hide an outer one.
+    pub(crate) fn scope(text: &str) -> LocationScope<'_> {
+        let index = LocationIndex {
+            ptr: text.as_ptr() as usize,
+            len: text.len(),
+            line_starts: std::cell::OnceCell::new(),
+            cursor: std::cell::Cell::new((0, 1, 1)),
+            element_indexes: std::cell::RefCell::new(std::collections::HashMap::new()),
+        };
+        LOCATION_INDEXES.with(|s| s.borrow_mut().push(index));
+        LocationScope {
+            _text: std::marker::PhantomData,
+        }
+    }
+
+    fn lookup(text: &str, offset: usize) -> Option<Position> {
+        LOCATION_INDEXES.with(|s| {
+            s.borrow()
+                .iter()
+                .rev()
+                .find(|i| i.ptr == text.as_ptr() as usize && i.len == text.len())
+                .map(|i| i.position(text, offset))
+        })
+    }
+
+    /// `el`'s 1-based index among its parent's element children with the
+    /// same namespace and local name, from the scope over its document's
+    /// text. `None` outside one, or for an element with no parent; the
+    /// caller then counts for itself.
+    pub(crate) fn element_index(el: roxmltree::Node) -> Option<usize> {
+        let text = el.document().input_text();
+        LOCATION_INDEXES.with(|s| {
+            let s = s.borrow();
+            let index = s
+                .iter()
+                .rev()
+                .find(|i| i.ptr == text.as_ptr() as usize && i.len == text.len())?;
+            let id = el.id().get_usize();
+            if let Some(&n) = index.element_indexes.borrow().get(&id) {
+                return Some(n);
+            }
+            let parent = el.parent()?;
+            let mut seen: std::collections::HashMap<(Option<&str>, &str), usize> =
+                std::collections::HashMap::new();
+            let mut indexes = index.element_indexes.borrow_mut();
+            for child in parent.children().filter(roxmltree::Node::is_element) {
+                let name = child.tag_name();
+                let n = seen.entry((name.namespace(), name.name())).or_insert(0);
+                *n += 1;
+                indexes.insert(child.id().get_usize(), *n);
+            }
+            indexes.get(&id).copied()
+        })
+    }
+
+    fn position(&self, text: &str, offset: usize) -> Position {
+        let offset = offset.min(text.len());
+        let starts = self.line_starts.get_or_init(|| {
+            std::iter::once(0)
+                .chain(
+                    text.bytes()
+                        .enumerate()
+                        .filter(|&(_, b)| b == b'\n')
+                        .map(|(i, _)| i + 1),
+                )
+                .collect()
+        });
+        // The line holding `offset`: the last start at or before it.
+        let line_ix = starts.partition_point(|&s| s <= offset) - 1;
+        let line = line_ix as u32 + 1;
+        let (prev_offset, prev_line, prev_column) = self.cursor.get();
+        let column = if prev_line == line && prev_offset <= offset {
+            prev_column + text[prev_offset..offset].chars().count() as u32
+        } else {
+            text[starts[line_ix]..offset].chars().count() as u32 + 1
+        };
+        self.cursor.set((offset, line, column));
+        Position { line, column }
+    }
+}
+
+impl Drop for LocationScope<'_> {
+    fn drop(&mut self) {
+        LOCATION_INDEXES.with(|s| {
+            s.borrow_mut().pop();
+        });
     }
 }
 
@@ -865,6 +1011,62 @@ mod tests {
             Position::of_offset(text, offset),
             Position { line: 1, column: 5 }
         );
+    }
+
+    /// Inside a scope the index answers, and its answer is the scan's at
+    /// every offset, in any order: forwards, backwards, repeated, across
+    /// lines, on a long single line, with multi-byte text and CRLF.
+    #[test]
+    fn the_position_index_agrees_with_the_scan_everywhere() {
+        let texts = [
+            String::new(),
+            "a\nbc\n\ndéf\r\ngh".to_string(),
+            "çğış".repeat(500),
+            "x\n".repeat(300) + &"é".repeat(300),
+        ];
+        for text in &texts {
+            let boundaries: Vec<usize> = (0..=text.len())
+                .filter(|&i| text.is_char_boundary(i))
+                .collect();
+            // Forwards, then backwards, then strided, so the cursor is both
+            // used and refused.
+            let mut order = boundaries.clone();
+            order.extend(boundaries.iter().rev());
+            order.extend(boundaries.iter().step_by(7));
+            order.push(text.len() + 10); // past the end clamps, as the scan does
+            let _scope = LocationIndex::scope(text);
+            for &offset in &order {
+                assert_eq!(
+                    Position::of_offset(text, offset),
+                    Position::scan(text, offset),
+                    "offset {offset} of {text:?}"
+                );
+            }
+        }
+    }
+
+    /// A scope covers only its own text, nested scopes do not hide each
+    /// other, and dropping one leaves the scan in charge again.
+    #[test]
+    fn a_position_scope_covers_its_text_only() {
+        let outer = "a\nb\nc".to_string();
+        let inner = "x\ny".to_string();
+        let lookup = |t: &str| LocationIndex::lookup(t, 2);
+        assert_eq!(lookup(&outer), None);
+        {
+            let _o = LocationIndex::scope(&outer);
+            assert!(lookup(&outer).is_some());
+            assert_eq!(lookup(&inner), None);
+            {
+                let _i = LocationIndex::scope(&inner);
+                assert!(lookup(&outer).is_some());
+                assert_eq!(lookup(&inner), Some(Position { line: 2, column: 1 }));
+            }
+            assert_eq!(lookup(&inner), None);
+            // A slice of the text is a different text to the index.
+            assert_eq!(lookup(&outer[..3]), None);
+        }
+        assert_eq!(lookup(&outer), None);
     }
 
     #[test]

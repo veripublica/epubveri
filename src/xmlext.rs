@@ -316,6 +316,11 @@ fn prefixed_binding<'a, 'input: 'a>(
 /// 1-based position of `el` among its same-expanded-name element siblings, as
 /// XPath's `p[3]` predicate counts (namespace + local name must both match).
 fn element_index(el: roxmltree::Node) -> usize {
+    // Counting per call is quadratic over many siblings; a `LocationIndex`
+    // scope over the document answers the same number in constant time.
+    if let Some(n) = crate::report::LocationIndex::element_index(el) {
+        return n;
+    }
     let name = el.tag_name();
     match el.parent() {
         Some(parent) => {
@@ -338,6 +343,28 @@ mod tests {
         doc.descendants()
             .find(|n| n.is_element() && n.tag_name().name() == local)
             .unwrap()
+    }
+
+    /// Inside a `LocationIndex` scope every element's path is the one
+    /// counted without it: same-named siblings interleaved with others, a
+    /// same local name in two namespaces, nesting, the root.
+    #[test]
+    fn element_paths_are_the_same_inside_a_location_scope() {
+        let xml = r#"<root xmlns="urn:a" xmlns:b="urn:b"><p/><q/><p><p/><b:p/><p/></p><b:p/><p/><q/></root>"#;
+        let doc = roxmltree::Document::parse(xml).unwrap();
+        let elements: Vec<_> = doc.descendants().filter(|n| n.is_element()).collect();
+        let outside: Vec<_> = elements
+            .iter()
+            .map(|&n| format!("{:?}", node_path(n)))
+            .collect();
+        let _scope = crate::report::LocationIndex::scope(xml);
+        // In reverse too, so a parent is numbered from a later child first.
+        for (n, want) in elements.iter().zip(&outside).rev() {
+            assert_eq!(&format!("{:?}", node_path(*n)), want);
+        }
+        for (n, want) in elements.iter().zip(&outside) {
+            assert_eq!(&format!("{:?}", node_path(*n)), want);
+        }
     }
 
     #[test]
