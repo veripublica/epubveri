@@ -8,7 +8,23 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.21.0] - 2026-10-02
+
+**A CSS syntax error now says what is wrong, and two CSS false positives are
+gone.** CSS-008 used to read "CSS syntax error" whatever the problem was. It
+now names the problem and quotes it. Two shapes that epubcheck passes failed
+here, and now pass: an unquoted `url()` with a quote or a parenthesis in it
+that names a real file, and a declaration written directly inside `@media`.
+Two shapes epubcheck reports were missed here, and are now CSS-008: a rule
+inside `@font-face`, and a value holding a `{ }` block. A book with either can
+now fail where it passed, which is why this is a minor release. A book
+epubcheck passes still passes here.
+
+A tool that dispatches on the `rule` field should know two things. A rule
+nested in a style rule now has its own key, `css.declaration.nested_rule`.
+The CSS-008 texts all changed. Large files with many findings are no longer
+slow, and the same book now gives the same report on every run. The
+library's API is unchanged.
 
 ### Added
 
