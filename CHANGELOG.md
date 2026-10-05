@@ -8,7 +8,11 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.21.1] - 2026-10-05
+
+**A program that parses EPUB 2 books itself can now use epubveri's entity step
+and table.** Nothing a book gets told changes: validation output is the same
+as 0.21.0, and the library API only gains.
 
 ### Added
 
