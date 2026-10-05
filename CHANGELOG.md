@@ -8,7 +8,14 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.22.0] - 2026-10-05
+
+**False positives on XML names and spaces are gone, and some books epubcheck
+fails now fail here too.** An EPUB 2 book with a decomposed Turkish letter in
+an id failed here and passed epubcheck. It now passes here too. Names and
+whitespace are now judged with epubcheck's own tables. Some books that epubcheck
+fails now fail here as well, which is why this is a minor release. A book
+epubcheck passes still passes here. The library's public API is unchanged.
 
 ### Fixed
 
