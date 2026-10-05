@@ -15,7 +15,7 @@ pub enum Datatype {
     Name,
     NCName,
     Id,
-    /// HTML5's `id`: one or more characters, none of them whitespace
+    /// HTML5's `id`: one or more characters, none of them XML whitespace
     /// (`xsd:string { pattern = '[^\\s]+' }` in epubcheck's `datatypes.rnc`,
     /// where it is called `datatype.html5.token`). Not an XSD built-in -
     /// there is no standard type with these bounds - so it carries a name of
@@ -108,8 +108,14 @@ impl Datatype {
                     }
                 })
                 .collect(),
-            // every other built-in has whiteSpace="collapse"
-            _ => s.split_whitespace().collect::<Vec<_>>().join(" "),
+            // every other built-in has whiteSpace="collapse", which means
+            // the four XML whitespace characters and nothing else: Jing keeps
+            // a NO-BREAK SPACE, so `"a\u{a0}"` is not an NCName there.
+            _ => s
+                .split(crate::xmlext::is_xml_space)
+                .filter(|t| !t.is_empty())
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
 
@@ -126,7 +132,11 @@ impl Datatype {
             Datatype::NmTokens => !s.is_empty() && s.split(' ').all(is_nmtoken),
             Datatype::Name => is_name(&s),
             Datatype::NCName | Datatype::Id | Datatype::IdRef => is_ncname(&s),
-            Datatype::Html5Token => !raw.is_empty() && !raw.chars().any(char::is_whitespace),
+            // XSD's `\s` is the four XML whitespace characters: an id holding a
+            // NO-BREAK SPACE or an EM SPACE is valid in epubcheck.
+            Datatype::Html5Token => {
+                !raw.is_empty() && !raw.chars().any(crate::xmlext::is_xml_space)
+            }
             Datatype::HttpEquiv => HTTP_EQUIV_DIRECTIVES
                 .iter()
                 .any(|d| s.eq_ignore_ascii_case(d)),
@@ -240,30 +250,7 @@ fn bool_val(s: &str) -> Option<bool> {
     }
 }
 
-fn is_name_start(c: char) -> bool {
-    c.is_alphabetic() || c == '_'
-}
-fn is_name_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '.' | '-' | '_')
-}
-
-fn is_ncname(s: &str) -> bool {
-    let mut it = s.chars();
-    match it.next() {
-        Some(c) if is_name_start(c) => it.all(is_name_char),
-        _ => false,
-    }
-}
-fn is_name(s: &str) -> bool {
-    let mut it = s.chars();
-    match it.next() {
-        Some(c) if is_name_start(c) || c == ':' => it.all(|c| is_name_char(c) || c == ':'),
-        _ => false,
-    }
-}
-fn is_nmtoken(s: &str) -> bool {
-    !s.is_empty() && s.chars().all(|c| is_name_char(c) || c == ':')
-}
+use crate::xmlname::{is_name, is_ncname, is_nmtoken};
 
 fn is_language(s: &str) -> bool {
     let mut segs = s.split('-');
@@ -359,6 +346,24 @@ fn is_datetime(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::Datatype as D;
+
+    /// XSD's whitespace facet and `\s` mean the four XML whitespace
+    /// characters; Jing keeps a NO-BREAK SPACE. Each value here was asked of
+    /// epubcheck 5.4.0's own datatype library (2026-10-05).
+    #[test]
+    fn whitespace_is_xml_whitespace_only() {
+        assert!(D::NCName.allows(" a "));
+        assert!(D::Id.allows("\ta\n"));
+        assert!(!D::NCName.allows("a\u{a0}"));
+        assert!(!D::Id.allows("\u{a0}a"));
+        assert!(!D::Integer.allows("1\u{a0}"));
+        assert!(D::Integer.allows(" 1 "));
+        assert!(!D::Language.allows("en\u{2003}"));
+        assert!(D::Html5Token.allows("a\u{a0}b"));
+        assert!(D::Html5Token.allows("a\u{2003}b"));
+        assert!(!D::Html5Token.allows("a b"));
+        assert!(!D::IdRefs.allows("a\u{a0}b"));
+    }
 
     #[test]
     fn language() {

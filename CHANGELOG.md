@@ -8,6 +8,41 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An EPUB 2 id with a combining mark or a middle dot no longer fails.**
+  A Turkish `ş` written as `s` plus a combining cedilla (what macOS often
+  produces) and `a·b` are valid XML names, and epubcheck accepts them as ids.
+  We reported RSC-005 on them, an error that failed the book. The same
+  applied to NCX ids, SVG ids and `prefix` names. We judged XML names with
+  Rust's idea of "alphanumeric". We now use the exact tables epubcheck uses,
+  read out of epubcheck 5.4.0's own code for every character. Its grammars use
+  XML 1.0's original name tables, and its `prefix` parser uses the wider Fifth
+  Edition ones. The tables also cut the other way: `a²`, `a‿b`, an id holding
+  a no-break space and ids outside the Basic Multilingual Plane are invalid in
+  epubcheck, and are now RSC-005 here too.
+- **An EPUB 3 id holding a no-break space or an em space no longer fails.**
+  epubcheck forbids only the four XML whitespace characters in an id. We
+  forbade every Unicode space.
+- **`itemref="a/b"` is no longer an error.** epubcheck types `itemref` as
+  any space-separated tokens. We typed it as a list of XML name tokens.
+- **A no-break space is text, as in epubcheck.** `<ul>&#160;<li>` and
+  `<body>&#160;<p>` put text where the grammar allows none. epubcheck reports
+  that as RSC-005. We treated the no-break space as ignorable whitespace and
+  said nothing. The same mistake split `aria-relevant="additions&#160;text"`
+  into two valid words, which epubcheck reads as one invalid word. A book with
+  either shape can now fail here where it passed before. It fails in
+  epubcheck too.
+
+Each shape was checked on a whole book against epubcheck 5.4.0, 70 probe
+books in all. 0.21.1 gave the wrong verdict on 35 of them: 17 failed that
+epubcheck passes, and 18 passed that epubcheck fails. This build gives the
+same verdict on all 70, and the same message IDs on all but four. Those four
+differences predate this change and do not move a verdict. No book on our
+real-book shelf changes.
+
 ## [0.21.1] - 2026-10-05
 
 **A program that parses EPUB 2 books itself can now use epubveri's entity step

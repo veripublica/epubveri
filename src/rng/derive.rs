@@ -73,8 +73,11 @@ impl Grammar {
 /// The XHTML namespace, for the custom-element rule above.
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 
+/// Is this text run whitespace RELAX NG may ignore? XML whitespace only: a
+/// NO-BREAK SPACE is text, and Jing reports `<ul>&#160;<li>` as text where
+/// none is allowed.
 fn is_ws(s: &str) -> bool {
-    s.chars().all(char::is_whitespace)
+    s.chars().all(crate::xmlext::is_xml_space)
 }
 
 /// Does this name class name `{ns}local` *outright*?
@@ -663,7 +666,11 @@ impl<'a> Env<'a> {
             }
             Pattern::List(inner) => {
                 let mut cur = inner.clone();
-                for tok in s.split_whitespace() {
+                // A list splits on XML whitespace only, as Jing does.
+                for tok in s
+                    .split(crate::xmlext::is_xml_space)
+                    .filter(|t| !t.is_empty())
+                {
                     cur = self.text_deriv(&cur, tok);
                 }
                 if self.nullable(&cur) {

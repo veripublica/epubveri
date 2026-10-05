@@ -904,15 +904,6 @@ fn check_one_epub_attribute(
     }
 }
 
-fn is_valid_ncname(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_alphabetic() || first == '_')
-        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
-}
-
 /// `RSC-005`: every `id` attribute anywhere in the SVG document must be a
 /// valid XML NCName (a real fixture uses `id="1"`, invalid because it
 /// starts with a digit) and unique document-wide (a real fixture shares
@@ -1004,7 +995,7 @@ pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Repo
     let mut by_id: HashMap<&str, u32> = HashMap::new();
     for n in svg_root.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attr_no_ns("id") {
-            if !is_valid_ncname(id) {
+            if !crate::xmlname::is_xsd_id(id) {
                 report.push_node(
                     RSC_005,
                     Severity::Error,

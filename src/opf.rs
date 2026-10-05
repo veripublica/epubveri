@@ -2402,7 +2402,7 @@ fn parse_prefix_value(value: &str) -> (Vec<(String, String)>, Vec<PrefixFault>) 
             State::Prefix => {
                 if run.is_empty() {
                     faults.push(PrefixFault::EmptyPrefix);
-                } else if !crate::ncx::is_valid_ncname(&run) {
+                } else if !crate::xmlname::is_ncname_fifth_edition(&run) {
                     faults.push(PrefixFault::NotNcName(run.clone()));
                 } else {
                     prefix = Some(run.clone());

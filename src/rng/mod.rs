@@ -2968,4 +2968,36 @@ mod tests {
         // And the element name still inherits the grammar's default.
         assert!(!valid("<root xml:lang=\"en\"/>"));
     }
+    /// A NO-BREAK SPACE is text, not ignorable whitespace, and a list splits
+    /// on XML whitespace only - each case probed on a whole book against
+    /// epubcheck 5.4.0 (2026-10-05).
+    #[test]
+    fn nbsp_is_text_and_does_not_split_a_list() {
+        let valid = |g: &crate::rng::Grammar, body: &str| {
+            let xml = format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body>{body}</body></html>"
+            );
+            let d = crate::ocf::parse_xml(&xml).unwrap();
+            crate::rng::validate_node_report(g, d.root_element()).is_empty()
+        };
+        let g3 = xhtml_grammar();
+        assert!(valid(&g3, "<ul> <li>x</li></ul>"));
+        assert!(!valid(&g3, "<ul>\u{a0}<li>x</li></ul>"));
+        assert!(!valid(&g3, "<table>\u{a0}<tr><td>x</td></tr></table>"));
+        assert!(valid(&g3, "<p aria-relevant=\"additions text\">x</p>"));
+        assert!(!valid(
+            &g3,
+            "<p aria-relevant=\"additions\u{a0}text\">x</p>"
+        ));
+        assert!(valid(&g3, "<p id=\"a\u{a0}b\">x</p>"));
+        assert!(valid(
+            &g3,
+            "<div itemscope=\"\" itemref=\"a/b c\u{a0}d\">x</div>"
+        ));
+        let g2 = crate::rng::xhtml_grammar_epub2();
+        assert!(valid(&g2, " <p>x</p>"));
+        assert!(!valid(&g2, "\u{a0}<p>x</p>"));
+        assert!(valid(&g2, "<p id=\"ba\u{73}\u{327}\">x</p>"));
+        assert!(!valid(&g2, "<p id=\"a\u{b2}\">x</p>"));
+    }
 }

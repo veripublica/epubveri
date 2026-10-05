@@ -152,7 +152,7 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
     let mut by_id: std::collections::HashMap<&str, u32> = std::collections::HashMap::new();
     for n in doc.descendants().filter(|n| n.is_element()) {
         if let Some(id) = n.attr_no_ns("id") {
-            if !is_valid_ncname(id) {
+            if !crate::xmlname::is_xsd_id(id) {
                 report.push_node(
                     RSC_005,
                     Severity::Error,
@@ -181,15 +181,6 @@ fn check_id_attributes(doc: &roxmltree::Document, ncx_path: &str, report: &mut R
             );
         }
     }
-}
-
-pub(crate) fn is_valid_ncname(s: &str) -> bool {
-    let mut chars = s.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first.is_alphabetic() || first == '_')
-        && chars.all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.'))
 }
 
 /// A `pageTarget`'s `type` must be one of the three DAISY-defined values.

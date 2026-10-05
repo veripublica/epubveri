@@ -848,7 +848,10 @@
     <optional><attribute name="itemscope"><data type="token"/></attribute></optional>
     <optional><attribute name="itemid"><data type="anyURI"/></attribute></optional>
     <optional>
-      <attribute name="itemref"><list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list></attribute>
+      <!-- `common.data.idrefs` = `datatype.html5.space.separated.tokens`, a
+           list of `[^\s]+` tokens (`mod/datatypes.rnc`:95), not NMTOKENs:
+           `itemref="a/b"` and `itemref="a&#160;b"` are valid in epubcheck. -->
+      <attribute name="itemref"><list><zeroOrMore><data type="html5Token"/></zeroOrMore></list></attribute>
     </optional>
     <optional>
       <!-- token, not NMTOKEN: HTML5 microdata explicitly allows an itemprop
