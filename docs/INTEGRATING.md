@@ -587,6 +587,19 @@ with enough attributes to take minutes, and enough elements to take a
 gigabyte. `check` is the scan the validator runs before its own parse, so the
 two cannot drift apart.
 
+**If those texts include EPUB 2 content documents**, pass each one through
+`epubveri::htm::declare_dtd_entities` after decoding it. EPUB 2 lets a
+document use `&nbsp;` and the other XHTML named entities without declaring
+them, and `roxmltree` does not read the external DTD that declares them, so
+on a shelf of 544 real books, 131 contain a file it rejects. The function
+declares the ones the document uses, and it is the step the validator runs
+before its own parse. The `DtdShift` it returns says where the declarations
+went in (`at`) and how many bytes they took (`len`). A range in the parsed text
+that starts at or after `at` maps back to yours by subtracting `len`. EPUB 3
+documents come back unchanged, since a named entity there is an error. If you
+also read the raw text, `epubveri::htm::xhtml_entity("rsquo")` gives the
+character a name stands for, from the same table.
+
 **If you run epubveri in a debug build** — which includes your own `cargo test`
 — add this to your root `Cargo.toml`:
 

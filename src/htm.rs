@@ -360,6 +360,27 @@ const XHTML_NAMED_ENTITIES: &[(&str, u32)] = &[
 /// declaration.
 const PREDEFINED_ENTITIES: &[&str] = &["amp", "lt", "gt", "apos", "quot"];
 
+/// The character an entity name stands for in an EPUB 2 content document:
+/// one of the five XML predefines (`amp`, `lt`, `gt`, `apos`, `quot`) or of
+/// the XHTML 1.x DTD entity sets (`HTMLlat1`, `HTMLsymbol`, `HTMLspecial`).
+/// `name` is without the `&` and the `;`, and case matters.
+///
+/// This is the table [`declare_dtd_entities`] declares from, public so that a
+/// program reading raw text knows what a reference means without a second
+/// copy of it. It is fixed by those DTDs and is not HTML5's much larger list
+/// of named references: `&nbsp;` is here, `&NewLine;` is not. In an EPUB 3
+/// document only the five XML predefines are legal at all.
+pub fn xhtml_entity(name: &str) -> Option<char> {
+    match name {
+        "amp" => Some('&'),
+        "lt" => Some('<'),
+        "gt" => Some('>'),
+        "apos" => Some('\''),
+        "quot" => Some('"'),
+        _ => xhtml_entity_codepoint(name).and_then(char::from_u32),
+    }
+}
+
 /// The Unicode code point of a standard HTML named entity, or `None` if the
 /// name isn't one.
 fn xhtml_entity_codepoint(name: &str) -> Option<u32> {
@@ -554,7 +575,22 @@ fn check_entities(orig_text: &str, path: &str, is_epub3: bool, report: &mut Repo
 /// In particular EPUB 3 is left strictly alone: named references other than
 /// the predefined five are a genuine error there, and making them parse
 /// would be papering over one.
-pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> (String, Option<DtdShift>) {
+///
+/// **For a program that parses the book itself.** This is public so that a
+/// tool working on the same files (a converter, a repair tool) parses EPUB 2
+/// content documents exactly as the validator does, instead of keeping its
+/// own copy. Map a byte range of the returned text back to `text` with
+/// [`DtdShift::at`] and [`DtdShift::len`]: a range starting at or after `at`
+/// moves back by `len`, a range ending at or before `at` is unchanged, and no
+/// element, attribute or text node can straddle it, because the insertion is
+/// inside the DOCTYPE. Offsets are into the `String` you pass in; if you
+/// decoded the file from something other than UTF-8 first, mapping them to
+/// the file's bytes is yours to do. What counts as a recognized DOCTYPE and
+/// which entities are declared are the validator's decisions and follow the
+/// spec as epubveri reads it, so they may change between releases (see
+/// CHANGELOG). The EPUB 3 refusal will not: a converter that needs EPUB 3
+/// named references to parse needs its own path.
+pub fn declare_dtd_entities(text: String, is_epub3: bool) -> (String, Option<DtdShift>) {
     if is_epub3 || !has_epub2_xhtml_doctype(&text) {
         return (text, None);
     }
@@ -597,6 +633,8 @@ pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> (String, Opt
     // exactly the inserted width.
     let anchor = Position::of_offset(&text, at);
     let shift = DtdShift {
+        at,
+        len: decls.len(),
         line: anchor.line,
         after_column: anchor.column,
         chars: decls.chars().count() as u32,
@@ -608,13 +646,19 @@ pub(crate) fn declare_dtd_entities(text: String, is_epub3: bool) -> (String, Opt
     (out, Some(shift))
 }
 
-/// How far `declare_dtd_entities` pushed one line's columns to the right.
+/// Where `declare_dtd_entities` inserted its declarations, and how far that
+/// moved what follows: in bytes, for a caller mapping ranges back to the
+/// original text, and in columns, for the positions epubveri reports.
 ///
 /// Only a single line is ever affected (the one holding the DOCTYPE's
 /// closing `>`), and only its columns: the injection adds no newline, so
 /// line numbers are already exact everywhere.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DtdShift {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DtdShift {
+    /// The byte offset in the original text where the declarations went in.
+    pub at: usize,
+    /// How many bytes went in there.
+    pub len: usize,
     /// The 1-based line the declarations were inserted into.
     line: u32,
     /// Columns strictly greater than this, on that line, moved right.
@@ -2526,6 +2570,59 @@ mod tests {
         let h1 = doc.descendants().find(|n| n.has_tag_name("h1")).unwrap();
         let pos = doc.text_pos_at(h1.range().start);
         assert_eq!((pos.row, pos.col), (5, 1), "h1 is on line 5, column 1");
+    }
+
+    /// The byte contract a converter relies on: the output is the input with
+    /// exactly `len` bytes inserted at `at`, so a node range read off the
+    /// output maps back by subtracting `len`. Non-ASCII before the DOCTYPE
+    /// and in the body keeps bytes and chars apart; both DOCTYPE shapes (with
+    /// and without an internal subset) are covered.
+    #[test]
+    fn declare_dtd_entities_reports_the_insertion_in_bytes() {
+        let doctype = "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\"";
+        for subset in ["", " [<!ENTITY own \"é\">]"] {
+            let text = format!(
+                "<?xml version=\"1.0\"?><!-- çığ -->\n{doctype}{subset}>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><body>\n\
+                 <p>ş&rsquo;ö&nbsp;ü</p><h1 id=\"x\">Ğ</h1>\n</body></html>"
+            );
+            let (out, shift) = declare_dtd_entities(text.clone(), false);
+            let s = shift.expect("an EPUB 2 document needing declarations");
+            assert_eq!(out.len(), text.len() + s.len);
+            assert_eq!(&out[..s.at], &text[..s.at]);
+            assert_eq!(&out[s.at + s.len..], &text[s.at..]);
+            assert!(out[s.at..s.at + s.len].contains("<!ENTITY rsquo"));
+            let doc = crate::ocf::parse_xml(&out).unwrap();
+            let h1 = doc.descendants().find(|n| n.has_tag_name("h1")).unwrap();
+            let r = h1.range();
+            assert!(r.start >= s.at + s.len);
+            assert_eq!(
+                &text[r.start - s.len..r.end - s.len],
+                "<h1 id=\"x\">Ğ</h1>",
+                "subset {subset:?}"
+            );
+        }
+        let plain = format!("{doctype}>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"/>");
+        assert_eq!(declare_dtd_entities(plain, false).1, None);
+    }
+
+    /// The public lookup answers for every name the DTDs define - the
+    /// table and the five XML predefines, which the table leaves out - and
+    /// for nothing else, HTML5-only names included.
+    #[test]
+    fn xhtml_entity_covers_the_dtd_sets_and_the_xml_predefines() {
+        assert_eq!(xhtml_entity("nbsp"), Some('\u{a0}'));
+        assert_eq!(xhtml_entity("rsquo"), Some('\u{2019}'));
+        assert_eq!(xhtml_entity("amp"), Some('&'));
+        assert_eq!(xhtml_entity("apos"), Some('\''));
+        for name in ["NewLine", "NBSP", "nbsp;", "&nbsp", ""] {
+            assert_eq!(xhtml_entity(name), None, "{name:?}");
+        }
+        for (name, cp) in XHTML_NAMED_ENTITIES {
+            assert_eq!(xhtml_entity(name), char::from_u32(*cp), "{name}");
+            assert!(!PREDEFINED_ENTITIES.contains(name), "{name}");
+        }
+        assert_eq!(XHTML_NAMED_ENTITIES.len() + PREDEFINED_ENTITIES.len(), 253);
     }
 
     /// EPUB 3 is deliberately untouched: a named reference other than the

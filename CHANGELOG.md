@@ -8,6 +8,26 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **A program that parses EPUB 2 content documents itself can now make them
+  parse the way epubveri does.** An EPUB 2 file may use `&nbsp;`, `&rsquo;`
+  and the other XHTML named entities without declaring them, and an XML
+  parser that does not read the external DTD rejects it. On a shelf of 544
+  real books, 131 contain such a file. `htm::declare_dtd_entities` adds the
+  declarations to the DOCTYPE, and is now public along with `htm::DtdShift`,
+  which gains `at` and `len`: where the declarations went in and how many
+  bytes they took, in the text you passed in, so a range read off the parsed
+  text maps back by subtracting `len`. EPUB 3 is never touched, because a
+  named entity other than the predefined five is an error there.
+  `htm::xhtml_entity` gives the character an entity name stands for, from
+  the same table plus the five XML predefines, so a program that reads raw
+  text knows what `&rsquo;` means without a copy of the table. It covers the
+  253 names the XHTML 1.x DTDs define, not HTML5's longer list. Validation is
+  unchanged.
+
 ## [0.21.0] - 2026-10-02
 
 **A CSS syntax error now says what is wrong, and two CSS false positives are
