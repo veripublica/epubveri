@@ -242,40 +242,18 @@
     </rule>
   </pattern>
 
-  <!-- 5.5.5 The meta element -->
+  <!-- 5.5.5 The meta element
 
-  <pattern id="opf-meta-property-not-empty">
-    <rule context="opf:package[starts-with(@version, '3')]//opf:meta[@property]">
-      <assert test="string-length(normalize-space(@property)) &gt; 0"
-        >value of attribute "property" is invalid (must not be empty)</assert>
-    </rule>
-  </pattern>
-
-  <pattern id="opf-meta-property-single-token">
-    <rule context="opf:package[starts-with(@version, '3')]//opf:meta[@property]">
-      <assert test="not(contains(normalize-space(@property), ' '))"
-        >only one value must be specified for the "property" attribute</assert>
-    </rule>
-  </pattern>
-
-  <pattern id="opf-meta-scheme-single-token">
-    <rule context="opf:package[starts-with(@version, '3')]//opf:meta[@scheme]">
-      <assert test="not(contains(normalize-space(@scheme), ' '))"
-        >only one value must be specified for the "scheme" attribute</assert>
-    </rule>
-  </pattern>
+       `property` and `scheme` must be one non-empty name token, and a link's
+       `properties` must not be empty: the package grammar types them
+       (`xsd:NMTOKEN`/`NMTOKENS`, as epubcheck's `package-30.rnc` does). Four
+       patterns here imitated the empty and the list cases until 2026-10-07,
+       and could not see the character case (`property="x&#160;"`). -->
 
   <!-- an unprefixed, unknown "scheme" value is OPF-027, not RSC-005 -
        hand-coded in opf.rs for the same reason as above. -->
 
   <!-- 5.5.7 The link element -->
-
-  <pattern id="opf-link-properties-not-empty">
-    <rule context="opf:link[@properties]">
-      <assert test="string-length(normalize-space(@properties)) &gt; 0"
-        >value of attribute "properties" is invalid (must not be empty)</assert>
-    </rule>
-  </pattern>
 
   <!-- 5.8 Collections -->
 

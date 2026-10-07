@@ -1536,6 +1536,85 @@ mod tests {
         );
     }
 
+    /// The EPUB 3 package attributes epubcheck types (`package-30.rnc`) and we
+    /// left to the wildcard: `properties`/`rel` are `xsd:NMTOKENS`,
+    /// `property`/`scheme` `xsd:NMTOKEN`, `linear` and
+    /// `page-progression-direction` closed `token` lists. Each value below
+    /// was measured against epubcheck 5.4.0 as a whole book.
+    ///
+    /// The guard is the first loop: XML whitespace around a token is
+    /// collapsed by every one of these types and must stay valid, and a
+    /// no-break space is not XML whitespace and must not. A typed attribute
+    /// the wildcard can still match is never type-checked at all, which is
+    /// what `anyAttributesExceptTyped` is for - this is the test that notices
+    /// if a name drops out of its `except`.
+    #[test]
+    fn epub3_package_attributes_are_typed_as_epubcheck_types_them() {
+        let pkg = |item: &str, spine: &str, itemref: &str, meta: &str| {
+            format!(
+                r#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+<dc:identifier id="id">urn:uuid:1</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language>
+<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>{meta}</metadata>
+<manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml" {item}/></manifest>
+<spine {spine}><itemref idref="c" {itemref}/></spine></package>"#
+            )
+        };
+        let ok = |item: &str, spine: &str, itemref: &str, meta: &str| {
+            validate_node_report(
+                &package_grammar(),
+                roxmltree::Document::parse(&pkg(item, spine, itemref, meta))
+                    .unwrap()
+                    .root_element(),
+            )
+            .is_empty()
+        };
+        for (item, spine, itemref, meta) in [
+            (r#"properties=" nav  ""#, "", "", ""),
+            ("", r#"page-progression-direction=" rtl ""#, "", ""),
+            ("", "", r#"linear=" no" properties="page-spread-left""#, ""),
+            (
+                "",
+                "",
+                "",
+                r#"<meta property=" dcterms:creator " scheme="onix:x">x</meta>"#,
+            ),
+            ("", "", "", r#"<link rel="record voicing" href="r.xml"/>"#),
+        ] {
+            assert!(
+                ok(item, spine, itemref, meta),
+                "{item}{spine}{itemref}{meta}"
+            );
+        }
+        for (item, spine, itemref, meta) in [
+            ("properties=\"nav\u{a0}\"", "", "", ""),
+            (r#"properties="""#, "", "", ""),
+            ("", "page-progression-direction=\"rtl\u{a0}\"", "", ""),
+            ("", r#"page-progression-direction="up""#, "", ""),
+            ("", "", r#"linear="maybe""#, ""),
+            ("", "", "properties=\"page-spread-left\u{3000}\"", ""),
+            ("", "", "", r#"<meta property="">x</meta>"#),
+            ("", "", "", r#"<meta property="a:b c:d">x</meta>"#),
+            (
+                "",
+                "",
+                "",
+                "<meta property=\"dcterms:creator\" scheme=\"c:d\u{a0}\">x</meta>",
+            ),
+            (
+                "",
+                "",
+                "",
+                r#"<link rel="record" properties="  " href="r.xml"/>"#,
+            ),
+        ] {
+            assert!(
+                !ok(item, spine, itemref, meta),
+                "{item}{spine}{itemref}{meta}"
+            );
+        }
+    }
+
     /// `id` and `lang`/`xml:lang` datatypes, which differ by version — the
     /// gap the epubcheck differ found on 2026-08-04 (one book we called VALID
     /// and epubcheck gave 407 errors: 127 digit-initial ids, 280 empty langs).

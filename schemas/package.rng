@@ -46,22 +46,32 @@
           <oneOrMore>
             <choice>
               <element name="item">
-                <ref name="anyAttributes"/>
+                <ref name="anyAttributesExceptTyped"/>
                 <attribute name="id"><data type="ID"/></attribute>
                 <attribute name="href"><data type="string"/></attribute>
                 <attribute name="media-type"><data type="string"/></attribute>
+                <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
               </element>
               <ref name="foreignElement"/>
             </choice>
           </oneOrMore>
         </element>
         <element name="spine">
-          <ref name="anyAttributes"/>
+          <ref name="anyAttributesExceptTyped"/>
+          <optional>
+            <attribute name="page-progression-direction">
+              <choice><value>ltr</value><value>rtl</value><value>default</value></choice>
+            </attribute>
+          </optional>
           <oneOrMore>
             <choice>
               <element name="itemref">
-                <ref name="anyAttributes"/>
+                <ref name="anyAttributesExceptTyped"/>
                 <attribute name="idref"><data type="IDREF"/></attribute>
+                <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
+                <optional>
+                  <attribute name="linear"><choice><value>yes</value><value>no</value></choice></attribute>
+                </optional>
               </element>
               <ref name="foreignElement"/>
             </choice>
@@ -76,6 +86,59 @@
   <!-- any attribute, any namespace -->
   <define name="anyAttributes">
     <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
+  </define>
+
+  <!-- The EPUB 3 wildcard minus the attributes epubcheck's `package-30.rnc`
+       types and we now type too. **A typed attribute must be excepted from
+       the wildcard beside it**, or a bad value simply matches the wildcard
+       and the type is never asked. Typed (2026-10-07): `properties`, `rel`
+       (`xsd:NMTOKENS`), `property`, `scheme` (`xsd:NMTOKEN`), `linear`
+       (`yes`|`no`), `page-progression-direction` (`ltr`|`rtl`|`default`).
+       Each is excepted on every element, which is harmless where an element
+       does not carry it: there, the attribute was already foreign.
+
+       Why these: a probe sweep found `properties="nav&#160;"`, `linear="yes&#160;"`
+       and the like passing here and failing there, and the same typing gives
+       epubcheck's RSC-005 on its own fixtures for an empty or list-valued
+       `property`/`scheme` and an empty link `properties`, which four
+       Schematron patterns used to imitate (removed). Measured before
+       shipping: of 75 EPUB 3 packages on the shelf (1,001 values), 1,086
+       epubcheck fixtures and 208 epub-tests packages, the only values these
+       types reject are in the four fixtures that expect the RSC-005. -->
+  <define name="anyAttributesExceptTyped">
+    <zeroOrMore>
+      <attribute>
+        <anyName>
+          <except>
+            <name ns="">properties</name>
+            <name ns="">rel</name>
+            <name ns="">property</name>
+            <name ns="">scheme</name>
+            <name ns="">linear</name>
+            <name ns="">page-progression-direction</name>
+          </except>
+        </anyName>
+      </attribute>
+    </zeroOrMore>
+  </define>
+
+  <!-- EPUB 3 `<meta>` and `<link>`, typed as above and otherwise as loose as
+       they were: any other attribute, any content. -->
+  <define name="metaEl-epub3">
+    <element name="meta">
+      <ref name="anyAttributesExceptTyped"/>
+      <optional><attribute name="property"><data type="NMTOKEN"/></attribute></optional>
+      <optional><attribute name="scheme"><data type="NMTOKEN"/></attribute></optional>
+      <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
+    </element>
+  </define>
+  <define name="linkEl-epub3">
+    <element name="link">
+      <ref name="anyAttributesExceptTyped"/>
+      <optional><attribute name="rel"><data type="NMTOKENS"/></attribute></optional>
+      <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
+      <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
+    </element>
   </define>
 
   <!-- fully permissive mixed content: any attributes, any child elements, text -->
@@ -146,7 +209,28 @@
       </optional>
       <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
       <attribute name="role"><data type="string"/></attribute>
-      <optional><element name="metadata"><ref name="looseContent"/></element></optional>
+      <!-- Still loose, except that its `<meta>` and `<link>` are typed as the
+           package metadata's are (`opf.collection.meta`, `opf.link`): the
+           Schematron patterns the typing replaced covered them here too. -->
+      <optional>
+        <element name="metadata">
+          <ref name="anyAttributes"/>
+          <mixed>
+            <zeroOrMore>
+              <choice>
+                <ref name="metaEl-epub3"/>
+                <ref name="linkEl-epub3"/>
+                <element>
+                  <anyName>
+                    <except><name>meta</name><name>link</name></except>
+                  </anyName>
+                  <ref name="looseContent"/>
+                </element>
+              </choice>
+            </zeroOrMore>
+          </mixed>
+        </element>
+      </optional>
       <choice>
         <oneOrMore><ref name="collection"/></oneOrMore>
         <group>
@@ -154,7 +238,7 @@
           <oneOrMore>
             <element name="link">
               <attribute name="href"><data type="string"/></attribute>
-              <optional><attribute name="rel"><data type="string"/></attribute></optional>
+              <optional><attribute name="rel"><data type="NMTOKENS"/></attribute></optional>
               <optional><attribute name="id"><data type="ID"/></attribute></optional>
               <optional><attribute name="media-type"><data type="string"/></attribute></optional>
               <empty/>
@@ -232,10 +316,10 @@
        carry a metadata child that is not a dc element, a `<meta>` or a
        `<link>`. -->
   <define name="metaOrLinkEl-epub3">
-    <element>
-      <choice><name>meta</name><name>link</name></choice>
-      <ref name="looseContent"/>
-    </element>
+    <choice>
+      <ref name="metaEl-epub3"/>
+      <ref name="linkEl-epub3"/>
+    </choice>
   </define>
 
   <!-- A DC-namespace element that is not one of the fifteen: still fully

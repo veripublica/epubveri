@@ -5225,7 +5225,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // on top: a second error for one defect, naming a property
                 // that is not there. `metadata-meta-property-empty-error.opf`
                 // carries both spellings.
-                if property.trim().is_empty() {
+                if crate::xmlext::is_xml_blank(property) {
                     continue;
                 }
                 if property.starts_with("rendition:")

@@ -48,7 +48,30 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   read as the `nav` token here and passed. epubcheck reads it
   as an unknown property (OPF-027), finds no navigation document, and fails
   the book. We now report OPF-027 and the missing navigation document too.
-  epubcheck's schema adds one more RSC-005 there, which we do not report yet.
+  epubcheck's schema adds one more RSC-005 there. We now report it too; see
+  the next entry.
+- **EPUB 3 package attributes are now typed as epubcheck types them.**
+  `properties` and `rel` must be lists of XML name tokens, `property` and
+  `scheme` a single one, `linear` is `yes` or `no`, and
+  `page-progression-direction` is `ltr`, `rtl` or `default`. Surrounding
+  spaces are still fine. Until now our package grammar accepted any value in
+  these attributes. So `linear="maybe"`, `page-progression-direction="up"` or
+  a value holding a no-break space passed here and failed in epubcheck with
+  RSC-005. Now they fail here too. Before shipping we checked every value of
+  these attributes in the 75 EPUB 3 books of our test shelf (1,001 values),
+  in epubcheck's 1,086 test books and in W3C's 208 EPUB 3 test books. The
+  only values the new types reject are in four epubcheck test books that
+  expect exactly that error.
+- **Four `rule` keys are gone, and their findings now come from the grammar.**
+  An empty `property`, a `property` or `scheme` holding a list, and an
+  empty link `properties` are still RSC-005, with the same count. Their
+  `rule` is now `opf.package.schema_violation`. It used to be
+  `opf.package.opf_meta_property_not_empty`,
+  `opf.package.opf_meta_property_single_token`,
+  `opf.package.opf_meta_scheme_single_token` or
+  `opf.package.opf_link_properties_not_empty`. A tool that dispatches on those
+  keys should match the new one. The message now quotes the value instead of
+  describing it.
 
 ## [0.22.0] - 2026-10-05
 
