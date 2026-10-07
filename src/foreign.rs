@@ -87,11 +87,20 @@ pub(crate) fn fallback_reaches_core(
 /// -> status map every per-content-doc check below looks resources up in.
 pub(crate) fn build_resource_status(
     items: &crate::opf::ManifestItems,
+    owners: &crate::opf::ItemsByPath,
     fallback_map: &HashMap<String, String>,
     is_epub3: bool,
 ) -> HashMap<String, ResourceStatus> {
     let mut status = HashMap::new();
     for (id, (path, mt)) in items {
+        // Two items declaring one path (OPF-074): the path's status is its
+        // owner's, the first in manifest order, not whichever id sorts last.
+        if owners
+            .get(&crate::opf::nfc(path))
+            .is_some_and(|(owner, _)| owner != id)
+        {
+            continue;
+        }
         let category = classify(mt, is_epub3);
         let reaches_core_via_fallback = match category {
             Category::Core => true,
@@ -600,7 +609,7 @@ mod tests {
             "w".to_string(),
             ("mod.wasm".to_string(), "application/wasm".to_string()),
         );
-        let status = build_resource_status(&items, &HashMap::new(), true);
+        let status = build_resource_status(&items, &HashMap::new(), &HashMap::new(), true);
         // No fallback declared, and application/wasm is not a Core Media
         // Type, so the resource is foreign with nothing to rescue it.
         assert!(!status["mod.wasm"].reaches_core_via_fallback);
@@ -669,7 +678,7 @@ mod tests {
                 "audio/x-wav".to_string(),
             ),
         );
-        let status = build_resource_status(&items, &HashMap::new(), true);
+        let status = build_resource_status(&items, &HashMap::new(), &HashMap::new(), true);
         assert!(!status["https://example.org/clip.wav"].reaches_core_via_fallback);
 
         let findings = |body: &str, restricted: &HashSet<String>| {
@@ -744,7 +753,7 @@ mod tests {
             "a".to_string(),
             ("sound.wav".to_string(), "audio/x-wav".to_string()),
         );
-        let status = build_resource_status(&items, &HashMap::new(), true);
+        let status = build_resource_status(&items, &HashMap::new(), &HashMap::new(), true);
         // Both are foreign with no fallback to rescue them, or the rows
         // below would pass for the wrong reason.
         assert!(!status["stream.m3u8"].reaches_core_via_fallback);
@@ -813,7 +822,7 @@ mod tests {
             "w".to_string(),
             ("x.bin".to_string(), "application/octet-stream".to_string()),
         );
-        let status = build_resource_status(&items, &HashMap::new(), true);
+        let status = build_resource_status(&items, &HashMap::new(), &HashMap::new(), true);
         assert!(!status["x.bin"].reaches_core_via_fallback);
 
         let findings = |body: &str| {

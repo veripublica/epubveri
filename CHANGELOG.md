@@ -12,6 +12,35 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A malformed package document keeps what came before the break**, the
+  package counterpart of #139.
+  - The part before the break is now checked as epubcheck's streaming parser
+    checks it. Start-tag faults are reported: the grammar's RSC-005s, and
+    OPF-027, OPF-028, OPF-049, OPF-052, OPF-053, OPF-054, OPF-085, OPF-092,
+    OPF-093, RSC-020 and a link or guide reference's missing target.
+  - Nothing is reported that epubcheck only says because its manifest is
+    built at `</package>` and never was: no OPF-003 for files the manifest
+    does declare, no OPF-031 or RSC-008 for guide references it resolves,
+    and no second RSC-016.
+  - No resource is opened for this. Measured on 5.4.0 against 80 broken or
+    cut packages and 36 faults placed before a break.
+  - **A package cut off at the end is no longer OPF-001.** We reported "the
+    EPUB version could not be read" for every truncated package document,
+    although its root and version were right there.
+- **A package `meta` is one of its two forms.** The EPUB 3 form has a
+  `property`, the legacy form has both `name` and `content`. A `<meta>` with
+  neither is now RSC-005, as in epubcheck; a collection's `meta` takes the
+  EPUB 3 form only.
+- **EPUB 2 metadata admits no stray OPF or DC element.** A `<foo/>` in the
+  OPF namespace, or a `dc:foo`, is now RSC-005. Other namespaces stay free.
+- **A local metadata `link` without a media-type is OPF-093 whatever its
+  `rel`.** A local `record` link drew OPF-094, which epubcheck keeps for
+  remote links.
+- **Two manifest items on one path: the first decides**, as in epubcheck's
+  resource registry, which references resolve against. A second item
+  declaring `i.png` as `image/jpg` made every image pointing at it a foreign
+  resource and drew an RSC-032 beside OPF-074 that epubcheck does not
+  report. Which item decided RSC-010 there was also the wrong one.
 - **EPUB 2 SVG attributes follow SVG 1.1, not the EPUB 3 list.** At 2.0,
   `role`, `aria-*` and `data-*` on an SVG element are now RSC-005, and so is
   `lang` anywhere but on a `glyph`. A malformed `data-` name there is that

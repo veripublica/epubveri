@@ -283,6 +283,13 @@ pub struct Ocf {
     /// Container paths named by a `<CipherReference>` in
     /// `META-INF/encryption.xml`, filled in by [`check_encryption`].
     encrypted: std::collections::HashSet<String>,
+    /// While set, every read answers `None` without touching the archive or
+    /// the budget. Set for the package-only pass over a malformed package
+    /// document's well-formed prefix (`opf::check`), which must ask what the
+    /// package says without opening a single resource: epubcheck never gets
+    /// that far, and a read there would spend this book's budget on files
+    /// nothing else asked for.
+    reads_suspended: bool,
 }
 
 impl Ocf {
@@ -318,6 +325,14 @@ impl Ocf {
     /// epubcheck's own output for that book. So this is a separate method
     /// rather than a filter inside [`Ocf::read`] — the encryption checks
     /// themselves have to read these entries.
+    /// Run `f` with every read answering `None`; see `reads_suspended`.
+    pub(crate) fn without_reads<T>(&mut self, f: impl FnOnce(&mut Ocf) -> T) -> T {
+        let was = std::mem::replace(&mut self.reads_suspended, true);
+        let out = f(self);
+        self.reads_suspended = was;
+        out
+    }
+
     pub(crate) fn read_content(&mut self, name: &str) -> Option<Vec<u8>> {
         if self.is_encrypted(name) {
             return None;
@@ -335,7 +350,7 @@ impl Ocf {
     /// INVALID, while EPUBCheck 5.4.0 reported it valid. The image check
     /// needs twelve bytes and was inflating the whole entry to get them.
     pub(crate) fn read_head_content(&mut self, name: &str, n: u64) -> Option<Vec<u8>> {
-        if self.is_encrypted(name) {
+        if self.reads_suspended || self.is_encrypted(name) {
             return None;
         }
         let f = self.archive.by_name(name).ok()?;
@@ -397,6 +412,9 @@ impl Ocf {
     /// per-entry cap; an entry over it reads as `None` and is reported by
     /// `check_resource_limits` rather than materialised.
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
+        if self.reads_suspended {
+            return None;
+        }
         // Already known to be over the cap: the answer cannot change, and
         // asking again would inflate another 64 MiB to learn it (a stylesheet
         // is read from two places, so every oversized one cost that twice).
@@ -807,6 +825,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         read_cache: HashMap::new(),
         read_cache_bytes: 0,
         encrypted: std::collections::HashSet::new(),
+        reads_suspended: false,
     };
 
     if ocf.has("mimetype")

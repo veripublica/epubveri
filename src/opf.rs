@@ -1087,10 +1087,10 @@ fn declared_media_type<'a>(media: &'a MediaByPath, resolved: &str) -> Option<&'a
 ///
 /// **From `items`, not from `items_by_path` alone.** `items` is keyed by id,
 /// so an item shadowed by a later one with the same id is not in it, as it
-/// is not in epubcheck's registry; `items_by_path` holds every `<item>`.
-/// Where two registered items share a path the last in manifest order wins,
-/// as in `ItemsByPath` - the scan returned whichever `HashMap` iteration
-/// reached first.
+/// is not in epubcheck's registry; `items_by_path` holds the first `<item>`
+/// for each path. Where two registered items share a path the first in
+/// manifest order wins, as in `ItemsByPath` - the scan returned whichever
+/// `HashMap` iteration reached first.
 type MediaByPath = HashMap<String, String>;
 
 fn media_by_path(items: &ManifestItems, items_by_path: &ItemsByPath) -> MediaByPath {
@@ -1241,10 +1241,12 @@ fn hyperlink_abort(
 /// **It also fixed an answer that changed from run to run.** When two items
 /// share a path (OPF-074), the scan returned whichever one `HashMap`
 /// iteration reached first, and that order is seeded per process: the same
-/// book drew two RSC-010s on some runs and three on others. epubcheck's
-/// `OPFItems` builds its URL map by `put` in manifest order, so the *last*
-/// item with a path is the one every lookup sees, and so is it here.
-type ItemsByPath = HashMap<String, (String, String)>;
+/// book drew two RSC-010s on some runs and three on others. The *first*
+/// item with a path is the one every lookup sees, as in epubcheck's
+/// `ResourceRegistry`, which references resolve against. (This said last,
+/// after `OPFItems`, whose URL map does keep the last but only places
+/// OPF-074; measured on 5.4.0, the reference checks follow the first.)
+pub(crate) type ItemsByPath = HashMap<String, (String, String)>;
 
 /// The manifest by id: id -> (resolved path, media type).
 ///
@@ -4808,6 +4810,77 @@ fn recover_root_start_tag(xml: &str) -> Option<(usize, &str)> {
     None
 }
 
+/// The start positions of the elements still open at `cut` in a prefix that
+/// `htm::well_formed_prefix` rebuilt: their end tags were never read.
+fn open_at_cut(prefix_doc: &roxmltree::Document, cut: usize) -> Vec<Position> {
+    prefix_doc
+        .descendants()
+        .filter(|n| n.is_element() && n.range().end > cut)
+        .map(Position::of)
+        .collect()
+}
+
+/// A malformed package document: what epubcheck still reports from the part
+/// it read, kept out of `sub` - our own checks run on the rebuilt prefix with
+/// every resource read suspended.
+///
+/// **Allowed by name, not filtered by exception**, because epubcheck keeps
+/// far less here than for a content document (#139). Reading as a stream, it
+/// keeps what fires at a start tag; but `OPFHandler.buildItems()` runs only
+/// at `</package>`, which never comes, so the manifest is never built: no
+/// item, spine or resource check runs, and Schematron, which needs the whole
+/// document, never runs at all. Measured on 5.4.0, 36 faults each placed
+/// before a fatal just above `</package>`, against its well-formed twin.
+/// What survives:
+///
+/// - the grammar's start-tag findings (RSC-005), but not an element's
+///   incomplete content when that element was still open, and not duplicate
+///   ids, which Jing checks at the end;
+/// - the handler's: OPF-027, OPF-028, OPF-049, OPF-052, OPF-053, OPF-054,
+///   OPF-085, OPF-092, OPF-093, RSC-020, and a `link`'s or a guide
+///   reference's missing target (RSC-007, RSC-007w) and OPF-031.
+///
+/// OPF-030 is already decided by the caller. Left out on purpose, because
+/// they would be false here: the OPF-003 epubcheck reports for every file in
+/// the container (nothing was declared because nothing was built), the
+/// OPF-031 and RSC-008 for a guide reference whose target the manifest does
+/// declare, and the second RSC-016 from its version peek, which reads to
+/// `</metadata>` and meets the same fault. Anything not named here is
+/// dropped, so the worst this can do is say less than epubcheck.
+fn keep_package_findings_before_fatal(
+    report: &mut Report,
+    sub: Report,
+    open: &[Position],
+    at_cut: Position,
+    opf_path: &str,
+) {
+    const KEPT: &[&str] = &[
+        OPF_027, OPF_028, OPF_049, OPF_052, OPF_053, OPF_054, OPF_085, OPF_092, OPF_093, RSC_020,
+        RSC_007, RSC_007W, OPF_031,
+    ];
+    for m in sub.messages {
+        let Some(pos) = m.position else { continue };
+        if m.location.as_deref() != Some(opf_path)
+            || (pos.line, pos.column) >= (at_cut.line, at_cut.column)
+        {
+            continue;
+        }
+        let keep = match m.rule {
+            // Ours by other means, the grammar's there: an empty `dc:title`
+            // (`datatype.string.nonempty`) and EPUB 2's required spine `toc`.
+            Some("opf.package.opf_title_not_empty" | "opf.spine.missing_toc_epub2") => true,
+            Some("opf.package.schema_violation") => {
+                m.violation_kind != Some(crate::report::ViolationKind::IncompleteContent)
+                    || !open.contains(&pos)
+            }
+            _ => KEPT.contains(&m.id),
+        };
+        if keep {
+            report.messages.push(m);
+        }
+    }
+}
+
 /// The byte offset of a 1-based line/column, the inverse of [`line_col_at`] —
 /// used to find how far the parser got before it gave up, in text there is no
 /// document for.
@@ -4839,8 +4912,6 @@ fn line_col_at(xml: &str, off: usize) -> Position {
 }
 
 pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
-    let profile = options.profile.as_deref();
-    let advisory = options.advisory;
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
         None => {
@@ -4855,6 +4926,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     let Some(text) = decode_opf_bytes(&bytes, opf_path, report) else {
         return;
     };
+    check_text(ocf, opf_path, text, options, report);
+}
+
+/// Everything [`check`] asks of a decoded package document. Split out so a
+/// malformed one's well-formed prefix can be asked the same questions; see
+/// [`keep_package_findings_before_fatal`].
+fn check_text(
+    ocf: &mut Ocf,
+    opf_path: &str,
+    text: String,
+    options: &crate::Options,
+    report: &mut Report,
+) {
+    let profile = options.profile.as_deref();
+    let advisory = options.advisory;
     crate::htm::check_opf_doctype(&text, opf_path, report);
     crate::htm::check_xml_version(&text, opf_path, report);
     let doc = match parse_xml(&text) {
@@ -4897,7 +4983,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // an empty body claimed OPF-030 about a book whose identifier was
             // fine (probed against 5.4.0 with a misplaced XML declaration,
             // 2026-09-25).
-            let read_to = offset_at(&text, Position::of_parse_error(&e));
+            // A parser that ran out of input read all of it; roxmltree puts
+            // that at 1:1, which read here as "nothing was read" and made
+            // every truncated package an OPF-001 (the version unreadable)
+            // although its root, version and all, was right there.
+            let read_to = if e.ran_out_of_input() {
+                text.len()
+            } else {
+                offset_at(&text, Position::of_parse_error(&e))
+            };
             if recover_root_start_tag(&text).is_none_or(|(off, _)| read_to <= off) {
                 report.push_at_rule(
                     OPF_001,
@@ -4951,6 +5045,23 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         );
                     }
                 }
+            }
+            if let Some((prefix, cut)) = crate::htm::well_formed_prefix(&text, read_to)
+                && let Ok(prefix_doc) = parse_xml(&prefix)
+                && prefix_doc.root_element().tag_name().name() == "package"
+            {
+                let open = open_at_cut(&prefix_doc, cut);
+                let mut sub = Report::default();
+                ocf.without_reads(|ocf| {
+                    check_text(ocf, opf_path, prefix.clone(), options, &mut sub)
+                });
+                keep_package_findings_before_fatal(
+                    report,
+                    sub,
+                    &open,
+                    line_col_at(&text, cut),
+                    opf_path,
+                );
             }
             return;
         }
@@ -6746,7 +6857,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 );
             }
             manifest_order.push((resolved.clone(), mt.to_string()));
-            items_by_path.insert(nfc(&resolved), (id.to_string(), mt.to_string()));
+            // **The first item to declare a path owns it**, as in epubcheck's
+            // `ResourceRegistry.registerResource` (`containsKey`, then put),
+            // which is what every reference into the publication resolves
+            // against. This was last-wins: a second item declaring `i.png` as
+            // `image/jpg` made every `<img src="i.png">` a foreign resource
+            // and drew an RSC-032 epubcheck does not report beside OPF-074.
+            items_by_path
+                .entry(nfc(&resolved))
+                .or_insert_with(|| (id.to_string(), mt.to_string()));
             items.insert(id.to_string(), (resolved, mt.to_string()));
         }
         if cover_image_count > 1 {
@@ -7270,13 +7389,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 vec![href.to_string()],
             );
         }
+        // OPF-093 whatever the `rel`: `OPFHandler30.processLink` asks the
+        // local-in-package-metadata question first and only reaches the
+        // `record`/`voicing` OPF-094 in its `else`, so a local `record` link
+        // without a media-type is OPF-093 there (measured on 5.4.0). Its own
+        // OPF-094 fixtures are both remote, which the branch above covers.
         if media_type.is_none() {
             report.push_at_pos(
-                if media_type_always_required {
-                    OPF_094
-                } else {
-                    OPF_093
-                },
+                OPF_093,
                 Severity::Error,
                 "a link to a local resource must declare a media-type",
                 opf_path,
@@ -8138,7 +8258,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
 
     // resolved-resource-key -> Core-Media-Type/fallback status, for the
     // foreign-resource-fallback checks (RSC-032/MED-003/MED-007) below.
-    let resource_status = crate::foreign::build_resource_status(&items, &fallback_map, is_epub3);
+    let resource_status =
+        crate::foreign::build_resource_status(&items, &items_by_path, &fallback_map, is_epub3);
     // Container paths whose manifest item declares a `fallback`, for the
     // OBS-001 the reference walk below reports.
     let manifest_fallback_paths: HashSet<String> = items
@@ -21188,6 +21309,119 @@ mod tests {
         assert_eq!(ids, [crate::ids::OPF_001, crate::ids::RSC_016]);
     }
 
+    /// A malformed package document: what epubcheck still reports from the
+    /// part it read, and nothing it only says because the manifest was never
+    /// built. Each case measured on 5.4.0 (one book, cut or broken at that
+    /// point, against its well-formed twin).
+    #[test]
+    fn a_malformed_package_keeps_what_was_found_before_the_break() {
+        use crate::ids::{OPF_001, OPF_003, OPF_028, OPF_030, OPF_049, RSC_005, RSC_016};
+        let ch1 = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+        let ids = |opf: &str| -> Vec<&'static str> {
+            let mut v: Vec<_> = crate::validate_bytes(epub_with_opf(Some(opf), ch1))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        let head = |meta: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id\">\n\
+                 <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\n\
+                 <dc:identifier id=\"id\">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>\n\
+                 <dc:title>T</dc:title><dc:language>en</dc:language>\n{meta}\n\
+                 <meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta>\n</metadata>\n<manifest>\n\
+                 <item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\n\
+                 <item id=\"ch1\" href=\"ch1.xhtml\" media-type=\"application/xhtml+xml\"/>\n</manifest>\n"
+            )
+        };
+        // Cut off at the end of the file: the root was read, so this is not
+        // OPF-001 (the version unreadable), which every truncated package
+        // used to be. Nor OPF-003: the files are declared, epubcheck only
+        // says otherwise because its manifest is built at `</package>`.
+        assert_eq!(ids(&head("")), [RSC_016]);
+        // Start-tag findings before the break survive, from the grammar and
+        // from the handler; a broken token rather than a cut alike.
+        assert_eq!(ids(&head("<meta>x</meta>")), [RSC_005, RSC_016]);
+        assert_eq!(
+            ids(&format!("{}<<", head("<meta property=\"zz:x\">x</meta>"))),
+            [OPF_028, RSC_016]
+        );
+        assert_eq!(
+            ids(&format!(
+                "{}<spine><itemref idref=\"nope\"/></spine><<</package>",
+                head("")
+            )),
+            [OPF_049, RSC_016]
+        );
+        // Schematron never runs: an unresolved `refines` is silent here.
+        assert_eq!(
+            ids(&head(
+                "<meta refines=\"#nope\" property=\"title-type\">main</meta>"
+            )),
+            [RSC_016]
+        );
+        // An identifier never reached is still OPF-030, as before.
+        assert_eq!(
+            ids(
+                "<?xml version=\"1.0\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id\">\n<metadata>"
+            ),
+            [OPF_030, RSC_016]
+        );
+        assert!(!ids(&head("")).contains(&OPF_001));
+        assert!(!ids(&head("")).contains(&OPF_003));
+    }
+
+    /// A package `meta` is the EPUB 3 form (`property`) or the legacy one
+    /// (`name` and `content`), and EPUB 2 metadata admits nothing else in the
+    /// OPF or DC namespace. Both were clean here; RSC-005 in 5.4.0.
+    #[test]
+    fn package_meta_takes_one_of_its_two_forms_and_epub2_metadata_no_stray_opf_element() {
+        // The grammar's findings alone: the EPUB 2 base has no NCX, and its
+        // missing spine `toc` is an RSC-005 of its own.
+        let rsc_005 = |opf: &str| {
+            const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+            crate::validate_bytes(epub_with_opf(Some(opf), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.package.schema_violation"))
+                .count()
+        };
+        let v3 = |meta: &str| {
+            format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>{meta}</metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch1"/></spine></package>"#
+            )
+        };
+        assert_eq!(rsc_005(&v3("<meta>x</meta>")), 1);
+        assert_eq!(rsc_005(&v3(r#"<meta name="x">y</meta>"#)), 1);
+        assert_eq!(rsc_005(&v3(r#"<meta name="cover" content="ch1"/>"#)), 0);
+        assert_eq!(
+            rsc_005(&v3(r#"<meta property="dcterms:creator">x</meta>"#)),
+            0
+        );
+        let v2 = |extra: &str| {
+            format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language>{extra}</metadata><manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch1"/></spine></package>"#
+            )
+        };
+        assert_eq!(rsc_005(&v2("<foo/>")), 1);
+        assert_eq!(rsc_005(&v2("<dc:foo>x</dc:foo>")), 1);
+        assert_eq!(rsc_005(&v2(r#"<x:foo xmlns:x="urn:x">x</x:foo>"#)), 0);
+    }
+
+    /// A local metadata `link` without a media-type is OPF-093 whatever its
+    /// `rel`; `record` reaches OPF-094 only when remote (5.4.0).
+    #[test]
+    fn a_local_record_link_without_media_type_is_opf_093() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2020-01-01T00:00:00Z</meta><link rel="record" href="ch1.xhtml"/><link rel="record" href="http://example.com/r.xml"/></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="ch1"/></spine></package>"#;
+        assert_eq!(
+            opf_ids_of(opf, &[crate::ids::OPF_093, crate::ids::OPF_094]),
+            [crate::ids::OPF_093, crate::ids::OPF_094]
+        );
+    }
+
     /// Two grammar gaps closed against epubcheck 5.4.0 (2026-09-25): EPUB 3
     /// has no `noscript` at all, and a media element takes a `src` or
     /// `source` children, never both.
@@ -31543,18 +31777,24 @@ mod items_by_path_tests {
     /// order, which is seeded afresh for every map, so one book could draw a
     /// different report on every run. Each map in this process gets its own
     /// seed, so thirty runs would all but certainly have caught it.
-    /// epubcheck's `OPFItems` keeps the last item in manifest order for a
-    /// URL, and so does `ItemsByPath`.
+    ///
+    /// **The first item decides, not the last.** This test used to pin the
+    /// last, on the strength of epubcheck's `OPFItems`, which does keep the
+    /// last item for a URL - but that map only places OPF-074. References
+    /// resolve against `ResourceRegistry`, which keeps the first
+    /// (`containsKey`, then put). Measured on 5.4.0 with this very book:
+    /// XHTML first draws no RSC-010, CSS first draws one. We had both
+    /// backwards.
     #[test]
-    fn two_items_on_one_path_resolve_to_the_last_every_time() {
-        for (first_is_xhtml, expected) in [(true, 1), (false, 0)] {
+    fn two_items_on_one_path_resolve_to_the_first_every_time() {
+        for (first_is_xhtml, expected) in [(true, 0), (false, 1)] {
             let bytes = book(first_is_xhtml);
             let counts: std::collections::BTreeSet<usize> =
                 (0..30).map(|_| rsc_010_count(&bytes)).collect();
             assert_eq!(
                 counts.into_iter().collect::<Vec<_>>(),
                 vec![expected],
-                "first_is_xhtml={first_is_xhtml}: the last item (CSS if the XHTML came first) decides"
+                "first_is_xhtml={first_is_xhtml}: the first item decides"
             );
         }
     }

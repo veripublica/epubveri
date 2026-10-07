@@ -187,15 +187,39 @@
 
   <!-- EPUB 3 `<meta>` and `<link>`, typed as above and otherwise as loose as
        they were: any other attribute, any content. -->
+  <!-- A package `meta` is one of two forms (`package-30.rnc`,
+       `opf.meta`): the EPUB 3 one with a `property`, or the legacy one with
+       both `name` and `content`. `property` used to be optional outright, so
+       a `<meta>` carrying neither was clean here and RSC-005 there (measured
+       on 5.4.0; none of the shelf's 75 EPUB 3 packages has one). A
+       collection's `meta` takes the EPUB 3 form only. -->
   <define name="metaEl-epub3">
     <element name="meta">
-      <ref name="anyAttributesExceptTypedAndLang"/>
-      <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <optional><attribute name="property"><data type="NMTOKEN"/></attribute></optional>
-      <optional><attribute name="scheme"><data type="NMTOKEN"/></attribute></optional>
-      <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
+      <ref name="metaCommon-epub3"/>
+      <choice>
+        <ref name="metaPropertyForm-epub3"/>
+        <group>
+          <attribute name="name"/>
+          <attribute name="content"/>
+        </group>
+      </choice>
     </element>
+  </define>
+  <define name="collectionMetaEl-epub3">
+    <element name="meta">
+      <ref name="metaCommon-epub3"/>
+      <ref name="metaPropertyForm-epub3"/>
+    </element>
+  </define>
+  <define name="metaCommon-epub3">
+    <ref name="anyAttributesExceptTypedAndLang"/>
+    <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
+    <optional><attribute name="id"><data type="ID"/></attribute></optional>
+    <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
+  </define>
+  <define name="metaPropertyForm-epub3">
+    <attribute name="property"><data type="NMTOKEN"/></attribute>
+    <optional><attribute name="scheme"><data type="NMTOKEN"/></attribute></optional>
   </define>
   <define name="linkEl-epub3">
     <element name="link">
@@ -289,7 +313,7 @@
           <ref name="anyAttributes"/>
           <zeroOrMore>
             <choice>
-              <ref name="metaEl-epub3"/>
+              <ref name="collectionMetaEl-epub3"/>
               <ref name="linkEl-epub3"/>
               <element>
                 <anyName>
@@ -685,6 +709,14 @@
         <name>dc:date</name>
         <name>dc:type</name>
         <name>dc:format</name>
+        <!-- `OPF20.any-other-element`: nothing else in the OPF, OEB 1.0 or
+             DC namespace either. Without these an OPF-namespaced `<foo/>`
+             or a `dc:foo` matched here and was clean, where epubcheck says
+             RSC-005 (measured on 5.4.0; none of the shelf's 463 EPUB 2
+             packages has one). -->
+        <nsName ns="http://www.idpf.org/2007/opf"/>
+        <nsName ns="http://openebook.org/namespaces/oeb-package/1.0/"/>
+        <nsName ns="http://purl.org/dc/elements/1.1/"/>
         </except>
       </anyName>
       <ref name="looseContent"/>
