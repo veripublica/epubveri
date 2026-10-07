@@ -13,6 +13,7 @@ use crate::ids::*;
 use crate::ocf::{Ocf, parse_error_detail, parse_xml};
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
+use crate::xmlext::XmlTokens;
 
 const RENDITION_NS: &str = "http://www.idpf.org/2013/rendition";
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
@@ -170,7 +171,7 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
             n.is_element()
                 && n.tag_name().name() == "link"
                 && n.attr_no_ns("rel")
-                    .is_some_and(|r| r.split_whitespace().any(|t| t == "mapping"))
+                    .is_some_and(|r| r.xml_tokens().any(|t| t == "mapping"))
         })
         .collect();
     if let Some(second) = mapping_links.get(1) {

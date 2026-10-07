@@ -1385,7 +1385,7 @@ fn is_position_fixed(value: &[Spanned<ComponentValue>]) -> bool {
 /// `@font-face` one cannot drift apart — they are two sites asking one
 /// question, which is exactly how the `@font-face` gap opened.
 fn is_file_url_str(url: &str) -> bool {
-    url.trim_start().starts_with("file:")
+    crate::url::trim_url(url).starts_with("file:")
 }
 
 fn check_font_face(block: &Block, name_span: Span, ctx: Ctx, report: &mut Report) {

@@ -11,6 +11,7 @@
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
+use crate::xmlext::XmlTokens;
 
 /// The byte offset of `needle` within `haystack`, assuming `needle` is
 /// literally a subslice of `haystack` (as produced by `&haystack[a..b]` or
@@ -1186,7 +1187,9 @@ pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, rep
         // `<input>` is already rejected outright by the element vocabulary.
         if node.tag_name().namespace() == Some(XHTML_NS)
             && node.tag_name().name() == "input"
-            && node.attr_no_ns("type").is_some_and(|t| t.trim() == "image")
+            && node
+                .attr_no_ns("type")
+                .is_some_and(|t| crate::xmlext::trim_xml_space(t) == "image")
         {
             match node.attr_no_ns("alt") {
                 None => report.push_at_pos(
@@ -1221,7 +1224,7 @@ pub(crate) fn check_dom(d: &roxmltree::Document, path: &str, is_epub3: bool, rep
         for attr in node.attributes() {
             match attr.namespace() {
                 Some(ns) if ns == SSML_NS && attr.name() == "ph" => {
-                    if attr.value().trim().is_empty() {
+                    if crate::xmlext::is_xml_blank(attr.value()) {
                         report.push_at_pos(
                             HTM_007,
                             Severity::Warning,
@@ -1299,7 +1302,7 @@ pub(crate) fn is_data_attribute_name(name: &str) -> bool {
 /// a bare whitespace-separated sequence of "<number><unit>" components
 /// with no "P"/"T" markers at all (both are exercised by real fixtures).
 pub(crate) fn is_valid_html5_datetime(s: &str) -> bool {
-    let s = s.trim();
+    let s = crate::xmlext::trim_xml_space(s);
     if s.is_empty() || !s.is_ascii() {
         return false;
     }
@@ -1509,7 +1512,7 @@ fn is_valid_duration_component(token: &str) -> bool {
 
 fn is_valid_flat_duration(s: &str) -> bool {
     let mut any = false;
-    for token in s.split_whitespace() {
+    for token in s.xml_tokens() {
         if !is_valid_duration_component(token) {
             return false;
         }
@@ -1647,7 +1650,7 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
         ] {
             if let Some(v) = n.attr_no_ns(attr) {
                 let bad: Vec<&str> = v
-                    .split_whitespace()
+                    .xml_tokens()
                     .filter(|tok| !id_owner.contains_key(tok))
                     .collect();
                 push_idrefs(report, path, n, attr, &bad, no_such, no_such_many);
@@ -1724,7 +1727,7 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
                     }
                 } else if local == "output" {
                     let bad: Vec<&str> = v
-                        .split_whitespace()
+                        .xml_tokens()
                         .filter(|tok| !id_owner.contains_key(tok))
                         .collect();
                     push_idrefs(report, path, n, "for", &bad, no_such, no_such_many);
@@ -1738,7 +1741,7 @@ pub(crate) fn check_idref_resolution(doc: &roxmltree::Document, path: &str, repo
                         && a.tag_name().namespace() == Some(XHTML_NS)
                 });
                 let bad: Vec<&str> = v
-                    .split_whitespace()
+                    .xml_tokens()
                     .filter(|tok| {
                         !table.is_some_and(|t| {
                             t.descendants().any(|d| {

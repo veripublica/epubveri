@@ -3190,7 +3190,7 @@ fn check_collection_link_fragments(
         if is_external(href) {
             continue;
         }
-        let Some((path_part, frag)) = href.split_once('#') else {
+        let Some((path_part, frag)) = crate::url::trim_url(href).split_once('#') else {
             continue;
         };
         if frag.is_empty() || frag.contains(['=', ':', '(']) {
@@ -3394,7 +3394,7 @@ fn check_guide_references(
                 if !is_content_document_type(mt) && !is_deprecated_content_document_type(mt) {
                     continue;
                 }
-                let Some(frag) = href.split_once('#').map(|(_, f)| f) else {
+                let Some(frag) = crate::url::trim_url(href).split_once('#').map(|(_, f)| f) else {
                     continue;
                 };
                 // Same exemption as the content-document site: an empty
@@ -3522,7 +3522,7 @@ fn check_ncx_content_fragments(
                 vec![src.to_string()],
             );
         }
-        let (target, frag) = match src.split_once('#') {
+        let (target, frag) = match crate::url::trim_url(src).split_once('#') {
             Some((p, f)) => (p, Some(f)),
             None => (src, None),
         };
@@ -9418,7 +9418,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if remote_base.is_some() {
                     continue;
                 }
-                let (path_part, frag) = match href.split_once('#') {
+                let (path_part, frag) = match crate::url::trim_url(href).split_once('#') {
                     Some((p, f)) => (p, Some(f)),
                     None => (href, None),
                 };
@@ -9580,7 +9580,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if crate::url::is_absolute(&href) || is_remote_url(&href) || remote_base.is_some() {
                     continue;
                 }
-                let Some((path_part, frag)) = href.split_once('#') else {
+                let Some((path_part, frag)) = crate::url::trim_url(&href).split_once('#') else {
                     continue;
                 };
                 if frag.is_empty() || frag.contains(['=', ':', '(']) {
@@ -9711,13 +9711,15 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // place is the whole point - they drifted apart for
                     // `<object>`, for `input@src`, and here.
                     resource_refs.insert(resolved.clone());
-                    // Real corpus finding: the srcset candidate file
-                    // genuinely exists in the container - the defect
-                    // is that it's missing its own manifest item, so
-                    // this must check manifest declaration (`items`),
-                    // not container file existence (`name_index`).
-                    if !manifest_paths.contains(&resolved) {
-                        report.push_node_attr(
+                    // Declared, undeclared or absent, as for every other
+                    // resource reference: a candidate whose file exists but
+                    // has no manifest item is RSC-008 (a real corpus case),
+                    // and one whose file is not in the container at all is
+                    // RSC-007 - measured on 5.4.0, one book each. Asking only
+                    // the manifest called both RSC-008.
+                    match classify_resource_ref(&resolved, &manifest_paths, &name_index, opf_path) {
+                        ResourceRef::Fine => {}
+                        ResourceRef::Undeclared => report.push_node_attr(
                             RSC_008,
                             Severity::Error,
                             format!("srcset candidate '{url}' is not declared in the manifest"),
@@ -9726,7 +9728,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             srcset_attr,
                             "opf.content_document.srcset_not_in_manifest",
                             vec![url.to_string()],
-                        );
+                        ),
+                        ResourceRef::Missing => report.push_node_attr(
+                            RSC_007,
+                            Severity::Error,
+                            format!(
+                                "reference to a resource missing from the publication: '{url}'"
+                            ),
+                            path.clone(),
+                            n,
+                            srcset_attr,
+                            "opf.content_document.reference_missing_resource",
+                            vec![url.to_string()],
+                        ),
                     }
                 }
             }
@@ -9748,7 +9762,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
             });
             if let Some(v) = src
-                && let Some((p, _frag)) = v.split_once('#')
+                && let Some((p, _frag)) = crate::url::trim_url(v).split_once('#')
                 && !is_external(v)
             {
                 let resolved = nfc(&resolve(&dir, p));
@@ -9888,7 +9902,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if is_external(href) {
                         continue;
                     }
-                    let (path_part, frag) = match href.split_once('#') {
+                    let (path_part, frag) = match crate::url::trim_url(href).split_once('#') {
                         Some((p, f)) => (p, Some(f)),
                         None => (href, None),
                     };
@@ -13156,7 +13170,7 @@ fn check_dictionaries(
                 continue;
             }
             // The fragment, as for every other reference (RSC-012).
-            if let Some((_, frag)) = href.split_once('#')
+            if let Some((_, frag)) = crate::url::trim_url(&href).split_once('#')
                 && !frag.is_empty()
                 && !frag.contains(['=', ':', '('])
                 && let Some(ids) = target_id_kinds(ocf, name_index, target_ids, &resolved, true)
@@ -30327,7 +30341,12 @@ mod tests {
                 .messages
                 .iter()
                 .map(|m| m.id)
-                .filter(|id| matches!(*id, crate::ids::OPF_097 | crate::ids::RSC_008))
+                .filter(|id| {
+                    matches!(
+                        *id,
+                        crate::ids::OPF_097 | crate::ids::RSC_008 | crate::ids::RSC_007
+                    )
+                })
                 .collect()
         };
         // Every case keeps both declared images reachable except through the
@@ -30341,13 +30360,16 @@ mod tests {
                 .is_empty(),
             "a srcset candidate that is declared and used owes nothing"
         );
-        // Used but never declared: RSC-008, which we did not report for
-        // `<source>` at all.
+        // Used but never declared, and - this helper writes only the nav and
+        // ch1 - not in the container either: RSC-007, which we did not report
+        // for `<source>` at all. This said RSC-008 until 2026-10-07, which is
+        // epubcheck's answer only when the file *is* there (5.3.0 and 5.4.0
+        // agree, one book each); the srcset check asked the manifest alone.
         assert_eq!(
             ids(&format!(
                 r#"<p><picture><source srcset="other.png"/>{BOTH}</picture></p>"#
             )),
-            vec![crate::ids::RSC_008]
+            vec![crate::ids::RSC_007]
         );
         // The `<img srcset>` half already worked; asserted so a refactor
         // cannot quietly drop it while fixing the `<source>` one.
@@ -30355,7 +30377,7 @@ mod tests {
             ids(
                 r#"<p><img src="wide.png" srcset="other.png 2x" alt="a"/><img src="alt.png" alt="b"/></p>"#
             ),
-            vec![crate::ids::RSC_008]
+            vec![crate::ids::RSC_007]
         );
         // A `data:` URL in a source set contains commas, and a naive split
         // on them turns its base64 body into a phantom candidate. epubcheck

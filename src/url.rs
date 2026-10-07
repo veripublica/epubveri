@@ -565,7 +565,7 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     // Reported from a 2,798-book Apple Books library run against 5.3.0, where
     // it was the only finding of ours the reporter could call wrong: three
     // books, one of them flipped to invalid by it alone.
-    let href = href.trim();
+    let href = trim_url(href);
     // A scheme-relative `//host/…` resolves against the container's URL and
     // takes its scheme, so its host is judged as an https URL's would be:
     // `//` and `///x.html` (no host) are RSC-020 to epubcheck, and were
@@ -661,7 +661,7 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     // the URL parser and is valid, which the corpus says outright - the
     // fixture is called `content-model-a-with-leading-trailing-spaces-valid`
     // and it caught this the moment the rule was written without the trim.
-    href.trim().contains(' ')
+    trim_url(href).contains(' ')
 }
 
 /// Percent-decode a host for validation. Invalid escapes (`%zz`, a trailing
@@ -736,7 +736,7 @@ pub(crate) fn is_insecure_remote(href: &str) -> bool {
     if crate::opf::is_scheme_relative(href) {
         return false;
     }
-    let scheme = href.trim().split_once(':').map(|(s, _)| s).unwrap_or("");
+    let scheme = trim_url(href).split_once(':').map(|(s, _)| s).unwrap_or("");
     !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("file")
 }
 
@@ -769,7 +769,10 @@ pub(crate) fn unit_error(href: &str) -> Option<UnitError> {
     let is_data = scheme(t).is_some_and(|s| s.eq_ignore_ascii_case("data"));
     let owned;
     let t = if is_data {
-        owned = t.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        owned = t
+            .chars()
+            .filter(|c| !crate::xmlext::is_xml_space(*c))
+            .collect::<String>();
         owned.as_str()
     } else {
         t

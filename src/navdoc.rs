@@ -8,6 +8,7 @@
 use crate::ids::*;
 use crate::report::{Report, Severity};
 use crate::xmlext::NodeExt;
+use crate::xmlext::XmlTokens;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
@@ -130,7 +131,7 @@ fn check_li(li: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
         // fell through this one `return`.
         if let Some(text) = li
             .children()
-            .find(|c| c.is_text() && c.text().is_some_and(|t| !t.trim().is_empty()))
+            .find(|c| c.is_text() && c.text().is_some_and(|t| !crate::xmlext::is_xml_blank(t)))
         {
             // One per `<li>`, which is what epubcheck gives. Several text
             // runs with no element between them needs a comment or a PI to
@@ -365,7 +366,7 @@ fn check_landmarks(nav: roxmltree::Node, dir: &str, path: &str, report: &mut Rep
                         Some(f) => format!("{resolved}#{f}"),
                         None => resolved,
                     };
-                    entries.push((types.split_whitespace().collect(), key, a));
+                    entries.push((types.xml_tokens().collect(), key, a));
                 }
             }
         }

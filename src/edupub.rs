@@ -60,7 +60,7 @@ fn is_heading(n: roxmltree::Node) -> bool {
 
 /// XPath's `normalize-space`.
 fn normalize(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    crate::xmlext::normalize_xml_space(s)
 }
 
 /// An element's string value: all of its descendant text.
@@ -78,7 +78,9 @@ fn string_value(n: roxmltree::Node) -> String {
 fn heading_rank(n: roxmltree::Node) -> f64 {
     if n.attr_no_ns("role") == Some("heading") {
         return match n.attr_no_ns("aria-level") {
-            Some(v) => v.trim().parse::<f64>().unwrap_or(f64::NAN),
+            Some(v) => crate::xmlext::trim_xml_space(v)
+                .parse::<f64>()
+                .unwrap_or(f64::NAN),
             None => 2.0,
         };
     }
@@ -506,7 +508,8 @@ impl NavCompleteness {
                         .filter(|n| {
                             n.is_element()
                                 && n.tag_name().name() == "a"
-                                && n.attribute("href").is_some_and(|h| !h.trim().is_empty())
+                                && n.attribute("href")
+                                    .is_some_and(|h| !crate::xmlext::is_xml_blank(h))
                         })
                         .collect();
                     if self.first_toc_link.is_none()
@@ -791,7 +794,7 @@ fn elem_text(n: roxmltree::Node) -> String {
         .filter(|t| t.is_text())
         .filter_map(|t| t.text())
         .collect::<String>()
-        .trim()
+        .trim_matches(crate::xmlext::is_xml_space)
         .to_string()
 }
 

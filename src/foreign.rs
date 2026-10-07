@@ -11,6 +11,7 @@
 //! the picture's own "always works" raster fallback), and a `<picture>
 //! <source>` is exempt only when it declares a `type` attribute.
 
+use crate::xmlext::XmlTokens;
 use std::collections::{HashMap, HashSet};
 
 use crate::ids::{MED_003, MED_007, RSC_032};
@@ -113,7 +114,7 @@ pub(crate) fn build_resource_status(
 /// `data:`/`mailto:`/`tel:`, or an unsupported exotic scheme - each
 /// handled, if at all, by a separate check).
 fn lookup_key(dir: &str, href: &str) -> Option<String> {
-    let h = href.trim();
+    let h = crate::url::trim_url(href);
     if h.is_empty()
         || h.starts_with('#')
         || h.starts_with("data:")
@@ -164,7 +165,7 @@ pub(crate) struct Refs<'a> {
 }
 
 fn resolve_ref(dir: &str, href: &str, refs: &Refs<'_>) -> Option<(Category, bool)> {
-    let h = href.trim();
+    let h = crate::url::trim_url(href);
     // **A reference epubcheck aborted asks no further questions, and this is
     // that abort.** `ResourceReferencesChecker.checkReference` runs the remote
     // check first and `checkRemoteReference` ends RSC-006 with
@@ -246,7 +247,7 @@ fn is_palpable(n: roxmltree::Node) -> bool {
 fn has_palpable_content(n: roxmltree::Node) -> bool {
     n.children().any(|c| {
         if c.is_text() {
-            c.text().is_some_and(|t| !t.trim().is_empty())
+            c.text().is_some_and(|t| !crate::xmlext::is_xml_blank(t))
         } else {
             c.is_element() && is_palpable(c)
         }
@@ -314,7 +315,7 @@ fn check_single(
 /// including its `data:` handling, and answers only the one question the
 /// `<video>` position exemption turns on.
 fn is_audio_ref(dir: &str, href: &str, status: &HashMap<String, ResourceStatus>) -> bool {
-    let h = href.trim();
+    let h = crate::url::trim_url(href);
     if h.starts_with("data:") {
         let mt = data_url_media_type(h).unwrap_or("text/plain");
         return crate::cmt::base_media_type(mt).starts_with("audio/");
@@ -401,7 +402,7 @@ fn img_candidates(node: roxmltree::Node) -> Vec<String> {
         srcset
             .split(',')
             .filter_map(|c| {
-                let u = c.split_whitespace().next()?;
+                let u = c.xml_tokens().next()?;
                 (!u.is_empty()).then(|| u.to_string())
             })
             .collect()
@@ -468,7 +469,7 @@ fn check_picture(
                 };
                 let mut any_foreign = false;
                 for candidate in srcset.split(',') {
-                    let Some(u) = candidate.split_whitespace().next() else {
+                    let Some(u) = candidate.xml_tokens().next() else {
                         continue;
                     };
                     if resolve_ref(dir, u, refs).is_some_and(|(cat, _)| cat == Category::Foreign) {

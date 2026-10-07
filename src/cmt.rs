@@ -62,7 +62,7 @@ pub(crate) const NON_PREFERRED: &[&str] = &[
 /// Strip any `; charset=...`/`; codecs=...` parameter before comparing a
 /// declared media-type against the lists above.
 pub(crate) fn base_media_type(mt: &str) -> &str {
-    mt.split(';').next().unwrap_or(mt).trim()
+    crate::xmlext::trim_xml_space(mt.split(';').next().unwrap_or(mt))
 }
 
 pub(crate) fn is_core_media_type(mt: &str) -> bool {
@@ -107,7 +107,7 @@ pub(crate) fn is_core_audio_type_epub2(mt: &str) -> bool {
 pub(crate) fn is_core_audio_type(mt: &str) -> bool {
     let normalized: String = mt
         .chars()
-        .filter(|c| !c.is_whitespace())
+        .filter(|c| !crate::xmlext::is_xml_space(*c))
         .flat_map(char::to_lowercase)
         .collect();
     matches!(

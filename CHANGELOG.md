@@ -48,6 +48,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   standing in for the required `1`, and a `playOrder` holding a no-break
   space. epubcheck reads `playOrder` as a number in XPath 1.0's way, and so
   do we now.
+- **A link whose fragment ends in a space no longer reports a missing
+  target.** `<a href="chapter.xhtml#s1 ">` named fragment `s1 ` here
+  (RSC-012, a failing book) and `s1` in epubcheck, whose URL parser strips the
+  space first. Fragments are now taken from the trimmed reference.
+- **A `srcset` candidate whose file is not in the book is RSC-007, not
+  RSC-008.** RSC-008 ("not declared in the manifest") is epubcheck's answer
+  only when the file is present. For a file that is missing altogether it
+  reports RSC-007, as it does for every other reference, and so do we now.
 
 ### Changed
 

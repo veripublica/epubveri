@@ -9,7 +9,7 @@ fn elem_text(n: roxmltree::Node) -> String {
         .filter(|t| t.is_text())
         .filter_map(|t| t.text())
         .collect::<String>()
-        .trim()
+        .trim_matches(crate::xmlext::is_xml_space)
         .to_string()
 }
 
@@ -36,7 +36,7 @@ pub(crate) fn check_preview_publication(
     if !applies {
         return;
     }
-    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let norm = |s: &str| crate::xmlext::normalize_xml_space(s);
     let Some(md) = metadata else {
         if !dc_types.iter().any(|t| t == "preview") {
             report.push_at_rule(

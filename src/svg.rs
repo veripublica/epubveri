@@ -14,6 +14,7 @@
 //!   element-vocabulary check - real epubcheck reports SVG conformance
 //!   issues as USAGE, not errors (confirmed via a dedicated fixture).
 
+use crate::xmlext::XmlTokens;
 use std::collections::HashMap;
 
 use crate::ids::*;
@@ -147,13 +148,17 @@ fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
 /// RSC-007 for a missing resource. Trimmed inside the parens too, since
 /// `url( #a )` is equally legal.
 pub(crate) fn url_reference(value: &str) -> Option<&str> {
-    let inner = value.trim().strip_prefix("url(")?.strip_suffix(')')?.trim();
+    let inner = crate::xmlext::trim_xml_space(
+        crate::xmlext::trim_xml_space(value)
+            .strip_prefix("url(")?
+            .strip_suffix(')')?,
+    );
     let unquoted = inner
         .strip_prefix('\'')
         .and_then(|r| r.strip_suffix('\''))
         .or_else(|| inner.strip_prefix('"').and_then(|r| r.strip_suffix('"')))
         .unwrap_or(inner);
-    Some(unquoted.trim())
+    Some(crate::xmlext::trim_xml_space(unquoted))
 }
 
 /// `RSC-025` (usage): an SVG-namespaced element not in the known
@@ -294,7 +299,7 @@ pub(crate) fn check_resource_references(
 ) {
     use crate::opf::{is_external, nfc, resolve};
     for_each_reference(svg_root, is_epub3, |n, v, _| {
-        let v = v.trim();
+        let v = crate::url::trim_url(v);
         if v.is_empty() || v.starts_with('#') || is_external(v) || crate::opf::is_remote_url(v) {
             return;
         }
@@ -336,7 +341,7 @@ pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
     // use for.
     for_each_reference(doc.root_element(), true, |_, v, _| {
         {
-            let v = v.trim();
+            let v = crate::url::trim_url(v);
             // Remote targets come back unresolved, as the SMIL extractor's do
             // and for the same reason: they have no container path, and the
             // caller keys them by the href as written.
@@ -943,7 +948,7 @@ pub(crate) fn check_fragments(
         }
     }
     for_each_reference(svg_root, is_epub3, |n, v, source| {
-        let v = v.trim();
+        let v = crate::url::trim_url(v);
         let Some(frag) = v.strip_prefix('#') else {
             return;
         };
@@ -1097,7 +1102,7 @@ pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &
             || a.descendants()
                 .filter(|d| d.is_text())
                 .filter_map(|d| d.text())
-                .any(|t| !t.trim().is_empty());
+                .any(|t| !crate::xmlext::is_xml_blank(t));
         if !has_label {
             report.push_at_pos(
                 ACC_011,
@@ -1368,7 +1373,7 @@ const SVG_PRESERVE_ASPECT_RATIO: &[&str] = &[
 /// optional whitespace, one alignment keyword, optionally whitespace and
 /// `meet` or `slice`, optional whitespace.
 fn preserve_aspect_ratio_is_valid(v: &str) -> bool {
-    let mut parts = v.split_whitespace();
+    let mut parts = v.xml_tokens();
     let Some(align) = parts.next() else {
         return false;
     };
@@ -1811,7 +1816,9 @@ pub(crate) fn check_content_model(
                 );
             } else if !is_text_element
                 && child.is_text()
-                && child.text().is_some_and(|t| !t.trim().is_empty())
+                && child
+                    .text()
+                    .is_some_and(|t| !crate::xmlext::is_xml_blank(t))
             {
                 // Indentation is not content: epubcheck accepts a `<rect>`
                 // spread over three lines around its `<desc>`, and rejects

@@ -87,7 +87,7 @@ fn peek_dc_types(ocf: &mut ocf::Ocf, opf_path: &str) -> Vec<String> {
                 && n.tag_name().namespace() == Some("http://purl.org/dc/elements/1.1/")
                 && n.ancestors().any(|a| a.tag_name().name() == "metadata")
         })
-        .map(|n| n.text().unwrap_or("").trim().to_string())
+        .map(|n| crate::xmlext::trim_xml_space(n.text().unwrap_or("")).to_string())
         .filter(|t| !t.is_empty())
         .collect()
 }

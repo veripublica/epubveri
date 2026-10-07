@@ -8,6 +8,7 @@
 //! grammar, so that's what's implemented here. Plain XML, so `roxmltree`
 //! (via `ocf::parse_xml`) handles it directly — no new parser needed.
 
+use crate::xmlext::XmlTokens;
 use std::collections::{HashMap, HashSet};
 
 use crate::ids::*;
@@ -172,7 +173,7 @@ pub(crate) fn check(
         .filter(|n| n.is_element() && n.attribute((EPUB_NS, "type")).is_some())
     {
         let value = n.attribute((EPUB_NS, "type")).unwrap();
-        for token in value.split_whitespace() {
+        for token in value.xml_tokens() {
             if !token.contains(':') && !crate::ssv::is_default_vocab_type(token) {
                 report.push_node(
                     OPF_088,
@@ -328,7 +329,7 @@ pub(crate) fn resource_refs(smil_xml: &str, base_dir: &str) -> Vec<String> {
         // this one is exactly how the local half came to be missing a source
         // in the first place.
         if crate::opf::is_remote_url(v) {
-            out.push(v.trim().to_string());
+            out.push(crate::url::trim_url(v).to_string());
             return;
         }
         if !is_external(v) {
@@ -627,7 +628,7 @@ fn check_audio(
 /// separate from the begin-vs-end *comparison* (MED-008/009), which only
 /// applies once both sides did parse.
 pub(crate) fn parse_clock_value(s: &str) -> Option<f64> {
-    let s = s.trim();
+    let s = crate::xmlext::trim_xml_space(s);
     parse_full_clock(s)
         .or_else(|| parse_partial_clock(s))
         .or_else(|| parse_timecount(s))

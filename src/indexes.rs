@@ -6,6 +6,7 @@
 //! cross-referencing that decides *which* documents must have one needs
 //! the OPF's own manifest/collection context and is wired from `opf.rs`.
 
+use crate::xmlext::XmlTokens;
 use std::collections::HashSet;
 
 use crate::ids::*;
@@ -16,7 +17,7 @@ const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 
 fn has_type_token(n: roxmltree::Node, token: &str) -> bool {
     n.attribute((EPUB_NS, "type"))
-        .is_some_and(|t| t.split_whitespace().any(|tok| tok == token))
+        .is_some_and(|t| t.xml_tokens().any(|tok| tok == token))
 }
 
 /// Every `epub:type="index"` element in a content document.
@@ -574,7 +575,7 @@ fn check_body_declaration(doc: &roxmltree::Document, path: &str, report: &mut Re
             .children()
             .filter(|c| c.is_text())
             .filter_map(|c| c.text())
-            .any(|t| !t.trim().is_empty());
+            .any(|t| !crate::xmlext::is_xml_blank(t));
         own_text
             && !e
                 .ancestors()
