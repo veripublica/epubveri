@@ -2121,6 +2121,31 @@ pub(crate) fn check_required_attributes(
     is_epub3: bool,
     report: &mut Report,
 ) {
+    check_attributes(svg_root, path, is_epub3, true, report);
+}
+
+/// The same grammar for a standalone SVG document, where epubcheck applies
+/// less of it at 3.0: measured on 5.4.0 with a `.svg` in the spine, a
+/// `<rect>` or `<image>` without `width`/`height` draws nothing at 3.0 and
+/// RSC-005 at 2.0, while a bad `preserveAspectRatio` is RSC-025 at 3.0 and
+/// RSC-005 at 2.0. So EPUB 3 asks only about values, and EPUB 2 asks it all.
+/// Neither ran on a standalone SVG before.
+pub(crate) fn check_standalone_attributes(
+    svg_root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    check_attributes(svg_root, path, is_epub3, !is_epub3, report);
+}
+
+fn check_attributes(
+    svg_root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    include_required: bool,
+    report: &mut Report,
+) {
     // The same question, asked at both versions with different force -
     // epubcheck runs the SVG 1.1 grammar normatively for EPUB 2 and
     // informatively for EPUB 3, so the id and severity differ while the
@@ -2138,6 +2163,7 @@ pub(crate) fn check_required_attributes(
     };
     for n in svg_root
         .descendants()
+        .filter(|_| include_required)
         .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
     {
         let Ok(i) = SVG_REQUIRED_ATTRS.binary_search_by_key(&n.tag_name().name(), |(e, _)| e)
@@ -2221,7 +2247,7 @@ pub(crate) fn check_required_attributes(
     // nothing there (measured on 5.4.0, inline, one book each).
     for n in svg_root
         .descendants()
-        .filter(|_| !is_epub3)
+        .filter(|_| !is_epub3 && include_required)
         .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
         .filter(|n| SVG_REQUIRED_XLINK_HREF.contains(&n.tag_name().name()))
     {
@@ -3332,6 +3358,26 @@ mod tests {
         assert_eq!(acc("<a href=\"c.xhtml\"><title>t</title></a>"), 0);
         assert_eq!(acc("<a href=\"c.xhtml\" xlink:title=\"t\"/>"), 0);
         assert_eq!(acc("<a href=\"c.xhtml\" aria-label=\"t\"/>"), 0);
+    }
+
+    #[test]
+    fn a_standalone_svg_gets_values_at_3_and_everything_at_2() {
+        // Measured on 5.4.0 with a .svg in the spine: at 3.0 a missing
+        // width/height is silent and a bad preserveAspectRatio is RSC-025; at
+        // 2.0 both are RSC-005.
+        let ids = |body: &str, is_epub3: bool| -> Vec<&'static str> {
+            let xml = format!("<svg xmlns=\"http://www.w3.org/2000/svg\" {body}");
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_standalone_attributes(d.root_element(), "x.svg", is_epub3, &mut report);
+            report.messages.iter().map(|m| m.id).collect()
+        };
+        let no_wh = "viewBox=\"0 0 1 1\"><rect x=\"1\"/></svg>";
+        let bad_par = "viewBox=\"0 0 1 1\" preserveAspectRatio=\"bogus\"><rect width=\"1\" height=\"1\"/></svg>";
+        assert!(ids(no_wh, true).is_empty());
+        assert_eq!(ids(bad_par, true), vec![RSC_025]);
+        assert_eq!(ids(no_wh, false), vec![RSC_005]);
+        assert_eq!(ids(bad_par, false), vec![RSC_005]);
     }
 
     #[test]

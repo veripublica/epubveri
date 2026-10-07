@@ -1646,6 +1646,15 @@ mod tests {
                 "<meta property=\"dcterms:creator\" id=\"t\u{a0}\">X</meta>",
             ),
             ("", "", r#"id="1r""#, ""),
+            // `xml:lang` is "" | a language tag on package metadata (measured).
+            (
+                "",
+                "",
+                "",
+                r#"<meta property="dcterms:creator" xml:lang="en_US">X</meta>"#,
+            ),
+            // IDREF attributes are lexically checked (measured).
+            (r#"fallback="1a""#, "", "", ""),
         ] {
             assert!(
                 !ok(item, spine, itemref, meta),

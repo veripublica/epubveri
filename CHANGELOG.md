@@ -159,6 +159,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   - **OPF-001 beside an undecodable package document.** An OPF with an
     unknown or mismatched encoding stops epubcheck's version check as well,
     and it reports OPF-001 there.
+- **An NCX entry pointing at a file that is in the book but not in the
+  manifest is now RSC-008, as in epubcheck.** We reported nothing, so the book
+  passed here and failed there. New `rule` key:
+  `opf.ncx.content_src_undeclared`.
+- **A standalone SVG's attributes are now checked.** In EPUB 3 a bad value
+  (such as `preserveAspectRatio="bogus"`) is RSC-025 (usage). In EPUB 2 a
+  missing required attribute (`width` on `<rect>`) or a bad value is RSC-005.
+  We checked these only for SVG inside XHTML. epubcheck does not flag a
+  missing attribute in an EPUB 3 standalone SVG, and neither do we.
+- **`xml:lang` in an EPUB 3 package must be a language tag or empty, and
+  `label for`/`output for` must hold no whitespace, as in epubcheck.** These
+  add the RSC-005 epubcheck gives beside the OPF-092 or IDREF finding we
+  already reported. None of these values in our test shelf or in epubcheck's
+  or W3C's test books is affected.
+- **A fixed-layout viewport with a no-break space in it is HTM_056, as in
+  epubcheck.** An earlier attempt was reverted on a measurement that could
+  not see epubcheck's underscore ids. It was wrong.
 - **MathML in a standalone SVG now gets ACC-009** (usage) when it has no
   `alttext` and no annotation, as it already did in XHTML.
 

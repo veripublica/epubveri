@@ -1363,7 +1363,10 @@
   </define>
   <define name="labelEl">
     <element name="label"><ref name="globalAttrs"/>
-      <optional><attribute name="for"><data type="string"/></attribute></optional>
+      <!-- `common.data.idref` (web-forms.rnc), i.e. `datatype.html5.token`:
+           no whitespace at all. `for="i "` is RSC-005 there (measured on
+           5.4.0) and was only the IDREF check's finding here. -->
+      <optional><attribute name="for"><data type="html5Token"/></attribute></optional>
       <ref name="phrasingContent"/>
     </element>
   </define>
@@ -1454,7 +1457,10 @@
   </define>
   <define name="outputEl">
     <element name="output"><ref name="globalAttrs"/>
-      <optional><attribute name="for"><data type="string"/></attribute></optional>
+      <!-- `common.data.idrefs` (web-forms2.rnc): a list of tokens. -->
+      <optional>
+        <attribute name="for"><list><zeroOrMore><data type="html5Token"/></zeroOrMore></list></attribute>
+      </optional>
       <optional><attribute name="form"><data type="string"/></attribute></optional>
       <!-- #33: common-form.attrs (web-forms2.rnc). -->
       <optional><attribute name="name"><data type="string"/></attribute></optional>

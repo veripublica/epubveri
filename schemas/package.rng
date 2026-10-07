@@ -37,7 +37,8 @@
 
   <start>
     <element name="package">
-      <ref name="anyAttributesExceptTyped"/>
+      <ref name="anyAttributesExceptTypedAndLang"/>
+      <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <!-- Required by the spec; its absence is reported in opf.rs (OPF-048),
            so only its type is the grammar's. -->
@@ -146,11 +147,50 @@
     </zeroOrMore>
   </define>
 
+  <!-- `opf.xml.lang.attr = attribute xml:lang { "" | datatype.languagecode }`
+       (package-30.rnc), on `package`, the Dublin Core elements, `meta` and
+       `collection` (`opf.i18n.attrs`). Typed 2026-10-07: `xml:lang="en&#160;"`
+       is RSC-005 there and was only OPF-092 here. Measured first: all 735
+       `xml:lang` values in EPUB 3 packages on the shelf, the fixtures and
+       epub-tests are "" or a valid tag. -->
+  <define name="opfLangValue">
+    <choice><value type="token"></value><data type="language"/></choice>
+  </define>
+
+  <!-- The typed wildcard minus `xml:lang` as well, for the two elements here
+       that type it (`package`, `meta`). Not folded into
+       `anyAttributesExceptTyped`: `item`, `itemref`, `spine`, `manifest` and
+       `link` carry no `xml:lang` in package-30.rnc, and taking it out of
+       their wildcard would make it an error there, which is not measured. -->
+  <define name="anyAttributesExceptTypedAndLang">
+    <zeroOrMore>
+      <attribute>
+        <anyName>
+          <except>
+            <name ns="">properties</name>
+            <name ns="">rel</name>
+            <name ns="">property</name>
+            <name ns="">scheme</name>
+            <name ns="">linear</name>
+            <name ns="">page-progression-direction</name>
+            <name ns="">id</name>
+            <name ns="">unique-identifier</name>
+            <name ns="">fallback</name>
+            <name ns="">media-overlay</name>
+            <name ns="">toc</name>
+            <name ns="http://www.w3.org/XML/1998/namespace">lang</name>
+          </except>
+        </anyName>
+      </attribute>
+    </zeroOrMore>
+  </define>
+
   <!-- EPUB 3 `<meta>` and `<link>`, typed as above and otherwise as loose as
        they were: any other attribute, any content. -->
   <define name="metaEl-epub3">
     <element name="meta">
-      <ref name="anyAttributesExceptTyped"/>
+      <ref name="anyAttributesExceptTypedAndLang"/>
+      <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="property"><data type="NMTOKEN"/></attribute></optional>
       <optional><attribute name="scheme"><data type="NMTOKEN"/></attribute></optional>
@@ -233,7 +273,7 @@
           <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
         </attribute>
       </optional>
-      <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
+      <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
       <attribute name="role"><data type="string"/></attribute>
       <!-- Still loose, except that its `<meta>` and `<link>` are typed as the
            package metadata's are (`opf.collection.meta`, `opf.link`): the
@@ -297,7 +337,7 @@
           <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
         </attribute>
       </optional>
-      <optional><attribute name="xml:lang"><data type="string"/></attribute></optional>
+      <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
       <text/>
     </element>
   </define>

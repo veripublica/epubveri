@@ -95,14 +95,14 @@ fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, repo
     let mut has_blank_value = false;
 
     for piece in content.split(',') {
-        let piece = piece.trim();
+        let piece = crate::xmlext::trim_xml_space(piece);
         if piece.is_empty() {
             continue;
         }
         match piece.split_once('=') {
             Some((key, value)) => {
-                let key = key.trim();
-                let value = value.trim();
+                let key = crate::xmlext::trim_xml_space(key);
+                let value = crate::xmlext::trim_xml_space(value);
                 if !matches!(key, "width" | "height") {
                     continue;
                 }

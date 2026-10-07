@@ -3743,6 +3743,28 @@ fn check_ncx_content_fragments(
             );
             continue;
         }
+        // **Present in the container, absent from the manifest.** epubcheck
+        // registers an NCX `<content src>` like any reference and reports an
+        // undeclared target RSC-008 (`ResourceReferencesChecker`), as it does
+        // for a hyperlink; nothing here asked, so the reference fell through
+        // the checks below (none of which know the file) and the book passed.
+        // Measured on 5.4.0: an EPUB 2 NCX entry to a file in the container
+        // with no manifest item is RSC-008 there (and OPF-003 for the file,
+        // which we already gave).
+        if name_index.contains_key(&resolved) && !items_by_path.contains_key(&resolved) {
+            report.push_node(
+                RSC_008,
+                Severity::Error,
+                format!(
+                    "NCX content src '{src}' references a resource not declared in the manifest"
+                ),
+                ncx_path,
+                n,
+                "opf.ncx.content_src_undeclared",
+                vec![src.to_string()],
+            );
+            continue;
+        }
         // **Both** of the questions epubcheck asks of a hyperlink, asked
         // here by the same predicate. `ResourceReferencesChecker` has one
         // path for every registered reference and an NCX `<content src>` is
@@ -11864,6 +11886,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         );
         crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_content_model(d.root_element(), doc_path, is_epub3, report);
+        crate::svg::check_standalone_attributes(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
         crate::svg::check_deprecated_xlink_href(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_ids(d.root_element(), doc_path, report);
@@ -24355,6 +24378,15 @@ mod tests {
         }
 
         const SVG_ITEM: &str = r#"<item id="sv" href="pic.svg" media-type="image/svg+xml"/>"#;
+        // `other.xhtml` is in the container and not in the manifest: an NCX
+        // entry to it is RSC-008 (measured on 5.4.0), and was nothing here.
+        let undeclared: Vec<_> = crate::validate_bytes(book("2.0", "", "ch1.xhtml", "other.xhtml"))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_008)
+            .map(|m| m.rule)
+            .collect();
+        assert_eq!(undeclared, [Some("opf.ncx.content_src_undeclared")]);
         const XHTML_ITEM: &str =
             r#"<item id="x2" href="other.xhtml" media-type="application/xhtml+xml"/>"#;
         let has =
