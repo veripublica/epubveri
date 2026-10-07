@@ -2697,6 +2697,30 @@ mod tests {
         assert_eq!(run("@future { color red }", &empty_index()), vec![CSS_008]);
     }
 
+    /// **A deliberate divergence from epubcheck, in the spec's favour (owner's
+    /// decision, 2026-10-07).** CSS Syntax §5.5.6: a top-level `{}`-block is
+    /// allowed as the *whole* value of a declaration, so `p { color: { red }; }`
+    /// is a well-formed declaration. Whether `color` takes such a value is a
+    /// property-grammar question, not a syntax error. epubcheck 5.4.0 reports
+    /// CSS-008 twice and fails the book; we report nothing, measured on the
+    /// same text. The mixed shape is a syntax error in both, and stays one
+    /// here: a block followed by more (`color: red {}`, `font: {} bar`) makes
+    /// the item a rule. Do not "fix" the first assertion to match epubcheck
+    /// without the owner; it was asked and answered.
+    #[test]
+    fn a_block_as_the_whole_value_is_a_declaration_as_the_spec_says() {
+        for css in [
+            "p { color: { red }; }",
+            "p { color: {} }",
+            "p { --x: { a: b }; }",
+        ] {
+            assert!(run(css, &empty_index()).is_empty(), "{css}");
+        }
+        for css in ["p { color: red {} }", "p { font: {} bar; color: red }"] {
+            assert!(run(css, &empty_index()).contains(&CSS_008), "{css}");
+        }
+    }
+
     /// What styloria 0.12 (CSS Syntax CRD 2026-10-01) changed, each against
     /// epubcheck 5.4.0 on the same text.
     #[test]
