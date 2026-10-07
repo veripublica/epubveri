@@ -750,15 +750,26 @@ const SVG_ATTRIBUTES: &[&str] = &[
 /// [`SVG2_ONLY_ELEMENTS`].
 const SVG3_ONLY_ATTRIBUTES: &[&str] = &["focusable", "href", "rel", "tabindex"];
 
-fn is_recognized_attribute(name: &str, is_epub3: bool) -> bool {
+fn is_recognized_attribute(name: &str, element: &str, is_epub3: bool) -> bool {
+    if !is_epub3 {
+        // EPUB 2's SVG 1.1 grammar (`schema/20/rng/svg/`) has no ARIA at all
+        // and declares `lang` on `glyph` alone (`svg-basic-font.rng`); the
+        // flat list below carries all three for EPUB 3's sake. Measured on
+        // 5.4.0, inline and standalone: `role`, `aria-label` and `lang` on a
+        // `rect` are RSC-005, `lang` on a `glyph` is clean.
+        if SVG3_ONLY_ATTRIBUTES.contains(&name) || name == "role" || name.starts_with("aria-") {
+            return false;
+        }
+        if name == "lang" {
+            return element == "glyph";
+        }
+        return SVG_ATTRIBUTES.contains(&name);
+    }
     // `role` and `aria-*`: `epub-svg-strict-inc.rnc` folds `aria.global`
     // into `SVG.Core.attrib`, which covers the `aria-*` set but not `role`
     // itself. `role` is allowed here anyway - accepting it is a miss, and
     // rejecting an accessibility attribute that authors do put on SVG
     // would be the expensive direction of wrong.
-    if !is_epub3 && SVG3_ONLY_ATTRIBUTES.contains(&name) {
-        return false;
-    }
     SVG_ATTRIBUTES.contains(&name) || name == "role" || name.starts_with("aria-")
 }
 
@@ -824,7 +835,11 @@ fn check_attrs_of(n: roxmltree::Node, path: &str, is_epub3: bool, report: &mut R
         // A control was part of the probe: `zzz-foo` is rejected by both
         // tools, so the grammar really is applied to this document and the
         // silence on `data-epub` is a rule rather than an absence.
-        if crate::htm::is_data_attribute_name(name) {
+        // EPUB 3 only: SVG 1.1 at 2.0 has no `data-*`, and `data-x` there is
+        // the plain RSC-005 of any unknown attribute, with no HTM_061 for a
+        // malformed suffix (measured on 5.4.0, inline and standalone, as on
+        // an EPUB 2 XHTML `p`).
+        if is_epub3 && crate::htm::is_data_attribute_name(name) {
             // The suffix is still judged, and on a *standalone* SVG only this
             // site can do it: `htm::check_dom` runs over content documents
             // declared `application/xhtml+xml`, so it already covers inline
@@ -844,7 +859,7 @@ fn check_attrs_of(n: roxmltree::Node, path: &str, is_epub3: bool, report: &mut R
             }
             continue;
         }
-        if !is_recognized_attribute(name, is_epub3) {
+        if !is_recognized_attribute(name, n.tag_name().name(), is_epub3) {
             let (id, severity) = if is_epub3 {
                 (RSC_025, Severity::Usage)
             } else {
@@ -1892,7 +1907,28 @@ fn preserve_aspect_ratio_is_valid(v: &str) -> bool {
 /// `animateMotion`, `pattern` and `marker` were probed too and require
 /// nothing; they are listed here only so the next reader does not re-probe
 /// them.
-const SVG_REQUIRED_XLINK_HREF: &[&str] = &["cursor", "feImage", "mpath", "textPath", "tref", "use"];
+///
+/// `a`, `image`, `font-face-uri` and `definition-src` were missing all the
+/// same, and the extraction was redone from the grammar to find them: every
+/// `attlist.*` that references `SVG.XLinkRequired.attrib`,
+/// `SVG.XLinkEmbed.attrib` or `SVG.XLinkReplace.attrib`, the three sets in
+/// `svg-xlink-attrib.rng` whose `xlink:href` is not optional. Ten elements;
+/// the four new ones measured on 5.4.0, inline and standalone, each with a
+/// control carrying `xlink:href` that is clean. A plain `href` does not
+/// stand in for it at 2.0: epubcheck reports both the unknown `href` and the
+/// missing `xlink:href`.
+const SVG_REQUIRED_XLINK_HREF: &[&str] = &[
+    "a",
+    "cursor",
+    "definition-src",
+    "feImage",
+    "font-face-uri",
+    "image",
+    "mpath",
+    "textPath",
+    "tref",
+    "use",
+];
 
 /// SVG 1.1's **descriptive elements**, allowed inside any graphics element.
 const SVG_DESCRIPTIVE_ELEMENTS: &[&str] = &["desc", "metadata", "title"];
@@ -2528,6 +2564,66 @@ mod tests {
     const X: &str = r#"xmlns="http://www.w3.org/1999/xhtml""#;
     const M: &str = r#"xmlns="http://www.w3.org/1998/Math/MathML""#;
     const RECT: &str = r#"<rect width="1" height="1"/>"#;
+
+    /// EPUB 2's SVG 1.1 attribute rules that the flat EPUB 3 list hid,
+    /// each measured on 5.4.0 inline and standalone.
+    #[test]
+    fn epub2_svg_attributes_follow_svg_1_1_not_the_epub3_list() {
+        let ids = |body: &str, is_epub3: bool| -> Vec<&'static str> {
+            let svg = format!(r#"{S}{body}</svg>"#);
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_attribute_vocabulary(doc.root_element(), "s.svg", is_epub3, &mut report);
+            check_required_attributes(doc.root_element(), "s.svg", is_epub3, &mut report);
+            report.messages.iter().map(|m| m.id).collect()
+        };
+        const XL: &str = r#"xmlns:xlink="http://www.w3.org/1999/xlink""#;
+        for attr in [
+            r#"role="img""#,
+            r#"aria-label="x""#,
+            r#"lang="en""#,
+            r#"data-x="1""#,
+        ] {
+            let rect = format!(r#"<rect width="1" height="1" {attr}/>"#);
+            assert_eq!(ids(&rect, false), [RSC_005], "{attr} at 2.0");
+            assert!(
+                ids(&rect, true).iter().all(|id| *id != RSC_005),
+                "{attr} at 3.0"
+            );
+        }
+        // A malformed `data-` suffix is the same plain RSC-005 at 2.0.
+        assert_eq!(
+            ids(r#"<rect width="1" height="1" data-FOO="1"/>"#, false),
+            [RSC_005]
+        );
+        // `lang` is SVG 1.1's on `glyph`.
+        assert!(
+            ids(
+                r#"<defs><font horiz-adv-x="1"><glyph lang="en"/></font></defs>"#,
+                false
+            )
+            .is_empty()
+        );
+        // `xlink:href` is required on `image` and `a` too, and a plain `href`
+        // does not stand in for it: both faults are reported.
+        assert_eq!(ids(r#"<image width="1" height="1"/>"#, false), [RSC_005]);
+        assert_eq!(
+            ids(r#"<a><rect width="1" height="1"/></a>"#, false),
+            [RSC_005]
+        );
+        assert_eq!(
+            ids(r#"<image width="1" height="1" href="i.png"/>"#, false),
+            [RSC_005, RSC_005]
+        );
+        assert!(
+            ids(
+                &format!(r#"<image {XL} width="1" height="1" xlink:href="i.png"/>"#),
+                false
+            )
+            .is_empty()
+        );
+        assert!(ids(r#"<image width="1" height="1"/>"#, true).is_empty());
+    }
 
     #[test]
     fn epub2_standalone_foreign_object_takes_svg_alone() {

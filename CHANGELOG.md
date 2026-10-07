@@ -12,6 +12,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **EPUB 2 SVG attributes follow SVG 1.1, not the EPUB 3 list.** At 2.0,
+  `role`, `aria-*` and `data-*` on an SVG element are now RSC-005, and so is
+  `lang` anywhere but on a `glyph`. A malformed `data-` name there is that
+  same RSC-005, not HTM_061. `image`, `a`, `font-face-uri` and
+  `definition-src` now require `xlink:href`, as `use` and the others already
+  did. A plain `href` does not stand in for it: both faults are reported, as
+  in epubcheck. Measured on 5.4.0, inline and standalone. EPUB 3 is
+  unchanged.
 - **EPUB 2: XHTML inside SVG is now checked, and SVG below it no longer
   is.** Neither was right before. epubcheck places XHTML in EPUB 2 SVG with
   NVDL, and we did not ask:
