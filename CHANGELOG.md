@@ -8,6 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A space at either end of `prefix` no longer fails the book.**
+  `prefix="foaf: http://xmlns.com/foaf/spec/ "` gives OPF-004 in both tools.
+  epubcheck reports it as a warning and passes the book. We reported it as an
+  error, so the book failed. The same was true of OPF-004e (something other
+  than a plain space between a prefix and its URI, such as a no-break space)
+  and OPF-004f (the same between two mappings). All three are now warnings,
+  as in epubcheck. The ids had been checked against epubcheck, but their
+  severities had not. No epubcheck test book uses these three, so our test
+  corpus could not catch it.
+
 ## [0.22.0] - 2026-10-05
 
 **False positives on XML names and spaces are gone, and some books epubcheck

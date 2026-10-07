@@ -45,6 +45,13 @@ path = "src/epubtests.rs"
 name = "versions"
 path = "src/versions.rs"
 
+# Every severity we emit against epubcheck's DefaultSeverities table: a
+# severity is what moves the verdict, and the corpus fixtures do not reach
+# every id. Pre-flight gate.
+[[bin]]
+name = "severities"
+path = "src/severities.rs"
+
 # JSWolf's technique, made systematic: re-declare the shelf's EPUB 3 books as
 # EPUB 2 so their HTML5-era markup meets the EPUB 2 rules. Transforms only —
 # `compare` owns the oracle half.

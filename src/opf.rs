@@ -2331,8 +2331,11 @@ enum PrefixFault {
 /// where epubcheck produces one, and a non-NCName prefix produced none at
 /// all.
 ///
-/// Known gap: OPF-004f needs whitespace that Guava's `CharMatcher.whitespace()`
-/// accepts but that is not one of space/tab/CR/LF - a vertical tab, say.
+/// OPF-004e/f need whitespace that Guava's `CharMatcher.whitespace()` accepts
+/// but that is not the allowed run: a no-break space, an em space, U+3000 or
+/// NEL (all measured, all identical to epubcheck). Guava's set is Unicode's
+/// White_Space, which is exactly `char::is_whitespace` - so this is the one
+/// place in the package document where the Unicode test is the right one.
 /// Tab-separated mappings are legal and measured as such.
 ///
 /// The mappings come back in the order they are written, because the
@@ -2539,12 +2542,13 @@ const MARC_RELATORS: &[&str] = &[
 /// validator - which is the whole reason #70 exists. An instrument is not a
 /// source about the thing it measures.
 ///
-/// Still coarse, and knowingly: `syntax_errors` is a count, so every syntax
-/// fault reports the bare OPF-004 where epubcheck picks one of
-/// OPF-004a..OPF-004f from a character-level state machine
-/// (`PrefixDeclarationParser`). Splitting those means porting that machine,
-/// and getting it subtly wrong invents errors on an attribute most EPUB 3
-/// books carry - so it is tracked in #70 rather than guessed at here.
+/// The syntax faults come from `parse_prefix_value`, a port of epubcheck's
+/// `PrefixDeclarationParser`, and each carries **epubcheck's own severity**
+/// (`DefaultSeverities`): OPF-004, OPF-004e and OPF-004f are warnings, the
+/// rest errors. They were all errors until 0.22.0, so a `prefix` with one
+/// trailing space - epubcheck: valid, one warning - made the book INVALID.
+/// The IDs had been measured against epubcheck; the severities had not, and
+/// no epubcheck fixture exercises those three, so the corpus could not see it.
 fn check_prefix_declaration(
     prefix_attr: roxmltree::Attribute,
     path: &str,
@@ -2558,7 +2562,7 @@ fn check_prefix_declaration(
         let (id, severity, text) = match fault {
             PrefixFault::Syntax => (
                 OPF_004,
-                Severity::Error,
+                Severity::Warning,
                 "the \"prefix\" attribute value has a syntax error".to_string(),
             ),
             PrefixFault::EmptyPrefix => (
@@ -2593,7 +2597,7 @@ fn check_prefix_declaration(
             ),
             PrefixFault::IllegalSpace(p) => (
                 OPF_004E,
-                Severity::Error,
+                Severity::Warning,
                 match p {
                     Some(p) => format!("illegal whitespace between the prefix \"{p}\" and its URI"),
                     None => "illegal whitespace between a prefix and its URI".to_string(),
@@ -2601,7 +2605,7 @@ fn check_prefix_declaration(
             ),
             PrefixFault::IllegalWhitespaceBetween(_) => (
                 OPF_004F,
-                Severity::Error,
+                Severity::Warning,
                 "illegal whitespace between prefix mappings".to_string(),
             ),
             PrefixFault::MissingUri(p) => (
@@ -22929,6 +22933,59 @@ mod tests {
             "http://example.org/a%",
         ] {
             assert!(super::is_unparseable_uri(bad), "{bad} should not parse");
+        }
+    }
+
+    /// OPF-004, OPF-004e and OPF-004f are *warnings* in epubcheck
+    /// (`DefaultSeverities`); we had them as errors, so one trailing space in
+    /// `prefix` made a book INVALID that epubcheck passes. Each value was
+    /// measured against epubcheck 5.4.0 as a whole book: valid, one warning.
+    #[test]
+    fn prefix_whitespace_faults_are_warnings_as_in_epubcheck() {
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title></head>\
+            <body><p>hi</p></body></html>";
+        let opf = |prefix: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id" prefix="{prefix}">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        for (prefix, id) in [
+            ("foaf: http://xmlns.com/foaf/spec/ ", crate::ids::OPF_004),
+            (" foaf: http://xmlns.com/foaf/spec/", crate::ids::OPF_004),
+            (
+                "foaf:\u{a0}http://xmlns.com/foaf/spec/",
+                crate::ids::OPF_004E,
+            ),
+            (
+                "foaf: http://xmlns.com/foaf/spec/\u{3000}dbp: http://dbpedia.org/ontology/",
+                crate::ids::OPF_004F,
+            ),
+        ] {
+            let report = crate::validate_bytes(epub_with_opf(Some(&opf(prefix)), CH1));
+            let found: Vec<_> = report
+                .messages
+                .iter()
+                .filter(|m| m.severity != crate::report::Severity::Usage)
+                .map(|m| (m.id, m.severity))
+                .collect();
+            assert_eq!(
+                found,
+                [(id, crate::report::Severity::Warning)],
+                "prefix={prefix:?}"
+            );
         }
     }
 

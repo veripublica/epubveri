@@ -361,6 +361,12 @@ else
     fi
   fi
 
+  # A severity is what moves the verdict, and corpus fixtures do not reach
+  # every id: OPF-004/004e/004f were errors here and warnings in epubcheck
+  # until 2026-10-07, so a trailing space in `prefix` failed a valid book.
+  check "severities match epubcheck's DefaultSeverities" \
+    cargo run --release -q -p epubveri-harness --bin severities
+
   # docs/COVERAGE.md is generated; a stale one is a published document that
   # disagrees with the code.
   cargo run --release -q -p epubveri-harness --bin coverage >/dev/null 2>&1
