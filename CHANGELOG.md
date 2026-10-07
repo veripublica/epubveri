@@ -21,6 +21,22 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   as in epubcheck. The ids had been checked against epubcheck, but their
   severities had not. No epubcheck test book uses these three, so our test
   corpus could not catch it.
+- **A space at either end of a manifest `href` no longer reports a missing
+  file.** `href="chapter.xhtml "` or `href=" chapter.xhtml"` gave RSC-001,
+  and RSC-020 as well for a plain space, so the book failed. epubcheck's URL
+  parser strips that space before looking for the file, so the book passed
+  there. The same was true of a tab, a line break, an em space or an
+  ideographic space, and of `<guide>` references in EPUB 2. We now strip
+  exactly the characters epubcheck strips, measured one character at a time.
+  A no-break space and NEL are not stripped there and are not stripped here,
+  so those books still fail in both tools. Before this change we stripped
+  them in some places and missed the OPF-003 epubcheck gives for the file
+  left undeclared.
+- **An EPUB 2 manifest `media-type` with a trailing space no longer fails.**
+  epubcheck trims the media type before using it; we reported OPF-043 and
+  RSC-010 for an XHTML spine item it considered fine. In EPUB 3, the nav
+  item's media type with a trailing space is still RSC-005, as in epubcheck.
+  The OPF-012 we added on top of it is gone.
 
 ## [0.22.0] - 2026-10-05
 

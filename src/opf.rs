@@ -396,6 +396,12 @@ pub(crate) fn nfc(s: &str) -> String {
 /// Drops fragments/queries; collapses "." and ".."; honors a leading "/";
 /// percent-decodes each segment. (Caller NFC-normalizes for comparison.)
 pub(crate) fn resolve(base_dir: &str, href: &str) -> String {
+    // epubcheck's URL parser strips these from both ends before it resolves
+    // anything, so every caller gets the same answer whether or not it
+    // trimmed first - and callers must not trim with `str::trim`, which also
+    // strips a no-break space the parser keeps. Only the ends of the whole
+    // reference: a space before a `#` is inside the path, there and here.
+    let href = crate::url::trim_url(href);
     let href = href.split('#').next().unwrap_or(href);
     let href = href.split('?').next().unwrap_or(href);
 
@@ -2184,7 +2190,7 @@ fn check_meta_property_scheme_shape(
                     .filter(|m| m.is_element() && m.tag_name().name() == "item")
                     .find(|m| {
                         m.attr_no_ns("href")
-                            .is_some_and(|h| nfc(&resolve("", h.trim())) == target)
+                            .is_some_and(|h| nfc(&resolve("", h)) == target)
                     })
                     .and_then(|m| m.attr_no_ns("id"));
                 if let Some(id) = item_id {
@@ -4080,7 +4086,7 @@ fn check_cover_meta_advisory(
                 let resolved = nfc(&resolve(base_dir, value));
                 manifest_items.iter().find(|n| {
                     n.attr_no_ns("href").is_some_and(|h| {
-                        h.trim() == value || nfc(&resolve(base_dir, h.trim())) == resolved
+                        h.trim() == value || nfc(&resolve(base_dir, h)) == resolved
                     })
                 })
             })
@@ -4279,7 +4285,7 @@ fn declared_resources_of(ocf: &mut Ocf, package_path: &str) -> HashSet<String> {
     let dir = parent_dir(package_path);
     let local = |href: &str| {
         (!is_external(href) && !is_remote_url(href) && !is_file_url(href))
-            .then(|| nfc(&resolve(&dir, strip_url_fragment(href).trim())))
+            .then(|| nfc(&resolve(&dir, &strip_url_fragment(href))))
     };
     // **Items are keyed by id, and a repeated id keeps only its last item.**
     // epubcheck builds its by-URL view from `itemBuilders`, a map keyed by
@@ -5852,7 +5858,19 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 item.attr_no_ns("media-type"),
             );
             let (id, href, mt) = match (id, href, mt) {
-                (Some(i), Some(h), Some(m)) => (i.trim(), h, m),
+                // Each trimmed the way epubcheck trims it before using it: the
+                // id and media type by Java's `trim` (`OPFItem`:85,
+                // `OPFHandler30`:531), the href by its URL parser, which
+                // strips a different set (`url::trim_url`). Untrimmed, an
+                // href with one trailing space named a missing file - RSC-001
+                // and a failing book that epubcheck passes. Rust's `trim`
+                // was wrong the other way: it also strips a no-break space,
+                // so `nav\u{a0}` found an item epubcheck does not.
+                (Some(i), Some(h), Some(m)) => (
+                    crate::xmlext::trim_xml_space(i),
+                    crate::url::trim_url(h),
+                    crate::xmlext::trim_xml_space(m),
+                ),
                 _ => {
                     // **Skip the item, say nothing.** All three attributes are
                     // required by both package grammars, so the content model
@@ -6206,25 +6224,35 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             "opf.manifest_item.search_key_map_wrong_media_type",
                             vec![mt.to_string()],
                         );
-                    } else if token == "nav" && mt != "application/xhtml+xml" {
-                        report.push_node(
-                            OPF_012,
-                            Severity::Error,
-                            format!("property \"nav\" is not defined for media type '{mt}'"),
-                            opf_path,
-                            item,
-                            "opf.manifest_item.nav_wrong_media_type",
-                            vec![mt.to_string()],
-                        );
-                        report.push_node(
-                            RSC_005,
-                            Severity::Error,
-                            "the nav document must be an XHTML Content Document",
-                            opf_path,
-                            item,
-                            "opf.manifest_item.nav_not_xhtml",
-                            Vec::new(),
-                        );
+                    } else if token == "nav" {
+                        // Two checks in epubcheck, reading two values. Its
+                        // Java (OPF-012) sees the media type after `trim`;
+                        // its Schematron (`opf.nav.type`, RSC-005) compares
+                        // the attribute as written. So
+                        // `media-type="application/xhtml+xml "` is RSC-005
+                        // alone - measured on 5.4.0.
+                        if mt != "application/xhtml+xml" {
+                            report.push_node(
+                                OPF_012,
+                                Severity::Error,
+                                format!("property \"nav\" is not defined for media type '{mt}'"),
+                                opf_path,
+                                item,
+                                "opf.manifest_item.nav_wrong_media_type",
+                                vec![mt.to_string()],
+                            );
+                        }
+                        if item.attr_no_ns("media-type") != Some("application/xhtml+xml") {
+                            report.push_node(
+                                RSC_005,
+                                Severity::Error,
+                                "the nav document must be an XHTML Content Document",
+                                opf_path,
+                                item,
+                                "opf.manifest_item.nav_not_xhtml",
+                                Vec::new(),
+                            );
+                        }
                     } else {
                         // A genuinely custom (non-reserved) prefix is
                         // always allowed - but a *reserved*-prefixed
@@ -8096,7 +8124,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if v.is_empty() || is_external(v) || v.starts_with('#') {
                         continue;
                     }
-                    let resolved = nfc(&resolve(&parent_dir(&path), strip_url_fragment(v).trim()));
+                    let resolved = nfc(&resolve(&parent_dir(&path), &strip_url_fragment(v)));
                     let (id, msg, rule) = match classify_resource_ref(
                         &resolved,
                         &manifest_paths,
@@ -10008,7 +10036,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if url.is_empty() || is_external(url) || is_remote_url(url) {
                         continue;
                     }
-                    let key = nfc(&resolve(&dir, strip_url_fragment(url).trim()));
+                    let key = nfc(&resolve(&dir, &strip_url_fragment(url)));
                     if manifest_fallback_paths.contains(&key) {
                         report.push_node(
                             OBS_001,
@@ -10039,7 +10067,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 && !is_external(src)
                 && !is_remote_url(src)
             {
-                let key = nfc(&resolve(&dir, strip_url_fragment(src).trim()));
+                let key = nfc(&resolve(&dir, &strip_url_fragment(src)));
                 if let Some(mt) = declared_media_type(&media_types_by_path, &key) {
                     if !is_script_media_type(mt) {
                         report.push_node(
@@ -10103,7 +10131,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             vec![v.to_string()],
                         );
                     }
-                    let key = nfc(&resolve(&dir, strip_url_fragment(v).trim()));
+                    let key = nfc(&resolve(&dir, &strip_url_fragment(v)));
                     resource_refs.insert(key.clone());
                     // The same declared/present matrix the no-namespace
                     // attribute walk below applies. It could not reach here:
@@ -10221,7 +10249,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // One `continue` was serving two questions; only one
                         // of them is epubcheck's.
                         if remote_base.is_none() && !is_external(v) {
-                            resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(v).trim())));
+                            resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(v))));
                         }
                         continue;
                     }
@@ -10240,7 +10268,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // reported nothing.
                     if remote_base.is_none() && !is_external(v) && is_resource_reference(node, attr)
                     {
-                        let key = nfc(&resolve(&dir, strip_url_fragment(v).trim()));
+                        let key = nfc(&resolve(&dir, &strip_url_fragment(v)));
                         // `OBS-001`: EPUB 3.4 marks the *manifest* content
                         // fallback outdated (epubcheck 5.4.0,
                         // `ResourceReferencesChecker.checkFallbacks`). Per
@@ -10853,7 +10881,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // OPF-097 below. Inline <style> resolves against this
                     // document's own directory.
                     if !is_external(&u) {
-                        resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
+                        resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&u))));
                     }
                     // **An import is not a remote-resources dependency.**
                     // The property exists for remote resources a reading
@@ -11664,7 +11692,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // to remember to join each list. Before adding a reference kind,
                 // ask which lists it must join.
                 if !is_external(&href) {
-                    resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&href).trim())));
+                    resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&href))));
                 }
             }
         }
@@ -11702,8 +11730,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // See the note on the PI branch above: the reference is
                     // registered here, not only classified.
                     if !is_external(&import_url) {
-                        resource_refs
-                            .insert(nfc(&resolve(&dir, strip_url_fragment(&import_url).trim())));
+                        resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&import_url))));
                     }
                 }
             }
@@ -11738,7 +11765,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
                 // See the note on the PI branch above.
                 if !is_external(href) {
-                    resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(href).trim())));
+                    resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(href))));
                 }
             }
         }
@@ -11937,7 +11964,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // stylesheet in the manifest asks for it, exactly as epubcheck
             // registers references from every CSS resource it checks.
             if !is_external(&u) {
-                resource_refs.insert(nfc(&resolve(&dir, strip_url_fragment(&u).trim())));
+                resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&u))));
             }
             // RSC-020, same reasoning as the guide and the NCX: a `url()` is a
             // registered reference and epubcheck strict-parses every one,
@@ -11991,7 +12018,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         vec![u.clone()],
                     );
                 }
-                let target = nfc(&resolve(&dir, bare.trim()));
+                let target = nfc(&resolve(&dir, &bare));
                 // **RSC-008 is NOT asked here**, and adding it was a mistake
                 // the 981-book `compare` caught the same day: `css.rs`'s own
                 // RSC-001/007/008 walk already owns it, with a position and
@@ -13943,7 +13970,7 @@ impl LinkedSheet {
         let refs = crate::css::stylesheet_urls(&sheet)
             .into_iter()
             .filter(|u| !is_external(u))
-            .map(|u| nfc(&resolve(&css_dir, strip_url_fragment(&u).trim())))
+            .map(|u| nfc(&resolve(&css_dir, &strip_url_fragment(&u))))
             .collect();
         LinkedSheet {
             classes: crate::css::selector_class_names(&sheet),
@@ -22934,6 +22961,72 @@ mod tests {
         ] {
             assert!(super::is_unparseable_uri(bad), "{bad} should not parse");
         }
+    }
+
+    /// A manifest href is trimmed the way epubcheck's URL parser trims it
+    /// (`url::trim_url`), and no wider. Each row measured against epubcheck
+    /// 5.4.0 as a whole book with the space before or after `nav.xhtml`: a
+    /// plain space, a tab or U+3000 resolve to the file (valid); a no-break
+    /// space and NEL do not (RSC-001 and OPF-003, invalid). We had the first
+    /// group as RSC-001 - a failing verdict - and missed OPF-003 on the second.
+    #[test]
+    fn manifest_href_is_trimmed_as_epubchecks_url_parser_trims_it() {
+        let opf = |href: &str, mt: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="{href}" media-type="{mt}" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title></head>\
+            <body><p>hi</p></body></html>";
+        let ids = |href: &str, mt: &str| {
+            let mut v: Vec<_> = crate::validate_bytes(epub_with_opf(Some(&opf(href, mt)), CH1))
+                .messages
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m.severity,
+                        crate::report::Severity::Fatal | crate::report::Severity::Error
+                    )
+                })
+                .map(|m| m.id)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        const XHTML: &str = "application/xhtml+xml";
+        for ok in [
+            "nav.xhtml ",
+            " nav.xhtml",
+            "nav.xhtml&#9;",
+            "nav.xhtml\u{3000}",
+        ] {
+            assert_eq!(ids(ok, XHTML), Vec::<&str>::new(), "href={ok:?}");
+        }
+        for missing in ["nav.xhtml\u{a0}", "\u{a0}nav.xhtml", "nav.xhtml\u{85}"] {
+            assert!(
+                ids(missing, XHTML).contains(&crate::ids::RSC_001),
+                "href={missing:?}"
+            );
+        }
+        // Java's OPF-012 reads the trimmed media type and is silent; the
+        // Schematron compares the attribute as written and is not.
+        assert_eq!(
+            ids("nav.xhtml", "application/xhtml+xml "),
+            [crate::ids::RSC_005]
+        );
     }
 
     /// OPF-004, OPF-004e and OPF-004f are *warnings* in epubcheck

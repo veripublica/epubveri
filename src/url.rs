@@ -506,6 +506,39 @@ pub(crate) fn scheme(href: &str) -> Option<&str> {
         .then_some(candidate)
 }
 
+/// Is `c` stripped from either end of a URL before epubcheck resolves it?
+///
+/// Its URL parser trims with Java's `Character.isWhitespace`: the C0
+/// separators and every Unicode space separator **except the three no-break
+/// ones** (U+00A0, U+2007, U+202F), plus the line and paragraph separators.
+/// NEL (U+0085) is not in it. Measured on 2026-10-07 against epubcheck 5.4.0,
+/// one book per character, leading and trailing, on a manifest `href`: every
+/// character this accepts resolved to the file, and NBSP, U+2007, U+202F, NEL,
+/// U+180E, U+200B and U+FEFF left the reference unresolved (RSC-001).
+///
+/// Neither Rust's `trim` (it also strips NBSP and NEL) nor the XML set (it
+/// misses U+3000 and the em space) is this set, which is why it is spelled out.
+pub(crate) fn is_url_edge_space(c: char) -> bool {
+    matches!(
+        c,
+        '\t'..='\r'
+            | '\u{1c}'..='\u{20}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{2006}'
+            | '\u{2008}'..='\u{200a}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{205f}'
+            | '\u{3000}'
+    )
+}
+
+/// `href` as epubcheck's URL parser reads it: without the
+/// [`is_url_edge_space`] characters at either end.
+pub(crate) fn trim_url(href: &str) -> &str {
+    href.trim_matches(is_url_edge_space)
+}
+
 /// Only meaningful on absolute URLs (a scheme followed by `:`) - relative
 /// and fragment-only hrefs are untouched by both checks.
 pub(crate) fn is_absolute(href: &str) -> bool {

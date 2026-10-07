@@ -58,6 +58,18 @@ pub fn is_xml_blank(s: &str) -> bool {
     s.split(is_xml_space).all(str::is_empty)
 }
 
+/// `s` without the XML whitespace at either end: what epubcheck's Java
+/// `String.trim()` leaves of an attribute or text value.
+///
+/// Java's `trim` strips everything at or below `U+0020`; in a document that
+/// parses, the only such characters are the four XML spaces (the same
+/// argument as [`is_xml_blank`]). Rust's `str::trim` strips Unicode
+/// `White_Space` as well, so `"nav\u{a0}"` came out as `"nav"` here and stayed
+/// `"nav\u{a0}"` there - a different id, idref or media type.
+pub(crate) fn trim_xml_space(s: &str) -> &str {
+    s.trim_matches(is_xml_space)
+}
+
 /// XPath's `normalize-space()`: collapse runs of XML whitespace to a single
 /// space and trim the ends.
 pub fn normalize_xml_space(s: &str) -> String {
