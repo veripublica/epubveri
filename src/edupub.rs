@@ -621,7 +621,7 @@ pub(crate) fn check_teacher_edition_and_accessibility(
             .filter(|n| {
                 n.is_element()
                     && n.tag_name().name() == "meta"
-                    && n.attr_no_ns("property").map(str::trim) == Some(property)
+                    && n.attr_no_ns("property").map(crate::xmlext::trim_xml_space) == Some(property)
             })
             .collect()
     };

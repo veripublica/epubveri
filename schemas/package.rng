@@ -39,6 +39,9 @@
     <element name="package">
       <ref name="anyAttributesExceptTyped"/>
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <!-- Required by the spec; its absence is reported in opf.rs (OPF-048),
+           so only its type is the grammar's. -->
+      <optional><attribute name="unique-identifier"><data type="IDREF"/></attribute></optional>
       <attribute name="version"><data type="string"/></attribute>
       <interleave>
         <element name="metadata"><ref name="metadataContent-epub3"/></element>
@@ -53,6 +56,8 @@
                 <attribute name="href"><data type="string"/></attribute>
                 <attribute name="media-type"><data type="string"/></attribute>
                 <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
+                <optional><attribute name="fallback"><data type="IDREF"/></attribute></optional>
+                <optional><attribute name="media-overlay"><data type="IDREF"/></attribute></optional>
               </element>
               <ref name="foreignElement"/>
             </choice>
@@ -61,6 +66,7 @@
         <element name="spine">
           <ref name="anyAttributesExceptTyped"/>
           <optional><attribute name="id"><data type="ID"/></attribute></optional>
+          <optional><attribute name="toc"><data type="IDREF"/></attribute></optional>
           <optional>
             <attribute name="page-progression-direction">
               <choice><value>ltr</value><value>rtl</value><value>default</value></choice>
@@ -101,7 +107,12 @@
        and `id` (`xsd:ID`) wherever `opf.id.attr` puts it: `package`,
        `manifest`, `spine`, `itemref`, `meta`, `link` (`item`'s was typed
        already). Measured the same way for `id`: every id on those elements
-       in the shelf, the fixtures and epub-tests is an NCName.
+       in the shelf, the fixtures and epub-tests is an NCName. And
+       `unique-identifier`, `fallback`, `media-overlay` and `toc` as
+       `xsd:IDREF` (2026-10-07): lexical only, as Jing checks it there -
+       a reference to an id that does not exist is the hand-coded checks'
+       question (OPF-030, OPF-040, OPF-049). All 1,494 values in the same
+       three sets are NCNames.
        Each is excepted on every element, which is harmless where an element
        does not carry it: there, the attribute was already foreign.
 
@@ -125,6 +136,10 @@
             <name ns="">linear</name>
             <name ns="">page-progression-direction</name>
             <name ns="">id</name>
+            <name ns="">unique-identifier</name>
+            <name ns="">fallback</name>
+            <name ns="">media-overlay</name>
+            <name ns="">toc</name>
           </except>
         </anyName>
       </attribute>

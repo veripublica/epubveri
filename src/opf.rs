@@ -2174,15 +2174,16 @@ fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mu
     let unique_id = doc
         .descendants()
         .find(|n| n.is_element() && n.tag_name().name() == "package")
-        .and_then(|p| p.attribute("unique-identifier"))
-        .map(str::trim);
+        // As written, against a trimmed id: epubcheck's
+        // `idAttr.trim().equals(uniqueIdent)`, as in `check_unique_identifier`.
+        .and_then(|p| p.attribute("unique-identifier"));
     for n in doc
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "identifier")
     {
         let is_unique = n
             .attribute("id")
-            .map(str::trim)
+            .map(crate::xmlext::trim_xml_space)
             .is_some_and(|id| !id.is_empty() && Some(id) == unique_id);
         if !is_unique {
             continue;
@@ -3325,7 +3326,7 @@ fn check_collection_link_fragments(
                 .any(|a| a.is_element() && a.tag_name().name() == "collection")
         })
     {
-        let Some(href) = link.attr_no_ns("href").map(str::trim) else {
+        let Some(href) = link.attr_no_ns("href").map(crate::url::trim_url) else {
             continue;
         };
         if is_external(href) {
@@ -4214,7 +4215,7 @@ fn check_cover_meta_advisory(
     let ids: HashSet<&str> = manifest_items
         .iter()
         .filter_map(|n| n.attr_no_ns("id"))
-        .map(str::trim)
+        .map(crate::xmlext::trim_xml_space)
         .collect();
     for meta in doc.descendants().filter(|n| {
         n.is_element()
@@ -4809,7 +4810,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         let body = &text[body_start..read_to];
                         let report_unresolved = !root
                             .attr_no_ns("unique-identifier")
-                            .map(str::trim)
+                            .map(crate::xmlext::trim_xml_space)
                             .is_some_and(|uid| body.contains(uid));
                         check_unique_identifier(
                             root,
@@ -5515,7 +5516,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let text = elem_text(n);
             let syntax_ok = text
                 .split(',')
-                .map(str::trim)
+                .map(crate::xmlext::trim_xml_space)
                 .filter(|p| !p.is_empty())
                 .all(|piece| match piece.split_once('=') {
                     Some((key, value))
@@ -6826,15 +6827,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         .collect();
     // A media-overlay attribute's target item must itself be a Media
     // Overlay Document (application/smil+xml).
+    // `opf.media.overlay` in epubcheck's Schematron compares the target's
+    // media type, which is empty when no item has that id, so a dangling
+    // reference fails this assertion too (measured on 5.4.0: "given type
+    // was \"\""). We asked only of targets that exist.
     for (item, overlay_id) in &overlay_items {
-        if let Some((_, mt)) = items.get(overlay_id)
-            && mt != "application/smil+xml"
-        {
+        let mt = items
+            .get(overlay_id)
+            .map(|(_, mt)| mt.as_str())
+            .unwrap_or("");
+        if mt != "application/smil+xml" {
             report.push_node(
                 RSC_005,
                 Severity::Error,
                 format!(
-                    "media-overlay target '{overlay_id}' must be of the \"application/smil+xml\" type"
+                    "media-overlay target '{overlay_id}' must be of the \"application/smil+xml\" type (given type was \"{mt}\")"
                 ),
                 opf_path,
                 *item,
@@ -7149,12 +7156,21 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // content-doc resolved-path -> its declared overlay's resolved-path
     // (once the id it names is resolvable). Used below to cross-reference
     // against what each overlay's <text src> actually references.
+    //
+    // A non-empty `media-overlay` naming no item maps to the empty string:
+    // epubcheck's `OPFChecker30` asks only whether the attribute is set, so
+    // such a document is MED_013 when no overlay references it and MED_012
+    // when one does (measured on 5.4.0: `media-overlay="nope"` is MED_013
+    // there, and was nothing here because the document dropped out).
     let content_doc_overlay: HashMap<String, String> = media_overlay_attrs
         .into_iter()
-        .filter_map(|(doc_path, overlay_id)| {
-            items
+        .filter(|(_, overlay_id)| !overlay_id.is_empty())
+        .map(|(doc_path, overlay_id)| {
+            let target = items
                 .get(&overlay_id)
-                .map(|(overlay_path, _)| (doc_path, nfc(overlay_path)))
+                .map(|(overlay_path, _)| nfc(overlay_path))
+                .unwrap_or_default();
+            (doc_path, target)
         })
         .collect();
 
@@ -7261,7 +7277,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         if !refs.is_empty()
             && refs
                 .iter()
-                .all(|ir| ir.attr_no_ns("linear").map(str::trim) == Some("no"))
+                .all(|ir| ir.attr_no_ns("linear").map(crate::xmlext::trim_xml_space) == Some("no"))
         {
             report.push_at_pos(
                 OPF_033,
@@ -7273,7 +7289,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         }
         let mut spine_seen: HashSet<&str> = HashSet::new();
         for (position, ir) in refs.into_iter().enumerate() {
-            match ir.attr_no_ns("idref").map(str::trim) {
+            match ir.attr_no_ns("idref").map(crate::xmlext::trim_xml_space) {
                 None => report.push_node(
                     RSC_005,
                     Severity::Error,
@@ -7312,7 +7328,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         Some((path, mt)) => {
                             spine_order.entry(nfc(path)).or_insert(position);
                             spine_idrefs.insert(idref.to_string());
-                            if ir.attr_no_ns("linear").map(str::trim) == Some("no") {
+                            if ir.attr_no_ns("linear").map(crate::xmlext::trim_xml_space)
+                                == Some("no")
+                            {
                                 non_linear_paths.push((nfc(path), Position::of(ir)));
                             }
                             // Core content-document media types valid in the
@@ -7624,7 +7642,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // the OPF id is reported.
         if is_epub3
             && let Some(sp) = spine
-            && let Some(toc) = sp.attr_no_ns("toc").map(str::trim)
+            && let Some(toc) = sp.attr_no_ns("toc").map(crate::xmlext::trim_xml_space)
         {
             let mt = items
                 .get(toc)
@@ -7644,7 +7662,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 );
             }
         }
-        match sp.attr_no_ns("toc").map(str::trim) {
+        match sp.attr_no_ns("toc").map(crate::xmlext::trim_xml_space) {
             None => {
                 // ...but not in OEBPS 1.2, which predates the NCX entirely.
                 if is_epub2 && !is_oeb12 {
@@ -7761,7 +7779,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .into_iter()
             .flat_map(|sp| sp.children())
             .filter(|n| n.is_element() && n.tag_name().name() == "itemref")
-            .filter_map(|ir| ir.attr_no_ns("idref").map(str::trim))
+            .filter_map(|ir| ir.attr_no_ns("idref").map(crate::xmlext::trim_xml_space))
             .collect();
         // resolved manifest path -> is that item in the spine
         let in_spine: HashMap<&str, bool> = items
@@ -12681,12 +12699,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // and our own 981-book run caught it.
                     let in_spine = item
                         .attr_no_ns("id")
-                        .map(str::trim)
+                        .map(crate::xmlext::trim_xml_space)
                         .is_some_and(|id| spine_idrefs.contains(id));
                     let is_spine_ncx = spine
                         .and_then(|sp| sp.attr_no_ns("toc"))
-                        .map(str::trim)
-                        .is_some_and(|toc| item.attr_no_ns("id").map(str::trim) == Some(toc));
+                        .map(crate::xmlext::trim_xml_space)
+                        .is_some_and(|toc| {
+                            item.attr_no_ns("id").map(crate::xmlext::trim_xml_space) == Some(toc)
+                        });
                     if !is_nav && !in_spine && !is_spine_ncx && !resource_refs.contains(href) {
                         let shown = data_url_display(href);
                         report.push_node(
@@ -12732,11 +12752,13 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // for `ncx.ncx`, and our media-type test excused it.
                 let is_spine_ncx = spine
                     .and_then(|sp| sp.attr_no_ns("toc"))
-                    .map(str::trim)
-                    .is_some_and(|toc| item.attr_no_ns("id").map(str::trim) == Some(toc));
+                    .map(crate::xmlext::trim_xml_space)
+                    .is_some_and(|toc| {
+                        item.attr_no_ns("id").map(crate::xmlext::trim_xml_space) == Some(toc)
+                    });
                 let in_spine = item
                     .attr_no_ns("id")
-                    .map(str::trim)
+                    .map(crate::xmlext::trim_xml_space)
                     .is_some_and(|id| spine_idrefs.contains(id));
                 if in_spine
                     || is_nav
@@ -13894,7 +13916,11 @@ fn check_html_declared_as_xhtml(
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().name() == "item")
     {
-        if item.attr_no_ns("media-type").map(str::trim) == Some("text/html") {
+        if item
+            .attr_no_ns("media-type")
+            .map(crate::xmlext::trim_xml_space)
+            == Some("text/html")
+        {
             let href = item.attr_no_ns("href").unwrap_or_default();
             report.push_at_pos(
                 OPF_035,

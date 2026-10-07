@@ -124,6 +124,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `rule` key (`css.url.file_scheme_not_allowed`) as on the XHTML side; the
   old key `opf.content_document.file_url_stylesheet_import` is gone. The
   `style` attribute on SVG elements is left unchecked, as in epubcheck.
+- **`unique-identifier`, `fallback`, `media-overlay` and `toc` are typed as
+  ID references in EPUB 3, as in epubcheck.** A value that is not an XML name
+  (a no-break space in it, a leading digit) now gets epubcheck's extra
+  RSC-005. Every such value in our test shelf and in epubcheck's and W3C's
+  test books is already a valid name. A `toc` padded with a no-break space now
+  names the missing item (OPF-049), as there, rather than "not an NCX".
+- **A `media-overlay` naming no item is now MED_013 and RSC-005, as in
+  epubcheck.** We dropped such a document from the overlay checks altogether.
 - **MathML in a standalone SVG now gets ACC-009** (usage) when it has no
   `alttext` and no annotation, as it already did in XHTML.
 
