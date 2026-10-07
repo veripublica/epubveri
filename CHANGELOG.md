@@ -115,6 +115,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `url(…)` to a remote file, fails the book in epubcheck, in a standalone
   `.svg` and in SVG inside XHTML alike. We reported nothing. A remote `<a>`
   is still fine. New `rule` key: `svg.remote_resource`.
+- **The CSS in a standalone SVG's `<style>` is now checked.** epubcheck reads
+  it like an XHTML `<style>`, and we did not read it at all. Now a syntax
+  error in it is CSS-008, and its fonts are noted (CSS-028). A remote font it
+  uses needs `remote-resources` on the SVG's manifest item (OPF-014). Images
+  and fonts it uses count as referenced, so OPF-097 no longer calls them
+  unused. A `file:` `@import` there is still RSC-030, now under the CSS
+  `rule` key (`css.url.file_scheme_not_allowed`) as on the XHTML side; the
+  old key `opf.content_document.file_url_stylesheet_import` is gone. The
+  `style` attribute on SVG elements is left unchecked, as in epubcheck.
+- **MathML in a standalone SVG now gets ACC-009** (usage) when it has no
+  `alttext` and no annotation, as it already did in XHTML.
 
 ### Changed
 

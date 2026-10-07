@@ -845,6 +845,42 @@ fn item_property_media_types(token: &str) -> Option<&'static [&'static str]> {
     })
 }
 
+/// ACC-009 (usage): a MathML `<math>` with neither `alttext` nor an
+/// `annotation`/`annotation-xml` alternative. EPUB 3 only. Shared by XHTML
+/// content documents and standalone SVG, whose `foreignObject` may hold
+/// MathML too: epubcheck reports it there (measured on 5.4.0, a `<math>`
+/// directly in a standalone SVG's `foreignObject`), and we only asked XHTML.
+fn check_mathml_alternative_text(
+    root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    for n in root.descendants().filter(|n| {
+        is_epub3
+            && n.is_element()
+            && n.tag_name().name() == "math"
+            && n.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
+    }) {
+        let has_annotation = n.descendants().any(|c| {
+            c.is_element()
+                && matches!(c.tag_name().name(), "annotation" | "annotation-xml")
+                && c.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
+        });
+        if !n.has_attr_no_ns("alttext") && !has_annotation {
+            report.push_full(
+                ACC_009,
+                Severity::Usage,
+                "MathML markup has no alternative text",
+                path,
+                Position::of(n),
+                "htm.mathml.no_alternative_text",
+                Vec::new(),
+            );
+        }
+    }
+}
+
 fn classify_resource_ref(
     resolved: &str,
     manifest_paths: &HashSet<String>,
@@ -9317,29 +9353,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // EPUB 3 only: epubcheck emits ACC-009 from `OPSHandler30` alone, and
         // OPS 2.0.1 has no MathML at all - `schema/20` never includes a MathML
         // grammar, so an EPUB 2 `<math>` is already an unknown element.
-        for n in d.descendants().filter(|n| {
-            is_epub3
-                && n.is_element()
-                && n.tag_name().name() == "math"
-                && n.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
-        }) {
-            let has_annotation = n.descendants().any(|c| {
-                c.is_element()
-                    && matches!(c.tag_name().name(), "annotation" | "annotation-xml")
-                    && c.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
-            });
-            if !n.has_attr_no_ns("alttext") && !has_annotation {
-                report.push_full(
-                    ACC_009,
-                    Severity::Usage,
-                    "MathML markup has no alternative text",
-                    path.clone(),
-                    Position::of(n),
-                    "htm.mathml.no_alternative_text",
-                    Vec::new(),
-                );
-            }
-        }
+        check_mathml_alternative_text(d.root_element(), &path, is_epub3, report);
 
         // HTML5 <time datetime="..."> value grammar.
         for n in d
@@ -11779,6 +11793,88 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         if is_epub3 {
             crate::svg::check_html_ids(d.root_element(), doc_path, false, report);
             crate::svg::check_remote_references(d.root_element(), doc_path, is_epub3, report);
+        }
+        // **CSS in a standalone SVG's `<style>`.** epubcheck runs every
+        // `style` element's text through the same `CSSChecker` as an XHTML
+        // `<style>` (`OPSHandler.endElement`), whatever the document; we ran
+        // it on XHTML only, so a standalone SVG's stylesheet was never read:
+        // no CSS-008/CSS-028, its references unregistered (OPF-097 on what it
+        // uses), and no OPF-014 for a remote font it pulls in. The `style`
+        // *attribute* is checked on HTML elements only there, and is left
+        // alone here too. The OPF-014 is the CSS checker's own: the SVG's
+        // `checkProperties` does not count a remote resource in CSS, which is
+        // why a declared `remote-resources` is still OPF-018 there (measured
+        // on 5.4.0, declared and undeclared).
+        for st in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "style")
+        {
+            let css_text: String = st
+                .descendants()
+                .filter(|n| n.is_text())
+                .filter_map(|n| n.text())
+                .collect();
+            if css_text
+                .trim_matches(crate::xmlext::is_xml_space)
+                .is_empty()
+            {
+                continue;
+            }
+            let origin = crate::css::inline_origin(&text, &css_text, st);
+            crate::css::check(
+                &css_text,
+                doc_path,
+                &dir,
+                &name_index,
+                &manifest_paths,
+                origin,
+                advisory,
+                is_epub3,
+                report,
+            );
+            check_exempt_font_usage(
+                &css_text,
+                &dir,
+                &ResourceView {
+                    items: &items,
+                    items_by_path: &items_by_path,
+                    name_index: &name_index,
+                },
+                doc_path,
+                origin,
+                is_epub3,
+                report,
+            );
+            let sheet = styloria::parse_stylesheet(&css_text).0;
+            let imports: HashSet<String> = crate::css::import_targets(&sheet).into_iter().collect();
+            let mut uses_remote = false;
+            for u in crate::css::stylesheet_urls(&sheet) {
+                if is_remote_url(&u) {
+                    remote_resource_refs.insert(strip_url_fragment(&u));
+                    if !imports.contains(&u) {
+                        uses_remote = true;
+                    }
+                } else if !is_external(&u) {
+                    resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&u))));
+                }
+            }
+            let declares_remote = item_properties
+                .get(doc_path.as_str())
+                .is_some_and(|p| p.xml_tokens().any(|t| t == "remote-resources"));
+            if is_epub3 && uses_remote && !declares_remote {
+                report.push_node(
+                    OPF_014,
+                    Severity::Error,
+                    "stylesheet uses a remote resource but this SVG document doesn't declare the \"remote-resources\" property - add it to the document's manifest item in the OPF",
+                    doc_path.clone(),
+                    st,
+                    "opf.content_document.property_used_undeclared",
+                    vec!["remote-resources".to_string()],
+                );
+            }
+        }
+        check_mathml_alternative_text(d.root_element(), doc_path, is_epub3, report);
+        if is_epub3 {
             crate::svg::check_properties(
                 d.root_element(),
                 doc_path,
@@ -11922,17 +12018,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             vec![import_url.clone()],
                         );
                     }
-                    if is_file_url(&import_url) {
-                        report.push_node(
-                            RSC_030,
-                            Severity::Error,
-                            format!("'{import_url}' is a file URL, which is not allowed"),
-                            doc_path.clone(),
-                            n,
-                            "opf.content_document.file_url_stylesheet_import",
-                            vec![import_url.clone()],
-                        );
-                    }
+                    // RSC-030 for a `file:` import is `css::check`'s now that
+                    // a standalone SVG's `<style>` goes through it (see below,
+                    // after the SVG checks), as on the XHTML side; reporting it
+                    // here as well gave epubcheck's own
+                    // `file-url-in-svg-content-error` one RSC-030 too many.
                     // See the note on the PI branch above: the reference is
                     // registered here, not only classified.
                     if !is_external(&import_url) {
@@ -29126,6 +29216,56 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// A standalone SVG's `<style>` is CSS like any other (epubcheck's
+    /// `OPSHandler.endElement` hands every `style` element to `CSSChecker`),
+    /// and its MathML owes ACC-009 like XHTML's. Each measured on 5.4.0; none
+    /// was reported before.
+    #[test]
+    fn standalone_svg_style_and_mathml_are_checked() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            let svg = format!(
+                r#"<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><title>t</title>{body}</svg>"#
+            );
+            let mut v: Vec<_> = crate::validate_bytes(epub_with_svg_spine(&svg))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| {
+                    matches!(
+                        *id,
+                        crate::ids::CSS_008 | crate::ids::OPF_014 | crate::ids::ACC_009
+                    )
+                })
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(
+            ids("<style>rect { fill red; }</style><rect width=\"1\" height=\"1\"/>"),
+            [crate::ids::CSS_008]
+        );
+        assert_eq!(
+            ids(
+                r#"<style>@font-face { font-family: S; src: url("https://example.org/f.woff2"); }</style>"#
+            ),
+            [crate::ids::OPF_014]
+        );
+        // The `style` attribute is checked on HTML elements only, there too.
+        assert!(ids("<rect width=\"1\" height=\"1\" style=\"fill red\"/>").is_empty());
+        assert_eq!(
+            ids(
+                r#"<foreignObject width="5" height="5"><math xmlns="http://www.w3.org/1998/Math/MathML"><mi>x</mi></math></foreignObject>"#
+            ),
+            // OPF-014 too: the SVG item does not declare `mathml` (measured).
+            [crate::ids::ACC_009, crate::ids::OPF_014]
+        );
+        assert!(
+            ids(
+                r#"<foreignObject width="5" height="5"><math xmlns="http://www.w3.org/1998/Math/MathML" alttext="x"><mi>x</mi></math></foreignObject>"#
+            ) == [crate::ids::OPF_014]
+        );
     }
 
     #[test]
