@@ -58,6 +58,25 @@ pub fn is_xml_blank(s: &str) -> bool {
     s.split(is_xml_space).all(str::is_empty)
 }
 
+/// A whitespace-separated token list split the way epubcheck splits one.
+///
+/// Every list epubcheck tokenizes in a package or content document - its
+/// vocabulary `properties`/`rel`/`epub:type` (Java `\s+`), the
+/// Schematron's `tokenize(., '\s+')`, the grammars' list types - splits on
+/// ASCII whitespace, which on a parsed document is the four XML spaces.
+/// `str::split_whitespace` also splits on a no-break space, so
+/// `properties="nav\u{a0}"` read as the `nav` token here and as the unknown
+/// token `nav\u{a0}` there (OPF-027, RSC-005, and no nav document).
+pub(crate) trait XmlTokens {
+    fn xml_tokens(&self) -> impl Iterator<Item = &str>;
+}
+
+impl XmlTokens for str {
+    fn xml_tokens(&self) -> impl Iterator<Item = &str> {
+        self.split(is_xml_space).filter(|t| !t.is_empty())
+    }
+}
+
 /// `s` without the XML whitespace at either end: what epubcheck's Java
 /// `String.trim()` leaves of an attribute or text value.
 ///

@@ -38,6 +38,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   item's media type with a trailing space is still RSC-005, as in epubcheck.
   The OPF-012 we added on top of it is gone.
 
+### Changed
+
+- **Some books epubcheck fails now fail here too: property lists with a
+  no-break space.** `properties`, `rel`, `epub:type`, `role` and the other
+  token lists in package and content documents are now split only on the
+  four XML whitespace characters, as epubcheck splits them. Before, a no-break
+  space, an em space or U+3000 also split them. So `properties="nav&#160;"`
+  read as the `nav` token here and passed. epubcheck reads it
+  as an unknown property (OPF-027), finds no navigation document, and fails
+  the book. We now report OPF-027 and the missing navigation document too.
+  epubcheck's schema adds one more RSC-005 there, which we do not report yet.
+
 ## [0.22.0] - 2026-10-05
 
 **False positives on XML names and spaces are gone, and some books epubcheck

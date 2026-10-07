@@ -9,7 +9,7 @@ use unicode_normalization::UnicodeNormalization;
 use crate::ids::*;
 use crate::ocf::{Ocf, parse_xml};
 use crate::report::{Position, Report, Severity};
-use crate::xmlext::{NodeExt, attr_no_ns_node, attr_ns_node};
+use crate::xmlext::{NodeExt, XmlTokens, attr_no_ns_node, attr_ns_node};
 
 /// Report one RELAX NG [`Blame`](crate::rng::Blame) as RSC-005, routing it to
 /// the `push_node*` variant that pins the right thing: `@name` for an attribute
@@ -542,10 +542,9 @@ fn is_restricted_remote_ref(
         "embed" | "input" | "object" if matches!(attr, "src" | "data") => !remote_manifest
             .get(bare)
             .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt)),
-        "link" if attr == "href" => node.attr_no_ns("rel").is_some_and(|r| {
-            r.split_whitespace()
-                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
-        }),
+        "link" if attr == "href" => node
+            .attr_no_ns("rel")
+            .is_some_and(|r| r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet"))),
         _ => false,
     }
 }
@@ -1111,10 +1110,9 @@ fn is_resource_reference(node: roxmltree::Node, attr: &str) -> bool {
         ("input", "src") => true,
         // Only a stylesheet link consumes its target; `<link rel="next">`
         // and friends are navigation, not resources.
-        ("link", "href") => node.attr_no_ns("rel").is_some_and(|r| {
-            r.split_whitespace()
-                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
-        }),
+        ("link", "href") => node
+            .attr_no_ns("rel")
+            .is_some_and(|r| r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet"))),
         // MathML's `altimg` is an image the renderer draws when it can't do
         // MathML - a resource by any reading.
         (_, "altimg") => true,
@@ -1296,7 +1294,7 @@ fn check_epub34_itemref_deprecations(
     ir: roxmltree::Node,
     report: &mut Report,
 ) {
-    for token in props.split_whitespace() {
+    for token in props.xml_tokens() {
         // Graduated from NEXT-006: 5.4.0 supports roll publications and
         // reports this as an ordinary RSC-005 error
         // (`rendition-layout-pre-paginated-override-roll-error.opf`), so it
@@ -1363,7 +1361,7 @@ fn check_reflowable_page_spread(props: &str, path: &str, ir: roxmltree::Node, re
         "rendition:page-spread-right",
         "rendition:page-spread-center",
     ];
-    for token in props.split_whitespace() {
+    for token in props.xml_tokens() {
         if PROHIBITED.contains(&token) {
             report.push_node(
                 OPF_100,
@@ -1398,7 +1396,7 @@ fn check_itemref_rendition_conflicts(
     is_epub3: bool,
     report: &mut Report,
 ) {
-    let tokens: Vec<&str> = props.split_whitespace().collect();
+    let tokens: Vec<&str> = props.xml_tokens().collect();
     for kind in ["layout", "orientation", "spread", "flow"] {
         let prefix = format!("rendition:{kind}-");
         if tokens.iter().filter(|t| t.starts_with(&prefix)).count() > 1 {
@@ -2122,9 +2120,10 @@ fn is_well_formed_ncname_or_prefixed(value: &str) -> bool {
 /// results omitted, and reports OPF-025 when the non-list form is handed
 /// more than one - so leading, trailing and repeated whitespace do not
 /// count, and an all-whitespace value is *no* tokens rather than a list.
-/// `split_whitespace` is that splitter exactly.
+/// `xml_tokens` is that splitter exactly; `split_whitespace` was not, as it
+/// also splits on a no-break space, which Java's `\s` does not match.
 fn single_value_required(value: &str) -> bool {
-    value.split_whitespace().count() > 1
+    value.xml_tokens().count() > 1
 }
 
 /// Small per-`<meta>` checks that need their own dedicated code/severity
@@ -2757,7 +2756,7 @@ fn check_prefix_usage(
     }
     let reserved = ctx.reserved();
     let is_reserved = |p: &str| reserved.iter().any(|(n, _)| *n == p);
-    for tok in text.split_whitespace() {
+    for tok in text.xml_tokens() {
         let Some((prefix, local)) = tok.split_once(':') else {
             continue;
         };
@@ -2927,10 +2926,9 @@ fn collect_svg_class_names(
             }
         }
         if node.tag_name().name() == "link"
-            && node.attr_no_ns("rel").is_some_and(|r| {
-                r.split_whitespace()
-                    .any(|t| t.eq_ignore_ascii_case("stylesheet"))
-            })
+            && node
+                .attr_no_ns("rel")
+                .is_some_and(|r| r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet")))
             && let Some(href) = node.attr_no_ns("href")
         {
             has_css = true;
@@ -3088,7 +3086,7 @@ fn check_outdated_features(
                 }
             }
             "itemref" => {
-                for token in n.attr_no_ns("properties").unwrap_or("").split_whitespace() {
+                for token in n.attr_no_ns("properties").unwrap_or("").xml_tokens() {
                     if OUTDATED_ITEMREF_PROPERTIES.contains(&token) {
                         outdated(
                             n,
@@ -4170,10 +4168,10 @@ fn check_declared_version_advisory(
             .filter(|n| n.tag_name().name() == "item")
             .filter_map(|n| n.attr_no_ns("properties"))
     };
-    if item_props().any(|p| p.split_whitespace().any(|t| t == "nav")) {
+    if item_props().any(|p| p.xml_tokens().any(|t| t == "nav")) {
         signals.push("a navigation document (properties=\"nav\")".to_string());
     }
-    if item_props().any(|p| p.split_whitespace().any(|t| t != "nav")) {
+    if item_props().any(|p| p.xml_tokens().any(|t| t != "nav")) {
         signals.push("other EPUB 3 manifest properties".to_string());
     }
     // The content-document half, gathered while the spine was walked. Both
@@ -6196,7 +6194,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
             if let Some(props) = item.attr_no_ns("properties") {
                 item_properties.insert(resolved_nfc.clone(), props.to_string());
-                for token in props.split_whitespace() {
+                for token in props.xml_tokens() {
                     if token == "cover-image" {
                         cover_image_count += 1;
                         if !mt.starts_with("image/") {
@@ -6309,7 +6307,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
             if item
                 .attr_no_ns("properties")
-                .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"))
+                .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"))
             {
                 nav_present = true;
                 nav_count += 1;
@@ -6317,7 +6315,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             }
             if item
                 .attr_no_ns("properties")
-                .is_some_and(|p| p.split_whitespace().any(|t| t == "data-nav"))
+                .is_some_and(|p| p.xml_tokens().any(|t| t == "data-nav"))
             {
                 data_nav_items.push((resolved.clone(), mt.to_string()));
             }
@@ -6691,11 +6689,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         .flat_map(|md| md.children())
         .filter(|n| n.is_element() && n.tag_name().name() == "link")
     {
-        let rel_tokens: Vec<&str> = link
-            .attr_no_ns("rel")
-            .unwrap_or("")
-            .split_whitespace()
-            .collect();
+        let rel_tokens: Vec<&str> = link.attr_no_ns("rel").unwrap_or("").xml_tokens().collect();
         if rel_tokens.contains(&"alternate") && rel_tokens.len() > 1 {
             report.push_at_pos(
                 OPF_089,
@@ -6786,7 +6780,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // (confirmed via a real fixture pairing it with a custom-prefixed
         // token, both valid) - anything else unprefixed is undefined.
         if let Some(props) = link.attr_no_ns("properties") {
-            for token in props.split_whitespace() {
+            for token in props.xml_tokens() {
                 if token != "onix" && !token.contains(':') {
                     report.push_node(
                         OPF_027,
@@ -7261,12 +7255,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             // a fixed-layout document
                             // (`layout-roll-content-reflowable-error`).
                             let is_pre_paginated = if props
-                                .split_whitespace()
+                                .xml_tokens()
                                 .any(|p| p == "rendition:layout-pre-paginated")
                             {
                                 true
                             } else if props
-                                .split_whitespace()
+                                .xml_tokens()
                                 .any(|p| p == "rendition:layout-reflowable")
                             {
                                 false
@@ -7277,7 +7271,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                             // (NEXT-006), so an itemref that declares one is
                             // not read as a roll item here either.
                             let is_roll_item = package_layout_roll
-                                && !props.split_whitespace().any(|p| {
+                                && !props.xml_tokens().any(|p| {
                                     p == "rendition:layout-pre-paginated"
                                         || p == "rendition:layout-reflowable"
                                 });
@@ -7950,7 +7944,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // (probed against 5.4.0, 2026-09-25).
     let manifest_index_paths: HashSet<String> = item_properties
         .iter()
-        .filter(|(_, props)| props.split_whitespace().any(|t| t == "index"))
+        .filter(|(_, props)| props.xml_tokens().any(|t| t == "index"))
         .map(|(p, _)| p.clone())
         .collect();
     let collection_index_paths: HashSet<String> = crate::indexes::linked_paths(&pkg, &base_dir);
@@ -9002,7 +8996,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .filter(|n| is_epub3 && n.is_element() && n.has_attr_no_ns("role"))
         {
             let role = attr_no_ns_node(n, "role").expect("filtered on has_attr_no_ns above");
-            for token in role.value().split_whitespace() {
+            for token in role.value().xml_tokens() {
                 if DEPRECATED_ARIA_ROLES.contains(&token) {
                     report.push_node_attr(
                         RSC_017,
@@ -9034,7 +9028,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             let type_attr =
                 attr_ns_node(n, EPUB_NS, "type").expect("filtered on the same attribute above");
             let value = type_attr.value();
-            for token in value.split_whitespace() {
+            for token in value.xml_tokens() {
                 if token.contains(':') {
                     continue;
                 }
@@ -9263,11 +9257,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 continue;
             };
             let target = if resolve_srcset {
-                href.split(',')
-                    .next()
-                    .unwrap_or(href)
-                    .split_whitespace()
-                    .next()
+                href.split(',').next().unwrap_or(href).xml_tokens().next()
             } else {
                 Some(href)
             };
@@ -9630,10 +9620,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         for n in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "link"
-                && n.attr_no_ns("rel").is_some_and(|r| {
-                    r.split_whitespace()
-                        .any(|t| t.eq_ignore_ascii_case("stylesheet"))
-                })
+                && n.attr_no_ns("rel")
+                    .is_some_and(|r| r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet")))
         }) {
             if let Some(href) = n.attr_no_ns("href")
                 && !is_external(href)
@@ -9697,7 +9685,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     continue;
                 }
                 for candidate in srcset_attr.value().split(',') {
-                    let url = candidate.split_whitespace().next().unwrap_or("");
+                    let url = candidate.xml_tokens().next().unwrap_or("");
                     if url.is_empty() || is_external(url) {
                         continue;
                     }
@@ -10030,7 +10018,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // missing.
             if is_epub3 && matches!(node.tag_name().name(), "img" | "source") {
                 for cand in node.attr_no_ns("srcset").unwrap_or("").split(',') {
-                    let Some(url) = cand.split_whitespace().next() else {
+                    let Some(url) = cand.xml_tokens().next() else {
                         continue;
                     };
                     if url.is_empty() || is_external(url) || is_remote_url(url) {
@@ -10403,8 +10391,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     let is_non_stylesheet_link = tag == "link"
                         && attr == "href"
                         && !node.attr_no_ns("rel").is_some_and(|r| {
-                            r.split_whitespace()
-                                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                            r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet"))
                         });
                     if (is_remote_url(v) || is_file_url(v)) && !is_non_stylesheet_link {
                         let bare = strip_url_fragment(v);
@@ -10576,8 +10563,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if attr == "href"
                         && node.tag_name().name() == "link"
                         && !node.attr_no_ns("rel").is_some_and(|r| {
-                            r.split_whitespace()
-                                .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                            r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet"))
                         })
                     {
                         continue;
@@ -10903,10 +10889,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // below) - its own findings are already reported separately
             // via the manifest text/css loop further down.
             if node.tag_name().name() == "link"
-                && node.attr_no_ns("rel").is_some_and(|r| {
-                    r.split_whitespace()
-                        .any(|t| t.eq_ignore_ascii_case("stylesheet"))
-                })
+                && node
+                    .attr_no_ns("rel")
+                    .is_some_and(|r| r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet")))
                 && let Some(href) = node.attr_no_ns("href")
                 && !is_external(href)
             {
@@ -10963,7 +10948,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if node.tag_name().name() == "link" {
                 let rel_tokens: Vec<&str> = node
                     .attr_no_ns("rel")
-                    .map(|r| r.split_whitespace().collect())
+                    .map(|r| r.xml_tokens().collect())
                     .unwrap_or_default();
                 let is_plain_stylesheet =
                     rel_tokens.len() == 1 && rel_tokens[0].eq_ignore_ascii_case("stylesheet");
@@ -10972,7 +10957,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     && rel_tokens[1].eq_ignore_ascii_case("stylesheet");
                 if is_plain_stylesheet
                     && let Some(class) = node.attr_no_ns("class")
-                    && class.split_whitespace().count() > 1
+                    && class.xml_tokens().count() > 1
                 {
                     report.push_at_pos(
                         CSS_005,
@@ -11036,7 +11021,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .get(&nfc(&path))
                 .cloned()
                 .unwrap_or_default();
-            let declared_tokens: Vec<&str> = declared.split_whitespace().collect();
+            let declared_tokens: Vec<&str> = declared.xml_tokens().collect();
             // "used but undeclared" is uniformly OPF-014/Error across all
             // three properties; "declared but unused" differs per property -
             // remote-resources is OPF-018/Warning, scripted/svg are
@@ -11542,7 +11527,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .get(doc_path.as_str())
                     .cloned()
                     .unwrap_or_default();
-                if !declared.split_whitespace().any(|t| t == "remote-resources") {
+                if !declared.xml_tokens().any(|t| t == "remote-resources") {
                     report.push_node(
                         OPF_014,
                         Severity::Error,
@@ -11735,10 +11720,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 }
             }
             if n.tag_name().name() == "link"
-                && n.attr_no_ns("rel").is_some_and(|r| {
-                    r.split_whitespace()
-                        .any(|t| t.eq_ignore_ascii_case("stylesheet"))
-                })
+                && n.attr_no_ns("rel")
+                    .is_some_and(|r| r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet")))
                 && let Some(href) = n.attr_no_ns("href")
             {
                 if is_remote_url(href) || is_file_url(href) {
@@ -12137,7 +12120,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         // is epubsana's guard to hold rather than ours to suppress.
         let declares_remote = item_properties
             .get(&nfc(&path))
-            .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"));
+            .is_some_and(|p| p.xml_tokens().any(|t| t == "remote-resources"));
         if css_has_remote && !declares_remote {
             report.push_at_rule(
                 OPF_014,
@@ -12336,7 +12319,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // simply fall through to the local branch below.
                     let is_nav = item
                         .attr_no_ns("properties")
-                        .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
+                        .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"));
                     let mt = item.attr_no_ns("media-type").unwrap_or_default();
                     // The remote half stays EPUB 3 only. In EPUB 2 nothing
                     // may be remote at all, so such an item is already an
@@ -12373,7 +12356,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 if href.trim_start().starts_with("data:") {
                     let is_nav = item
                         .attr_no_ns("properties")
-                        .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
+                        .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"));
                     // **The same three exemptions as the local branch below**,
                     // and writing only the first of them here was the shape
                     // this whole family keeps producing: a new branch that
@@ -12423,7 +12406,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let resolved = nfc(&resolve(&base_dir, href));
                 let is_nav = item
                     .attr_no_ns("properties")
-                    .is_some_and(|p| p.split_whitespace().any(|t| t == "nav"));
+                    .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"));
                 // **The NCX exemption is the item the spine names, not any
                 // item carrying the NCX media type.** epubcheck's condition
                 // is `item.isNcx()`, and that flag is set in exactly one
@@ -12709,7 +12692,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if let Some(evidence) = has_remote_audio.filter(|_| {
                 !item_properties
                     .get(&overlay_path)
-                    .is_some_and(|p| p.split_whitespace().any(|t| t == "remote-resources"))
+                    .is_some_and(|p| p.xml_tokens().any(|t| t == "remote-resources"))
             }) {
                 report.push_node(
                     OPF_014,
@@ -12950,7 +12933,7 @@ fn check_distributable_objects(pkg: &roxmltree::Node, opf_path: &str, report: &m
         n.is_element()
             && n.tag_name().name() == "collection"
             && n.attr_no_ns("role")
-                .is_some_and(|r| r.split_whitespace().any(|t| t == role))
+                .is_some_and(|r| r.xml_tokens().any(|t| t == role))
     };
     let children = |n: roxmltree::Node, name: &str| -> usize {
         n.children()
@@ -13088,7 +13071,7 @@ fn check_dictionaries(
     report: &mut Report,
 ) {
     const SKM_MT: &str = "application/vnd.epub.search-key-map+xml";
-    let has_prop = |props: &str, token: &str| props.split_whitespace().any(|t| t == token);
+    let has_prop = |props: &str, token: &str| props.xml_tokens().any(|t| t == token);
     let node_text = |n: roxmltree::Node| -> String {
         n.descendants()
             .filter(|t| t.is_text())
@@ -23027,6 +23010,47 @@ mod tests {
             ids("nav.xhtml", "application/xhtml+xml "),
             [crate::ids::RSC_005]
         );
+    }
+
+    /// Property lists split on XML whitespace only, as epubcheck's `\s+`
+    /// does. `properties="nav\u{a0}"` is one unknown token there - OPF-027,
+    /// and the book has no nav document - where `split_whitespace` read it
+    /// as `nav` and passed the book. Measured on 5.4.0 with a no-break space,
+    /// an em space and U+3000, leading, trailing and between two tokens.
+    #[test]
+    fn property_lists_split_on_xml_whitespace_only() {
+        let opf = |props: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="{props}"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title></head>\
+            <body><p>hi</p></body></html>";
+        let has = |props: &str, id: &str| {
+            crate::validate_bytes(epub_with_opf(Some(&opf(props)), CH1))
+                .messages
+                .iter()
+                .any(|m| m.id == id)
+        };
+        assert!(!has("nav", crate::ids::OPF_027));
+        assert!(!has(" nav\t", crate::ids::OPF_027), "XML whitespace splits");
+        for props in ["nav\u{a0}", "\u{2003}nav", "nav\u{3000}svg"] {
+            assert!(has(props, crate::ids::OPF_027), "properties={props:?}");
+            assert!(has(props, crate::ids::RSC_005), "no nav: {props:?}");
+        }
     }
 
     /// OPF-004, OPF-004e and OPF-004f are *warnings* in epubcheck
