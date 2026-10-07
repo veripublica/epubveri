@@ -112,14 +112,12 @@ pub(crate) fn check(
                 NCX_001,
                 Severity::Error,
                 format!(
-                    "dtb:uid '{}' does not match the package's identifier '{}'",
-                    content.trim(),
-                    package_uid.trim()
+                    "dtb:uid '{trimmed}' does not match the package's identifier '{package_uid}'"
                 ),
                 ncx_path,
                 Position::of(meta),
                 "ncx.uid.package_identifier_mismatch",
-                vec![content.trim().to_string(), package_uid.trim().to_string()],
+                vec![trimmed.to_string(), package_uid.to_string()],
             );
         }
     }
@@ -331,46 +329,60 @@ fn check_nav_point_model(doc: &roxmltree::Document, ncx_path: &str, report: &mut
     }
 }
 
+/// XPath 1.0's `number()` of a string (§4.4): XML whitespace around an
+/// optional `-` and `Digits ('.' Digits?)? | '.' Digits`, anything else NaN.
+/// `ncx.sch` is Schematron 1.5 run by Jing, so it is XPath 1.0: no exponent,
+/// no `+`, and a no-break space makes the value NaN rather than a number -
+/// which `str::trim` followed by Rust's `parse` got wrong on all three.
+fn xpath1_number(s: &str) -> f64 {
+    let t = crate::xmlext::trim_xml_space(s);
+    let digits = t.strip_prefix('-').unwrap_or(t);
+    let (int, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    let all_digits = |p: &str| p.bytes().all(|b| b.is_ascii_digit());
+    let well_formed = all_digits(int)
+        && all_digits(frac)
+        && (!int.is_empty() || !frac.is_empty())
+        && (!int.is_empty() || digits.contains('.'));
+    if well_formed {
+        t.parse().unwrap_or(f64::NAN)
+    } else {
+        f64::NAN
+    }
+}
+
+/// The `src` of an element's `content` child, **as written**: `ncx.sch`
+/// compares `ncx:content/@src` values as strings, with no trimming, so
+/// `c.xhtml` and `c.xhtml ` are two targets there. `None` when there is no
+/// `content`/`src`, which in XPath is an empty node-set that equals nothing.
+fn content_src<'a>(n: roxmltree::Node<'a, '_>) -> Option<&'a str> {
+    n.children()
+        .find(|c| c.is_element() && c.tag_name().name() == "content")
+        .and_then(|c| c.attr_no_ns("src"))
+}
+
 fn check_play_order(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
-    use std::collections::HashMap;
-
-    // playOrder -> the elements claiming it, each with the target it names.
-    let mut claims: HashMap<&str, Vec<(roxmltree::Node, String)>> = HashMap::new();
-    for n in doc.descendants().filter(|n| {
-        n.is_element() && matches!(n.tag_name().name(), "navPoint" | "navTarget" | "pageTarget")
-    }) {
-        let Some(order) = n.attr_no_ns("playOrder") else {
-            continue;
-        };
-        let target = n
-            .children()
-            .find(|c| c.is_element() && c.tag_name().name() == "content")
-            .and_then(|c| c.attr_no_ns("src"))
-            .unwrap_or_default()
-            .trim()
-            .to_string();
-        claims.entry(order).or_default().push((n, target));
-    }
-
-    // Collected first, then reported in document order: `claims` is keyed by
-    // a hash, so reporting straight out of it would order the findings
-    // differently from run to run. epubcheck reports these in document
-    // order, and so should we - a report that reshuffles itself between
-    // identical runs is one nobody can diff.
-    let mut offenders: Vec<(roxmltree::Node, &str)> = Vec::new();
-    for (order, holders) in &claims {
-        if holders.len() < 2 {
-            continue;
-        }
-        let first = &holders[0].1;
-        if holders.iter().all(|(_, t)| t == first) {
-            // One position, reached by several routes - legitimate.
-            continue;
-        }
-        offenders.extend(holders.iter().map(|(n, _)| (*n, *order)));
-    }
-    offenders.sort_by_key(|(n, _)| n.range().start);
-    for (n, order) in offenders {
+    // `ncx_playOrderMatch2`: no element may share a *numeric* playOrder with
+    // one whose `content/@src` differs from its own, compared as written.
+    // A NaN playOrder equals nothing, and an element without a `src`
+    // compares unequal to nothing, so neither can offend here.
+    let holders: Vec<(roxmltree::Node, &str, f64, Option<&str>)> = doc
+        .descendants()
+        .filter(|n| {
+            n.is_element() && matches!(n.tag_name().name(), "navPoint" | "navTarget" | "pageTarget")
+        })
+        .filter_map(|n| {
+            let order = n.attr_no_ns("playOrder")?;
+            Some((n, order, xpath1_number(order), content_src(n)))
+        })
+        .collect();
+    // Reported in document order, which `holders` already is.
+    let offenders = holders.iter().filter(|(_, _, num, src)| {
+        let Some(src) = src else { return false };
+        holders
+            .iter()
+            .any(|(_, _, other, osrc)| other == num && osrc.is_some_and(|o| o != *src))
+    });
+    for (n, order, _, _) in offenders {
         report.push_node(
             RSC_005,
             Severity::Error,
@@ -378,7 +390,7 @@ fn check_play_order(doc: &roxmltree::Document, ncx_path: &str, report: &mut Repo
                 "identical playOrder value '{order}' on elements that do not refer to the same target"
             ),
             ncx_path,
-            n,
+            *n,
             "ncx.play_order.duplicate",
             vec![order.to_string()],
         );
@@ -400,35 +412,27 @@ fn check_play_order(doc: &roxmltree::Document, ncx_path: &str, report: &mut Repo
 /// satisfy it, while no-gaps compares numerically; and every rule is
 /// per-element, so a bad NCX names each offender rather than one line.
 fn check_play_order_sequence(doc: &roxmltree::Document, ncx_path: &str, report: &mut Report) {
-    use std::collections::{HashMap, HashSet};
-
-    // Every element carrying a playOrder, with its raw value and the target
-    // it names - the same population `check_play_order` walks.
-    let holders: Vec<(roxmltree::Node, &str, String)> = doc
+    // Every element carrying a playOrder - its value as written, that value
+    // as XPath 1.0's `number()` reads it, and its `content/@src` as written.
+    // The same population `check_play_order` walks.
+    let holders: Vec<(roxmltree::Node, &str, f64, Option<&str>)> = doc
         .descendants()
         .filter(|n| {
             n.is_element() && matches!(n.tag_name().name(), "navPoint" | "navTarget" | "pageTarget")
         })
         .filter_map(|n| {
-            n.attr_no_ns("playOrder").map(|order| {
-                let target = n
-                    .children()
-                    .find(|c| c.is_element() && c.tag_name().name() == "content")
-                    .and_then(|c| c.attr_no_ns("src"))
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                (n, order.trim(), target)
-            })
+            let order = n.attr_no_ns("playOrder")?;
+            Some((n, order, xpath1_number(order), content_src(n)))
         })
         .collect();
     if holders.is_empty() {
         return;
     }
 
-    // Origin: string comparison, per the Schematron.
-    if !holders.iter().any(|(_, order, _)| *order == "1") {
-        for (n, order, _) in &holders {
+    // Origin: a string comparison against the value as written, per the
+    // Schematron - so `playOrder="1 "` does not satisfy it (measured).
+    if !holders.iter().any(|(_, order, _, _)| *order == "1") {
+        for (n, order, _, _) in &holders {
             report.push_node(
                 RSC_005,
                 Severity::Error,
@@ -443,19 +447,13 @@ fn check_play_order_sequence(doc: &roxmltree::Document, ncx_path: &str, report: 
 
     // No gaps: numeric. A non-numeric value simply takes no part, exactly as
     // XPath's `number()` makes it NaN and drops it from both sides.
-    let numbers: HashSet<i64> = holders
-        .iter()
-        .filter_map(|(_, order, _)| order.parse::<i64>().ok())
-        .collect();
-    for (n, order, _) in &holders {
-        if let Ok(v) = order.parse::<i64>()
-            && v > 1
-            && !numbers.contains(&(v - 1))
-        {
+    for (n, _, v, _) in &holders {
+        let v = *v;
+        if v > 1.0 && !holders.iter().any(|(_, _, o, _)| *o == v - 1.0) {
             report.push_node(
                 RSC_005,
                 Severity::Error,
-                format!("playOrder '{v}' has no predecessor '{}'", v - 1),
+                format!("playOrder '{v}' has no predecessor '{}'", v - 1.0),
                 ncx_path,
                 *n,
                 "ncx.play_order.gap",
@@ -464,22 +462,19 @@ fn check_play_order_sequence(doc: &roxmltree::Document, ncx_path: &str, report: 
         }
     }
 
-    // Match: one target, one position. Only elements that actually name a
-    // target take part - the Schematron's context requires `ncx:content`.
-    let mut by_target: HashMap<&str, Vec<(roxmltree::Node, &str)>> = HashMap::new();
-    for (n, order, target) in &holders {
-        if !target.is_empty() {
-            by_target.entry(target).or_default().push((*n, order));
-        }
-    }
-    let mut offenders: Vec<(roxmltree::Node, &str)> = Vec::new();
-    for group in by_target.values() {
-        let first = group[0].1;
-        if group.iter().any(|(_, o)| *o != first) {
-            offenders.extend(group.iter().copied());
-        }
-    }
-    offenders.sort_by_key(|(n, _)| n.range().start);
+    // Match: one target, one position. Only elements with a `content` take
+    // part, and the target is compared as written. The test is
+    // `number(@playOrder) != number(current()/@playOrder)` over the same
+    // target, and the element itself is in that set: NaN != NaN is true in
+    // XPath, so a non-numeric playOrder on an element with content fails on
+    // its own - which is what epubcheck reports for `playOrder="1&#160;"`.
+    let offenders = holders.iter().filter_map(|(n, order, num, src)| {
+        let src = (*src)?;
+        holders
+            .iter()
+            .any(|(_, _, o, os)| *os == Some(src) && o != num)
+            .then_some((*n, *order))
+    });
     for (n, order) in offenders {
         report.push_node(
             RSC_005,
@@ -509,7 +504,7 @@ fn check_page_target_uniqueness(doc: &roxmltree::Document, ncx_path: &str, repor
     for n in &all {
         if let Some(v) = n.attr_no_ns("value") {
             *counts
-                .entry((v.trim(), n.attr_no_ns("type").unwrap_or("").trim()))
+                .entry((v, n.attr_no_ns("type").unwrap_or("")))
                 .or_default() += 1;
         }
     }
@@ -521,7 +516,9 @@ fn check_page_target_uniqueness(doc: &roxmltree::Document, ncx_path: &str, repor
         let Some(v) = n.attr_no_ns("value") else {
             continue;
         };
-        let key = (v.trim(), n.attr_no_ns("type").unwrap_or("").trim());
+        // As written: the Schematron compares `@value=current()/@value`
+        // as strings, so `1` and `1 ` are two values there (measured).
+        let key = (v, n.attr_no_ns("type").unwrap_or(""));
         if in_page_list && counts.get(&key).copied().unwrap_or(0) > 1 {
             report.push_node(
                 RSC_005,
@@ -558,12 +555,14 @@ fn check_multi_lang_siblings(doc: &roxmltree::Document, ncx_path: &str, report: 
                 .collect();
             for c in &sibs {
                 if let Some(lang) = c.attribute((XML_NS, "lang")) {
-                    *seen.entry(lang.trim()).or_default() += 1;
+                    // As written, like the Schematron's comparison: `en` and
+                    // `en ` are two languages there (measured).
+                    *seen.entry(lang).or_default() += 1;
                 }
             }
             for c in &sibs {
                 if let Some(lang) = c.attribute((XML_NS, "lang"))
-                    && seen.get(lang.trim()).copied().unwrap_or(0) > 1
+                    && seen.get(lang).copied().unwrap_or(0) > 1
                 {
                     report.push_node(
                         RSC_005,
@@ -572,7 +571,7 @@ fn check_multi_lang_siblings(doc: &roxmltree::Document, ncx_path: &str, report: 
                         ncx_path,
                         *c,
                         "ncx.nav_label.duplicate_lang",
-                        vec![name.to_string(), lang.trim().to_string()],
+                        vec![name.to_string(), lang.to_string()],
                     );
                 }
             }
@@ -825,7 +824,9 @@ pub(crate) fn check_duplicate_targets(
         else {
             continue;
         };
-        let src = src.trim();
+        // Whether two entries land on one file is a question about where the
+        // reference resolves, so it is trimmed as the URL parser trims it.
+        let src = crate::url::trim_url(src);
         // A fragment is precisely how the format says "a different place in
         // the same file", so entries carrying one are not landing together.
         // A remote target is nobody's table of contents entry to fix.
@@ -1017,6 +1018,58 @@ mod tests {
             .into_iter()
             .filter_map(|(r, _)| r)
             .collect()
+    }
+
+    /// `ncx.sch` compares `@value`, `@xml:lang` and `content/@src` as written
+    /// and reads `playOrder` with XPath 1.0's `number()`. We trimmed all of
+    /// them with `str::trim`. Each case measured against epubcheck 5.4.0 as a
+    /// whole EPUB 2 book, with a plain space, a no-break space, an em space,
+    /// U+3000 and NEL (40 books, every finding and count identical after).
+    #[test]
+    fn ncx_schematron_values_are_compared_as_written() {
+        let np = |id: &str, order: &str, src: &str| {
+            format!(
+                r#"<navPoint id="{id}" playOrder="{order}"><navLabel><text>c</text></navLabel><content src="{src}"/></navPoint>"#
+            )
+        };
+        let nav = |points: &str| format!("<navMap>{points}</navMap>");
+        // Two values differing only by a trailing space are two values: no
+        // duplicate page value, no duplicate language.
+        let page = |v: &str| {
+            format!(
+                r#"<pageTarget id="p{}" value="{v}" type="normal" playOrder="{}"><navLabel><text>p</text></navLabel><content src="c.xhtml#{}"/></pageTarget>"#,
+                v.len(),
+                v.len() + 1,
+                v.len()
+            )
+        };
+        let body = format!(
+            "{}<pageList><navLabel><text>P</text></navLabel>{}{}</pageList>",
+            nav(&np("a", "1", "c.xhtml")),
+            page("1"),
+            page("1 ")
+        );
+        assert!(!rules_for(&body).contains(&"ncx.page_target.duplicate_value_type"));
+        let langs = nav(
+            r#"<navPoint id="a" playOrder="1"><navLabel xml:lang="en"><text>c</text></navLabel><navLabel xml:lang="en "><text>d</text></navLabel><content src="c.xhtml"/></navPoint>"#,
+        );
+        assert!(!rules_for(&langs).contains(&"ncx.nav_label.duplicate_lang"));
+        // `c.xhtml` and `c.xhtml ` are two targets: different playOrders on
+        // them are fine, and the same playOrder on them is not.
+        let r = rules_for(&nav(&(np("a", "1", "c.xhtml") + &np("b", "2", "c.xhtml "))));
+        assert!(!r.contains(&"ncx.play_order.target_mismatch"), "{r:?}");
+        let r = rules_for(&nav(&(np("a", "1", "c.xhtml") + &np("b", "1", "c.xhtml "))));
+        assert!(r.contains(&"ncx.play_order.duplicate"), "{r:?}");
+        // Origin is a string comparison; a no-break space makes the value NaN,
+        // and a NaN playOrder fails the same-target rule on its own.
+        let r = rules_for(&nav(&np("a", "1 ", "c.xhtml")));
+        assert!(r.contains(&"ncx.play_order.no_origin"), "{r:?}");
+        let r = rules_for(&nav(&np("a", "1\u{a0}", "c.xhtml")));
+        assert!(r.contains(&"ncx.play_order.target_mismatch"), "{r:?}");
+        assert!(super::xpath1_number(" 2 ") == 2.0);
+        for nan in ["2\u{a0}", "1e1", "+1", "", ".", "-"] {
+            assert!(super::xpath1_number(nan).is_nan(), "{nan:?}");
+        }
     }
 
     /// An NCX that isn't well-formed XML used to return from `check` without

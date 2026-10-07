@@ -37,6 +37,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   RSC-010 for an XHTML spine item it considered fine. In EPUB 3, the nav
   item's media type with a trailing space is still RSC-005, as in epubcheck.
   The OPF-012 we added on top of it is gone.
+- **Two NCX entries whose values differ only by a space are no longer
+  reported as duplicates.** epubcheck compares a page target's `value`, a
+  label's `xml:lang` and an entry's `content src` exactly as written. So
+  `xml:lang="en"` beside `xml:lang="en "`, or `src="c.xhtml"` beside
+  `src="c.xhtml "` with different `playOrder`s, are fine there. We trimmed
+  them first and reported RSC-005, which failed the book. The other
+  direction is fixed too. Two entries with the same `playOrder` and those two
+  `src` spellings now fail here as they do there. So does a `playOrder="1 "`
+  standing in for the required `1`, and a `playOrder` holding a no-break
+  space. epubcheck reads `playOrder` as a number in XPath 1.0's way, and so
+  do we now.
 
 ### Changed
 
