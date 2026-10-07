@@ -573,7 +573,10 @@ fn join_base(base: &str, href: &str) -> String {
 /// count. Without that a base64 image href puts several kilobytes of payload
 /// into a usage message, which is what our first version did.
 pub(crate) fn data_url_display(href: &str) -> String {
-    let compact: String = href.chars().filter(|c| !c.is_whitespace()).collect();
+    let compact: String = href
+        .chars()
+        .filter(|c| !crate::xmlext::is_xml_space(*c))
+        .collect();
     match compact.char_indices().nth(30) {
         Some((i, _)) => format!("{}…", &compact[..i]),
         None => compact,
@@ -588,12 +591,15 @@ pub(crate) fn data_url_display(href: &str) -> String {
 /// the case is **kept**: epubcheck's comparison is case-sensitive, and
 /// `data:TEXT/HTML,x` is RSC-010 where `data:text/html,x` is RSC-011.
 pub(crate) fn data_url_media_type(href: &str) -> &str {
-    let rest = match href.trim_start().strip_prefix("data:") {
+    let rest = match href
+        .trim_start_matches(crate::url::is_url_edge_space)
+        .strip_prefix("data:")
+    {
         Some(r) => r,
         None => return "",
     };
     let end = rest.find([',', ';']).unwrap_or(rest.len());
-    rest[..end].trim()
+    rest[..end].trim_matches(crate::xmlext::is_xml_space)
 }
 
 /// True for hrefs we should not resolve against the container (remote/special).
@@ -622,7 +628,7 @@ pub(crate) fn data_url_media_type(href: &str) -> &str {
 /// `res:///` slipping between two predicates. Read that note as history: both
 /// now ask the same question of the scheme.
 pub(crate) fn is_external(href: &str) -> bool {
-    let href = href.trim();
+    let href = href.trim_matches(crate::url::is_url_edge_space);
     href.is_empty()
         || href.starts_with('#')
         || is_scheme_relative(href)
@@ -656,7 +662,8 @@ fn relative_url_message(v: &str, err: crate::url::UnitError) -> String {
 /// another host, which is what makes it remote to epubcheck
 /// (`OCFContainer.isRemote`), and so here.
 pub(crate) fn is_scheme_relative(href: &str) -> bool {
-    href.trim_start().starts_with("//")
+    href.trim_start_matches(crate::url::is_url_edge_space)
+        .starts_with("//")
 }
 
 /// True only for a genuine remote fetch (http/https) - unlike
@@ -667,7 +674,7 @@ pub(crate) fn is_scheme_relative(href: &str) -> bool {
 /// `filter: url(#id)` or an `<a href="mailto:...">` isn't "using a
 /// remote resource" just because it isn't locally resolvable.
 pub(crate) fn is_remote_url(href: &str) -> bool {
-    let href = href.trim();
+    let href = href.trim_matches(crate::url::is_url_edge_space);
     // epubcheck's rule, from `OCFContainer.isRemote`: a `data:` URL is never
     // remote, anything inside the container is not remote, and everything
     // else with a scheme is. It is deliberately *not* a list of known
@@ -709,7 +716,8 @@ pub(crate) fn is_remote_url(href: &str) -> bool {
 /// case-sensitively for parity (a `FILE:` URL is valid per RFC but rare,
 /// and epubcheck misses it too).
 pub(crate) fn is_file_url(href: &str) -> bool {
-    href.trim_start().starts_with("file:")
+    href.trim_start_matches(crate::url::is_url_edge_space)
+        .starts_with("file:")
 }
 
 /// Strip a `#fragment` from a remote URL before comparing it against the
@@ -1536,7 +1544,7 @@ const OPF_PKG_NS: &str = "http://www.idpf.org/2007/opf";
 ///   single-letter primary subtag ("a-value"), which real BCP-47 never
 ///   allows (a language subtag is ISO 639, always 2-8 letters).
 fn is_valid_lang_tag(raw: &str) -> bool {
-    if raw != raw.trim() {
+    if raw != raw.trim_matches(crate::xmlext::is_xml_space) {
         return false;
     }
     if raw.is_empty() {
@@ -1636,8 +1644,13 @@ fn check_refines_cycles(doc: &roxmltree::Document, opf_path: &str, report: &mut 
         .descendants()
         .filter(|n| n.is_element())
         .filter_map(|n| {
-            let id = n.attr_no_ns("id")?.trim().to_string();
-            let refines = n.attr_no_ns("refines")?.trim();
+            let id = n
+                .attr_no_ns("id")?
+                .trim_matches(crate::xmlext::is_xml_space)
+                .to_string();
+            let refines = n
+                .attr_no_ns("refines")?
+                .trim_matches(crate::xmlext::is_xml_space);
             let target = refines.strip_prefix('#')?.to_string();
             Some((id, target))
         })
@@ -2063,7 +2076,7 @@ fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mu
             .filter(|t| t.is_text())
             .filter_map(|t| t.text())
             .collect::<String>()
-            .trim()
+            .trim_matches(crate::xmlext::is_xml_space)
             .to_string();
         let uuid_part = if let Some(rest) = text.strip_prefix("urn:uuid:") {
             Some(rest)
@@ -2090,27 +2103,19 @@ fn check_uuid_identifiers(doc: &roxmltree::Document, opf_path: &str, report: &mu
     }
 }
 
-/// A meta property/scheme value is well-formed if it's a bare NCName, or
-/// a `prefix:reference` pair where both halves are non-empty NCNames -
-/// approximated here as "non-empty and alphanumeric/hyphen/underscore/
-/// colon, with a non-empty reference part after any colon" (no real
-/// NCName Unicode-category checking, which the corpus doesn't exercise).
-fn is_well_formed_ncname_or_prefixed(value: &str) -> bool {
-    if value.is_empty() {
-        return false;
-    }
+/// OPF-026 exactly as epubcheck's `VocabUtil.parseProperties` decides it: it
+/// matches `(([^:]*):)?(.*)` and reports a malformed property only when a
+/// colon is present and the prefix before the first one, or everything after
+/// it, is empty. It asks nothing about characters. Our old reading
+/// ("non-empty NCName halves, no second colon") also called `a:b:c`,
+/// `fo#o`, `a·b` and a value with a no-break space OPF-026, where
+/// epubcheck gives OPF-027/OPF-028 or the grammar's RSC-005 instead.
+/// Measured on 5.4.0, `property` and `scheme`, nine values each. This was
+/// the open "OPF-026 char check vs VocabUtil" gap.
+fn vocab_property_is_well_formed(value: &str) -> bool {
     match value.split_once(':') {
-        Some((prefix, reference)) => {
-            !prefix.is_empty()
-                && !reference.is_empty()
-                && !reference.contains(':')
-                && value
-                    .chars()
-                    .all(|c| c.is_alphanumeric() || matches!(c, ':' | '-' | '_' | '.'))
-        }
-        None => value
-            .chars()
-            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | '.')),
+        Some((prefix, rest)) => !prefix.is_empty() && !rest.is_empty(),
+        None => true,
     }
 }
 
@@ -2177,7 +2182,9 @@ fn check_meta_property_scheme_shape(
         .filter(|n| n.is_element() && n.tag_name().name() == "meta")
     {
         if let Some(refines_attr) = attr_no_ns_node(n, "refines") {
-            let refines = refines_attr.value().trim();
+            let refines = refines_attr
+                .value()
+                .trim_matches(crate::xmlext::is_xml_space);
             // epubcheck resolves the whole value, fragment included, and a
             // manifest href never carries one (OPF-091), so a value with a
             // fragment matches no item there. Stripping it here matched
@@ -2210,7 +2217,9 @@ fn check_meta_property_scheme_shape(
             }
         }
         if let Some(scheme_attr) = attr_no_ns_node(n, "scheme") {
-            let scheme = scheme_attr.value().trim();
+            let scheme = scheme_attr
+                .value()
+                .trim_matches(crate::xmlext::is_xml_space);
             if is_epub3 && single_value_required(scheme) {
                 report.push_node_attr(
                     OPF_025,
@@ -2224,8 +2233,7 @@ fn check_meta_property_scheme_shape(
                     "opf.meta.scheme_value_list",
                     vec![scheme.to_string()],
                 );
-            } else if is_epub3 && scheme.contains(':') && !is_well_formed_ncname_or_prefixed(scheme)
-            {
+            } else if is_epub3 && scheme.contains(':') && !vocab_property_is_well_formed(scheme) {
                 // `scheme="xsd:"`: OPF-026, as for `property` — same parser.
                 report.push_at_pos(
                     OPF_026,
@@ -2248,7 +2256,9 @@ fn check_meta_property_scheme_shape(
             }
         }
         if let Some(property_attr) = attr_no_ns_node(n, "property") {
-            let property = property_attr.value().trim();
+            let property = property_attr
+                .value()
+                .trim_matches(crate::xmlext::is_xml_space);
             if is_epub3 && single_value_required(property) {
                 report.push_node_attr(
                     OPF_025,
@@ -2265,7 +2275,7 @@ fn check_meta_property_scheme_shape(
             } else if is_epub3
                 && !property.is_empty()
                 && !property.contains(' ')
-                && !is_well_formed_ncname_or_prefixed(property)
+                && !vocab_property_is_well_formed(property)
             {
                 report.push_at_pos(
                     OPF_026,
@@ -3075,13 +3085,17 @@ fn check_outdated_features(
             ),
             "meta" => {
                 if let Some(p) = n.attr_no_ns("property")
-                    && OUTDATED_META_PROPERTIES.contains(&p.trim())
+                    && OUTDATED_META_PROPERTIES
+                        .contains(&p.trim_matches(crate::xmlext::is_xml_space))
                 {
                     outdated(
                         n,
-                        format!("the \"{}\" property", p.trim()),
+                        format!(
+                            "the \"{}\" property",
+                            p.trim_matches(crate::xmlext::is_xml_space)
+                        ),
                         "opf.metadata.outdated_property",
-                        vec![p.trim().to_string()],
+                        vec![p.trim_matches(crate::xmlext::is_xml_space).to_string()],
                         report,
                     );
                 }
@@ -3256,7 +3270,9 @@ fn check_guide_references(
         // real books have a spaced guide href, and epubcheck's own test suite
         // has no fixture for it either. The oracle is the only witness, which
         // is why parity questions get probed rather than measured.
-        if href.trim().contains(' ')
+        if href
+            .trim_matches(crate::url::is_url_edge_space)
+            .contains(' ')
             && let Some(href_attr) = attr_no_ns_node(r, "href")
         {
             report.push_node_attr(
@@ -3472,7 +3488,7 @@ fn check_ncx_content_fragments(
         //
         // A fragment-only `src="#x"` keeps the old behaviour: it is non-empty,
         // so `is_external` still stops it here.
-        if !src.trim().is_empty() && is_external(src) {
+        if !src.trim_matches(crate::url::is_url_edge_space).is_empty() && is_external(src) {
             continue;
         }
         // RSC-020: an unencoded space in the reference itself. epubcheck
@@ -3490,7 +3506,9 @@ fn check_ncx_content_fragments(
         // reference that is both malformed and missing earns both findings.
         // Interior space only; leading/trailing is stripped by the URL
         // parser and valid, as at the content-document sites.
-        if src.trim().contains(' ')
+        if src
+            .trim_matches(crate::url::is_url_edge_space)
+            .contains(' ')
             && let Some(src_attr) = attr_no_ns_node(n, "src")
         {
             report.push_node_attr(
@@ -3526,7 +3544,10 @@ fn check_ncx_content_fragments(
             Some((p, f)) => (p, Some(f)),
             None => (src, None),
         };
-        let resolved = if target.trim().is_empty() {
+        let resolved = if target
+            .trim_matches(crate::url::is_url_edge_space)
+            .is_empty()
+        {
             nfc(ncx_path)
         } else {
             nfc(&resolve(&dir, target))
@@ -4071,12 +4092,13 @@ fn check_cover_meta_advisory(
     for meta in doc.descendants().filter(|n| {
         n.is_element()
             && n.tag_name().name() == "meta"
-            && n.attr_no_ns("name").is_some_and(|v| v.trim() == "cover")
+            && n.attr_no_ns("name")
+                .is_some_and(|v| v.trim_matches(crate::xmlext::is_xml_space) == "cover")
     }) {
         let Some(content) = meta.attr_no_ns("content") else {
             continue;
         };
-        let value = content.trim();
+        let value = content.trim_matches(crate::xmlext::is_xml_space);
         if ids.contains(value) {
             continue;
         }
@@ -4085,7 +4107,8 @@ fn check_cover_meta_advisory(
                 let resolved = nfc(&resolve(base_dir, value));
                 manifest_items.iter().find(|n| {
                     n.attr_no_ns("href").is_some_and(|h| {
-                        h.trim() == value || nfc(&resolve(base_dir, h)) == resolved
+                        h.trim_matches(crate::url::is_url_edge_space) == value
+                            || nfc(&resolve(base_dir, h)) == resolved
                     })
                 })
             })
@@ -4095,7 +4118,7 @@ fn check_cover_meta_advisory(
             Some(id) => format!(
                 "the cover meta's content '{value}' is not the id of any manifest item; it is the \
                  href of item '{}', and the convention expects the id",
-                id.trim()
+                id.trim_matches(crate::xmlext::is_xml_space)
             ),
             None => {
                 format!("the cover meta's content '{value}' is not the id of any manifest item")
@@ -4257,7 +4280,8 @@ fn container_link_targets_silently(ocf: &mut Ocf) -> HashSet<String> {
         .filter(|n| n.is_element() && n.tag_name().name() == "link")
     {
         if let Some(href) = n.attr_no_ns("href") {
-            let href = strip_url_fragment(href.trim()).to_string();
+            let href =
+                strip_url_fragment(href.trim_matches(crate::url::is_url_edge_space)).to_string();
             if !href.is_empty() && !is_external(&href) {
                 out.insert(nfc(&resolve("", &href)));
             }
@@ -4303,7 +4327,10 @@ fn declared_resources_of(ocf: &mut Ocf, package_path: &str) -> HashSet<String> {
                 if let (Some(id), Some(href)) = (n.attr_no_ns("id"), n.attr_no_ns("href"))
                     && let Some(path) = local(href)
                 {
-                    by_id.insert(id.trim().to_string(), path);
+                    by_id.insert(
+                        id.trim_matches(crate::xmlext::is_xml_space).to_string(),
+                        path,
+                    );
                 }
             }
             "link" => {
@@ -4323,12 +4350,17 @@ fn declared_resources_of(ocf: &mut Ocf, package_path: &str) -> HashSet<String> {
 /// hand in `checkMimetypeMatches`; without it every Opus book draws an OPF-013
 /// from us and none from epubcheck.
 fn normalize_opus(mt: &str) -> &str {
-    let t = mt.trim();
+    let t = mt.trim_matches(crate::xmlext::is_xml_space);
     let (head, rest) = t.split_once(';').unwrap_or((t, ""));
-    if head.trim().eq_ignore_ascii_case("audio/ogg")
+    if head
+        .trim_matches(crate::xmlext::is_xml_space)
+        .eq_ignore_ascii_case("audio/ogg")
         && rest.split(';').any(|p| {
-            p.split_once('=')
-                .is_some_and(|(k, v)| k.trim().eq_ignore_ascii_case("codecs") && v.trim() == "opus")
+            p.split_once('=').is_some_and(|(k, v)| {
+                k.trim_matches(crate::xmlext::is_xml_space)
+                    .eq_ignore_ascii_case("codecs")
+                    && v.trim_matches(crate::xmlext::is_xml_space) == "opus"
+            })
         })
     {
         return "audio/ogg";
@@ -5091,7 +5123,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .filter(|t| t.is_text())
                 .filter_map(|t| t.text())
                 .collect::<String>()
-                .trim()
+                .trim_matches(crate::xmlext::is_xml_space)
                 .to_string()
         };
         let meta_property_text = |property: &str| -> Option<String> {
@@ -5359,9 +5391,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .map(str::trim)
                 .filter(|p| !p.is_empty())
                 .all(|piece| match piece.split_once('=') {
-                    Some((key, value)) if !key.trim().is_empty() && !value.trim().is_empty() => {
-                        let key = key.trim();
-                        let value = value.trim();
+                    Some((key, value))
+                        if !key.trim_matches(crate::xmlext::is_xml_space).is_empty()
+                            && !value.trim_matches(crate::xmlext::is_xml_space).is_empty() =>
+                    {
+                        let key = key.trim_matches(crate::xmlext::is_xml_space);
+                        let value = value.trim_matches(crate::xmlext::is_xml_space);
                         !matches!(key, "width" | "height")
                             || crate::layout::is_valid_viewport_value(key, value)
                     }
@@ -5420,7 +5455,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter(|t| t.is_text())
                     .filter_map(|t| t.text())
                     .collect();
-                text.trim() == "pre-paginated"
+                text.trim_matches(crate::xmlext::is_xml_space) == "pre-paginated"
             });
         package_layout_roll = md
             .children()
@@ -5435,7 +5470,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .filter(|t| t.is_text())
                     .filter_map(|t| t.text())
                     .collect();
-                text.trim() == "roll"
+                text.trim_matches(crate::xmlext::is_xml_space) == "roll"
             });
         // **Descendants, not children.** epubcheck's `OPFHandler` dispatches
         // on namespace plus local name wherever the element sits, so a
@@ -5551,7 +5586,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if epubcheck_accepts_dc_date(&text) {
                 // epubcheck's verdict is "fine"; W3C-DTF may still disagree,
                 // and saying so is ours to say, not its.
-                let value = text.trim();
+                let value = text.trim_matches(crate::xmlext::is_xml_space);
                 if advisory && !is_valid_dc_date(value) {
                     let spec = if is_epub3 {
                         "EPUB 3 recommends"
@@ -5577,12 +5612,12 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     Severity::Warning,
                     format!(
                         "dc:date value '{}' does not follow recommended syntax",
-                        text.trim()
+                        text.trim_matches(crate::xmlext::is_xml_space)
                     ),
                     opf_path,
                     Position::of(n),
                     "opf.metadata.date_syntax_not_recommended",
-                    vec![text.trim().to_string()],
+                    vec![text.trim_matches(crate::xmlext::is_xml_space).to_string()],
                 );
             } else {
                 report.push_at_pos(
@@ -5590,7 +5625,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     Severity::Error,
                     format!(
                         "dc:date value '{}' is empty or doesn't conform to ISO 8601",
-                        text.trim()
+                        text.trim_matches(crate::xmlext::is_xml_space)
                     ),
                     opf_path,
                     Position::of(n),
@@ -5677,7 +5712,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     opf_path,
                     modified,
                     "opf.metadata.invalid_dcterms_modified",
-                    vec![text.trim().to_string()],
+                    vec![text.trim_matches(crate::xmlext::is_xml_space).to_string()],
                 );
             }
         }
@@ -5915,7 +5950,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // about the URL's syntax; we reported RSC-020 on top, describing a
             // path that is not a path. `data-url-in-manifest-item-error.opf`
             // is the fixture, and its payload is wrapped over eight lines.
-            if href.contains(' ') && !href.trim_start().starts_with("data:") {
+            if href.contains(' ')
+                && !href
+                    .trim_start_matches(crate::url::is_url_edge_space)
+                    .starts_with("data:")
+            {
                 report.push_node_attr(
                     RSC_020,
                     Severity::Error,
@@ -5926,7 +5965,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     "opf.manifest_item.unencoded_space_in_href",
                     vec![href.to_string()],
                 );
-            } else if !href.trim_start().starts_with("data:")
+            } else if !href
+                .trim_start_matches(crate::url::is_url_edge_space)
+                .starts_with("data:")
                 && let Some(err) = crate::url::unit_error(href)
             {
                 report.push_node_attr(
@@ -5967,7 +6008,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // EPUB 2 package with a `data:` manifest href draws nothing from
             // epubcheck at all - measured, so there is no id to substitute
             // the way the hyperlink site above gets RSC-010.
-            if is_epub3 && href.trim_start().starts_with("data:") {
+            if is_epub3
+                && href
+                    .trim_start_matches(crate::url::is_url_edge_space)
+                    .starts_with("data:")
+            {
                 report.push_node_attr(
                     RSC_029,
                     Severity::Error,
@@ -5979,7 +6024,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     vec![id.to_string()],
                 );
             }
-            if href.trim_start().starts_with("file:") {
+            if href
+                .trim_start_matches(crate::url::is_url_edge_space)
+                .starts_with("file:")
+            {
                 report.push_node_attr(
                     RSC_030,
                     Severity::Error,
@@ -6408,7 +6456,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // MED_013 against epubcheck's one.
                     overlay_on_non_content_doc.insert(nfc(&resolved));
                 }
-                media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
+                media_overlay_attrs.push((
+                    nfc(&resolved),
+                    mo.trim_matches(crate::xmlext::is_xml_space).to_string(),
+                ));
             }
             if let Some(fb) = item.attr_no_ns("fallback") {
                 fallback_map.insert(
@@ -6625,7 +6676,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         .filter(|n| n.is_element() && n.tag_name().name() == "item")
         .filter_map(|n| {
             n.attr_no_ns("media-overlay")
-                .map(|o| (n, o.trim().to_string()))
+                .map(|o| (n, o.trim_matches(crate::xmlext::is_xml_space).to_string()))
         })
         .collect();
     // A media-overlay attribute's target item must itself be a Media
@@ -6832,7 +6883,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Some(href_attr) = attr_no_ns_node(link, "href") else {
             continue;
         };
-        let href = href_attr.value().trim();
+        let href = href_attr
+            .value()
+            .trim_matches(crate::url::is_url_edge_space);
         if let Some(frag) = href.strip_prefix('#') {
             if items.contains_key(frag) {
                 report.push_at_pos(
@@ -7034,7 +7087,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 "opf.spine.adobe_pagemap_usage",
                 Vec::new(),
             );
-            if !items.contains_key(page_map.trim()) {
+            if !items.contains_key(page_map.trim_matches(crate::xmlext::is_xml_space)) {
                 report.push_at_pos(
                     OPF_063,
                     Severity::Warning,
@@ -7850,7 +7903,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
     // package that was 16 million `nfc` calls and 93% of the run.
     let svg_manifest_paths: HashSet<String> = items
         .values()
-        .filter(|(_, mt)| mt.trim() == "image/svg+xml")
+        .filter(|(_, mt)| mt.trim_matches(crate::xmlext::is_xml_space) == "image/svg+xml")
         .map(|(res, _)| nfc(res))
         .collect();
     // Content documents are validated against the version's own content model:
@@ -8130,7 +8183,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if off >= err_offset {
                         break;
                     }
-                    let v = value.trim();
+                    let v = value.trim_matches(crate::url::is_url_edge_space);
                     if v.is_empty() || is_external(v) || v.starts_with('#') {
                         continue;
                     }
@@ -8727,7 +8780,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             .filter(|n| n.is_element() && n.tag_name().name() == "img")
         {
             if let Some(src) = attr_no_ns_node(n, "src")
-                && src.value().trim().is_empty()
+                && src
+                    .value()
+                    .trim_matches(crate::xmlext::is_xml_space)
+                    .is_empty()
             {
                 report.push_node_attr(
                     RSC_005,
@@ -9298,7 +9354,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // is how an Opus file is legitimately declared. Their source calls
             // this a hack pending real MIME parsing; matched anyway, because
             // an OPUS book must not draw a warning here from either tool.
-            let declared_type = declared_type.split(';').next().unwrap_or("").trim();
+            let declared_type = declared_type
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim_matches(crate::xmlext::is_xml_space);
             if let Some((_, actual_type)) = items_by_path.get(&resolved)
                 && !normalize_opus(actual_type).eq_ignore_ascii_case(declared_type)
             {
@@ -9394,7 +9454,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // almost never what the author meant. Checked ahead of the
                 // `is_external` bail-out below, which counts an empty href as
                 // external (nothing to resolve) and would skip past this.
-                if href.trim().is_empty() {
+                if href.trim_matches(crate::url::is_url_edge_space).is_empty() {
                     report.push_at_pos(
                         HTM_045,
                         Severity::Usage,
@@ -10130,7 +10190,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // is what catches SVG's `<font-face-uri xlink:href>`,
                     // whose media type gives no hint that it is a font.
                     if is_remote_url(v) {
-                        remote_resource_refs.insert(strip_url_fragment(v).trim().to_string());
+                        remote_resource_refs.insert(
+                            strip_url_fragment(v)
+                                .trim_matches(crate::url::is_url_edge_space)
+                                .to_string(),
+                        );
                     }
                 } else {
                     // Same interior-space rule as the attribute walk below.
@@ -10344,7 +10408,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // position policy rather than an accident — the URL is
                     // *declared* there, which is where it has to be fixed.
                     let already = {
-                        let u = v.trim();
+                        let u = v.trim_matches(crate::url::is_url_edge_space);
                         report.messages.iter().any(|m| {
                             // **The manifest pass only.** Two content
                             // documents naming the same leaking URL are two
@@ -10367,8 +10431,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     if !already
                         && remote_base.is_none()
                         && !is_external(v)
-                        && !v.trim().is_empty()
-                        && href_leaks_container_root(&dir, v.trim())
+                        && !v.trim_matches(crate::url::is_url_edge_space).is_empty()
+                        && href_leaks_container_root(
+                            &dir,
+                            v.trim_matches(crate::url::is_url_edge_space),
+                        )
                     {
                         report.push_node(
                             RSC_026,
@@ -10642,7 +10709,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     .attr_no_ns("href")
                     .or_else(|| node.attribute(("http://www.w3.org/1999/xlink", "href")));
                 if let Some(href) = href {
-                    if href.trim_start().starts_with("data:") {
+                    if href
+                        .trim_start_matches(crate::url::is_url_edge_space)
+                        .starts_with("data:")
+                    {
                         // RSC-029 is EPUB 3 only (#95): it comes from
                         // `OPSHandler30.processHyperlink`, an override the
                         // EPUB 2 handler does not have.
@@ -10698,7 +10768,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 Vec::new(),
                             );
                         }
-                    } else if href.trim_start().starts_with('#') {
+                    } else if href
+                        .trim_start_matches(crate::url::is_url_edge_space)
+                        .starts_with('#')
+                    {
                         // A fragment-only href is an internal link into the
                         // document's own content; `is_external` (below)
                         // treats it as external and would drop it, but for
@@ -11017,7 +11090,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 Vec::new(),
                             );
                         }
-                        Some(t) if t.trim().is_empty() => {
+                        Some(t) if t.trim_matches(crate::xmlext::is_xml_space).is_empty() => {
                             report.push_node(
                                 CSS_015,
                                 Severity::Error,
@@ -11536,7 +11609,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .or_else(|| n.attr_no_ns("href"))
                 && is_remote_url(v)
             {
-                remote_resource_refs.insert(strip_url_fragment(v).trim().to_string());
+                remote_resource_refs.insert(
+                    strip_url_fragment(v)
+                        .trim_matches(crate::url::is_url_edge_space)
+                        .to_string(),
+                );
             }
         }
         // OPF-014: a standalone SVG content document embedding a remote
@@ -12383,7 +12460,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 //
                 // Keyed on the href, as the remote branch above is - a data
                 // URL has no container path to resolve either.
-                if href.trim_start().starts_with("data:") {
+                if href
+                    .trim_start_matches(crate::url::is_url_edge_space)
+                    .starts_with("data:")
+                {
                     let is_nav = item
                         .attr_no_ns("properties")
                         .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"));
@@ -13107,7 +13187,7 @@ fn check_dictionaries(
             .filter(|t| t.is_text())
             .filter_map(|t| t.text())
             .collect::<String>()
-            .trim()
+            .trim_matches(crate::xmlext::is_xml_space)
             .to_string()
     };
 
@@ -13217,7 +13297,7 @@ fn check_dictionaries(
                     && n.parent()
                         .is_some_and(|p| p.tag_name().name() == "metadata")
             })
-            .any(|n| node_text(n).trim() == "dictionary");
+            .any(|n| node_text(n).trim_matches(crate::xmlext::is_xml_space) == "dictionary");
         if !has_exact {
             let at = pkg
                 .children()
@@ -23088,6 +23168,26 @@ mod tests {
             &format!("{DATE}\u{a0}"),
             crate::ids::RSC_005
         ));
+    }
+
+    /// OPF-026 is `VocabUtil`'s colon test and nothing else: an empty prefix
+    /// or an empty reference. Each value measured on 5.4.0 in `property` and
+    /// `scheme`; the four that are not OPF-026 there drew it here.
+    #[test]
+    fn opf_026_is_vocabutils_colon_test() {
+        for v in [":x", "x:"] {
+            assert!(!super::vocab_property_is_well_formed(v), "{v}");
+        }
+        for v in [
+            "a:b:c",
+            "fo#o",
+            "dcterms:fo#o",
+            "a\u{b7}b",
+            "dcterms:creator\u{a0}",
+            "dc",
+        ] {
+            assert!(super::vocab_property_is_well_formed(v), "{v}");
+        }
     }
 
     /// Property lists split on XML whitespace only, as epubcheck's `\s+`

@@ -56,6 +56,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   RSC-008.** RSC-008 ("not declared in the manifest") is epubcheck's answer
   only when the file is present. For a file that is missing altogether it
   reports RSC-007, as it does for every other reference, and so do we now.
+- **OPF-026 ("malformed property") now fires only where epubcheck fires it:**
+  a `property` or `scheme` whose prefix or name is empty (`:x`, `x:`). We
+  also gave it for `a:b:c`, for characters such as `#` or `·`, and for a
+  value with a no-break space. epubcheck reports those as an unknown prefix
+  (OPF-028), an unknown property (OPF-027) or a schema error (RSC-005), and
+  we already reported those too. So the extra OPF-026 never changed a
+  verdict; it added a second error for one defect.
 
 ### Changed
 
