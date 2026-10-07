@@ -12,6 +12,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **EPUB 2: XHTML inside SVG is now checked, and SVG below it no longer
+  is.** Neither was right before. epubcheck places XHTML in EPUB 2 SVG with
+  NVDL, and we did not ask:
+  - In a standalone SVG, `foreignObject` holds SVG `svg` alone. Any XHTML
+    element or text there is now RSC-005.
+  - Inline, `foreignObject` holds `body`, XHTML inline and block content,
+    or `svg`. That content is now checked against the EPUB 2 XHTML grammar
+    the way NVDL hands it over, with elements in other namespaces cut out:
+    MathML in a `p` there is clean, a `ul` left empty by the cut is not.
+  - An XHTML element as the child of any other SVG element (`svg`, `g`,
+    `desc`, `title`, `metadata`, …) is now RSC-005, in both places.
+  - The other direction: SVG nested in XHTML inside a `foreignObject` is
+    never validated by epubcheck. A `<rect/>` without `width` there was a
+    false RSC-005 here, and so were a bad `fill-rule` and a content-model
+    fault.
+
+  Measured on 5.4.0 against 87 shapes. Every verdict matches; an inline
+  `foreignObject` still draws one RSC-005 where epubcheck may count two.
+  EPUB 3 is unchanged: measured the same way, it had no gap. New rule keys:
+  `svg.foreign_object.child_not_allowed`, `svg.content_model.xhtml_child`.
 - **A malformed SVG is now RSC-016, with what came before the break**
   (#141). An empty, truncated or otherwise broken `.svg` was skipped without a
   word, so the book passed here and failed in epubcheck. It is now a fatal

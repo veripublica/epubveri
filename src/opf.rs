@@ -8885,6 +8885,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // RSC-025 usage here. Only the first half shipped originally.
             crate::svg::check_required_attributes(svg_root, &path, is_epub3, report);
             crate::svg::check_content_model(svg_root, &path, is_epub3, report);
+            if !is_epub3 {
+                crate::svg::check_epub2_xhtml_children(svg_root, &path, report);
+            }
             crate::svg::check_epub_attributes(svg_root, &path, report);
             crate::svg::check_deprecated_xlink_href(svg_root, &path, is_epub3, report);
             // Inline, an id that is empty or holds whitespace is RSC-005 (the
@@ -11996,6 +11999,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         );
         crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_content_model(d.root_element(), doc_path, is_epub3, report);
+        if !is_epub3 {
+            crate::svg::check_epub2_xhtml_children(d.root_element(), doc_path, report);
+        }
         crate::svg::check_standalone_attributes(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
         crate::svg::check_deprecated_xlink_href(d.root_element(), doc_path, is_epub3, report);

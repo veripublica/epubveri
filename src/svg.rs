@@ -1429,6 +1429,9 @@ pub(crate) fn check_foreign_object(
     report: &mut Report,
 ) {
     if !is_epub3 {
+        if epub2_grammar_reaches(fo) {
+            check_epub2_foreign_object(fo, path, wrap_in_body, report);
+        }
         return;
     }
     let mut children = fo.children();
@@ -1469,17 +1472,7 @@ pub(crate) fn check_foreign_object(
     // single foreignObject regardless of its actual (valid) content - a
     // real bug only ever exposed once standalone SVG single-document
     // checks started actually running through this code path.
-    let mut ns_decls = String::new();
-    for ns in root.namespaces() {
-        match ns.name() {
-            // "xml" is always implicitly bound to the fixed XML namespace
-            // URI - redeclaring it is unnecessary and, if anything went
-            // slightly wrong upstream, a needless source of a parse error.
-            Some("xml") => continue,
-            Some(prefix) => ns_decls.push_str(&format!(" xmlns:{prefix}=\"{}\"", ns.uri())),
-            None => {}
-        }
-    }
+    let ns_decls = prefixed_ns_decls(root);
     // Embedded (foreignObject inside an XHTML document's own inline SVG):
     // there's already an ambient XHTML `<body>` in scope, so the content
     // is ordinary flow content and gets wrapped in a synthetic `<body>`
@@ -1547,6 +1540,245 @@ pub(crate) fn check_foreign_object(
             Vec::new(),
         );
     }
+}
+
+/// Every prefixed namespace binding on `root`, as attributes for a synthetic
+/// wrapper document, so prefixed content sliced out of the real document
+/// still resolves there.
+fn prefixed_ns_decls(root: roxmltree::Node) -> String {
+    let mut ns_decls = String::new();
+    for ns in root.namespaces() {
+        match ns.name() {
+            // "xml" is always implicitly bound to the fixed XML namespace
+            // URI - redeclaring it is unnecessary and, if anything went
+            // slightly wrong upstream, a needless source of a parse error.
+            Some("xml") => continue,
+            Some(prefix) => ns_decls.push_str(&format!(" xmlns:{prefix}=\"{}\"", ns.uri())),
+            None => {}
+        }
+    }
+    ns_decls
+}
+
+/// Whether epubcheck's EPUB 2 SVG grammar reaches `n` at all.
+///
+/// EPUB 2 validates SVG through NVDL (`ops20.nvdl` inline, `ops20-svg.nvdl`
+/// standalone), and inside SVG it switches to mode `allowForeignNS`: an XHTML
+/// element there is *attached* to the SVG section and validated with it, and
+/// everything else - an SVG element included - is merely *allowed*. So an
+/// SVG element below a non-SVG element that is itself inside SVG (the
+/// commonest shape: `foreignObject` > `p` > `svg`) is never validated. We
+/// validated it, and a `<rect/>` without `width` there was an RSC-005 that
+/// epubcheck does not report. Measured on 5.4.0, inline and standalone: a
+/// missing required attribute, a bad enumerated value, a bad
+/// `preserveAspectRatio` and a content-model fault in such an SVG are all
+/// silent there.
+///
+/// EPUB 3 is different and keeps its own walk: its standalone SVG does
+/// validate that nested SVG (informatively), and inline it reports nothing.
+fn epub2_grammar_reaches(n: roxmltree::Node) -> bool {
+    let mut below_non_svg = false;
+    for a in n.ancestors().skip(1).filter(|a| a.is_element()) {
+        if a.tag_name().namespace() == Some(SVG_NS) {
+            if below_non_svg {
+                return false;
+            }
+        } else {
+            below_non_svg = true;
+        }
+    }
+    true
+}
+
+/// EPUB 2: an XHTML element as the child of any SVG element but
+/// `foreignObject` is RSC-005.
+///
+/// SVG 1.1's grammar has no place for foreign elements outside
+/// `foreignObject` (its `foreignElement` alternative is commented out in
+/// `svg-extensibility.rng`, and `desc`, `title` and `metadata` take text
+/// alone), and NVDL attaches XHTML to the SVG section, so the grammar sees
+/// it. Elements in any other namespace are allowed, which is why RDF in
+/// `metadata` stays clean. Measured on 5.4.0 under `svg`, `g`, `text`,
+/// `desc`, `title`, `metadata`, `a` and `switch`, inline and standalone: one
+/// RSC-005 per element, none for what it contains, and nothing at all at
+/// EPUB 3.
+pub(crate) fn check_epub2_xhtml_children(
+    svg_root: roxmltree::Node,
+    path: &str,
+    report: &mut Report,
+) {
+    for parent in svg_root.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().namespace() == Some(SVG_NS)
+            && n.tag_name().name() != "foreignObject"
+            && epub2_grammar_reaches(*n)
+    }) {
+        for child in parent
+            .children()
+            .filter(|c| c.is_element() && c.tag_name().namespace() == Some(XHTML_NS))
+        {
+            let name = child.tag_name().name();
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!(
+                    "element \"{name}\" not allowed in SVG element \"{}\"",
+                    parent.tag_name().name()
+                ),
+                path,
+                child,
+                "svg.content_model.xhtml_child",
+                vec![name.to_string(), parent.tag_name().name().to_string()],
+            );
+        }
+    }
+}
+
+/// EPUB 2's `foreignObject`, which is two different grammars.
+///
+/// - **Standalone** (`svg11.rng` through `ops20-svg.nvdl`):
+///   `SVG.ForeignObjectContent.class` is `svg` alone. Any XHTML element and
+///   any text is RSC-005, one per child; elements in other namespaces are
+///   allowed, an `svg` child is SVG like any other.
+/// - **Inline** (`content.rng`, which hooks XHTML in): the content is any
+///   mix of `svg`, `body` and XHTML 1.1 inline and block content. Each `body`
+///   is checked in the body slot of the EPUB 2 XHTML grammar, the rest
+///   together inside a `div`, whose flow content is exactly inline plus
+///   block. Another SVG element there is RSC-005, another namespace allowed.
+///   The XHTML is checked as NVDL hands it to the grammar, through
+///   [`xhtml_only`]: in mode `allowForeignNS` an element in any other
+///   namespace, at any depth, is cut out rather than validated, so MathML in
+///   a `p` there is clean although MathML in an EPUB 2 body is not (#92).
+///
+/// Measured on 5.4.0 against 34 shapes in each place. Before this nothing
+/// asked, and every one of the invalid shapes passed the book. The EPUB 2
+/// fixture `svg-foreignObject-switch-valid` (a `body` inline) stays valid.
+fn check_epub2_foreign_object(fo: roxmltree::Node, path: &str, inline: bool, report: &mut Report) {
+    let not_allowed = |report: &mut Report, n: roxmltree::Node, what: String| {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!("{what} not allowed in foreignObject"),
+            path,
+            n,
+            "svg.foreign_object.child_not_allowed",
+            vec![what],
+        );
+    };
+    let mut rest = String::new();
+    let mut bodies = Vec::new();
+    for c in fo.children() {
+        if c.is_text() {
+            if c.text().is_some_and(|t| !crate::xmlext::is_xml_blank(t)) {
+                if inline {
+                    xhtml_only(c, &mut rest);
+                } else {
+                    not_allowed(report, c, "text".to_string());
+                }
+            }
+            continue;
+        }
+        if !c.is_element() {
+            continue;
+        }
+        let name = c.tag_name().name();
+        match c.tag_name().namespace() {
+            Some(SVG_NS) if name == "svg" => {}
+            Some(SVG_NS) => not_allowed(report, c, format!("element \"{name}\"")),
+            Some(XHTML_NS) if !inline => not_allowed(report, c, format!("element \"{name}\"")),
+            Some(XHTML_NS) if name == "body" => bodies.push(c),
+            Some(XHTML_NS) => xhtml_only(c, &mut rest),
+            _ => {}
+        }
+    }
+    if !inline {
+        return;
+    }
+    let head = format!(
+        "<html xmlns=\"{XHTML_NS}\" xmlns:epub=\"{EPUB_OPS_NS}\" xmlns:xlink=\"{XLINK_NS}\"><head><title>t</title></head>"
+    );
+    let mut wrappers: Vec<String> = bodies
+        .iter()
+        .map(|b| {
+            let mut body = String::new();
+            xhtml_only(*b, &mut body);
+            format!("{head}{body}</html>")
+        })
+        .collect();
+    if !rest.is_empty() {
+        wrappers.push(format!("{head}<body><div>{rest}</div></body></html>"));
+    }
+    let grammar = crate::rng::xhtml_grammar_epub2();
+    let conforms = wrappers.iter().all(|w| {
+        // Rebuilt from parsed nodes, so it always reparses; if it somehow
+        // does not, that is not the book's fault and says nothing.
+        crate::ocf::parse_xml(w).map_or(true, |doc| {
+            crate::rng::validate_node(&grammar, doc.root_element())
+        })
+    });
+    if !conforms {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "foreignObject content does not conform to the EPUB XHTML content-model schema",
+            path,
+            fo,
+            "svg.foreign_object.schema_violation",
+            Vec::new(),
+        );
+    }
+}
+
+/// `n` serialised as EPUB 2's NVDL hands it to the XHTML grammar inside SVG
+/// (mode `allowForeignNS` in `ops20.nvdl`): XHTML elements and text kept;
+/// an element in any other namespace dropped with everything in it; of the
+/// attributes, those in no namespace and in the XML, OPS and XLink
+/// namespaces kept (the ones the mode attaches), the rest dropped.
+/// Comments and processing instructions carry nothing the grammar reads.
+fn xhtml_only(n: roxmltree::Node, out: &mut String) {
+    fn escape(s: &str, out: &mut String) {
+        for ch in s.chars() {
+            match ch {
+                '&' => out.push_str("&amp;"),
+                '<' => out.push_str("&lt;"),
+                '>' => out.push_str("&gt;"),
+                '"' => out.push_str("&quot;"),
+                c => out.push(c),
+            }
+        }
+    }
+    if n.is_text() {
+        escape(n.text().unwrap_or(""), out);
+        return;
+    }
+    if !n.is_element() || n.tag_name().namespace() != Some(XHTML_NS) {
+        return;
+    }
+    let name = n.tag_name().name();
+    out.push('<');
+    out.push_str(name);
+    for a in n.attributes() {
+        let prefix = match a.namespace() {
+            None => "",
+            Some("http://www.w3.org/XML/1998/namespace") => "xml:",
+            Some(EPUB_OPS_NS) => "epub:",
+            Some(XLINK_NS) => "xlink:",
+            Some(_) => continue,
+        };
+        out.push(' ');
+        out.push_str(prefix);
+        out.push_str(a.name());
+        out.push_str("=\"");
+        escape(a.value(), out);
+        out.push('"');
+    }
+    out.push('>');
+    for c in n.children() {
+        xhtml_only(c, out);
+    }
+    out.push_str("</");
+    out.push_str(name);
+    out.push('>');
 }
 
 /// SVG 1.1 required attributes, enforced for **EPUB 2 only**.
@@ -1997,10 +2229,11 @@ pub(crate) fn check_content_model(
     } else {
         (RSC_005, Severity::Error)
     };
-    for parent in svg_root
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
-    {
+    for parent in svg_root.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().namespace() == Some(SVG_NS)
+            && (is_epub3 || epub2_grammar_reaches(*n))
+    }) {
         let pname = parent.tag_name().name();
         // The four closed shapes, each measured cell by cell rather than
         // read off a grammar. `None` means this element is not part of the
@@ -2165,6 +2398,7 @@ fn check_attributes(
         .descendants()
         .filter(|_| include_required)
         .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+        .filter(|n| is_epub3 || epub2_grammar_reaches(*n))
     {
         let Ok(i) = SVG_REQUIRED_ATTRS.binary_search_by_key(&n.tag_name().name(), |(e, _)| e)
         else {
@@ -2206,6 +2440,7 @@ fn check_attributes(
     for n in svg_root
         .descendants()
         .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+        .filter(|n| is_epub3 || epub2_grammar_reaches(*n))
     {
         for attr in n.attributes().filter(|a| a.namespace().is_none()) {
             let name = attr.name();
@@ -2249,6 +2484,7 @@ fn check_attributes(
         .descendants()
         .filter(|_| !is_epub3 && include_required)
         .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+        .filter(|n| epub2_grammar_reaches(*n))
         .filter(|n| SVG_REQUIRED_XLINK_HREF.contains(&n.tag_name().name()))
     {
         if n.attribute((XLINK_NS, "href")).is_some() {
@@ -2269,6 +2505,123 @@ fn check_attributes(
 
 #[cfg(test)]
 mod tests {
+
+    /// EPUB 2 places XHTML in SVG by NVDL, and none of it was asked. Each
+    /// verdict below was measured on epubcheck 5.4.0, one book per shape.
+    fn epub2_rules(svg: &str, inline: bool) -> Vec<&'static str> {
+        let doc = crate::ocf::parse_xml(svg).unwrap();
+        let root = doc.root_element();
+        let mut report = Report::default();
+        for fo in root
+            .descendants()
+            .filter(|n| n.tag_name().name() == "foreignObject")
+        {
+            check_foreign_object(fo, svg, root, "s.svg", false, inline, &mut report);
+        }
+        check_epub2_xhtml_children(root, "s.svg", &mut report);
+        check_required_attributes(root, "s.svg", false, &mut report);
+        check_content_model(root, "s.svg", false, &mut report);
+        report.messages.iter().filter_map(|m| m.rule).collect()
+    }
+
+    const S: &str = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1">"#;
+    const X: &str = r#"xmlns="http://www.w3.org/1999/xhtml""#;
+    const M: &str = r#"xmlns="http://www.w3.org/1998/Math/MathML""#;
+    const RECT: &str = r#"<rect width="1" height="1"/>"#;
+
+    #[test]
+    fn epub2_standalone_foreign_object_takes_svg_alone() {
+        let fo = |c: &str| {
+            format!(r#"{S}<foreignObject width="1" height="1">{c}</foreignObject></svg>"#)
+        };
+        let not_allowed = "svg.foreign_object.child_not_allowed";
+        assert!(epub2_rules(&fo(""), false).is_empty());
+        assert!(epub2_rules(&fo("<svg/>"), false).is_empty());
+        assert!(epub2_rules(&fo(&format!("<math {M}/>")), false).is_empty());
+        assert_eq!(epub2_rules(&fo("hello"), false), [not_allowed]);
+        assert_eq!(epub2_rules(&fo(RECT), false), [not_allowed]);
+        assert_eq!(
+            epub2_rules(&fo(&format!("<body {X}><p>x</p></body>")), false),
+            [not_allowed]
+        );
+        assert_eq!(
+            epub2_rules(&fo(&format!("hello<p {X}>x</p>")), false),
+            [not_allowed, not_allowed]
+        );
+    }
+
+    #[test]
+    fn epub2_inline_foreign_object_takes_body_or_flow_with_foreign_cut_out() {
+        let fo = |c: &str| {
+            format!(r#"{S}<foreignObject width="1" height="1">{c}</foreignObject></svg>"#)
+        };
+        let bad = "svg.foreign_object.schema_violation";
+        for ok in [
+            "hello".to_string(),
+            "<svg/>".to_string(),
+            format!("<body {X}><p>x</p></body>"),
+            format!("<body {X}><p>a</p></body><body {X}><p>b</p></body>"),
+            format!("<p {X}>x</p><span {X}>y</span>"),
+            // Cut out by NVDL, so clean here although MathML in an EPUB 2
+            // body is not (#92), and an SVG `rect` in a `p` is never checked.
+            format!("<p {X}><math {M}><mi>x</mi></math></p>"),
+            format!("<p {X}>a<rect xmlns=\"http://www.w3.org/2000/svg\"/></p>"),
+            format!("<ul {X}><math {M}/><li>a</li></ul>"),
+            format!("<p {X} xmlns:x=\"urn:x\" x:a=\"1\">a</p>"),
+        ] {
+            assert!(epub2_rules(&fo(&ok), true).is_empty(), "{ok}");
+        }
+        for invalid in [
+            format!("<body {X}>x</body>"),
+            format!("<title {X}>t</title>"),
+            format!("<p {X}><blink>x</blink></p>"),
+            // Cutting the MathML out leaves the `ul` without an `li`.
+            format!("<ul {X}><math {M}/></ul>"),
+        ] {
+            assert_eq!(epub2_rules(&fo(&invalid), true), [bad], "{invalid}");
+        }
+        assert_eq!(
+            epub2_rules(&fo(RECT), true),
+            ["svg.foreign_object.child_not_allowed"]
+        );
+    }
+
+    #[test]
+    fn epub2_xhtml_outside_foreign_object_is_rsc_005_and_svg_below_it_is_not_checked() {
+        let child = "svg.content_model.xhtml_child";
+        assert_eq!(
+            epub2_rules(&format!("{S}<p {X}>x</p></svg>"), true),
+            [child]
+        );
+        assert_eq!(
+            epub2_rules(&format!("{S}<g><div {X}><p>x</p></div></g></svg>"), true),
+            [child]
+        );
+        assert_eq!(
+            epub2_rules(&format!("{S}<desc><p {X}>x</p></desc></svg>"), false),
+            [child]
+        );
+        assert!(
+            epub2_rules(&format!("{S}<g><x:foo xmlns:x=\"urn:x\"/></g></svg>"), true).is_empty()
+        );
+        // Below an XHTML element inside a foreignObject the SVG 1.1 grammar
+        // never looks: a `rect` without its required attributes, an `svg` it
+        // would reject, an XHTML child of a `g` - all clean.
+        let nested = |c: &str| {
+            format!(
+                r#"{S}<foreignObject width="1" height="1"><p {X}><svg xmlns="http://www.w3.org/2000/svg">{c}</svg></p></foreignObject></svg>"#
+            )
+        };
+        assert!(epub2_rules(&nested("<rect/>"), true).is_empty());
+        assert!(
+            epub2_rules(
+                &nested(r#"<rect width="1" height="1"><circle r="1"/></rect>"#),
+                true
+            )
+            .is_empty()
+        );
+        assert!(epub2_rules(&nested(&format!("<g><p {X}>x</p></g>")), true).is_empty());
+    }
 
     /// A **standalone** SVG's own references were resolved by nothing.
     /// `resource_refs` existed, but only to answer "was this resource
