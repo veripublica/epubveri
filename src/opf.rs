@@ -839,6 +839,73 @@ fn classify_resource_ref(
     }
 }
 
+/// Whether a content-document grammar finding is left to another check.
+/// Shared by the parsed path and #139's well-formed-prefix path, so a
+/// malformed document cannot report what a well-formed one would suppress.
+fn content_blame_suppressed(
+    blame: &crate::rng::Blame,
+    is_epub3: bool,
+    report: &Report,
+    path: &str,
+) -> bool {
+    // #35 (part of the #31 attribute-allowlist epic): data-* is
+    // an open-ended attribute-name family RELAX NG can't
+    // express as a name class, so it has no explicit grammar
+    // rule and (once #36 removes the still-present permissive
+    // wildcard) would otherwise blame it "not allowed" here.
+    // Suppressed at the report level instead - a malformed
+    // data-* name is separately and more precisely caught by
+    // HTM-061 in htm.rs, so this deliberately doesn't
+    // re-validate the suffix (see is_data_attribute_name's own
+    // doc comment). Currently unreachable in practice (the
+    // wildcard already accepts data-* names, so the grammar
+    // never blames them not-allowed to begin with) - built now
+    // so the mechanism exists and is tested ahead of #36.
+    //
+    // EPUB 3 only. `data-*` is an HTML5 concept and XHTML 1.1 has
+    // no such family, so epubcheck reports a plain RSC-005 for
+    // `<p data-foo="x">` in a `version="2.0"` book - probed one
+    // book per case against 5.3.0, with a clean control on both
+    // sides. Suppressing it at every version was a false
+    // negative, found while verifying the 2026-08-16 shelf
+    // additions.
+    if is_epub3
+        && let crate::rng::Blame::Attribute(_, a, crate::rng::AttributeFault::NotAllowed) = &blame
+        && a.namespace().is_none()
+        && crate::htm::is_data_attribute_name(a.name())
+    {
+        return true;
+    }
+    // `check_dom`/`check_dom_epub2` ran earlier over this same
+    // document and report obsolete attributes under their own
+    // rule. Where both fire we emit one attribute twice, and
+    // epubcheck emits it once.
+    //
+    // Asked of the report rather than assumed, the same shape as
+    // the entity suppression above: the two checks own overlapping
+    // but not nested sets (`clear` is obsolete *and* absent from
+    // the grammar; a misspelt attribute is only the latter), so a
+    // claim that one covers the other would be the exact kind of
+    // belief that keeps turning out false here.
+    //
+    // This predates #69 - `<p clear="all">` already drew both -
+    // but #69 widened its reach: the attributes of a *misplaced*
+    // element never reached the grammar at all before, so on one
+    // shelf book ten `<br clear>` went from one finding each to
+    // two.
+    if let crate::rng::Blame::Attribute(node, a, _) = &blame
+        && let here = crate::xmlext::node_path_attr(*node, *a)
+        && report.messages.iter().any(|m| {
+            m.rule == Some("htm.obsolete_attribute")
+                && m.location.as_deref() == Some(path)
+                && m.element_path.as_ref().is_some_and(|p| p.path == here.path)
+        })
+    {
+        return true;
+    }
+    false
+}
+
 /// The SVG namespace, which several checks here have to name.
 /// The declared media type of a resolved container path, if it is a manifest
 /// item.
@@ -8216,6 +8283,48 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         vec![v.to_string()],
                     );
                 }
+                // #139: the schema findings before the failure, too. Jing
+                // validates as Xerces parses, so everything it rejected up to
+                // the fatal error stays in epubcheck's report; we had no DOM
+                // and reported none of it. Validate the well-formed prefix,
+                // its open elements closed, and keep what Jing could have
+                // said by then: nothing at or after the cut, and no
+                // "incomplete content" for an element still open there - that
+                // fires at an end tag Jing never received. Element, attribute
+                // and stray-text findings all fire at or before their own
+                // token, so they stay. Schematron is not run: epubcheck's runs
+                // at the end of the document, which a fatal error never
+                // reaches.
+                if schema_validated
+                    && let Some((prefix, cut)) = crate::htm::well_formed_prefix(&t, err_offset)
+                    && let Ok(pd) = parse_xml(&prefix)
+                {
+                    let _positions = crate::report::LocationIndex::scope(&prefix);
+                    for blame in crate::rng::validate_node_report(&xhtml_grammar, pd.root_element())
+                    {
+                        let node = blame.node();
+                        if node.range().start >= cut {
+                            continue;
+                        }
+                        if let crate::rng::Blame::Element(
+                            n,
+                            crate::rng::ElementFault::IncompleteContent { .. },
+                        ) = &blame
+                            && n.range().end > cut
+                        {
+                            continue;
+                        }
+                        if content_blame_suppressed(&blame, is_epub3, report, &path) {
+                            continue;
+                        }
+                        push_blame(
+                            report,
+                            &path,
+                            "opf.content_document.schema_violation",
+                            &blame,
+                        );
+                    }
+                }
                 continue;
             }
         };
@@ -8478,63 +8587,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         if schema_validated {
             let rule = "opf.content_document.schema_violation";
             for blame in crate::rng::validate_node_report(&xhtml_grammar, d.root_element()) {
-                // #35 (part of the #31 attribute-allowlist epic): data-* is
-                // an open-ended attribute-name family RELAX NG can't
-                // express as a name class, so it has no explicit grammar
-                // rule and (once #36 removes the still-present permissive
-                // wildcard) would otherwise blame it "not allowed" here.
-                // Suppressed at the report level instead - a malformed
-                // data-* name is separately and more precisely caught by
-                // HTM-061 in htm.rs, so this deliberately doesn't
-                // re-validate the suffix (see is_data_attribute_name's own
-                // doc comment). Currently unreachable in practice (the
-                // wildcard already accepts data-* names, so the grammar
-                // never blames them not-allowed to begin with) - built now
-                // so the mechanism exists and is tested ahead of #36.
-                //
-                // EPUB 3 only. `data-*` is an HTML5 concept and XHTML 1.1 has
-                // no such family, so epubcheck reports a plain RSC-005 for
-                // `<p data-foo="x">` in a `version="2.0"` book - probed one
-                // book per case against 5.3.0, with a clean control on both
-                // sides. Suppressing it at every version was a false
-                // negative, found while verifying the 2026-08-16 shelf
-                // additions.
-                if is_epub3
-                    && let crate::rng::Blame::Attribute(
-                        _,
-                        a,
-                        crate::rng::AttributeFault::NotAllowed,
-                    ) = &blame
-                    && a.namespace().is_none()
-                    && crate::htm::is_data_attribute_name(a.name())
-                {
-                    continue;
-                }
-                // `check_dom`/`check_dom_epub2` ran earlier over this same
-                // document and report obsolete attributes under their own
-                // rule. Where both fire we emit one attribute twice, and
-                // epubcheck emits it once.
-                //
-                // Asked of the report rather than assumed, the same shape as
-                // the entity suppression above: the two checks own overlapping
-                // but not nested sets (`clear` is obsolete *and* absent from
-                // the grammar; a misspelt attribute is only the latter), so a
-                // claim that one covers the other would be the exact kind of
-                // belief that keeps turning out false here.
-                //
-                // This predates #69 - `<p clear="all">` already drew both -
-                // but #69 widened its reach: the attributes of a *misplaced*
-                // element never reached the grammar at all before, so on one
-                // shelf book ten `<br clear>` went from one finding each to
-                // two.
-                if let crate::rng::Blame::Attribute(node, a, _) = &blame
-                    && let here = crate::xmlext::node_path_attr(*node, *a)
-                    && report.messages.iter().any(|m| {
-                        m.rule == Some("htm.obsolete_attribute")
-                            && m.location.as_deref() == Some(path.as_str())
-                            && m.element_path.as_ref().is_some_and(|p| p.path == here.path)
-                    })
-                {
+                if content_blame_suppressed(&blame, is_epub3, report, &path) {
                     continue;
                 }
                 push_blame(report, &path, rule, &blame);
@@ -17018,6 +17071,52 @@ mod tests {
         // will complain in the exact same way").
         let nav = r#"<nav epub:type="toc"><ol><li><a href="ch1.xhtml">Ch1</a></li></ol></nav>"#;
         assert!(has_opf_096(nav));
+    }
+
+    /// #139: schema findings that precede a fatal error are reported, as
+    /// epubcheck's streaming validator reports them; findings after it, and
+    /// "incomplete content" on an element still open at it, are not. Each
+    /// shape measured on 5.4.0, EPUB 3 and EPUB 2 (28 books, all identical
+    /// but one count gap that is the same in a well-formed document).
+    #[test]
+    fn schema_findings_before_a_fatal_error_are_kept() {
+        use crate::ids::{RSC_005, RSC_016};
+        let ids = |body: &str| -> Vec<&'static str> {
+            let doc = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\n{body}"
+            );
+            let mut v: Vec<_> = crate::validate_bytes(epub_with_opf(None, &doc))
+                .messages
+                .iter()
+                .filter(|m| m.id == RSC_005 || m.id == RSC_016)
+                .map(|m| m.id)
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        // The issue's shape: two stray `li` before a stray `</ul>`.
+        assert_eq!(
+            ids("<body>\n<li>a</li>\n<li>b</li></ul>\n</body></html>"),
+            [RSC_005, RSC_005, RSC_016]
+        );
+        // An attribute fault before the error is kept.
+        assert_eq!(
+            ids("<body>\n<p dir=\"sideways\">x</p>\n<p>y</q>\n</body></html>"),
+            [RSC_005, RSC_016]
+        );
+        // A `ul` still open at the error has no end tag for its content
+        // check to fire at; nothing after the error is seen.
+        assert_eq!(ids("<body>\n<ul>\n</p>\n</ul></body></html>"), [RSC_016]);
+        assert_eq!(
+            ids("<body>\n<p>x</q>\n<li>a</li>\n</body></html>"),
+            [RSC_016]
+        );
+        // An unterminated quote still leaves what came before it.
+        assert_eq!(
+            ids("<body>\n<li>a</li>\n<p class=\"x>y</p>\n</body></html>"),
+            [RSC_005, RSC_016]
+        );
     }
 
     // --- RSC-016: non-well-formed content documents (forum report, #12) ---

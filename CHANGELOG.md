@@ -12,6 +12,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A content document that is not well-formed now keeps the schema errors
+  that come before the break** (#139). epubcheck validates while it parses,
+  so everything it rejected up to the fatal error stays in its report: in the
+  reported book, five `<li>` elements sitting directly in `<body>`. We
+  reported the fatal error alone. We now check the part of the document
+  before the error and report what epubcheck reports there. Nothing after
+  the error is reported, in either tool. Neither is a "missing content"
+  error on an element the break left open, since epubcheck never reaches that
+  element's end tag. The book was already invalid, so no verdict changes. The
+  report is now complete.
+
 - **A space at either end of `prefix` no longer fails the book.**
   `prefix="foaf: http://xmlns.com/foaf/spec/ "` gives OPF-004 in both tools.
   epubcheck reports it as a warning and passes the book. We reported it as an

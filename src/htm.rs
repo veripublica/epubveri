@@ -2820,6 +2820,133 @@ mod tests {
     }
 }
 
+/// The part of a malformed document that epubcheck's streaming parser handed
+/// to its validators before the fatal error, rebuilt as a document: the text
+/// up to the start of the token the error falls in, with the elements still
+/// open at that point closed in order. Returns that text and the cut offset.
+/// Everything before the cut is byte-for-byte the original, so a position
+/// taken from the rebuilt document is a position in the real file.
+///
+/// For #139. epubcheck validates while it parses, so every schema finding
+/// before the fatal error is still reported, while we built a DOM, got
+/// nothing, and dropped them all. The caller validates the rebuilt document
+/// and keeps only what Jing could have said by then: nothing at or after the
+/// cut, and no end-of-element finding for an element the closers below
+/// invented (see `opf.rs`).
+///
+/// The same kind of scanner as [`scan_references`]: comments, CDATA, PIs and
+/// the DOCTYPE (internal subset included) are stepped over, and a `>` inside
+/// a quoted value does not end a tag. It trusts what precedes the error to
+/// be well-formed, which is the parser's own verdict, and returns `None` if
+/// no element was opened before the cut (nothing to validate).
+pub(crate) fn well_formed_prefix(text: &str, err_offset: usize) -> Option<(String, usize)> {
+    let b = text.as_bytes();
+    let err = err_offset.min(b.len());
+    let find = |from: usize, pat: &[u8]| -> Option<usize> {
+        b[from..]
+            .windows(pat.len())
+            .position(|w| w == pat)
+            .map(|p| from + p + pat.len())
+    };
+    let mut stack: Vec<&str> = Vec::new();
+    let mut opened_any = false;
+    let mut i = 0usize;
+    // A construct that runs past the end of the text (an unterminated quote,
+    // comment or tag) ends the prefix at its own start, like any other token
+    // the error falls in: what came before it was still validated there.
+    while i < err {
+        let rest = &b[i..];
+        let end = if rest.starts_with(b"<!--") {
+            let Some(e) = find(i + 4, b"-->") else { break };
+            e
+        } else if rest.starts_with(b"<![CDATA[") {
+            let Some(e) = find(i + 9, b"]]>") else { break };
+            e
+        } else if rest.starts_with(b"<?") {
+            let Some(e) = find(i + 2, b"?>") else { break };
+            e
+        } else if rest.starts_with(b"<!") {
+            // DOCTYPE: up to the first `>` outside quotes and outside `[...]`.
+            let (mut j, mut quote, mut depth) = (i + 2, 0u8, 0u32);
+            let close = loop {
+                let Some(&c) = b.get(j) else { break None };
+                if quote != 0 {
+                    if c == quote {
+                        quote = 0;
+                    }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'[' {
+                    depth += 1;
+                } else if c == b']' {
+                    depth = depth.saturating_sub(1);
+                } else if c == b'>' && depth == 0 {
+                    break Some(j + 1);
+                }
+                j += 1;
+            };
+            let Some(close) = close else { break };
+            close
+        } else if rest.starts_with(b"<") {
+            let (mut j, mut quote) = (i + 1, 0u8);
+            let close = loop {
+                let Some(&c) = b.get(j) else { break None };
+                if quote != 0 {
+                    if c == quote {
+                        quote = 0;
+                    }
+                } else if c == b'"' || c == b'\'' {
+                    quote = c;
+                } else if c == b'>' {
+                    break Some(j + 1);
+                }
+                j += 1;
+            };
+            let Some(close) = close else { break };
+            if close > err {
+                break;
+            }
+            let inner = &text[i + 1..close - 1];
+            if let Some(name) = inner.strip_prefix('/') {
+                let name = name.trim_end_matches(crate::xmlext::is_xml_space);
+                if stack.last() == Some(&name) {
+                    stack.pop();
+                } else {
+                    // The parser would have stopped here; the error is
+                    // expected at or before this point.
+                    break;
+                }
+            } else {
+                let name_end = inner
+                    .find(|c: char| crate::xmlext::is_xml_space(c) || c == '/')
+                    .unwrap_or(inner.len());
+                if !inner.ends_with('/') {
+                    stack.push(&inner[..name_end]);
+                }
+                opened_any = true;
+            }
+            close
+        } else {
+            i + rest.iter().position(|&c| c == b'<').unwrap_or(rest.len())
+        };
+        if end > err {
+            break;
+        }
+        i = end;
+    }
+    if !opened_any {
+        return None;
+    }
+    let mut out = String::with_capacity(i + stack.len() * 16);
+    out.push_str(&text[..i]);
+    for name in stack.iter().rev() {
+        out.push_str("</");
+        out.push_str(name);
+        out.push('>');
+    }
+    Some((out, i))
+}
+
 /// Reference-bearing attribute values found by scanning raw text, each with
 /// the byte offset of the value itself.
 ///
@@ -2935,6 +3062,52 @@ pub(crate) fn scan_references(text: &str) -> Vec<(String, usize)> {
         i = j + 1;
     }
     out
+}
+
+#[cfg(test)]
+mod well_formed_prefix_tests {
+    use super::well_formed_prefix;
+
+    /// The prefix up to the error offset (given as the index of `|`, which is
+    /// removed), its open elements closed.
+    fn cut(marked: &str) -> Option<String> {
+        let at = marked.find('|').expect("test text marks the error with |");
+        let text = marked.replacen('|', "", 1);
+        well_formed_prefix(&text, at).map(|(s, _)| s)
+    }
+
+    #[test]
+    fn cuts_at_the_token_the_error_falls_in_and_closes_what_is_open() {
+        // #139's own shape: a stray end tag, error at its `<`.
+        assert_eq!(
+            cut("<html><body><li>a</li>|</ul></body></html>").as_deref(),
+            Some("<html><body><li>a</li></body></html>")
+        );
+        // Error inside a text run: the run goes, the tags before it stay.
+        assert_eq!(
+            cut("<html><body><p>a |& b</p></body></html>").as_deref(),
+            Some("<html><body><p></p></body></html>")
+        );
+        // An unterminated quote runs to the end: cut at its tag.
+        assert_eq!(
+            cut("<html><body><li>a</li><p class=\"x>y|</p></body></html>").as_deref(),
+            Some("<html><body><li>a</li></body></html>")
+        );
+        // A `>` inside a quoted value does not end the tag, and comments,
+        // CDATA, PIs and a DOCTYPE with an internal subset are stepped over.
+        assert_eq!(
+            cut("<!DOCTYPE html [<!ENTITY a \"x>\">]><?p ?><html><!-- <b> --><body title=\"a>b\"><![CDATA[<i>]]>|</x>")
+                .as_deref(),
+            Some("<!DOCTYPE html [<!ENTITY a \"x>\">]><?p ?><html><!-- <b> --><body title=\"a>b\"><![CDATA[<i>]]></body></html>")
+        );
+        // Self-closing elements are not left open.
+        assert_eq!(
+            cut("<html><body><br/><img src=\"a\" />|</x>").as_deref(),
+            Some("<html><body><br/><img src=\"a\" /></body></html>")
+        );
+        // Nothing opened before the error: nothing to validate.
+        assert_eq!(cut("<?xml version=\"1.0\"?>\n|<html"), None);
+    }
 }
 
 #[cfg(test)]
