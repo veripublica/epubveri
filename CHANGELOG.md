@@ -12,6 +12,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A malformed SVG is now RSC-016, with what came before the break**
+  (#141). An empty, truncated or otherwise broken `.svg` was skipped without a
+  word, so the book passed here and failed in epubcheck. It is now a fatal
+  RSC-016. As with content documents (#139), the part before the break is
+  still checked the way epubcheck's streaming parser checks it. Faults at a
+  start tag there are reported: an unknown element, a bad attribute, an
+  invalid id, a missing or remote image. Checks that only run at an element's
+  end or the document's end, which are never reached, are not. A content
+  document or SVG that is cut off at the end now gets that check too: a
+  parse error at the end of input used to leave nothing to check.
+- **ACC-011 is EPUB 3 only, as in epubcheck.** An EPUB 2 SVG link without a
+  label no longer draws it.
 - **Stray text in the package metadata is now RSC-005, as in epubcheck**
   (#140). A character left between metadata elements, as in
   `<dc:date>…</dc:date>s` from a real book, passed here and failed there.

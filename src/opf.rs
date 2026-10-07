@@ -918,6 +918,74 @@ fn push_version_unreadable_after_decode_failure(opf_path: &str, report: &mut Rep
     );
 }
 
+/// #141: of the findings the standalone-SVG checks made on a rebuilt prefix
+/// (`htm::well_formed_prefix`), keep those epubcheck's streaming parser would
+/// have reported before the fatal error. Measured on 5.4.0, one truncated SVG
+/// per check, against the same SVG closed properly:
+///
+/// - Nothing at or after the cut, and nothing without a position.
+/// - Nothing from the end of the document: the property checks (OPF-014,
+///   OPF-015, OPF-018/018b) and duplicate ids, which are never reached.
+/// - Nothing from the end of an element still open at the cut: an `a`'s
+///   ACC-011, a `math`'s ACC-009, a `foreignObject`'s or `title`'s content
+///   check, and a `style`'s CSS, wherever in it the CSS finding points.
+///
+/// What is left is what fires at a start tag: unknown elements, attribute
+/// faults, ids, references (RSC-006/007, HTM_062), `epub:type`, and the
+/// content of elements that closed before the cut.
+fn keep_findings_before_fatal(
+    report: &mut Report,
+    start: usize,
+    prefix_doc: &roxmltree::Document,
+    cut: usize,
+    raw: &str,
+) {
+    let at_cut = line_col_at(raw, cut);
+    let before = |p: Position| (p.line, p.column) < (at_cut.line, at_cut.column);
+    let open: Vec<(&str, Position)> = prefix_doc
+        .descendants()
+        .filter(|n| n.is_element() && n.range().end > cut)
+        .map(|n| (n.tag_name().name(), Position::of(n)))
+        .collect();
+    const DOCUMENT_END: [&str; 4] = [
+        "svg.properties.undeclared",
+        "svg.properties.unneeded",
+        "svg.ids.duplicate_id",
+        "opf.content_document.property_used_undeclared",
+    ];
+    let mut kept = Vec::new();
+    for m in report.messages.drain(start..) {
+        let Some(pos) = m.position else { continue };
+        if !before(pos)
+            || m.rule.is_some_and(|r| DOCUMENT_END.contains(&r))
+            || matches!(m.id, OPF_018 | OPF_018B)
+        {
+            continue;
+        }
+        // Only the check that runs at that element's end, never everything
+        // pinned to its start: an `a`'s own start-tag fault is still reported
+        // (measured: an EPUB 2 `<a href>` left open keeps its RSC-005s).
+        let ended_late = open.iter().any(|(name, start_pos)| match *name {
+            "a" => *start_pos == pos && m.id == ACC_011,
+            "math" => *start_pos == pos && m.id == ACC_009,
+            "foreignObject" => {
+                *start_pos == pos && m.rule == Some("svg.foreign_object.schema_violation")
+            }
+            "title" => *start_pos == pos && m.rule == Some("svg.title.foreign_namespace"),
+            "style" => {
+                (start_pos.line, start_pos.column) <= (pos.line, pos.column)
+                    && m.id.starts_with("CSS-")
+            }
+            _ => false,
+        });
+        if ended_late {
+            continue;
+        }
+        kept.push(m);
+    }
+    report.messages.extend(kept);
+}
+
 fn classify_resource_ref(
     resolved: &str,
     manifest_paths: &HashSet<String>,
@@ -8391,7 +8459,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 // rather than paid on every book. That is the argument the
                 // issue got backwards, and `scan_references` skips those
                 // constructs by construction anyway.
-                let err_offset = {
+                let err_offset = if e.ran_out_of_input() {
+                    t.len()
+                } else {
                     let p = e.pos();
                     let mut off = t.len();
                     let mut row = 1u32;
@@ -8829,7 +8899,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             // the rest of that document, not its own document-level id
             // rules) - the identically-shaped standalone-SVG fixture
             // rejects it.
-            crate::svg::check_link_labels(svg_root, &path, report);
+            // ACC-011 is `OPSHandler30`'s (EPUB 3 only): an EPUB 2 SVG link
+            // without a label draws none there (measured on 5.4.0, #141's probes).
+            if is_epub3 {
+                crate::svg::check_link_labels(svg_root, &path, report);
+            }
         }
         for fo in d.descendants().filter(|n| {
             n.is_element()
@@ -11781,8 +11855,44 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         let Some(b) = ocf.read_content(&orig) else {
             continue;
         };
-        let text = String::from_utf8_lossy(&b).into_owned();
+        let raw = String::from_utf8_lossy(&b).into_owned();
+        // **A standalone SVG that is not well-formed** (#141). It used to be
+        // skipped without a word, so an empty, truncated or broken SVG passed
+        // the book where epubcheck reports RSC-016: the SVG counterpart of
+        // what #12 fixed for content documents. Like #139 there, the
+        // well-formed part before the error is then checked as epubcheck's
+        // streaming parser checks it - the same checks as below, run on the
+        // rebuilt prefix, with `prefix_cut` filtering what they report at the
+        // end of this iteration.
+        let mut prefix_cut: Option<(usize, String)> = None;
+        let text = match parse_xml(&raw) {
+            Ok(_) => raw,
+            Err(e) => {
+                report.push_full(
+                    RSC_016,
+                    Severity::Fatal,
+                    format!("SVG document is not well-formed XML: {e}"),
+                    doc_path.clone(),
+                    Position::of_parse_error(&e),
+                    "svg.malformed_xml",
+                    Vec::new(),
+                );
+                let err_offset = if e.ran_out_of_input() {
+                    raw.len()
+                } else {
+                    offset_at(&raw, Position::of_parse_error(&e))
+                };
+                match crate::htm::well_formed_prefix(&raw, err_offset) {
+                    Some((prefix, cut)) if parse_xml(&prefix).is_ok() => {
+                        prefix_cut = Some((cut, raw.clone()));
+                        prefix
+                    }
+                    _ => continue,
+                }
+            }
+        };
         let Ok(d) = parse_xml(&text) else { continue };
+        let findings_start = report.messages.len();
         let dir = parent_dir(doc_path);
         let declared_prefixes =
             attr_ns_node(d.root_element(), "http://www.idpf.org/2007/ops", "prefix")
@@ -11986,7 +12096,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             );
         }
         crate::svg::check_fragments(d.root_element(), doc_path, is_epub3, report);
-        crate::svg::check_link_labels(d.root_element(), doc_path, report);
+        // ACC-011 is `OPSHandler30`'s (EPUB 3 only): an EPUB 2 SVG link
+        // without a label draws none there (measured on 5.4.0, #141's probes).
+        if is_epub3 {
+            crate::svg::check_link_labels(d.root_element(), doc_path, report);
+        }
         for fo in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "foreignObject"
@@ -12162,6 +12276,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(href))));
                 }
             }
+        }
+        if let Some((cut, raw)) = &prefix_cut {
+            keep_findings_before_fatal(report, findings_start, &d, *cut, raw);
         }
     }
 
@@ -29376,6 +29493,68 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// #141: an SVG that is not well-formed is RSC-016 (it was skipped in
+    /// silence), and what fires at a start tag before the break is still
+    /// reported, as epubcheck's streaming parser reports it; what fires at an
+    /// end it never reaches is not. Measured on 5.4.0, one truncated SVG per
+    /// shape, each against the same SVG closed properly.
+    #[test]
+    fn a_malformed_svg_is_rsc_016_with_what_preceded_the_break() {
+        use crate::ids::{ACC_011, OPF_014, RSC_005, RSC_006, RSC_007, RSC_016};
+        let ids = |svg: &str| -> Vec<&'static str> {
+            let mut v: Vec<_> = crate::validate_bytes(epub_with_svg_spine(svg))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| {
+                    matches!(
+                        *id,
+                        RSC_016 | RSC_005 | RSC_006 | RSC_007 | ACC_011 | OPF_014
+                    )
+                })
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        const OPEN: &str =
+            r#"<svg viewBox="0 0 10 10" xmlns="http://www.w3.org/2000/svg"><title>t</title>"#;
+        // Empty, and cut off: the fatal alone.
+        assert_eq!(ids(""), [RSC_016]);
+        assert_eq!(ids(&format!("{OPEN}\n<rect")), [RSC_016]);
+        // A start-tag fault before the cut is kept.
+        assert_eq!(
+            ids(&format!(
+                "{OPEN}<rect id=\"1a\" width=\"1\" height=\"1\"/>\n<rect"
+            )),
+            [RSC_005, RSC_016]
+        );
+        assert_eq!(
+            ids(&format!(
+                "{OPEN}<image width=\"1\" height=\"1\" href=\"https://example.com/a.png\"/>\n<rect"
+            )),
+            [RSC_006, RSC_016]
+        );
+        // End-of-element and end-of-document checks are not reached: a link
+        // left open, and a script (OPF-014 is the property check at the end).
+        assert_eq!(
+            ids(&format!(
+                "{OPEN}<a href=\"nav.xhtml\"><rect width=\"1\" height=\"1\"/>\n<rect"
+            )),
+            [RSC_016]
+        );
+        assert_eq!(
+            ids(&format!("{OPEN}<script>var a;</script>\n<rect")),
+            [RSC_016]
+        );
+        // Nothing after the break is seen.
+        assert_eq!(
+            ids(&format!(
+                "{OPEN}<rect width=\"1\" height=\"1\"></circle>\n<rect id=\"1a\"/>"
+            )),
+            [RSC_016]
+        );
     }
 
     /// A standalone SVG's `<style>` is CSS like any other (epubcheck's

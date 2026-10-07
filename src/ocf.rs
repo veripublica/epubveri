@@ -36,6 +36,21 @@ impl std::fmt::Display for XmlError {
 }
 
 impl XmlError {
+    /// Whether the parser ran out of input rather than meeting a bad token:
+    /// a root that never closed, or a stream that ended mid-construct. Both
+    /// report position 1:1 in roxmltree, so a caller looking for "how far did
+    /// the parser get" must read them as the end of the text instead - the
+    /// #139/#141 prefix check otherwise found nothing before 1:1 and checked
+    /// nothing in a truncated document, its commonest shape.
+    pub(crate) fn ran_out_of_input(&self) -> bool {
+        matches!(
+            self,
+            XmlError::Parse(
+                roxmltree::Error::UnclosedRootNode | roxmltree::Error::UnexpectedEndOfStream
+            )
+        )
+    }
+
     /// The source position to report, mirroring `roxmltree::Error::pos`.
     /// The guard scans bytes rather than tracking rows, so it points at the
     /// start of the document - the file name is the actionable part.
