@@ -132,6 +132,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   names the missing item (OPF-049), as there, rather than "not an NCX".
 - **A `media-overlay` naming no item is now MED_013 and RSC-005, as in
   epubcheck.** We dropped such a document from the overlay checks altogether.
+- **EPUB 2: `<bdo>` without `dir`, and `dir="auto"`, are now errors, as in
+  epubcheck.** XHTML 1.1 requires `dir` on `bdo` and allows only `ltr` and
+  `rtl` anywhere. We accepted both, so `<p><bdo>x</bdo></p>` or
+  `<p dir="auto">` passed here and failed there. EPUB 3 is unchanged; HTML5
+  has `dir="auto"`. None of the 463 EPUB 2 books on our shelf uses either.
+- **An attribute with a bad value no longer brings follow-on errors.** When a
+  required attribute had a value the grammar rejects, we reported the value
+  and then also complained about the element's contents (for example "stray
+  text" inside `<bdo dir="auto">`). epubcheck reports the value alone, and so
+  do we now.
 - **MathML in a standalone SVG now gets ACC-009** (usage) when it has no
   `alttext` and no annotation, as it already did in XHTML.
 

@@ -1279,7 +1279,31 @@ impl<'a> Env<'a> {
                 // clas="header">`, #31's own worked example), so bailing
                 // out after the first was a latent gap this is the first
                 // real trigger for.
-                cur = prev;
+                // An attribute whose *name* is allowed and whose value is not
+                // is consumed rather than reverted: the element has it, as
+                // Jing treats it, so a required slot it fills stays filled
+                // and the content model carries on. Reverting it emptied the
+                // slot, the start tag then closed to NotAllowed, and the
+                // element's own content drew follow-on findings: EPUB 2
+                // `<bdo dir="auto">x</bdo>` was a value error *and* "stray
+                // text in bdo", one finding in epubcheck. An unknown name is
+                // still reverted, as it can fill nothing.
+                cur = if fault == AttributeFault::InvalidValue {
+                    let consumed = self.att_deriv_id(
+                        &prev,
+                        ans,
+                        att.name(),
+                        self.attr_id(ans, att.name()),
+                        &|_| true,
+                    );
+                    if is_not_allowed(&consumed) {
+                        prev
+                    } else {
+                        consumed
+                    }
+                } else {
+                    prev
+                };
                 continue;
             }
         }

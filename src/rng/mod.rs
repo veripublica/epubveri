@@ -1536,6 +1536,31 @@ mod tests {
         );
     }
 
+    /// EPUB 2 (XHTML 1.1): `bdo` requires `dir`, `dir` is `ltr`|`rtl` only,
+    /// and a rejected value on a required attribute is one finding, not a
+    /// value error plus follow-on content errors. Each measured on 5.4.0.
+    #[test]
+    fn epub2_bdo_and_dir_follow_xhtml_1_1() {
+        let doc = |body: &str| {
+            format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body>{body}</body></html>"
+            )
+        };
+        let count = |body: &str| {
+            validate_node_report(
+                &xhtml_grammar_epub2(),
+                roxmltree::Document::parse(&doc(body))
+                    .unwrap()
+                    .root_element(),
+            )
+            .len()
+        };
+        assert_eq!(count("<p><bdo dir=\"rtl\">x</bdo></p>"), 0);
+        assert_eq!(count("<p><bdo>x</bdo></p>"), 1);
+        assert_eq!(count("<p dir=\"auto\">x</p>"), 1);
+        assert_eq!(count("<p><bdo dir=\"auto\">x</bdo></p>"), 1);
+    }
+
     /// The EPUB 3 package attributes epubcheck types (`package-30.rnc`) and we
     /// left to the wildcard: `properties`/`rel` are `xsd:NMTOKENS`,
     /// `property`/`scheme` `xsd:NMTOKEN`, `linear` and

@@ -519,13 +519,32 @@
        them. "Not global" and "not valid anywhere" are different questions;
        the test applied here is absence from all 25 modules `content.rng`
        includes. -->
+  <!-- XHTML 1.1's `bdo.attlist`: `Common.attrib` with `dir` **required**
+       (bdo.rng), which is the whole point of the element. It was the shared
+       global set, where `dir` is optional, so `<p><bdo>x</bdo></p>` passed
+       here and is RSC-005 "missing required attribute \"dir\"" in epubcheck
+       (measured on 5.4.0, EPUB 2). EPUB 3's counterpart is the Schematron
+       `bdo-dir-required`, which runs at 3.0 only. -->
+  <define name="bdoAttrs-epub2">
+    <ref name="identityAttrs-epub2"/>
+    <optional><attribute name="class"><data type="string"/></attribute></optional>
+    <optional><attribute name="style"><data type="string"/></attribute></optional>
+    <optional><attribute name="title"><data type="string"/></attribute></optional>
+    <attribute name="dir">
+      <choice><value>ltr</value><value>rtl</value></choice>
+    </attribute>
+  </define>
+
   <define name="globalAttrsRest-epub2">
     <optional><attribute name="class"><data type="string"/></attribute></optional>
     <optional><attribute name="style"><data type="string"/></attribute></optional>
     <optional><attribute name="title"><data type="string"/></attribute></optional>
+    <!-- `ltr` | `rtl` only: XHTML 1.1's `Text.datatype` for `dir` has no
+         `auto`, which is HTML5's. `<p dir="auto">` is RSC-005 in an EPUB 2
+         book there and passed here (measured on 5.4.0). -->
     <optional>
       <attribute name="dir">
-        <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
+        <choice><value>ltr</value><value>rtl</value></choice>
       </attribute>
     </optional>
   </define>
@@ -2810,7 +2829,7 @@
       <element name="q"><ref name="globalAttrs-epub2"/>
         <optional><attribute name="cite"><data type="anyURI"/></attribute></optional>
         <ref name="epub2Inline"/></element>
-      <element name="bdo"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
+      <element name="bdo"><ref name="bdoAttrs-epub2"/><ref name="epub2Inline"/></element>
       <element name="br"><ref name="globalAttrs-epub2"/></element>
       <ref name="imgEl-epub2"/>
       <ref name="iframeEl-epub2"/>
