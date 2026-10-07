@@ -10,6 +10,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-07
+
 ### Fixed
 
 - **A malformed package document keeps what came before the break**, the
