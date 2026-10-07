@@ -83,7 +83,9 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   these attributes in the 75 EPUB 3 books of our test shelf (1,001 values),
   in epubcheck's 1,086 test books and in W3C's 208 EPUB 3 test books. The
   only values the new types reject are in four epubcheck test books that
-  expect exactly that error.
+  expect exactly that error. `id` on `package`, `manifest`, `spine`,
+  `itemref`, `meta` and `link` is now an XML ID, as there. Every such `id`
+  in the same three sets of books already is one.
 - **Four `rule` keys are gone, and their findings now come from the grammar.**
   An empty `property`, a `property` or `scheme` holding a list, and an
   empty link `properties` are still RSC-005, with the same count. Their

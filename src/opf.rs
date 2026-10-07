@@ -3838,12 +3838,12 @@ fn check_dc_values_not_empty(
 ///    it means that and does not — given a `&str` roxmltree ignores the
 ///    namespace — so the attribute is matched explicitly below.
 fn check_duplicate_ids(doc: &roxmltree::Document, opf_path: &str, report: &mut Report) {
-    // Mirrors the engine's own `normalize-space`, not XPath's definition of
-    // it: `split_whitespace` is Unicode-aware where XPath 1.0 lists only
-    // #x20/#x9/#xD/#xA. Matching the engine is what keeps the output
-    // identical — if that function is ever made spec-exact, this follows it.
+    // Mirrors the engine's own `normalize-space`, which is XPath's: the four
+    // XML whitespace characters only. It used to be Unicode-aware here after
+    // the engine had been made spec-exact, so `id="a"` and `id="a&#160;"`
+    // read as one id and drew a duplicate the Schematron does not.
     fn normalize_space(s: &str) -> String {
-        s.split_whitespace().collect::<Vec<_>>().join(" ")
+        crate::xmlext::normalize_xml_space(s)
     }
 
     // `select_context_nodes` walks `root_element().descendants()`, which

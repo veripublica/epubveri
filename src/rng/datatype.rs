@@ -216,7 +216,8 @@ impl Datatype {
     pub fn equal(&self, a: &str, b: &str) -> bool {
         match self {
             Datatype::Integer | Datatype::NonNegativeInteger | Datatype::PositiveInteger => {
-                match (a.trim().parse::<i128>(), b.trim().parse::<i128>()) {
+                let int = |s: &str| crate::xmlext::trim_xml_space(s).parse::<i128>();
+                match (int(a), int(b)) {
                     (Ok(x), Ok(y)) => x == y,
                     _ => self.normalize(a) == self.normalize(b),
                 }

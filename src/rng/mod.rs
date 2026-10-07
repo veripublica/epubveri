@@ -1580,6 +1580,12 @@ mod tests {
                 r#"<meta property=" dcterms:creator " scheme="onix:x">x</meta>"#,
             ),
             ("", "", "", r#"<link rel="record voicing" href="r.xml"/>"#),
+            (
+                "",
+                "",
+                r#"id="r1""#,
+                r#"<meta property="dcterms:creator" id="t">X</meta>"#,
+            ),
         ] {
             assert!(
                 ok(item, spine, itemref, meta),
@@ -1607,6 +1613,14 @@ mod tests {
                 "",
                 r#"<link rel="record" properties="  " href="r.xml"/>"#,
             ),
+            // `id` is `xsd:ID` on every package element (measured: RSC-005).
+            (
+                "",
+                "",
+                "",
+                "<meta property=\"dcterms:creator\" id=\"t\u{a0}\">X</meta>",
+            ),
+            ("", "", r#"id="1r""#, ""),
         ] {
             assert!(
                 !ok(item, spine, itemref, meta),

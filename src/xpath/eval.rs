@@ -124,11 +124,9 @@ impl<'a, 'input> Value<'a, 'input> {
             Value::NodeSet(ns) => ns
                 .first()
                 .map(|n| n.string_value())
-                .unwrap_or_default()
-                .trim()
-                .parse()
+                .map(|s| string_to_number(&s))
                 .unwrap_or(f64::NAN),
-            Value::String(s) => s.trim().parse().unwrap_or(f64::NAN),
+            Value::String(s) => string_to_number(s),
             Value::Number(n) => *n,
             Value::Boolean(b) => {
                 if *b {
@@ -422,7 +420,7 @@ fn nodeset_matches_scalar(ns: &[NodeRef], other: &Value) -> bool {
     match other {
         Value::Number(n) => ns
             .iter()
-            .any(|node| node.string_value().trim().parse::<f64>().ok() == Some(*n)),
+            .any(|node| string_to_number(&node.string_value()) == *n),
         Value::Boolean(b) => (!ns.is_empty()) == *b,
         _ => {
             let s = other.to_string_value();
@@ -456,20 +454,12 @@ fn compare_relational(a: &Value, b: &Value, op: BinOp) -> bool {
         }
     }
     match (a, b) {
-        (Value::NodeSet(ns), _) => ns.iter().any(|n| {
-            cmp(
-                n.string_value().trim().parse().unwrap_or(f64::NAN),
-                b.to_number(),
-                op,
-            )
-        }),
-        (_, Value::NodeSet(ns)) => ns.iter().any(|n| {
-            cmp(
-                a.to_number(),
-                n.string_value().trim().parse().unwrap_or(f64::NAN),
-                op,
-            )
-        }),
+        (Value::NodeSet(ns), _) => ns
+            .iter()
+            .any(|n| cmp(string_to_number(&n.string_value()), b.to_number(), op)),
+        (_, Value::NodeSet(ns)) => ns
+            .iter()
+            .any(|n| cmp(a.to_number(), string_to_number(&n.string_value()), op)),
         _ => cmp(a.to_number(), b.to_number(), op),
     }
 }
@@ -622,6 +612,13 @@ fn eval_call<'a, 'input>(
 
 fn current_string_value(env: &Env) -> String {
     env.current.string_value()
+}
+
+/// A string as a number: XML whitespace around it is ignored, anything else
+/// that does not parse is NaN. `str::trim` also stripped a no-break space,
+/// so `number('5&#160;')` was 5 here and NaN in epubcheck's engines.
+fn string_to_number(s: &str) -> f64 {
+    crate::xmlext::trim_xml_space(s).parse().unwrap_or(f64::NAN)
 }
 
 #[cfg(test)]

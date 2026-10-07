@@ -37,12 +37,14 @@
 
   <start>
     <element name="package">
-      <ref name="anyAttributes"/>
+      <ref name="anyAttributesExceptTyped"/>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <attribute name="version"><data type="string"/></attribute>
       <interleave>
         <element name="metadata"><ref name="metadataContent-epub3"/></element>
         <element name="manifest">
-          <ref name="anyAttributes"/>
+          <ref name="anyAttributesExceptTyped"/>
+          <optional><attribute name="id"><data type="ID"/></attribute></optional>
           <oneOrMore>
             <choice>
               <element name="item">
@@ -58,6 +60,7 @@
         </element>
         <element name="spine">
           <ref name="anyAttributesExceptTyped"/>
+          <optional><attribute name="id"><data type="ID"/></attribute></optional>
           <optional>
             <attribute name="page-progression-direction">
               <choice><value>ltr</value><value>rtl</value><value>default</value></choice>
@@ -68,6 +71,7 @@
               <element name="itemref">
                 <ref name="anyAttributesExceptTyped"/>
                 <attribute name="idref"><data type="IDREF"/></attribute>
+                <optional><attribute name="id"><data type="ID"/></attribute></optional>
                 <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
                 <optional>
                   <attribute name="linear"><choice><value>yes</value><value>no</value></choice></attribute>
@@ -93,7 +97,11 @@
        the wildcard beside it**, or a bad value simply matches the wildcard
        and the type is never asked. Typed (2026-10-07): `properties`, `rel`
        (`xsd:NMTOKENS`), `property`, `scheme` (`xsd:NMTOKEN`), `linear`
-       (`yes`|`no`), `page-progression-direction` (`ltr`|`rtl`|`default`).
+       (`yes`|`no`), `page-progression-direction` (`ltr`|`rtl`|`default`),
+       and `id` (`xsd:ID`) wherever `opf.id.attr` puts it: `package`,
+       `manifest`, `spine`, `itemref`, `meta`, `link` (`item`'s was typed
+       already). Measured the same way for `id`: every id on those elements
+       in the shelf, the fixtures and epub-tests is an NCName.
        Each is excepted on every element, which is harmless where an element
        does not carry it: there, the attribute was already foreign.
 
@@ -116,6 +124,7 @@
             <name ns="">scheme</name>
             <name ns="">linear</name>
             <name ns="">page-progression-direction</name>
+            <name ns="">id</name>
           </except>
         </anyName>
       </attribute>
@@ -127,6 +136,7 @@
   <define name="metaEl-epub3">
     <element name="meta">
       <ref name="anyAttributesExceptTyped"/>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="property"><data type="NMTOKEN"/></attribute></optional>
       <optional><attribute name="scheme"><data type="NMTOKEN"/></attribute></optional>
       <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
@@ -135,6 +145,7 @@
   <define name="linkEl-epub3">
     <element name="link">
       <ref name="anyAttributesExceptTyped"/>
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
       <optional><attribute name="rel"><data type="NMTOKENS"/></attribute></optional>
       <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
       <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
