@@ -1322,23 +1322,26 @@ pub(crate) fn check_deprecated_xlink_href(
     }
 }
 
-/// `ACC-011` (usage): an SVG `<a>` link with no accessible label at all -
-/// no `xlink:title` attribute, no `<title>` child, no `aria-label`, and
-/// no real text content anywhere inside it (confirmed via a real fixture
-/// exercising all four labeling mechanisms as valid, plus a fifth `<a>`
-/// with none of them).
+/// `ACC-011` (usage): an SVG `<a>` link with no accessible label, as
+/// `OPSHandler30` decides it: a non-empty `xlink:title` or `aria-label`
+/// (`Strings.isNullOrEmpty`, so `""` is no label), or an SVG `<title>` or
+/// `<text>` element inside the link. **Character data alone is not a label**:
+/// SVG does not render text outside `<text>`, and epubcheck sets `hasLabel`
+/// only on those two elements. Counting any non-blank text (as this did)
+/// missed ACC-011 on four of epubcheck's own fixtures,
+/// `url-missing-resource-svg-a-*`, whose `<a>` holds a bare `link`.
 pub(crate) fn check_link_labels(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     for a in svg_root.descendants().filter(|n| {
         n.is_element() && n.tag_name().name() == "a" && n.tag_name().namespace() == Some(SVG_NS)
     }) {
-        let has_label = a.attribute((XLINK_NS, "title")).is_some()
-            || a.attr_no_ns("aria-label").is_some()
-            || a.children()
-                .any(|c| c.is_element() && c.tag_name().name() == "title")
-            || a.descendants()
-                .filter(|d| d.is_text())
-                .filter_map(|d| d.text())
-                .any(|t| !crate::xmlext::is_xml_blank(t));
+        let non_empty = |v: Option<&str>| v.is_some_and(|v| !v.is_empty());
+        let has_label = non_empty(a.attribute((XLINK_NS, "title")))
+            || non_empty(a.attr_no_ns("aria-label"))
+            || a.descendants().any(|c| {
+                c.is_element()
+                    && c.tag_name().namespace() == Some(SVG_NS)
+                    && matches!(c.tag_name().name(), "title" | "text")
+            });
         if !has_label {
             report.push_at_pos(
                 ACC_011,
@@ -3305,6 +3308,30 @@ mod tests {
             ))
             .is_empty()
         );
+    }
+
+    #[test]
+    fn an_svg_link_is_named_by_title_text_or_attributes_not_by_bare_text() {
+        // OPSHandler30: xlink:title / aria-label (non-empty), or an SVG
+        // <title> or <text> inside. epubcheck's four
+        // `url-missing-resource-svg-a-*` fixtures hold a bare "link" and get
+        // ACC-011 there.
+        let acc = |a: &str| -> usize {
+            let xml = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+                 xmlns:xlink=\"http://www.w3.org/1999/xlink\">{a}</svg>"
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_link_labels(d.root_element(), "x.svg", &mut report);
+            report.messages.len()
+        };
+        assert_eq!(acc("<a href=\"c.xhtml\">link</a>"), 1);
+        assert_eq!(acc("<a href=\"c.xhtml\" aria-label=\"\">link</a>"), 1);
+        assert_eq!(acc("<a href=\"c.xhtml\"><text>link</text></a>"), 0);
+        assert_eq!(acc("<a href=\"c.xhtml\"><title>t</title></a>"), 0);
+        assert_eq!(acc("<a href=\"c.xhtml\" xlink:title=\"t\"/>"), 0);
+        assert_eq!(acc("<a href=\"c.xhtml\" aria-label=\"t\"/>"), 0);
     }
 
     #[test]

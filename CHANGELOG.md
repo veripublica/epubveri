@@ -142,6 +142,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   and then also complained about the element's contents (for example "stray
   text" inside `<bdo dir="auto">`). epubcheck reports the value alone, and so
   do we now.
+- **Four more of epubcheck's own test books now get exactly what epubcheck
+  reports.**
+  - **An SVG link needs a real name (ACC-011).** A name is `xlink:title`,
+    `aria-label` or an SVG `<title>`/`<text>` inside the link. Bare text in
+    `<a>` is not rendered in SVG and does not count. We counted it.
+  - **A manifest item whose `id` has a space at either end has its
+    `properties` ignored, as in epubcheck.** epubcheck files the item under
+    the trimmed id and then looks it up under the raw one, so it never reads
+    those properties. So `id=" img"` with an unknown property passes there,
+    and failed here. A padded nav `id` also loses the nav document's exemption
+    from OPF-097.
+  - **OBS-001 in EPUB 2.** An `<img>`, `<object>` or SVG `<image>` pointing at
+    a manifest item with a `fallback` gets OBS-001 (usage) at EPUB 2 too.
+    We reported it at EPUB 3 only.
+  - **OPF-001 beside an undecodable package document.** An OPF with an
+    unknown or mismatched encoding stops epubcheck's version check as well,
+    and it reports OPF-001 there.
 - **MathML in a standalone SVG now gets ACC-009** (usage) when it has no
   `alttext` and no annotation, as it already did in XHTML.
 

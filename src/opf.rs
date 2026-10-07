@@ -881,6 +881,43 @@ fn check_mathml_alternative_text(
     }
 }
 
+/// Whether a manifest item's `id` carries whitespace at either end.
+///
+/// epubcheck files each item under `id.trim()` (`OPFHandler`:542) and then
+/// looks it up again under the raw `id` to process its `properties`
+/// (`OPFHandler30`, `itemBuilders.get(id)`). For a padded id the lookup
+/// misses, so the item's properties are never read: no OPF-027/OPF-012 on
+/// them, no nav flag (so the nav document is not exempt from OPF-097), and
+/// none of the property-driven checks. Measured on 5.4.0 with `id=" img"`
+/// carrying `properties="bogus"` and `"svg"` (valid there, OPF-027/OPF-012
+/// here before), and with epubcheck's own
+/// `conformance-xml-id-leading-trailing-spaces-valid` (`id="nav "`: OPF-097
+/// there, nothing here before). A quirk rather than a rule, matched because a
+/// book that passes epubcheck must pass here. The nav document's *presence*
+/// is the Schematron's question and still sees the attribute.
+fn item_id_is_padded(item: roxmltree::Node) -> bool {
+    item.attr_no_ns("id")
+        .is_some_and(|raw| raw != crate::xmlext::trim_xml_space(raw))
+}
+
+/// OPF-001 beside a package document that cannot be decoded. epubcheck's
+/// `PackageDocumentPeeker` reads the version with the same XML parser before
+/// anything else (`OCFChecker`:420), so the encoding fault that is our RSC-016
+/// also leaves it with "Version not found". Measured on 5.4.0 with its own
+/// `xml-encoding-unknown-declared-error` and
+/// `xml-encoding-utf16-BOM-and-utf8-declaration-warning` packaged as books
+/// (single-file mode has no peek, which is why the feature files omit it).
+fn push_version_unreadable_after_decode_failure(opf_path: &str, report: &mut Report) {
+    report.push_at_rule(
+        OPF_001,
+        Severity::Error,
+        "the EPUB version could not be read: the package document could not be decoded",
+        opf_path,
+        "opf.package.version_unreadable",
+        Vec::new(),
+    );
+}
+
 fn classify_resource_ref(
     resolved: &str,
     manifest_paths: &HashSet<String>,
@@ -4073,6 +4110,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
                     "opf.encoding.mismatched_utf16",
                     vec![declared.clone()],
                 );
+                push_version_unreadable_after_decode_failure(opf_path, report);
                 return None;
             }
         }
@@ -4133,6 +4171,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
                     "opf.encoding.unrecognized",
                     vec![enc.to_string()],
                 );
+                push_version_unreadable_after_decode_failure(opf_path, report);
                 return None;
             }
             if enc.eq_ignore_ascii_case("iso-8859-1")
@@ -6376,7 +6415,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     }
                 }
             }
-            if let Some(props) = item.attr_no_ns("properties") {
+            if let Some(props) = item
+                .attr_no_ns("properties")
+                .filter(|_| !item_id_is_padded(item))
+            {
                 item_properties.insert(resolved_nfc.clone(), props.to_string());
                 for token in props.xml_tokens() {
                     if token == "cover-image" {
@@ -10499,7 +10541,24 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                         // draws nothing there while we drew one — the
                         // reference types this question is asked of are
                         // registered by the EPUB 3 handler.
-                        if is_epub3 && manifest_fallback_paths.contains(&key) {
+                        //
+                        // **Corrected 2026-10-07: the gate is the reference
+                        // type, not the version.** The audio probe above was
+                        // right and its reading too wide: `<audio>` is
+                        // registered by the EPUB 3 handler only, but `<img
+                        // src>`, `<object data>` and SVG `<image>` go through
+                        // the base `OPSHandler` at both versions
+                        // (`checkImage`, `registerReference(GENERIC)`), and
+                        // epubcheck reports OBS-001 for them in an EPUB 2
+                        // book: its own `opf-fallback-non-resolving-error`,
+                        // and one book each for img and object on 5.4.0.
+                        let registered_at_epub2 = matches!(
+                            (node.tag_name().name(), attr),
+                            ("img", "src") | ("object", "data") | ("image", _)
+                        );
+                        if (is_epub3 || registered_at_epub2)
+                            && manifest_fallback_paths.contains(&key)
+                        {
                             report.push_node(
                                 OBS_001,
                                 Severity::Usage,
@@ -12648,7 +12707,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     // simply fall through to the local branch below.
                     let is_nav = item
                         .attr_no_ns("properties")
-                        .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"));
+                        .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"))
+                        && !item_id_is_padded(item);
                     let mt = item.attr_no_ns("media-type").unwrap_or_default();
                     // The remote half stays EPUB 3 only. In EPUB 2 nothing
                     // may be remote at all, so such an item is already an
@@ -12688,7 +12748,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 {
                     let is_nav = item
                         .attr_no_ns("properties")
-                        .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"));
+                        .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"))
+                        && !item_id_is_padded(item);
                     // **The same three exemptions as the local branch below**,
                     // and writing only the first of them here was the shape
                     // this whole family keeps producing: a new branch that
@@ -12740,7 +12801,8 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 let resolved = nfc(&resolve(&base_dir, href));
                 let is_nav = item
                     .attr_no_ns("properties")
-                    .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"));
+                    .is_some_and(|p| p.xml_tokens().any(|t| t == "nav"))
+                    && !item_id_is_padded(item);
                 // **The NCX exemption is the item the spine names, not any
                 // item carrying the NCX media type.** epubcheck's condition
                 // is `item.isNcx()`, and that flag is set in exactly one
@@ -23484,6 +23546,46 @@ mod tests {
             super::item_property_media_types("data-nav").is_none(),
             "checked elsewhere"
         );
+    }
+
+    /// An item whose `id` has whitespace at either end never has its
+    /// `properties` read by epubcheck (filed under `id.trim()`, looked up by
+    /// the raw id). Measured on 5.4.0: `id=" img"` with `properties="bogus"`
+    /// is valid there (no OPF-027), and its own
+    /// `conformance-xml-id-leading-trailing-spaces-valid` gives the nav
+    /// document an OPF-097 because the nav flag is never set.
+    #[test]
+    fn a_padded_item_id_has_its_properties_ignored_as_in_epubcheck() {
+        let opf = |id: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="{id}" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav bogus"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title></head>\
+            <body><p>hi</p></body></html>";
+        let ids = |id: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_opf(Some(&opf(id)), CH1))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|i| matches!(*i, crate::ids::OPF_027 | crate::ids::OPF_097))
+                .collect()
+        };
+        assert_eq!(ids("nav"), [crate::ids::OPF_027]);
+        assert_eq!(ids("nav "), [crate::ids::OPF_097]);
     }
 
     /// OPF-026 is `VocabUtil`'s colon test and nothing else: an empty prefix
