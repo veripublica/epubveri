@@ -8634,6 +8634,40 @@ fn check_text(
                         vec![v.to_string()],
                     );
                 }
+                // And what it had *used* by then. The scan above only asks
+                // whether each reference resolves; it never told OPF-097 the
+                // target was consumed, so an image drawn before an undeclared
+                // `&nbsp;` was reported as referenced by nothing, which
+                // epubcheck, having registered the reference as it streamed
+                // past, does not say (measured on 5.4.0). Asked of the
+                // rebuilt prefix with the same `is_resource_reference` the
+                // DOM walk uses, for elements that start before the cut, and
+                // not at all under a remote `base`, as there.
+                if let Some((prefix, cut)) = crate::htm::well_formed_prefix(&t, err_offset)
+                    && let Ok(pd) = parse_xml(&prefix)
+                {
+                    let elements = || {
+                        pd.descendants()
+                            .filter(|n| n.is_element() && n.range().start < cut)
+                    };
+                    let remote_base = elements().any(|n| {
+                        n.tag_name().name() == "base"
+                            && n.attr_no_ns("href").is_some_and(is_external)
+                    });
+                    let dir = parent_dir(&path);
+                    for node in elements().filter(|_| !remote_base) {
+                        for a in node.attributes() {
+                            let v = a.value().trim_matches(crate::url::is_url_edge_space);
+                            if !v.is_empty()
+                                && !is_external(v)
+                                && !v.starts_with('#')
+                                && is_resource_reference(node, a.name())
+                            {
+                                resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(v))));
+                            }
+                        }
+                    }
+                }
                 // #139: the schema findings before the failure, too. Jing
                 // validates as Xerces parses, so everything it rejected up to
                 // the fatal error stays in epubcheck's report; we had no DOM
@@ -26235,6 +26269,38 @@ mod tests {
     }
 
     const CONTAINER_ROOT_OPF: &str = r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#;
+
+    /// A resource a malformed document used before its break is used: an
+    /// EPUB 3 chapter loading `s.css` and then meeting an undeclared
+    /// `&nbsp;` drew OPF-097 ("referenced by nothing") on the stylesheet,
+    /// which epubcheck, having registered the link as it streamed past, does
+    /// not report. A link after the break is not seen there either.
+    #[test]
+    fn a_resource_used_before_a_fatal_error_is_referenced() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2020-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/><item id="s" href="s.css" media-type="text/css"/></manifest><spine><itemref idref="c"/></spine></package>"#;
+        let nav = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>t</title></head><body><nav epub:type="toc"><ol><li><a href="c.xhtml">c</a></li></ol></nav></body></html>"#;
+        let opf_097 = |head: &str, body: &str| {
+            let c = format!(
+                r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>{head}</head><body>{body}</body></html>"#
+            );
+            crate::validate_bytes(zip_book(&[
+                ("content.opf", opf),
+                ("nav.xhtml", nav),
+                ("c.xhtml", &c),
+                ("s.css", "p { color: red }"),
+            ]))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::OPF_097)
+            .count()
+        };
+        let link = r#"<link rel="stylesheet" href="s.css"/>"#;
+        // Controls: used and well-formed, unused and well-formed.
+        assert_eq!(opf_097(link, "<p>x</p>"), 0);
+        assert_eq!(opf_097("", "<p>x</p>"), 1);
+        // Used, then the break.
+        assert_eq!(opf_097(link, "<p>a&nbsp;b</p>"), 0);
+    }
 
     /// A zip from `(name, body)` pairs, `mimetype` first and stored. The
     /// container points at `content.opf` in the root.

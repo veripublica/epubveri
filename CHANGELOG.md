@@ -27,6 +27,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   - **A package cut off at the end is no longer OPF-001.** We reported "the
     EPUB version could not be read" for every truncated package document,
     although its root and version were right there.
+- **A resource used before a document's fatal error counts as used.** An
+  EPUB 3 chapter that loaded an image or stylesheet and then met an
+  undeclared `&nbsp;` (or any other fatal error) left that resource reported
+  as referenced by nothing (OPF-097). epubcheck registers the reference as it
+  streams past and says nothing.
 - **A package `meta` is one of its two forms.** The EPUB 3 form has a
   `property`, the legacy form has both `name` and `content`. A `<meta>` with
   neither is now RSC-005, as in epubcheck; a collection's `meta` takes the
