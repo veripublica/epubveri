@@ -63,6 +63,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   (OPF-028), an unknown property (OPF-027) or a schema error (RSC-005), and
   we already reported those too. So the extra OPF-026 never changed a
   verdict; it added a second error for one defect.
+- **An SVG `id` that is empty or holds a space is now reported, as in
+  epubcheck.** In EPUB 3, `id=""`, `id=" a "` or `id="a b"` on an SVG element
+  is RSC-025 (usage) from epubcheck's informative SVG grammar. When the SVG
+  sits inside an XHTML document, the same value is also RSC-005, an error that
+  fails the book, because the XHTML grammar types it like an HTML `id`. We
+  reported neither. In a standalone `.svg` file the error half was already
+  right (`a b` and `""` are RSC-005 there, ` a ` is not). New `rule` keys:
+  `svg.ids.invalid_html_id` and `svg.ids.informative_invalid_id`.
 
 ### Changed
 

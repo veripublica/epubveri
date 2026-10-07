@@ -996,6 +996,65 @@ pub(crate) fn check_fragments(
     });
 }
 
+/// The HTML `id` rule on SVG elements of an EPUB 3 publication: non-empty, and
+/// no XML whitespace anywhere in it.
+///
+/// epubcheck applies it twice. Its informative strict grammar
+/// (`epub-svg-30-informative.rnc`, `isNormative=false`) runs on standalone and
+/// inline SVG alike, and a failure there is **RSC-025, usage**. The normative
+/// XHTML grammar types an *inline* SVG `id` the same way, which makes the
+/// same value **RSC-005, an error** there too. A standalone document's
+/// normative rule is `xsd:ID` instead (see [`check_ids`]): that one collapses
+/// whitespace, so `id=" a "` is only RSC-025 in a `.svg` file and fails the
+/// book inside XHTML. Measured on 5.4.0, one book per value and context,
+/// root and child element: `" a "`, `" a"`, `"a b"`, `""`, `"a&#9;b"` and
+/// `"a&#10;"` are caught; `"a&#160;"`, `"&#12288;a"`, `"1a"`, `"a:b"` and `"-a"`
+/// are not (the last three fail `xsd:ID` in a standalone file and nothing
+/// inline).
+///
+/// No EPUB 2 counterpart: epubcheck runs no informative pass there, and its
+/// XHTML 1.1 grammar types inline SVG ids differently.
+pub(crate) fn check_html_ids(
+    svg_root: roxmltree::Node,
+    path: &str,
+    inline: bool,
+    report: &mut Report,
+) {
+    for n in svg_root
+        .descendants()
+        .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
+    {
+        let Some(id) = n.attr_no_ns("id") else {
+            continue;
+        };
+        if !id.is_empty() && !id.contains(crate::xmlext::is_xml_space) {
+            continue;
+        }
+        if inline {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!(
+                    "value of attribute \"id\" is invalid: '{id}' (empty, or holds whitespace)"
+                ),
+                path,
+                n,
+                "svg.ids.invalid_html_id",
+                vec![id.to_string()],
+            );
+        }
+        report.push_node(
+            RSC_025,
+            Severity::Usage,
+            format!("value of attribute \"id\" is invalid: '{id}' (empty, or holds whitespace)"),
+            path,
+            n,
+            "svg.ids.informative_invalid_id",
+            vec![id.to_string()],
+        );
+    }
+}
+
 pub(crate) fn check_ids(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
     let mut by_id: HashMap<&str, u32> = HashMap::new();
     for n in svg_root.descendants().filter(|n| n.is_element()) {
@@ -2367,6 +2426,30 @@ mod tests {
             r#"<defs><marker id="mk"/></defs>"#,
         ] {
             assert!(missing(body).is_empty(), "should be silent: {body}");
+        }
+    }
+
+    /// An SVG `id` that is empty or holds XML whitespace: RSC-025 everywhere
+    /// in EPUB 3, plus RSC-005 when the SVG is inline. Rows measured on 5.4.0,
+    /// one book each, standalone and inline. See `check_html_ids`.
+    #[test]
+    fn an_svg_id_with_whitespace_is_informative_and_inline_normative() {
+        let ids = |id: &str, inline: bool| -> Vec<&'static str> {
+            let xml = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><rect id="{id}" width="1" height="1"/></svg>"#
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_html_ids(d.root_element(), "s.svg", inline, &mut report);
+            report.messages.iter().map(|m| m.id).collect()
+        };
+        for bad in [" a ", " a", "a b", "", "a&#9;b", "a&#10;"] {
+            assert_eq!(ids(bad, false), vec![RSC_025], "standalone {bad:?}");
+            assert_eq!(ids(bad, true), vec![RSC_005, RSC_025], "inline {bad:?}");
+        }
+        for ok in ["a", "1a", "a:b", "-a", "a\u{a0}", "\u{3000}a"] {
+            assert!(ids(ok, false).is_empty(), "standalone {ok:?}");
+            assert!(ids(ok, true).is_empty(), "inline {ok:?}");
         }
     }
 

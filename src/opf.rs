@@ -8604,6 +8604,11 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             crate::svg::check_content_model(svg_root, &path, is_epub3, report);
             crate::svg::check_epub_attributes(svg_root, &path, report);
             crate::svg::check_deprecated_xlink_href(svg_root, &path, is_epub3, report);
+            // Inline, an id that is empty or holds whitespace is RSC-005 (the
+            // XHTML grammar) and RSC-025 (the informative SVG grammar).
+            if is_epub3 {
+                crate::svg::check_html_ids(svg_root, &path, true, report);
+            }
             // `check_ids` is standalone-SVG-only: a real fixture confirms
             // `id="1"` on an SVG root is fine when the SVG is embedded
             // inline inside an XHTML document (a shared XML id-space with
@@ -11675,6 +11680,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         crate::svg::check_epub_attributes(d.root_element(), doc_path, report);
         crate::svg::check_deprecated_xlink_href(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_ids(d.root_element(), doc_path, report);
+        if is_epub3 {
+            crate::svg::check_html_ids(d.root_element(), doc_path, false, report);
+        }
         crate::svg::check_fragments(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_link_labels(d.root_element(), doc_path, report);
         for fo in d.descendants().filter(|n| {
