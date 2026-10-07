@@ -84,7 +84,12 @@ pub(crate) fn check(
         // NCX-004 (usage): the dtb:uid value has leading/trailing whitespace.
         // epubcheck reports this for both EPUB 2 and EPUB 3 (its #669); it is
         // independent of whether the (trimmed) value matches the package id.
-        if content != content.trim() {
+        // Java's `trim` on both sides (`NCXChecker`:68, :83), which keeps a
+        // no-break space; `str::trim` dropped it, so an identifier padded
+        // with one matched here and not there (NCX-001).
+        let trimmed = crate::xmlext::trim_xml_space(content);
+        let package_uid = crate::xmlext::trim_xml_space(package_uid);
+        if content != trimmed {
             report.push_at_pos(
                 NCX_004,
                 Severity::Usage,
@@ -102,7 +107,7 @@ pub(crate) fn check(
         // whose `<dc:identifier/>` is empty draws no NCX-001 there. Reporting
         // one says the dtb:uid "does not match ''", which blames the NCX for
         // a defect in the OPF that is already reported on its own.
-        if !package_uid.trim().is_empty() && content.trim() != package_uid.trim() {
+        if !package_uid.is_empty() && trimmed != package_uid {
             report.push_full(
                 NCX_001,
                 Severity::Error,

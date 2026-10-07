@@ -40,6 +40,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Changed
 
+- **A few more books epubcheck fails now fail here too: values padded with a
+  no-break space.** epubcheck trims `dc:language`, `dcterms:modified`, the
+  NCX `dtb:uid`, `fallback` and the identifier `id` it matches with Java's
+  `trim`. That `trim` removes ordinary spaces and line breaks but keeps a
+  no-break space. We trimmed with Rust's, which removes both. So
+  `<dc:language>en&#160;</dc:language>` passed here and was OPF-092 there,
+  and the same went for `dcterms:modified` (RSC-005) and an EPUB 2 identifier
+  padded with one (NCX-001). We now trim as epubcheck does. One value
+  epubcheck does not trim at all: `unique-identifier="uid "` (a trailing
+  space) names no identifier there and is OPF-030. It now is here too.
+
 - **Some books epubcheck fails now fail here too: property lists with a
   no-break space.** `properties`, `rel`, `epub:type`, `role` and the other
   token lists in package and content documents are now split only on the

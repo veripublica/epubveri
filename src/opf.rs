@@ -1606,9 +1606,10 @@ fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, is_epub3: bool, re
                 .descendants()
                 .filter(|t| t.is_text())
                 .filter_map(|t| t.text())
-                .collect::<String>()
-                .trim()
-                .to_string();
+                .collect::<String>();
+            // Java's `trim` (`OPFHandler30`:627), so a no-break space stays
+            // and makes the tag ill-formed there - and did not here.
+            let text = crate::xmlext::trim_xml_space(&text).to_string();
             if !text.is_empty() && !is_valid_lang_tag(&text) {
                 report.push_node(
                     OPF_092,
@@ -4375,7 +4376,12 @@ fn check_unique_identifier(
     // Reported *beside* OPF-030 rather than instead of it: an empty value
     // names no `dc:identifier`, so epubcheck gives both, and returning early
     // here would have traded one miss for another.
-    let uid_attr = pkg.attr_no_ns("unique-identifier").map(str::trim);
+    // **Untrimmed, and compared with a trimmed id**, which is epubcheck's
+    // `idAttr.trim().equals(uniqueIdent)` (`OPFHandler`:701) against the
+    // attribute as written (`:514`). So `unique-identifier="uid "` names no
+    // identifier there - OPF-030 - and `"  "` is not empty (no OPF-048).
+    // Measured on 5.4.0, EPUB 3 and 2.
+    let uid_attr = pkg.attr_no_ns("unique-identifier");
     if uid_attr == Some("") {
         report.push_at_pos(
             OPF_048,
@@ -4389,7 +4395,7 @@ fn check_unique_identifier(
         Some(uid) => {
             match identifiers
                 .iter()
-                .find(|n| n.attr_no_ns("id").map(str::trim) == Some(uid))
+                .find(|n| n.attr_no_ns("id").map(crate::xmlext::trim_xml_space) == Some(uid))
             {
                 Some(n) => {
                     return Some(
@@ -5661,7 +5667,9 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 .filter(|t| t.is_text())
                 .filter_map(|t| t.text())
                 .collect();
-            if !is_valid_dcterms_modified(text.trim()) {
+            // `normalize-space(.)` in epubcheck's Schematron: XML whitespace
+            // only, so a no-break space after the Z fails there.
+            if !is_valid_dcterms_modified(crate::xmlext::trim_xml_space(&text)) {
                 report.push_node(
                     RSC_005,
                     Severity::Error,
@@ -6290,9 +6298,14 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                     Vec::new(),
                 );
             } else if let Some(fs) = item.attr_no_ns("fallback-style") {
-                fallback_style_map.insert(id.to_string(), fs.trim().to_string());
+                fallback_style_map.insert(
+                    id.to_string(),
+                    crate::xmlext::trim_xml_space(fs).to_string(),
+                );
             }
-            if let Some(fb) = item.attr_no_ns("fallback").map(str::trim)
+            if let Some(fb) = item
+                .attr_no_ns("fallback")
+                .map(crate::xmlext::trim_xml_space)
                 && fb == id
             {
                 report.push_node(
@@ -6398,7 +6411,10 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                 media_overlay_attrs.push((nfc(&resolved), mo.trim().to_string()));
             }
             if let Some(fb) = item.attr_no_ns("fallback") {
-                fallback_map.insert(id.to_string(), fb.trim().to_string());
+                fallback_map.insert(
+                    id.to_string(),
+                    crate::xmlext::trim_xml_space(fb).to_string(),
+                );
             }
             manifest_order.push((resolved.clone(), mt.to_string()));
             items_by_path.insert(nfc(&resolved), (id.to_string(), mt.to_string()));
@@ -23010,6 +23026,54 @@ mod tests {
             ids("nav.xhtml", "application/xhtml+xml "),
             [crate::ids::RSC_005]
         );
+    }
+
+    /// Values epubcheck reads through Java's `trim`, which keeps a no-break
+    /// space, and one it does not trim at all. Each row measured on 5.4.0 as
+    /// a whole book: `unique-identifier="id "` is OPF-030 there (the
+    /// attribute is used as written, the id trimmed); `dc:language` and
+    /// `dcterms:modified` with a trailing no-break space are OPF-092 and
+    /// RSC-005. We trimmed with `str::trim` and passed all three.
+    #[test]
+    fn values_are_trimmed_as_java_trims_them() {
+        let opf = |uid: &str, lang: &str, modified: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="{uid}">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>{lang}</dc:language>
+    <meta property="dcterms:modified">{modified}</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>T</title></head>\
+            <body><p>hi</p></body></html>";
+        const DATE: &str = "2020-01-01T00:00:00Z";
+        let has = |uid: &str, lang: &str, modified: &str, id: &str| {
+            crate::validate_bytes(epub_with_opf(Some(&opf(uid, lang, modified)), CH1))
+                .messages
+                .iter()
+                .any(|m| m.id == id)
+        };
+        assert!(!has("id", "en ", &format!(" {DATE}"), crate::ids::RSC_005));
+        assert!(!has("id", "en ", DATE, crate::ids::OPF_092));
+        assert!(!has("id", "en", DATE, crate::ids::OPF_030));
+        assert!(has("id ", "en", DATE, crate::ids::OPF_030));
+        assert!(has("id", "en\u{a0}", DATE, crate::ids::OPF_092));
+        assert!(has(
+            "id",
+            "en",
+            &format!("{DATE}\u{a0}"),
+            crate::ids::RSC_005
+        ));
     }
 
     /// Property lists split on XML whitespace only, as epubcheck's `\s+`
