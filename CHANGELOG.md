@@ -82,6 +82,39 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   reported neither. In a standalone `.svg` file the error half was already
   right (`a b` and `""` are RSC-005 there, ` a ` is not). New `rule` keys:
   `svg.ids.invalid_html_id` and `svg.ids.informative_invalid_id`.
+- **Flow content directly inside a standalone SVG's `foreignObject` no longer
+  fails.** A `.svg` file whose `foreignObject` held a `<p>`, a `<div>`, a
+  MathML `<math>` or plain text got RSC-005 from us. epubcheck accepts flow
+  content there, or a single `<body>`, and we accepted only the `<body>`.
+  Two `<body>` elements and a `<title>` are still errors, as in epubcheck.
+- **An EPUB 3 SVG element without `xlink:href` no longer draws RSC-025.**
+  `<use href="#s"/>` (SVG 2's plain `href`), a bare `<use/>` and a
+  `<textPath>` with neither got a usage RSC-025 "missing required attribute
+  xlink:href". epubcheck's EPUB 3 SVG grammar makes it optional. The rule
+  still applies to EPUB 2, where the SVG 1.1 grammar is normative.
+
+### Added
+
+- **A manifest property on the wrong kind of file is now OPF-012 for every
+  property.** epubcheck defines each property for certain media types:
+  `svg` and `index` for XHTML, `mathml`, `scripted` and `switch` for XHTML
+  and SVG, `remote-resources` for those plus SMIL and CSS, `dictionary` and
+  `glossary` for search key maps (and XHTML for `glossary`). We checked only
+  `cover-image`, `nav` and `search-key-map`, so `properties="svg"` on a PNG
+  passed here and failed there. New `rule` key:
+  `opf.manifest_item.property_wrong_media_type`.
+- **Standalone SVG documents are now checked for the properties they need.**
+  A `.svg` in the book with a `<script>`, a `form` or an `on…` attribute needs
+  `scripted` (OPF-014), and one with MathML needs `mathml`. A property it
+  declares but does not need is OPF-015, and an unneeded `remote-resources`
+  is OPF-018, or OPF-018b when the SVG is scripted. epubcheck runs these
+  checks on SVG as on XHTML; we ran them on XHTML only. New `rule` keys:
+  `svg.properties.undeclared` and `svg.properties.unneeded`.
+- **A remote image, `use` or paint in SVG is now RSC-006.** `<image>` or
+  `<use>` pointing outside the book, or `fill`/`stroke`/`clip-path`
+  `url(…)` to a remote file, fails the book in epubcheck, in a standalone
+  `.svg` and in SVG inside XHTML alike. We reported nothing. A remote `<a>`
+  is still fine. New `rule` key: `svg.remote_resource`.
 
 ### Changed
 

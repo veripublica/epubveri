@@ -821,6 +821,30 @@ enum ResourceRef {
 /// Only the *decision* lives here, not the reporting: the callers anchor
 /// their findings differently (a DOM node, or a raw position on the parse-
 /// error path, which has no node — #73).
+/// The media types each manifest item property is defined for, from
+/// epubcheck's `PackageVocabs.ITEM_PROPERTIES` (`OPFHandler30`:531 reports
+/// OPF-012 for any other). `cover-image`, `nav`, `search-key-map` and
+/// `data-nav` have their own checks with their own rule keys, so they are not
+/// listed; the other eight went unchecked, and `properties="cover-image svg"` on a PNG
+/// passed here and failed there (measured on 5.4.0). A trailing `*` is a
+/// family, as `image/*` is there.
+fn item_property_media_types(token: &str) -> Option<&'static [&'static str]> {
+    const XHTML: &str = "application/xhtml+xml";
+    const SVG: &str = "image/svg+xml";
+    const SKM: &str = "application/vnd.epub.search-key-map+xml";
+    Some(match token {
+        // `data-nav` is checked where the Data Navigation Document is
+        // resolved (`opf.manifest.data_nav_not_xhtml`); listing it here too
+        // would report one item twice.
+        "index" | "svg" => &[XHTML],
+        "dictionary" => &[SKM],
+        "glossary" => &[SKM, XHTML],
+        "mathml" | "scripted" | "switch" => &[XHTML, SVG],
+        "remote-resources" => &[XHTML, "application/smil+xml", SVG, "text/css"],
+        _ => return None,
+    })
+}
+
 fn classify_resource_ref(
     resolved: &str,
     manifest_paths: &HashSet<String>,
@@ -962,7 +986,7 @@ fn media_by_path(items: &ManifestItems, items_by_path: &ItemsByPath) -> MediaByP
 /// declares no `scripted` and is expected to be clean. We used to mark it
 /// scripted and to omit the legacy javascript spellings, so a `text/ecmascript`
 /// script drew OPF-015 ("declared but not needed") on a book that needs it.
-fn is_script_media_type(t: &str) -> bool {
+pub(crate) fn is_script_media_type(t: &str) -> bool {
     const TYPES: [&str; 16] = [
         "application/javascript",
         "text/javascript",
@@ -6398,6 +6422,24 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
                                 "opf.manifest_item.unknown_property",
                                 vec![token.to_string()],
                             );
+                        } else if is_epub3
+                            && let Some(allowed) = item_property_media_types(token)
+                            && !allowed.iter().any(|a| match a.strip_suffix('*') {
+                                Some(family) => mt.starts_with(family),
+                                None => mt == *a,
+                            })
+                        {
+                            report.push_node(
+                                OPF_012,
+                                Severity::Error,
+                                format!(
+                                    "property \"{token}\" is not defined for media type '{mt}'"
+                                ),
+                                opf_path,
+                                item,
+                                "opf.manifest_item.property_wrong_media_type",
+                                vec![token.to_string(), mt.to_string()],
+                            );
                         }
                     }
                 }
@@ -8662,6 +8704,7 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
             if is_epub3 {
                 crate::svg::check_html_ids(svg_root, &path, true, report);
             }
+            crate::svg::check_remote_references(svg_root, &path, is_epub3, report);
             // `check_ids` is standalone-SVG-only: a real fixture confirms
             // `id="1"` on an SVG root is fine when the SVG is embedded
             // inline inside an XHTML document (a shared XML id-space with
@@ -11735,6 +11778,16 @@ pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &m
         crate::svg::check_ids(d.root_element(), doc_path, report);
         if is_epub3 {
             crate::svg::check_html_ids(d.root_element(), doc_path, false, report);
+            crate::svg::check_remote_references(d.root_element(), doc_path, is_epub3, report);
+            crate::svg::check_properties(
+                d.root_element(),
+                doc_path,
+                item_properties
+                    .get(&nfc(doc_path))
+                    .map(String::as_str)
+                    .unwrap_or(""),
+                report,
+            );
         }
         crate::svg::check_fragments(d.root_element(), doc_path, is_epub3, report);
         crate::svg::check_link_labels(d.root_element(), doc_path, report);
@@ -23275,6 +23328,46 @@ mod tests {
             &format!("{DATE}\u{a0}"),
             crate::ids::RSC_005
         ));
+    }
+
+    /// Every item property is defined for a set of media types
+    /// (`PackageVocabs.ITEM_PROPERTIES`); OPF-012 outside it. Each pair
+    /// measured on 5.4.0 as a whole book (24 in all); before, only
+    /// `cover-image`, `nav` and `search-key-map` were checked.
+    #[test]
+    fn item_properties_are_checked_against_their_media_types() {
+        let allows = |p: &str, mt: &str| {
+            super::item_property_media_types(p).is_some_and(|a| {
+                a.iter().any(|t| match t.strip_suffix('*') {
+                    Some(f) => mt.starts_with(f),
+                    None => mt == *t,
+                })
+            })
+        };
+        for p in [
+            "svg",
+            "mathml",
+            "scripted",
+            "switch",
+            "index",
+            "glossary",
+            "dictionary",
+            "remote-resources",
+        ] {
+            assert!(!allows(p, "image/png"), "{p} on png");
+        }
+        for p in ["svg", "index", "glossary", "dictionary"] {
+            assert!(!allows(p, "image/svg+xml"), "{p} on svg");
+        }
+        for p in ["mathml", "scripted", "switch", "remote-resources"] {
+            assert!(allows(p, "image/svg+xml"), "{p} on svg");
+        }
+        assert!(allows("remote-resources", "text/css"));
+        assert!(!allows("svg", "text/css"));
+        assert!(
+            super::item_property_media_types("data-nav").is_none(),
+            "checked elsewhere"
+        );
     }
 
     /// OPF-026 is `VocabUtil`'s colon test and nothing else: an empty prefix

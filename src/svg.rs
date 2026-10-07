@@ -327,6 +327,49 @@ pub(crate) fn check_resource_references(
     });
 }
 
+/// RSC-006 for a remote resource an SVG element pulls in: `image`, `use`, and
+/// `url(…)` in `fill`, `stroke` or `clip-path`. epubcheck routes these through
+/// `checkImage`, `checkSymbol` and `checkSVGAttributeURLValue`, which register
+/// a reference no remote resource may satisfy; a remote `<a>` is a hyperlink
+/// and is fine there and here. We skipped every remote URL, so all of these
+/// passed. Measured on 5.4.0, standalone and inline, one book per shape:
+/// `image` (`href` and `xlink:href`), `use` and `fill` are RSC-006, `a` is
+/// not. `stroke` and `clip-path` run through the same Java method as `fill`.
+/// `font-face-uri` is left out: a remote font is a different question
+/// (`remote-resources`), and it is unmeasured here.
+///
+/// EPUB 3 only, because only that was measured.
+pub(crate) fn check_remote_references(
+    svg_root: roxmltree::Node,
+    path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    if !is_epub3 {
+        return;
+    }
+    for_each_reference(svg_root, is_epub3, |n, v, source| {
+        let pulls_in = match source {
+            RefSource::Href => matches!(n.tag_name().name(), "image" | "use"),
+            _ => true,
+        };
+        let v = crate::url::trim_url(v);
+        if pulls_in && crate::opf::is_remote_url(v) {
+            report.push_node(
+                RSC_006,
+                Severity::Error,
+                format!(
+                    "remote resource '{v}' is not allowed here; it must be inside the container"
+                ),
+                path,
+                n,
+                "svg.remote_resource",
+                vec![v.to_string()],
+            );
+        }
+    });
+}
+
 pub(crate) fn resource_refs(svg_xml: &str, base_dir: &str) -> Vec<String> {
     use crate::opf::{is_external, nfc, resolve};
     let Ok(doc) = crate::ocf::parse_xml(svg_xml) else {
@@ -996,6 +1039,140 @@ pub(crate) fn check_fragments(
     });
 }
 
+/// Manifest properties against what a standalone SVG document uses: OPF-014
+/// for one it needs and lacks, OPF-015 for those it declares and does not
+/// need, OPF-018/OPF-018b for an unneeded `remote-resources`. epubcheck runs
+/// the same `OPSHandler30.checkProperties` on SVG as on XHTML; we ran ours on
+/// XHTML only, so `properties="scripted"` on a plain SVG, or a `<script>` with
+/// no declaration, passed here and failed there.
+///
+/// What an SVG can *need*: `scripted` (a `script` of a script type, a `form`,
+/// or an `on*` attribute, as on the XHTML side), `mathml` (a MathML `math`,
+/// in a `foreignObject`) and `remote-resources` (a remote `font-face-uri`,
+/// found by epubcheck's own `resources-remote-font-in-svg-valid`, which the
+/// first version of this check turned into an OPF-018). Nothing else: `svg` is not required of an SVG
+/// document, `switch` is the XHTML `epub:switch`, and a remote image in an
+/// SVG is RSC-006 rather than a remote resource. The unneeded set is
+/// declared minus needed minus `nav`, `data-nav` and `cover-image`, and is one
+/// OPF-015 naming them all, in epubcheck's vocabulary order. Measured on
+/// 5.4.0: plain, `<script>`, `onclick`, MathML and SVG-`switch` documents, each
+/// with no property and with `scripted`, `mathml`, `remote-resources` and
+/// `switch` (30 books).
+pub(crate) fn check_properties(
+    svg_root: roxmltree::Node,
+    path: &str,
+    declared: &str,
+    report: &mut Report,
+) {
+    const ORDER: [&str; 12] = [
+        "cover-image",
+        "data-nav",
+        "dictionary",
+        "glossary",
+        "index",
+        "mathml",
+        "nav",
+        "remote-resources",
+        "scripted",
+        "search-key-map",
+        "svg",
+        "switch",
+    ];
+    let needs_script = svg_root.descendants().find(|n| {
+        if !n.is_element() {
+            return false;
+        }
+        let script_type = n.attr_no_ns("type").unwrap_or("");
+        let is_script = n.tag_name().name() == "script"
+            && (script_type.is_empty() || crate::opf::is_script_media_type(script_type));
+        is_script
+            || n.tag_name().name() == "form"
+            || n.attributes()
+                .any(|a| a.namespace().is_none() && a.name().starts_with("on"))
+    });
+    let needs_math = svg_root.descendants().find(|n| {
+        n.is_element()
+            && n.tag_name().name() == "math"
+            && n.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
+    });
+    // A remote font through `font-face-uri` needs `remote-resources`
+    // (`OPSHandler30.checkSVGFontFaceURI`); epubcheck's own
+    // `resources-remote-font-in-svg-valid` declares it and expects silence.
+    let mut needs_remote = None;
+    for_each_reference(svg_root, true, |n, v, source| {
+        if needs_remote.is_none()
+            && matches!(source, RefSource::Href)
+            && n.tag_name().name() == "font-face-uri"
+            && crate::opf::is_remote_url(crate::url::trim_url(v))
+        {
+            needs_remote = Some(n);
+        }
+    });
+    let declared: Vec<&str> = declared.xml_tokens().collect();
+    // OPF-014 for an undeclared remote font is already reported where the
+    // standalone SVG is walked in `opf.rs`, under the rule key a repairer
+    // dispatches on (`opf.content_document.property_used_undeclared`), so
+    // `needs_remote` only keeps the property out of the unneeded set here.
+    for (name, node) in [("scripted", needs_script), ("mathml", needs_math)] {
+        if let Some(node) = node
+            && !declared.contains(&name)
+        {
+            report.push_node(
+                OPF_014,
+                Severity::Error,
+                format!("the \"{name}\" property should be declared in the manifest for this SVG document"),
+                path,
+                node,
+                "svg.properties.undeclared",
+                vec![name.to_string()],
+            );
+        }
+    }
+    let mut unneeded: Vec<&str> = ORDER
+        .iter()
+        .copied()
+        .filter(|p| declared.contains(p))
+        .filter(|p| !matches!(*p, "nav" | "data-nav" | "cover-image"))
+        .filter(|p| !(*p == "scripted" && needs_script.is_some()))
+        .filter(|p| !(*p == "mathml" && needs_math.is_some()))
+        .filter(|p| !(*p == "remote-resources" && needs_remote.is_some()))
+        .collect();
+    if let Some(i) = unneeded.iter().position(|p| *p == "remote-resources") {
+        unneeded.remove(i);
+        let (id, severity) = if needs_script.is_some() {
+            (OPF_018B, Severity::Usage)
+        } else {
+            (OPF_018, Severity::Warning)
+        };
+        report.push_at_pos(
+            id,
+            severity,
+            "the \"remote-resources\" property is declared but this SVG document references no remote resource",
+            path,
+            Position::of(svg_root),
+        );
+    }
+    if !unneeded.is_empty() {
+        report.push_node(
+            OPF_015,
+            Severity::Error,
+            format!(
+                "the propert{} {} declared but not needed by this SVG document",
+                if unneeded.len() == 1 {
+                    "y is"
+                } else {
+                    "ies are"
+                },
+                unneeded.join(", ")
+            ),
+            path,
+            svg_root,
+            "svg.properties.unneeded",
+            unneeded.iter().map(|p| p.to_string()).collect(),
+        );
+    }
+}
+
 /// The HTML `id` rule on SVG elements of an EPUB 3 publication: non-empty, and
 /// no XML whitespace anywhere in it.
 ///
@@ -1311,7 +1488,28 @@ pub(crate) fn check_foreign_object(
     // fixtures confirm both "non-body content" and "more than one body"
     // are their own distinct errors) - so it replaces the body slot
     // instead of being wrapped inside another one.
-    let wrapped = if wrap_in_body {
+    // Standalone, the grammar is `common.inner.flow | body.elem`
+    // (`epub-svg-forgiving-inc.rnc` plus `epub-svg-30.rnc`'s `|=`): flow
+    // content directly, *or* one `body`. Only the second used to be accepted,
+    // so `<p>`, `<div>`, `<math>` or plain text in a standalone foreignObject
+    // drew RSC-005 here and nothing there (measured on 5.4.0). A lone XHTML
+    // `body` fills the body slot; anything else is wrapped as flow content,
+    // which keeps two `body` elements (body inside body) and a `title` (not
+    // flow) errors, as epubcheck's own fixtures expect.
+    let lone_body = {
+        let mut elems = fo.children().filter(|c| c.is_element());
+        let only = elems.next();
+        elems.next().is_none()
+            && only.is_some_and(|b| {
+                b.tag_name().name() == "body"
+                    && b.tag_name().namespace() == Some("http://www.w3.org/1999/xhtml")
+            })
+            && fo
+                .children()
+                .filter(|c| c.is_text())
+                .all(|t| t.text().is_none_or(crate::xmlext::is_xml_blank))
+    };
+    let wrapped = if wrap_in_body || !lone_body {
         format!(
             "<html xmlns=\"http://www.w3.org/1999/xhtml\"{ns_decls}><head><title>t</title></head><body>{inner}</body></html>"
         )
@@ -2011,8 +2209,16 @@ pub(crate) fn check_required_attributes(
     // - which is why these were missing rather than merely unlisted, and why
     // the grammar extraction that produced the rest of the table missed every
     // one of them.
+    //
+    // **EPUB 2 only.** epubcheck's EPUB 3 copy of the SVG 1.1 modules
+    // (`schema/30/mod/svg11/svg-xlink-attrib.rnc`) makes `xlink:href`
+    // optional even in `SVG.XLinkRequired.attrib`, beside an optional SVG 2
+    // `href`. So at 3.0 nothing requires it, and `<use href="#s"/>`, a bare
+    // `<use/>` and a `<textPath>` without one drew a usage RSC-025 here and
+    // nothing there (measured on 5.4.0, inline, one book each).
     for n in svg_root
         .descendants()
+        .filter(|_| !is_epub3)
         .filter(|n| n.is_element() && n.tag_name().namespace() == Some(SVG_NS))
         .filter(|n| SVG_REQUIRED_XLINK_HREF.contains(&n.tag_name().name()))
     {
@@ -2998,6 +3204,124 @@ mod tests {
         // above, `epub:type` (check_epub_attributes owns it), and the
         // `inkscape:`/`sodipodi:` sets the grammar allows wholesale.
         assert!(attrs_on_image("class=\"c\" id=\"i\" style=\"x\" role=\"img\"").is_empty());
+    }
+
+    #[test]
+    fn standalone_foreign_object_takes_flow_content_or_one_body() {
+        // Each measured on 5.4.0 as a standalone .svg in the spine.
+        let ids = |inner: &str| -> Vec<&'static str> {
+            let xml = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1 1\">\
+                 <foreignObject width=\"1\" height=\"1\">{inner}</foreignObject></svg>"
+            );
+            let d = doc(&xml);
+            let fo = d
+                .descendants()
+                .find(|n| n.tag_name().name() == "foreignObject")
+                .unwrap();
+            let mut report = Report::new();
+            check_foreign_object(
+                fo,
+                &xml,
+                d.root_element(),
+                "x.svg",
+                true,
+                false,
+                &mut report,
+            );
+            report.messages.iter().map(|m| m.id).collect()
+        };
+        const X: &str = "xmlns=\"http://www.w3.org/1999/xhtml\"";
+        for ok in [
+            format!("<p {X}>x</p>"),
+            format!("<div {X}><p>x</p></div>"),
+            "<math xmlns=\"http://www.w3.org/1998/Math/MathML\"><mi>x</mi></math>".to_string(),
+            "hello".to_string(),
+            format!("<body {X}><p>x</p></body>"),
+        ] {
+            assert!(ids(&ok).is_empty(), "{ok}");
+        }
+        for bad in [
+            format!("<body {X}><p>x</p></body><body {X}><p>y</p></body>"),
+            format!("<title {X}>t</title>"),
+        ] {
+            assert_eq!(ids(&bad), vec![RSC_005], "{bad}");
+        }
+    }
+
+    #[test]
+    fn standalone_svg_properties_match_what_it_uses() {
+        // Each row a whole book on 5.4.0 (30 in all; see `check_properties`).
+        let ids = |body: &str, declared: &str| -> Vec<&'static str> {
+            let xml = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1 1\">{body}</svg>"
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_properties(d.root_element(), "x.svg", declared, &mut report);
+            let mut v: Vec<_> = report.messages.iter().map(|m| m.id).collect();
+            v.sort_unstable();
+            v
+        };
+        let rect = "<rect width=\"1\" height=\"1\"/>";
+        let script = "<script>var a=1;</script>";
+        let onclick = "<rect width=\"1\" height=\"1\" onclick=\"f()\"/>";
+        assert!(ids(rect, "").is_empty());
+        assert_eq!(ids(rect, "scripted"), [OPF_015]);
+        assert_eq!(ids(rect, "mathml switch"), [OPF_015]);
+        assert_eq!(ids(rect, "remote-resources"), [OPF_018]);
+        assert_eq!(ids(script, ""), [OPF_014]);
+        assert_eq!(ids(onclick, ""), [OPF_014]);
+        assert!(ids(script, "scripted").is_empty());
+        assert_eq!(ids(script, "remote-resources"), [OPF_014, OPF_018B]);
+        assert_eq!(ids(rect, "cover-image"), Vec::<&str>::new());
+    }
+
+    #[test]
+    fn remote_images_uses_and_paints_in_svg_are_rsc_006() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            let xml = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" \
+                 xmlns:xlink=\"http://www.w3.org/1999/xlink\" viewBox=\"0 0 1 1\">{body}</svg>"
+            );
+            let d = doc(&xml);
+            let mut report = Report::new();
+            check_remote_references(d.root_element(), "x.svg", true, &mut report);
+            report.messages.iter().map(|m| m.id).collect()
+        };
+        const R: &str = "https://example.com/a";
+        for bad in [
+            format!("<image width=\"1\" height=\"1\" href=\"{R}.png\"/>"),
+            format!("<image width=\"1\" height=\"1\" xlink:href=\"{R}.png\"/>"),
+            format!("<use href=\"{R}.svg#s\"/>"),
+            format!("<rect width=\"1\" height=\"1\" fill=\"url({R}.svg#g)\"/>"),
+        ] {
+            assert_eq!(ids(&bad), vec![RSC_006], "{bad}");
+        }
+        // A hyperlink may point anywhere.
+        assert!(
+            ids(&format!(
+                "<a href=\"{R}.html\"><rect width=\"1\" height=\"1\"/></a>"
+            ))
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn epub3_svg_never_requires_xlink_href() {
+        let xml = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1 1\">\
+                   <use/><use href=\"#s\"/><text><textPath>t</textPath></text></svg>";
+        let d = doc(xml);
+        for (is_epub3, want) in [(true, 0), (false, 3)] {
+            let mut report = Report::new();
+            check_required_attributes(d.root_element(), "x.svg", is_epub3, &mut report);
+            let n = report
+                .messages
+                .iter()
+                .filter(|m| m.text.contains("xlink:href"))
+                .count();
+            assert_eq!(n, want, "is_epub3={is_epub3}");
+        }
     }
 
     #[test]
