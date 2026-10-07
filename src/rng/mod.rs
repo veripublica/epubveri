@@ -1536,6 +1536,49 @@ mod tests {
         );
     }
 
+    /// #140: package metadata holds elements only. A stray character between
+    /// them is RSC-005 in epubcheck at both versions (measured on 5.4.0), as
+    /// is text directly inside the EPUB 2 `dc-metadata` wrapper.
+    #[test]
+    fn package_metadata_takes_no_stray_text() {
+        let pkg = |version: &str, metadata: &str| {
+            let modified = if version == "3.0" {
+                r#"<meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#
+            } else {
+                ""
+            };
+            format!(
+                r#"<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">{metadata}{modified}</metadata>
+<manifest><item id="c" href="c.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine toc="ncx"><itemref idref="c"/></spine></package>"#
+            )
+        };
+        let ok = |g: &Grammar, version: &str, metadata: &str| {
+            validate_node_report(
+                g,
+                roxmltree::Document::parse(&pkg(version, metadata))
+                    .unwrap()
+                    .root_element(),
+            )
+            .is_empty()
+        };
+        let dc = r#"<dc:identifier id="id">u</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language>"#;
+        for (g, v) in [(package_grammar(), "3.0"), (package_grammar_epub2(), "2.0")] {
+            assert!(ok(&g, v, dc), "{v}: control");
+            assert!(
+                ok(&g, v, &format!("\n  {dc}\n  ")),
+                "{v}: whitespace is fine"
+            );
+            assert!(!ok(&g, v, &format!("{dc}s")), "{v}: stray text");
+        }
+        assert!(!ok(
+            &package_grammar_epub2(),
+            "2.0",
+            &format!("<dc-metadata>s{dc}</dc-metadata>")
+        ));
+    }
+
     /// EPUB 2 (XHTML 1.1): `bdo` requires `dir`, `dir` is `ltr`|`rtl` only,
     /// and a rejected value on a required attribute is one finding, not a
     /// value error plus follow-on content errors. Each measured on 5.4.0.

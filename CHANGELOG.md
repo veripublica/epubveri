@@ -12,6 +12,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **Stray text in the package metadata is now RSC-005, as in epubcheck**
+  (#140). A character left between metadata elements, as in
+  `<dc:date>…</dc:date>s` from a real book, passed here and failed there.
+  The same applies to collection metadata and to EPUB 2's `dc-metadata` and
+  `x-metadata` wrappers. Whitespace between elements is still fine.
 - **A content document that is not well-formed now keeps the schema errors
   that come before the break** (#139). epubcheck validates while it parses,
   so everything it rejected up to the fatal error stays in its report: in the
