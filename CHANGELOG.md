@@ -44,6 +44,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     "attribute not allowed here", still one finding, as in epubcheck.
   - No book on our 544-book shelf changes: none of its EPUB 2 SVG uses an
     attribute on the wrong element.
+- **EPUB 2: SVG attribute values are checked as epubcheck checks them.** We
+  checked the value of five attributes. The EPUB 2 grammar fixes the value
+  of 57: `visibility`, `display`, `font-weight`, `stroke-linecap`,
+  `text-anchor` and the rest of the presentation properties, the filter and
+  gradient keywords, `class`, `target`, and `version`, which must be
+  exactly `1.1`. Some depend on the element: `fill` is `freeze` or `remove`
+  only on an animation element, and `type` and `operator` take different
+  keywords on different filter primitives. An invalid value is now RSC-005,
+  as in epubcheck. We probed 8,325 values against epubcheck 5.4.0 and now
+  report exactly the same 3,103. No book on our shelf changes.
+- **A keyword value with whitespace around it was reported as invalid.**
+  `fill-rule=" evenodd"` drew RSC-005 in an EPUB 2 book and RSC-025 in an
+  EPUB 3 one. epubcheck trims the whitespace from these values and accepts
+  them, at both versions. Case still counts: `EVENODD` is invalid.
 
 ## [0.23.0] - 2026-10-07
 

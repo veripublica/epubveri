@@ -906,6 +906,100 @@ mod svg11 {
         ("view", &[EXTERNAL, &["id", "preserveAspectRatio", "viewBox", "viewTarget", "zoomAndPan"]]),
         ("vkern", &[&["g1", "g2", "id", "k", "u1", "u2"]]),
     ];
+
+    /// Which of the elements that take an attribute a value rule covers.
+    pub(super) enum Scope {
+        All,
+        Only(&'static [&'static str]),
+        AllBut(&'static [&'static str]),
+    }
+
+    /// What the grammar accepts as the value.
+    pub(super) enum Value {
+        /// A `token` enumeration: XML whitespace is collapsed first, so
+        /// `" evenodd "` is `evenodd`, and case matters.
+        OneOf(&'static [&'static str]),
+        /// A `string` value: compared as written, whitespace included.
+        Exactly(&'static str),
+        /// `xsd:NMTOKEN` after the `collapse` facet.
+        NmToken,
+        /// `xsd:NMTOKENS`: one or more, separated by XML whitespace.
+        NmTokens,
+        /// `preserveAspectRatio`'s pattern.
+        AspectRatio,
+    }
+
+    use Scope::*;
+    use Value::*;
+
+    /// The attributes whose value the EPUB 2 grammar constrains, generated
+    /// by the same walk as [`SVG11_ATTRIBUTES`]: every other attribute is a
+    /// plain string, an `ID` (judged by the id checks) or free text. Sorted
+    /// by attribute; `operator` and `type` mean different things on
+    /// different elements and have a row each.
+    pub(super) const SVG11_VALUES: &[(&str, Scope, Value)] = &[
+        ("accumulate", All, OneOf(&["none", "sum"])),
+        ("additive", All, OneOf(&["replace", "sum"])),
+        ("alignment-baseline", All, OneOf(&["after-edge", "alphabetic", "auto", "baseline", "before-edge", "central", "hanging", "ideographic", "inherit", "mathematical", "middle", "text-after-edge", "text-before-edge"])),
+        ("calcMode", All, OneOf(&["discrete", "linear", "paced", "spline"])),
+        ("class", All, NmTokens),
+        ("clip-rule", All, OneOf(&["evenodd", "inherit", "nonzero"])),
+        ("clipPathUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("color-interpolation", All, OneOf(&["auto", "inherit", "linearRGB", "sRGB"])),
+        ("color-interpolation-filters", All, OneOf(&["auto", "inherit", "linearRGB", "sRGB"])),
+        ("color-rendering", All, OneOf(&["auto", "inherit", "optimizeQuality", "optimizeSpeed"])),
+        ("direction", All, OneOf(&["inherit", "ltr", "rtl"])),
+        ("display", All, OneOf(&["block", "compact", "inherit", "inline", "inline-table", "list-item", "marker", "none", "run-in", "table", "table-caption", "table-cell", "table-column", "table-column-group", "table-footer-group", "table-header-group", "table-row", "table-row-group"])),
+        ("dominant-baseline", All, OneOf(&["alphabetic", "auto", "central", "hanging", "ideographic", "inherit", "mathematical", "middle", "no-change", "reset-size", "text-after-edge", "text-before-edge", "use-script"])),
+        ("edgeMode", All, OneOf(&["duplicate", "none", "wrap"])),
+        ("externalResourcesRequired", All, OneOf(&["false", "true"])),
+        ("fill", Only(&["animate", "animateColor", "animateMotion", "animateTransform", "set"]), OneOf(&["freeze", "remove"])),
+        ("fill-rule", All, OneOf(&["evenodd", "inherit", "nonzero"])),
+        ("filterUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("font-stretch", AllBut(&["font-face"]), OneOf(&["condensed", "expanded", "extra-condensed", "extra-expanded", "inherit", "narrower", "normal", "semi-condensed", "semi-expanded", "ultra-condensed", "ultra-expanded", "wider"])),
+        ("font-style", AllBut(&["font-face"]), OneOf(&["inherit", "italic", "normal", "oblique"])),
+        ("font-variant", AllBut(&["font-face"]), OneOf(&["inherit", "normal", "small-caps"])),
+        ("font-weight", AllBut(&["font-face"]), OneOf(&["100", "200", "300", "400", "500", "600", "700", "800", "900", "bold", "bolder", "inherit", "lighter", "normal"])),
+        ("gradientUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("image-rendering", All, OneOf(&["auto", "inherit", "optimizeQuality", "optimizeSpeed"])),
+        ("lengthAdjust", All, OneOf(&["spacing", "spacingAndGlyphs"])),
+        ("markerUnits", All, OneOf(&["strokeWidth", "userSpaceOnUse"])),
+        ("maskContentUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("maskUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("method", All, OneOf(&["align", "stretch"])),
+        ("mode", All, OneOf(&["darken", "lighten", "multiply", "normal", "screen"])),
+        ("operator", Only(&["feComposite"]), OneOf(&["arithmetic", "atop", "in", "out", "over", "xor"])),
+        ("operator", Only(&["feMorphology"]), OneOf(&["dilate", "erode"])),
+        ("overflow", All, OneOf(&["auto", "hidden", "inherit", "scroll", "visible"])),
+        ("patternContentUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("patternUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("pointer-events", All, OneOf(&["all", "fill", "inherit", "none", "painted", "stroke", "visible", "visibleFill", "visiblePainted", "visibleStroke"])),
+        ("preserveAlpha", All, OneOf(&["false", "true"])),
+        ("preserveAspectRatio", All, AspectRatio),
+        ("primitiveUnits", All, OneOf(&["objectBoundingBox", "userSpaceOnUse"])),
+        ("rendering-intent", All, OneOf(&["absolute-colorimetric", "auto", "perceptual", "relative-colorimetric", "saturation"])),
+        ("restart", All, OneOf(&["always", "never", "whenNotActive"])),
+        ("shape-rendering", All, OneOf(&["auto", "crispEdges", "geometricPrecision", "inherit", "optimizeSpeed"])),
+        ("spacing", All, OneOf(&["auto", "exact"])),
+        ("spreadMethod", All, OneOf(&["pad", "reflect", "repeat"])),
+        ("stitchTiles", All, OneOf(&["noStitch", "stitch"])),
+        ("stroke-linecap", All, OneOf(&["butt", "inherit", "round", "square"])),
+        ("stroke-linejoin", All, OneOf(&["bevel", "inherit", "miter", "round"])),
+        ("target", All, NmToken),
+        ("text-anchor", All, OneOf(&["end", "inherit", "middle", "start"])),
+        ("text-rendering", All, OneOf(&["auto", "geometricPrecision", "inherit", "optimizeLegibility", "optimizeSpeed"])),
+        ("type", Only(&["feFuncA", "feFuncB", "feFuncG", "feFuncR"]), OneOf(&["discrete", "gamma", "identity", "linear", "table"])),
+        ("type", Only(&["feTurbulence"]), OneOf(&["fractalNoise", "turbulence"])),
+        ("type", Only(&["feColorMatrix"]), OneOf(&["hueRotate", "luminanceToAlpha", "matrix", "saturate"])),
+        ("type", Only(&["animateTransform"]), OneOf(&["rotate", "scale", "skewX", "skewY", "translate"])),
+        ("unicode-bidi", All, OneOf(&["bidi-override", "embed", "inherit", "normal"])),
+        ("version", All, Exactly("1.1")),
+        ("visibility", All, OneOf(&["hidden", "inherit", "visible"])),
+        ("writing-mode", All, OneOf(&["inherit", "lr", "lr-tb", "rl", "rl-tb", "tb", "tb-rl"])),
+        ("xChannelSelector", All, OneOf(&["A", "B", "G", "R"])),
+        ("yChannelSelector", All, OneOf(&["A", "B", "G", "R"])),
+        ("zoomAndPan", All, OneOf(&["disable", "magnify"])),
+    ];
 }
 
 fn is_recognized_attribute(name: &str, element: &str, is_epub3: bool) -> bool {
@@ -2014,19 +2108,20 @@ const SVG_REQUIRED_ATTRS: &[(&str, &[&str])] = &[
     ("vkern", &["k"]),
 ];
 
-/// The SVG attributes whose **value** epubcheck actually constrains.
+/// The SVG attribute values checked at **EPUB 3**, where epubcheck's SVG
+/// grammar is informative (RSC-025). EPUB 2 uses the generated
+/// `svg11::SVG11_VALUES` instead.
 ///
-/// Five of them, and that is the whole axis. `schema/20/rng/svg/svg-datatypes.rng`
-/// declares 22 datatypes and **17 are a plain `<data type="string"/>`** —
-/// `SVGLength`, `Number`, `OpacityValue`, `TransformList`, `PathData`, `SVGURI`
-/// and the rest carry their meaning in an `<a:documentation>` and constrain
-/// nothing. Probed rather than inferred: `width="abc"`, `r="-1"`,
-/// `opacity="junk"`, `transform="notafunction(1)"` and an invalid path `d` are
-/// all clean, against a control that confirms the document is being validated.
-///
-/// So constraining lengths, numbers or path data would be **inventing errors
-/// epubcheck does not make**, which is the restrictive direction the `ADV-*`
-/// mechanism exists to keep out of the verdict. Only these five are a gap.
+/// This list was once described as the whole axis: `svg-datatypes.rng`
+/// declares 22 datatypes and 17 are a plain `<data type="string"/>`, so
+/// lengths, numbers, opacities, transforms and path data constrain nothing
+/// (`width="abc"`, `r="-1"`, `opacity="junk"`, `transform="notafunction(1)"`
+/// and a bad path `d` are all clean, measured). That part stands. What it
+/// missed is the enumerations written inline in each `attlist`: 57 attributes
+/// at 2.0 (2026-10-08), and EPUB 3's own grammar has its own, with different
+/// values (`visibility` also takes `collapse` there). At 3.0 only these five
+/// and `preserveAspectRatio` are checked so far; the rest is an open gap, at
+/// usage severity.
 const SVG_ENUM_ATTRS: &[(&str, &[&str])] = &[
     ("clip-rule", &["evenodd", "inherit", "nonzero"]),
     ("externalResourcesRequired", &["false", "true"]),
@@ -2057,6 +2152,42 @@ fn preserve_aspect_ratio_is_valid(v: &str) -> bool {
         None => true,
         Some(m) => matches!(m, "meet" | "slice") && parts.next().is_none(),
     }
+}
+
+/// A `token`-typed enumeration value: XML whitespace collapsed, then one of
+/// `allowed`, case included. `" evenodd "` passes, `"evenodd evenodd"` and
+/// `"EVENODD"` do not (measured on 5.4.0).
+fn is_one_token_of(value: &str, allowed: &[&str]) -> bool {
+    let mut tokens = value.xml_tokens();
+    tokens.next().is_some_and(|t| allowed.contains(&t)) && tokens.next().is_none()
+}
+
+/// Whether the EPUB 2 grammar accepts `value` for `attr` on `element`, or
+/// `None` when it does not constrain that value. The caller has already
+/// established that `element` takes `attr`.
+fn epub2_value_is_valid(element: &str, attr: &str, value: &str) -> Option<bool> {
+    use svg11::{Scope, Value};
+    let (_, _, rule) = svg11::SVG11_VALUES.iter().find(|(a, scope, _)| {
+        *a == attr
+            && match scope {
+                Scope::All => true,
+                Scope::Only(els) => els.contains(&element),
+                Scope::AllBut(els) => !els.contains(&element),
+            }
+    })?;
+    Some(match rule {
+        Value::OneOf(allowed) => is_one_token_of(value, allowed),
+        Value::Exactly(s) => value == *s,
+        Value::NmToken => {
+            let mut tokens = value.xml_tokens();
+            tokens.next().is_some_and(crate::xmlname::is_nmtoken) && tokens.next().is_none()
+        }
+        Value::NmTokens => {
+            let mut tokens = value.xml_tokens().peekable();
+            tokens.peek().is_some() && tokens.all(crate::xmlname::is_nmtoken)
+        }
+        Value::AspectRatio => preserve_aspect_ratio_is_valid(value),
+    })
 }
 
 /// The elements whose required attribute is the **namespaced** `xlink:href`,
@@ -2636,7 +2767,8 @@ fn check_attributes(
             missing.iter().map(|a| (*a).to_string()).collect(),
         );
     }
-    // The five attributes whose value epubcheck constrains. Reported in the
+    // The attributes whose value epubcheck constrains: the whole generated
+    // table at 2.0, the five of `SVG_ENUM_ATTRS` at 3.0. Reported in the
     // same pass and with the same severity split as the required attributes:
     // one grammar, one normativity.
     for n in svg_root
@@ -2654,14 +2786,16 @@ fn check_attributes(
             if !is_epub3 && !is_recognized_attribute(name, n.tag_name().name(), false) {
                 continue;
             }
-            let bad = if name == "preserveAspectRatio" {
-                !preserve_aspect_ratio_is_valid(value)
+            let valid = if !is_epub3 {
+                epub2_value_is_valid(n.tag_name().name(), name, value)
+            } else if name == "preserveAspectRatio" {
+                Some(preserve_aspect_ratio_is_valid(value))
             } else if let Ok(i) = SVG_ENUM_ATTRS.binary_search_by_key(&name, |(a, _)| a) {
-                !SVG_ENUM_ATTRS[i].1.contains(&value)
+                Some(is_one_token_of(value, SVG_ENUM_ATTRS[i].1))
             } else {
-                continue;
+                None
             };
-            if !bad {
+            if valid != Some(false) {
                 continue;
             }
             report.push_full(
@@ -2796,6 +2930,101 @@ mod tests {
             .is_empty()
         );
         assert!(ids(r#"<image width="1" height="1"/>"#, true).is_empty());
+    }
+
+    /// The enumerated values at 2.0, each shape among the 8,325 values probed
+    /// against 5.4.0 (2026-10-08): `token` values collapse whitespace and keep
+    /// case, `version` is a `string` compared as written, and `fill`, `type`,
+    /// `operator` and the `font-*` properties mean different things on
+    /// different elements.
+    #[test]
+    fn epub2_svg_values_follow_the_generated_table() {
+        let invalid = |body: &str, is_epub3: bool| -> usize {
+            let svg = format!(r#"{S}{body}</svg>"#);
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_required_attributes(doc.root_element(), "s.svg", is_epub3, &mut report);
+            report
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.svg_invalid_attribute_value"))
+                .count()
+        };
+        for (body, at_2) in [
+            (r#"<rect width="1" height="1" visibility="hide"/>"#, 1),
+            (r#"<rect width="1" height="1" visibility=" hidden "/>"#, 0),
+            (r#"<rect width="1" height="1" visibility="Hidden"/>"#, 1),
+            (
+                r#"<rect width="1" height="1" visibility="hidden hidden"/>"#,
+                1,
+            ),
+            (r#"<g display="flex"/>"#, 1),
+            (r#"<g display="inline-table"/>"#, 0),
+            (r#"<animate attributeName="x" fill="freeze"/>"#, 0),
+            (r#"<animate attributeName="x" fill="red"/>"#, 1),
+            (r#"<rect width="1" height="1" fill="red"/>"#, 0),
+            (r#"<g font-weight="bold"/>"#, 0),
+            (r#"<g font-weight="heavy"/>"#, 1),
+            (
+                r#"<defs><font horiz-adv-x="1"><font-face font-weight="all"/></font></defs>"#,
+                0,
+            ),
+            (r#"<svg version="1.1"/>"#, 0),
+            (r#"<svg version="1.0"/>"#, 1),
+            (r#"<svg version=" 1.1"/>"#, 1),
+            (r#"<g class="a b"/>"#, 0),
+            (r#"<g class=""/>"#, 1),
+            (r#"<g class="a/b"/>"#, 1),
+            (
+                r#"<defs><filter><feColorMatrix type="matrix"/></filter></defs>"#,
+                0,
+            ),
+            (
+                r#"<defs><filter><feTurbulence type="matrix"/></filter></defs>"#,
+                1,
+            ),
+            (
+                r#"<defs><filter><feMorphology operator="xor"/></filter></defs>"#,
+                1,
+            ),
+            (r#"<script type="anything"/>"#, 0),
+        ] {
+            assert_eq!(invalid(body, false), at_2, "{body} at 2.0");
+        }
+        // The five checked at 3.0 compare as tokens too: a padded value was a
+        // false positive at both versions until the table came.
+        for body in [
+            r#"<rect width="1" height="1" fill-rule=" evenodd&#9;"/>"#,
+            r#"<rect width="1" height="1" clip-rule=" nonzero "/>"#,
+            r#"<svg preserveAspectRatio=" none "/>"#,
+        ] {
+            assert_eq!(invalid(body, false), 0, "{body} at 2.0");
+            assert_eq!(invalid(body, true), 0, "{body} at 3.0");
+        }
+        assert_eq!(
+            invalid(r#"<rect width="1" height="1" fill-rule="junk"/>"#, true),
+            1
+        );
+    }
+
+    /// Every value rule names an attribute some element takes, and every
+    /// element a rule is scoped to takes it.
+    #[test]
+    fn the_svg11_value_table_agrees_with_the_attribute_table() {
+        use svg11::Scope;
+        let takes = |e: &str, a: &str| is_recognized_attribute(a, e, false);
+        for (attr, scope, _) in svg11::SVG11_VALUES {
+            let els: &[&str] = match scope {
+                Scope::All => &[],
+                Scope::Only(els) | Scope::AllBut(els) => els,
+            };
+            assert!(els.iter().all(|e| takes(e, attr)), "{attr}");
+            assert!(
+                svg11::SVG11_ATTRIBUTES.iter().any(|(e, _)| takes(e, attr)),
+                "{attr}"
+            );
+        }
+        assert!(svg11::SVG11_VALUES.windows(2).all(|w| w[0].0 <= w[1].0));
     }
 
     /// At 2.0 an attribute is judged against its own element's SVG 1.1 list,
@@ -3071,11 +3300,12 @@ mod tests {
         assert_eq!(run(&HashSet::new()), 1, "undeclared and missing: RSC-007");
     }
 
-    /// **Five SVG attributes have a constrained value, and that is the whole
-    /// datatype axis.** `schema/20/rng/svg/svg-datatypes.rng` declares 22
-    /// datatypes and 17 of them are a plain `<data type="string"/>`: length,
-    /// number, opacity, transform list, path data and URI carry their meaning
-    /// in documentation and constrain nothing.
+    /// **The datatypes constrain nothing; the enumerations do.**
+    /// `schema/20/rng/svg/svg-datatypes.rng` declares 22 datatypes and 17 of
+    /// them are a plain `<data type="string"/>`: length, number, opacity,
+    /// transform list, path data and URI carry their meaning in documentation
+    /// and constrain nothing. The enumerated values are a separate table
+    /// (`epub2_svg_values_follow_the_generated_table`).
     ///
     /// Probed rather than inferred, against a control that confirms the
     /// document is validated at all: `width="abc"`, `width="-5"`, `r="-1"`,
@@ -3083,7 +3313,7 @@ mod tests {
     /// `d` are every one of them clean in epubcheck. Constraining those would
     /// be inventing errors it does not make.
     #[test]
-    fn only_five_svg_attribute_values_are_constrained() {
+    fn svg_datatype_values_are_unconstrained() {
         let bad = |body: &str| -> Vec<String> {
             let xml = format!(
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">
