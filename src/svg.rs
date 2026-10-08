@@ -2568,6 +2568,10 @@ pub(crate) fn check_content_model(
             && (is_epub3 || epub2_grammar_reaches(*n))
     }) {
         let pname = parent.tag_name().name();
+        if pname == "font" {
+            check_font_content(parent, path, id, severity, report);
+            continue;
+        }
         // The four closed shapes, each measured cell by cell rather than
         // read off a grammar. `None` means this element is not part of the
         // slice — every container is, deliberately.
@@ -2678,6 +2682,115 @@ pub(crate) fn check_content_model(
                 Position::of(parent),
             );
         }
+    }
+}
+
+/// `font` is the one SVG 1.1 element whose content is an ordered sequence
+/// with required members: `(desc | title | metadata)*`, then exactly one
+/// `font-face`, then exactly one `missing-glyph`, then any number of
+/// `glyph`, `hkern` and `vkern`. The same at 2.0 and 3.0
+/// (`svg-basic-font.rng`, `svg-basic-font.rnc`).
+///
+/// The counting follows epubcheck's, measured on 5.4.0 with 27 sequences,
+/// inline and standalone, at both versions:
+/// - A member that comes **too early**, before a required one (`glyph` with
+///   no `missing-glyph` yet), is one finding. The required members it skipped
+///   are then taken as given, so there is no "incomplete" finding after it.
+/// - A member that **does not fit at all** (a second `font-face`, a `desc`
+///   after `font-face`, a `rect`, an animation) is one finding and is
+///   otherwise ignored.
+/// - A `font` that ends with `font-face` or `missing-glyph` still owed is
+///   one finding.
+///
+/// Unknown SVG names belong to the vocabulary check and foreign elements are
+/// left alone, as everywhere else in the content model.
+fn check_font_content(
+    font: roxmltree::Node,
+    path: &str,
+    id: &'static str,
+    severity: Severity,
+    report: &mut Report,
+) {
+    const REQUIRED: [&str; 2] = ["font-face", "missing-glyph"];
+    // How many of the two required members are behind us.
+    let mut stage = 0usize;
+    for child in font.children() {
+        if child.is_text() {
+            if child
+                .text()
+                .is_some_and(|t| !crate::xmlext::is_xml_blank(t))
+            {
+                report.push_at_pos(
+                    id,
+                    severity,
+                    "text is not allowed inside \"font\"",
+                    path,
+                    Position::of(child),
+                );
+            }
+            continue;
+        }
+        if !child.is_element()
+            || child.tag_name().namespace() != Some(SVG_NS)
+            || !SVG_ELEMENTS.contains(&child.tag_name().name())
+        {
+            continue;
+        }
+        let cname = child.tag_name().name();
+        // The stage this member belongs at: before the required pair, at one
+        // of them, or after both.
+        let at = match cname {
+            "desc" | "title" | "metadata" => Some(0),
+            "font-face" => Some(0),
+            "missing-glyph" => Some(1),
+            "glyph" | "hkern" | "vkern" => Some(2),
+            _ => None,
+        };
+        let fits = match (cname, at) {
+            ("desc" | "title" | "metadata", Some(0)) => stage == 0,
+            (_, Some(at)) => at >= stage,
+            (_, None) => false,
+        };
+        if !fits {
+            report.push_at_pos(
+                id,
+                severity,
+                format!("element \"{cname}\" is not allowed inside \"font\""),
+                path,
+                Position::of(child),
+            );
+            continue;
+        }
+        let Some(at) = at else { continue };
+        if at > stage {
+            report.push_at_pos(
+                id,
+                severity,
+                format!(
+                    "element \"{cname}\" comes before the required \"{}\" in \"font\"",
+                    REQUIRED[stage]
+                ),
+                path,
+                Position::of(child),
+            );
+        }
+        if cname == "font-face" || cname == "missing-glyph" {
+            stage = at + 1;
+        } else if at == 2 {
+            stage = 2;
+        }
+    }
+    if stage < 2 {
+        report.push_at_pos(
+            id,
+            severity,
+            format!(
+                "element \"font\" has incomplete content; \"{}\" is missing",
+                REQUIRED[stage]
+            ),
+            path,
+            Position::of(font),
+        );
     }
 }
 
@@ -3005,6 +3118,74 @@ mod tests {
             invalid(r#"<rect width="1" height="1" fill-rule="junk"/>"#, true),
             1
         );
+    }
+
+    /// `font`'s ordered content, counted as epubcheck counts it: each row
+    /// was one of the 27 sequences measured on 5.4.0 (2026-10-08), with the
+    /// element each finding names.
+    #[test]
+    fn font_content_is_an_ordered_sequence_with_two_required_members() {
+        let named = |inner: &str, is_epub3: bool| -> Vec<String> {
+            let svg = format!(r#"{S}<font horiz-adv-x="1">{inner}</font></svg>"#);
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_content_model(doc.root_element(), "s.svg", is_epub3, &mut report);
+            report
+                .messages
+                .iter()
+                .map(|m| match m.text.starts_with("text ") {
+                    true => "text".to_string(),
+                    false => m.text.split('"').nth(1).unwrap_or_default().to_string(),
+                })
+                .collect()
+        };
+        const FF: &str = "<font-face/>";
+        const MG: &str = "<missing-glyph/>";
+        for (inner, expected) in [
+            ("", &["font"][..]),
+            (FF, &["font"]),
+            (MG, &["missing-glyph"]),
+            ("<glyph/>", &["glyph"]),
+            ("<glyph/><glyph/>", &["glyph"]),
+            ("<font-face/><glyph/>", &["glyph"]),
+            ("<font-face/><hkern k=\"1\"/>", &["hkern"]),
+            (
+                "<missing-glyph/><font-face/>",
+                &["missing-glyph", "font-face"],
+            ),
+            (
+                "<font-face/><glyph/><missing-glyph/>",
+                &["glyph", "missing-glyph"],
+            ),
+            ("<font-face/><desc>d</desc><missing-glyph/>", &["desc"]),
+            ("<font-face/><font-face/><missing-glyph/>", &["font-face"]),
+            (
+                "<font-face/><missing-glyph/><missing-glyph/>",
+                &["missing-glyph"],
+            ),
+            ("<font-face/><missing-glyph/><desc>d</desc>", &["desc"]),
+            ("<rect width=\"1\" height=\"1\"/>", &["rect", "font"]),
+            (
+                "<animate attributeName=\"x\"/><font-face/><missing-glyph/>",
+                &["animate"],
+            ),
+            ("<font-face/><missing-glyph/>text", &["text"]),
+            ("<desc>d</desc>", &["font"]),
+            ("<font-face/><missing-glyph/>", &[]),
+            (
+                "<title>t</title><metadata/><font-face/><missing-glyph/>",
+                &[],
+            ),
+            (
+                "<desc>d</desc><font-face/><missing-glyph/><glyph/><hkern k=\"1\"/><glyph/>",
+                &[],
+            ),
+            ("  <font-face/>  <missing-glyph/>  ", &[]),
+            ("<font-face/><missing-glyph/><x:y xmlns:x=\"urn:x\"/>", &[]),
+        ] {
+            assert_eq!(named(inner, false), expected, "{inner} at 2.0");
+            assert_eq!(named(inner, true), expected, "{inner} at 3.0");
+        }
     }
 
     /// Every value rule names an attribute some element takes, and every

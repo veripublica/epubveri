@@ -54,6 +54,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   keywords on different filter primitives. An invalid value is now RSC-005,
   as in epubcheck. We probed 8,325 values against epubcheck 5.4.0 and now
   report exactly the same 3,103. No book on our shelf changes.
+- **An SVG `font` is checked for its required parts and their order.** A
+  `font` must hold one `font-face`, then one `missing-glyph`, then any
+  `glyph`, `hkern` and `vkern`; `desc`, `title` and `metadata` may only come
+  first. We checked none of this, so a `font` with no `font-face` passed.
+  Now each misplaced or repeated part is reported, and so is a `font` that
+  ends with a required part missing: RSC-005 in EPUB 2, RSC-025 in EPUB 3,
+  as in epubcheck. Like epubcheck, a part that comes too early is one
+  finding, and the parts it skipped are not reported again as missing.
+  Measured on 27 sequences, inline and standalone, at both versions.
 - **A keyword value with whitespace around it was reported as invalid.**
   `fill-rule=" evenodd"` drew RSC-005 in an EPUB 2 book and RSC-025 in an
   EPUB 3 one. epubcheck trims the whitespace from these values and accepts
