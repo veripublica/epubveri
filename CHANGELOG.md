@@ -10,6 +10,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-08
+
 ### Added
 
 - **The reference resolver is public: `opf::resolve` and
@@ -35,9 +37,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   each of them (RSC-005), because EPUB 2 validates SVG against the whole SVG
   1.1 grammar. Each of the 81 SVG 1.1 elements now has its own list, taken
   from that grammar. We probed all 21,060 element–attribute pairs against
-  epubcheck 5.4.0 and now reject exactly the same 18,559. EPUB 3 is
-  unchanged: epubcheck's SVG check there is informative (RSC-025), and we
-  keep the shared list.
+  epubcheck 5.4.0 and now reject exactly the same 18,559. EPUB 3 gets the
+  same check at usage level; see below.
   - An attribute its element does not take is reported as not allowed,
     and its value is no longer judged. `preserveAspectRatio="junk"` on a
     `rect` used to draw "value of attribute is invalid". It now draws
@@ -97,8 +98,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   Measured on 27 sequences, inline and standalone, at both versions.
 - **A keyword value with whitespace around it was reported as invalid.**
   `fill-rule=" evenodd"` drew RSC-005 in an EPUB 2 book and RSC-025 in an
-  EPUB 3 one. epubcheck trims the whitespace from these values and accepts
-  them, at both versions. Case still counts: `EVENODD` is invalid.
+  EPUB 3 one, and so did the same shape in `clip-rule`,
+  `externalResourcesRequired` and `preserveAlpha`.
+  Both grammars declare these as tokens, so epubcheck trims the whitespace
+  and accepts them. Case still counts: `EVENODD` is invalid. Most other
+  keywords at EPUB 3 are compared as written, as above.
+- **0.23.0's notes left out one rule key.** The malformed-SVG finding (RSC-016,
+  #141) is keyed `svg.malformed_xml`.
 
 ## [0.23.0] - 2026-10-07
 
