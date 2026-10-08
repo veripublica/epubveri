@@ -36,6 +36,19 @@
 //!     … --bin compare -- ~/Documents/Projects/ebook-shelf   # every .epub under a dir
 //!     … --bin compare -- book.epub other.epub
 //!     … --bin compare -- --verbose ~/Documents/Projects/ebook-shelf   # per-book detail
+//!     … --bin compare -- --jobs 2 ~/Documents/Projects/ebook-shelf   # fewer workers
+//!
+//! **Books run in parallel, one worker per performance core** (2026-10-08).
+//! Each book costs a JVM start and an epubcheck run, and run one at a time
+//! the 1,086 fixture books took about half an hour. The workers take books
+//! off a shared counter; the results are then read back in book order, so
+//! the report is byte-identical to a sequential run's. The default leaves the
+//! efficiency cores to the machine (`hw.perflevel0.physicalcpu` on a Mac,
+//! all cores but two elsewhere); `--jobs N` overrides it, and `--jobs 1` is
+//! the old sequential run. epubveri's own caches are thread-local, so its
+//! side needs no locking. In parallel each JVM is also held near one core
+//! (`-XX:TieredStopAtLevel=1 -XX:+UseSerialGC`, see `main`), which is where
+//! most of the gain came from; `EPUBCHECK_JAVA_OPTS` overrides that.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -165,6 +178,70 @@ fn collect(paths: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+/// What both tools said about one book.
+struct BookRun {
+    theirs: BTreeMap<String, usize>,
+    stopped: BTreeMap<String, u32>,
+    ours: BTreeMap<String, usize>,
+    past: BTreeMap<String, usize>,
+}
+
+/// Run epubcheck and epubveri on one book, or `None` when epubcheck could not
+/// be started (said on stderr, and the book is left out).
+fn run_book(book: &Path, java: &str, jar: &Path, opts: &str) -> Option<BookRun> {
+    let name = book.file_name().unwrap().to_string_lossy();
+    // `-u` is load-bearing: epubcheck suppresses USAGE-severity messages
+    // by default, and a large share of our output is USAGE. Without it the
+    // first run of this tool listed eleven "false-positive candidates"
+    // that were nothing of the kind — we reported them at usage level and
+    // epubcheck simply was not printing its own.
+    let ec_out = match Command::new(java)
+        .args(opts.split_whitespace())
+        .arg("-jar")
+        .arg(jar)
+        .arg("-u")
+        .arg(book)
+        .output()
+    {
+        Ok(o) => {
+            let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
+            s.push_str(&String::from_utf8_lossy(&o.stderr));
+            s
+        }
+        Err(e) => {
+            eprintln!("  epubcheck failed on {name}: {e}");
+            return None;
+        }
+    };
+    let theirs = epubcheck_ids(&ec_out);
+    let stopped = epubcheck_stopped_at(&ec_out, book);
+    let (ours, past) = epubveri_ids(book, &stopped);
+    Some(BookRun {
+        theirs,
+        stopped,
+        ours,
+        past,
+    })
+}
+
+/// One worker per performance core: `hw.perflevel0.physicalcpu` on a Mac
+/// with two core types, all cores but two anywhere else, at least one.
+fn default_jobs() -> usize {
+    let perf = Command::new("/usr/sbin/sysctl")
+        .args(["-n", "hw.perflevel0.physicalcpu"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .and_then(|s| s.trim().parse::<usize>().ok());
+    perf.unwrap_or_else(|| {
+        std::thread::available_parallelism()
+            .map(|n| n.get().saturating_sub(2))
+            .unwrap_or(1)
+    })
+    .max(1)
+}
+
 fn main() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     let java = std::env::var("EPUBCHECK_JAVA")
@@ -173,15 +250,24 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|_| root.join("corpus/tools/epubcheck-5.4.0/epubcheck.jar"));
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
     let verbose = args.iter().any(|a| a == "--verbose");
+    let mut jobs = default_jobs();
+    if let Some(i) = args.iter().position(|a| a == "--jobs") {
+        let Some(n) = args.get(i + 1).and_then(|n| n.parse::<usize>().ok()) else {
+            eprintln!("--jobs needs a number");
+            std::process::exit(2);
+        };
+        jobs = n.max(1);
+        args.drain(i..=i + 1);
+    }
     let paths: Vec<PathBuf> = args
         .iter()
         .filter(|a| !a.starts_with("--"))
         .map(PathBuf::from)
         .collect();
     if paths.is_empty() {
-        eprintln!("usage: compare [--verbose] <book.epub|dir>…");
+        eprintln!("usage: compare [--verbose] [--jobs N] <book.epub|dir>…");
         std::process::exit(2);
     }
     if !jar.is_file() {
@@ -196,6 +282,21 @@ fn main() {
 
     let books = collect(&paths);
     println!("comparing {} book(s) against epubcheck\n", books.len());
+    // Each epubcheck JVM compiles with C2 on several threads of its own, so
+    // six of them at once used about twelve cores and ran barely twice as
+    // fast as one. Stopping at C1 and one GC thread keeps a JVM near one
+    // core. Measured on 120 fixture books (2026-10-08): 218 s with one
+    // worker, 121 s with six, 56 s with six and these options; alone, the
+    // same options made one worker slower (265 s), so they apply only in
+    // parallel. EPUBCHECK_JAVA_OPTS overrides them, empty included.
+    let java_opts = std::env::var("EPUBCHECK_JAVA_OPTS").unwrap_or_else(|_| {
+        if jobs > 1 {
+            "-XX:TieredStopAtLevel=1 -XX:+UseSerialGC".to_string()
+        } else {
+            String::new()
+        }
+    });
+    eprintln!("({jobs} worker(s), JVM options: {java_opts:?})");
 
     // ID -> (books where only we report it, books where only epubcheck does)
     let mut only_ours: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -213,33 +314,34 @@ fn main() {
     // kind of blindness it exists to correct.
     let mut blind: Vec<(String, String, usize)> = Vec::new();
 
-    for book in &books {
+    // Both tools run per book in the workers; everything that reads the
+    // results stays below, in book order.
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<std::sync::Mutex<Option<BookRun>>> =
+        books.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    std::thread::scope(|scope| {
+        for _ in 0..jobs.min(books.len()) {
+            scope.spawn(|| {
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some(book) = books.get(i) else { break };
+                    *results[i].lock().unwrap() = run_book(book, &java, &jar, &java_opts);
+                }
+            });
+        }
+    });
+
+    for (book, run) in books.iter().zip(results) {
         let name = book.file_name().unwrap().to_string_lossy().to_string();
-        // `-u` is load-bearing: epubcheck suppresses USAGE-severity messages
-        // by default, and a large share of our output is USAGE. Without it the
-        // first run of this tool listed eleven "false-positive candidates"
-        // that were nothing of the kind — we reported them at usage level and
-        // epubcheck simply was not printing its own.
-        let ec_out = match Command::new(&java)
-            .arg("-jar")
-            .arg(&jar)
-            .arg("-u")
-            .arg(book)
-            .output()
-        {
-            Ok(o) => {
-                let mut s = String::from_utf8_lossy(&o.stdout).into_owned();
-                s.push_str(&String::from_utf8_lossy(&o.stderr));
-                s
-            }
-            Err(e) => {
-                eprintln!("  epubcheck failed on {name}: {e}");
-                continue;
-            }
+        let Some(BookRun {
+            theirs,
+            stopped,
+            ours,
+            past,
+        }) = run.into_inner().unwrap()
+        else {
+            continue;
         };
-        let theirs = epubcheck_ids(&ec_out);
-        let stopped = epubcheck_stopped_at(&ec_out, book);
-        let (ours, past) = epubveri_ids(book, &stopped);
         if !past.is_empty() {
             let n: usize = past.values().sum();
             let where_: Vec<String> = stopped.iter().map(|(f, l)| format!("{f}:{l}")).collect();
