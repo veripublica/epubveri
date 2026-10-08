@@ -1,5 +1,9 @@
 //! XML names, checked the way epubcheck checks them.
 //!
+//! [`is_ncname`] and [`is_xsd_id`] are public, so that a program which writes
+//! an id can keep to exactly what the validator accepts. The rest stays
+//! inside the crate.
+//!
 //! epubcheck decides "is this an XML name" with two different libraries, and
 //! they disagree, so this module has two rules.
 //!
@@ -7,12 +11,12 @@
 //!   `NMTOKEN` in a grammar — EPUB 2 content-document ids, NCX ids, SVG ids,
 //!   OPF ids — goes through Jing's XSD datatype library, which uses the
 //!   character classes of XML 1.0 Appendix B (`BaseChar`, `Ideographic`,
-//!   `CombiningChar`, `Digit`, `Extender`). That is [`is_ncname`],
-//!   [`is_name`] and [`is_nmtoken`].
+//!   `CombiningChar`, `Digit`, `Extender`). That is [`is_ncname`] and
+//!   [`is_xsd_id`], and the crate's own `is_name` and `is_nmtoken`.
 //! - **Its Java code (Saxon's `NameChecker.isValidNCName`).** The `prefix`
 //!   attribute parser (OPF-004b) and fragment-identifier checks use XML 1.0
 //!   Fifth Edition's much wider `NameStartChar`/`NameChar` ranges. That is
-//!   [`is_ncname_fifth_edition`].
+//!   the crate's own `is_ncname_fifth_edition`.
 //!
 //! The two differ in both directions. `a‿b` (U+203F) passes the Fifth Edition
 //! and fails Appendix B; Appendix B stops at the BMP.
@@ -58,7 +62,11 @@ fn in_table(c: char, table: &[(char, char)]) -> bool {
 /// `xsd:NCName` (and `ID`, `IDREF`) as epubcheck's schemas read it: an XML
 /// 1.0 Appendix B name with no colon. `s` is the value after the whitespace
 /// facet; see [`is_xsd_id`] for a raw attribute value.
-pub(crate) fn is_ncname(s: &str) -> bool {
+///
+/// Public so that a program which writes an id keeps to exactly what the
+/// validator accepts. The tables follow epubcheck's grammar library and
+/// change with it (see CHANGELOG).
+pub fn is_ncname(s: &str) -> bool {
     let mut it = s.chars();
     match it.next() {
         Some(c) if in_table(c, XML10_NAME_START) => it.all(|c| in_table(c, XML10_NAME_CHAR)),
@@ -85,7 +93,10 @@ pub(crate) fn is_nmtoken(s: &str) -> bool {
 /// A raw attribute value typed `xsd:ID` in epubcheck's grammar: the
 /// `collapse` facet (XML whitespace only) and then [`is_ncname`]. `" a "`
 /// is a valid ID there; `"a\u{a0}"` is not.
-pub(crate) fn is_xsd_id(raw: &str) -> bool {
+///
+/// This is the test the grammars apply to every `xsd:ID` value, and the
+/// NCX and SVG id checks apply to every `id`: a value it rejects is RSC-005.
+pub fn is_xsd_id(raw: &str) -> bool {
     is_ncname(raw.trim_matches(is_xml_space))
 }
 

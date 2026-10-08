@@ -242,8 +242,16 @@ fn hex(c: u8) -> Option<u8> {
     }
 }
 
-/// Decode `%XX` escapes in a single path segment.
-fn percent_decode(s: &str) -> String {
+/// Decode the `%XX` escapes in one path segment, as [`resolve`] does to each
+/// segment it keeps.
+///
+/// Hex digits are read byte by byte, either case: a `%` that two hex digits
+/// do not follow (`%zz`, `%+1`, a `%` before a multi-byte character, a `%`
+/// at the end) stays as it is, and no input panics. The decoded bytes are
+/// read as UTF-8, and a sequence that is not valid UTF-8 becomes U+FFFD.
+/// An escaped `/` (`%2F`) decodes to a `/` inside the segment; split the
+/// path first, as [`resolve`] does, or it becomes a separator.
+pub fn percent_decode(s: &str) -> String {
     let b = s.as_bytes();
     let mut out = Vec::with_capacity(b.len());
     let mut i = 0;
@@ -392,10 +400,27 @@ pub(crate) fn nfc(s: &str) -> String {
     s.nfc().collect()
 }
 
-/// Resolve an href relative to `base_dir` into a container path.
-/// Drops fragments/queries; collapses "." and ".."; honors a leading "/";
-/// percent-decodes each segment. (Caller NFC-normalizes for comparison.)
-pub(crate) fn resolve(base_dir: &str, href: &str) -> String {
+/// The container path a relative reference names, resolved the way the
+/// validator resolves every `href`, `src` and manifest entry.
+///
+/// `base_dir` is the directory of the referring file inside the container,
+/// without a trailing `/` (`"OEBPS/Text"`, or `""` at the root). The result
+/// has no leading `/`.
+///
+/// - The URL whitespace epubcheck's parser strips from both ends of the
+///   reference is stripped first. A no-break space is not stripped.
+/// - Everything from the first `#`, then from the first `?`, is dropped.
+/// - A leading `/` resolves from the container root, not from `base_dir`.
+/// - The reference is split on `/` **before** decoding, then `.` and empty
+///   segments are skipped, `..` drops a segment (never above the root), and
+///   each remaining segment goes through [`percent_decode`]. So `%2E%2E` is
+///   a file named `..`, not a step up.
+///
+/// The result is **not** NFC-normalized. Normalize both sides before you
+/// compare it with a ZIP entry name, as the validator does. An absolute URL
+/// (`http:`, `mailto:`, a `data:` URL) is not a container path; filter those
+/// out before calling.
+pub fn resolve(base_dir: &str, href: &str) -> String {
     // epubcheck's URL parser strips these from both ends before it resolves
     // anything, so every caller gets the same answer whether or not it
     // trimmed first - and callers must not trim with `str::trim`, which also
@@ -14923,6 +14948,41 @@ fn check_font_obfuscation(
 #[cfg(test)]
 mod tests {
     use super::is_valid_dc_date;
+
+    /// `resolve` and `percent_decode` are public API (epubsana resolves with
+    /// them); these pin what their docs promise.
+    mod resolver {
+        use super::super::{percent_decode, resolve};
+
+        #[test]
+        fn percent_decode_never_panics_and_needs_two_hex_digits() {
+            assert_eq!(percent_decode("x%aéy.xhtml"), "x%aéy.xhtml");
+            assert_eq!(percent_decode("%Bölüm"), "%Bölüm");
+            assert_eq!(percent_decode("a%+1b"), "a%+1b");
+            assert_eq!(percent_decode("a%2"), "a%2");
+            assert_eq!(percent_decode("a%"), "a%");
+            assert_eq!(percent_decode("B%C3%B6l%c3%bcm"), "Bölüm");
+            assert_eq!(percent_decode("%FF"), "\u{FFFD}");
+        }
+
+        #[test]
+        fn resolve_splits_before_it_decodes() {
+            assert_eq!(
+                resolve("OEBPS/Text", "%2E%2E/a.xhtml"),
+                "OEBPS/Text/../a.xhtml"
+            );
+            assert_eq!(
+                resolve("OEBPS/Text", "../Images/a%20b.png"),
+                "OEBPS/Images/a b.png"
+            );
+            assert_eq!(resolve("OEBPS/Text", "./c.xhtml#p1"), "OEBPS/Text/c.xhtml");
+            assert_eq!(resolve("OEBPS/Text", "c.xhtml?x=1#y"), "OEBPS/Text/c.xhtml");
+            assert_eq!(resolve("OEBPS/Text", "/META-INF/x.xml"), "META-INF/x.xml");
+            assert_eq!(resolve("", "../../a.xhtml"), "a.xhtml");
+            assert_eq!(resolve("OEBPS", " a.xhtml\n"), "OEBPS/a.xhtml");
+            assert_eq!(resolve("OEBPS", "a.xhtml\u{a0}"), "OEBPS/a.xhtml\u{a0}");
+        }
+    }
 
     /// The four semantics `check_duplicate_ids` inherited when it moved out
     /// of `schemas/package.sch`. The shelf never exercises this rule (0 of

@@ -50,7 +50,7 @@ pub mod svg;
 pub mod url;
 pub mod xmlext;
 pub mod xmlguard;
-pub(crate) mod xmlname;
+pub mod xmlname;
 use crate::xmlext::NodeExt;
 pub mod xpath;
 

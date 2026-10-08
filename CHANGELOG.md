@@ -10,6 +10,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **The reference resolver is public: `opf::resolve` and
+  `opf::percent_decode`.** A program that follows a book's links can now
+  land on the same file the validator does. The path is split before it is
+  decoded, so `%2E%2E` names a file and is not a step up. A leading `/`
+  starts from the container root. Each segment is percent-decoded byte by
+  byte, so an odd `%` stays as it is and never panics. The result is not
+  NFC-normalized; normalize both sides before comparing it with a ZIP
+  entry name.
+- **The XML id rule is public: `xmlname::is_ncname` and
+  `xmlname::is_xsd_id`.** They are the same test the grammars and the NCX
+  and SVG checks apply, so a program that writes an id can keep to exactly
+  what the validator accepts. It follows XML 1.0 Appendix B as epubcheck's
+  grammar library reads it: a decomposed `ş` and `a·b` pass, `a²` does not,
+  and a no-break space is never trimmed.
+
 ## [0.23.0] - 2026-10-07
 
 ### Fixed
