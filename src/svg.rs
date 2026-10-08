@@ -1213,13 +1213,65 @@ fn is_recognized_attribute(name: &str, element: &str, is_epub3: bool) -> bool {
         }
         return SVG_ATTRIBUTES.contains(&name);
     }
-    // `role` and `aria-*`: `epub-svg-strict-inc.rnc` folds `aria.global`
-    // into `SVG.Core.attrib`, which covers the `aria-*` set but not `role`
-    // itself. `role` is allowed here anyway - accepting it is a miss, and
-    // rejecting an accessibility attribute that authors do put on SVG
-    // would be the expensive direction of wrong.
+    // EPUB 3 judges each SVG 1.1 element (and `feDropShadow`) by its own
+    // list too, as epubcheck's informative grammar does: the EPUB 2 list
+    // plus `svg11::SVG30_ADDED`. Measured on 5.4.0 (2026-10-08) over 82
+    // elements and 267 names: the same 18,779 pairs rejected.
+    if is_known_at_3(element) {
+        // `aria.global` is folded into `SVG.Core.attrib`, which every element
+        // but `style` takes. It is a closed list (`aria-foo` is rejected), but
+        // any `aria-*` name is accepted here: a miss, not a false finding.
+        if name.starts_with("aria-") {
+            return element != "style";
+        }
+        // `role` comes with the implicit-role groups of 19 elements and no
+        // others. This once accepted `role` everywhere, on the reading that
+        // the grammar had no `role` at all; the probe shows where it has one.
+        if name == "role" {
+            return SVG30_ROLE_ELEMENTS.contains(&element);
+        }
+        return takes_attribute_at_3(element, name);
+    }
+    // An element the vocabulary does not know: that is its finding, and its
+    // attributes keep the flat list's answer.
     SVG_ATTRIBUTES.contains(&name) || name == "role" || name.starts_with("aria-")
 }
+
+/// Whether EPUB 3's SVG grammar has an element of this name.
+fn is_known_at_3(element: &str) -> bool {
+    svg11::SVG11_ATTRIBUTES
+        .binary_search_by(|(e, _)| (*e).cmp(element))
+        .is_ok()
+        || svg11::SVG30_ADDED
+            .binary_search_by(|(e, _)| (*e).cmp(element))
+            .is_ok()
+}
+
+/// The SVG elements that take `role` at EPUB 3, through the grammar's
+/// implicit-role groups (`common.attrs.aria.implicit.*`, defined in the
+/// XHTML grammar rather than the SVG modules). Measured on 5.4.0
+/// (2026-10-08): `role` on each of the 82 elements, rejected on all others.
+const SVG30_ROLE_ELEMENTS: &[&str] = &[
+    "a",
+    "altGlyph",
+    "circle",
+    "ellipse",
+    "foreignObject",
+    "g",
+    "glyph",
+    "glyphRef",
+    "image",
+    "line",
+    "path",
+    "polygon",
+    "polyline",
+    "rect",
+    "svg",
+    "symbol",
+    "text",
+    "tspan",
+    "use",
+];
 
 /// `RSC-025` (usage): an unprefixed attribute on an SVG-namespaced element
 /// that SVG 1.1 has no such attribute for. Prefixed attributes are skipped
@@ -2332,25 +2384,15 @@ fn is_one_token_of(value: &str, allowed: &[&str]) -> bool {
 /// Whether the grammar of the book's version accepts `value` for `attr` on
 /// `element`, or `None` when it does not constrain that value. At 2.0 the
 /// caller has already established that `element` takes `attr`; at 3.0 this
-/// asks, because the name check there is still the flat list.
+/// asks again, because an element the vocabulary does not know keeps the
+/// flat list there.
 fn svg_value_is_valid(element: &str, attr: &str, value: &str, is_epub3: bool) -> Option<bool> {
     use svg11::{Scope, Value};
     let table = if is_epub3 {
+        // An attribute the element does not take is reported as such by
+        // `check_attribute_vocabulary`, and that is all epubcheck says of it.
         if !takes_attribute_at_3(element, attr) {
-            // epubcheck reports the attribute itself here ("not allowed"),
-            // which the flat EPUB 3 name check cannot see. Until it can,
-            // keep the one finding 0.23 made in this case, on the five
-            // attributes it checked then, so the count does not drop.
-            return match attr {
-                "preserveAspectRatio" => Some(preserve_aspect_ratio_is_valid(value)),
-                "clip-rule" | "fill-rule" => {
-                    Some(is_one_token_of(value, &["evenodd", "inherit", "nonzero"]))
-                }
-                "externalResourcesRequired" | "preserveAlpha" => {
-                    Some(is_one_token_of(value, &["false", "true"]))
-                }
-                _ => None,
-            };
+            return None;
         }
         svg11::SVG30_VALUES
     } else {
@@ -3500,11 +3542,11 @@ mod tests {
         assert!(svg11::SVG30_ADDED.windows(2).all(|w| w[0].0 < w[1].0));
     }
 
-    /// At 2.0 an attribute is judged against its own element's SVG 1.1 list,
-    /// and at 3.0 against the flat list still. Each 2.0 row was among the
-    /// 21,060 pairs probed against 5.4.0 (see `svg11`).
+    /// An attribute is judged against its own element's list at both
+    /// versions: RSC-005 at 2.0, RSC-025 at 3.0. Each row was among the pairs
+    /// probed against 5.4.0 (see `svg11`), 21,060 at 2.0 and 21,894 at 3.0.
     #[test]
-    fn epub2_svg_attributes_are_judged_per_element() {
+    fn svg_attributes_are_judged_per_element() {
         let count = |body: &str, is_epub3: bool| -> usize {
             let svg = format!(r#"{S}{body}</svg>"#);
             let doc = crate::ocf::parse_xml(&svg).unwrap();
@@ -3512,7 +3554,7 @@ mod tests {
             check_attribute_vocabulary(doc.root_element(), "s.svg", is_epub3, &mut report);
             report.messages.len()
         };
-        for (body, rejected_at_2) in [
+        for (body, rejected) in [
             (r#"<rect width="1" height="1" font-size="9"/>"#, 1),
             (r#"<rect width="1" height="1" text-anchor="end"/>"#, 1),
             (r#"<image width="1" height="1" fill="red"/>"#, 1),
@@ -3529,11 +3571,25 @@ mod tests {
                 0,
             ),
         ] {
-            assert_eq!(count(body, false), rejected_at_2, "{body} at 2.0");
-            assert_eq!(count(body, true), 0, "{body} at 3.0");
+            assert_eq!(count(body, false), rejected, "{body} at 2.0");
+            assert_eq!(count(body, true), rejected, "{body} at 3.0");
         }
-        // An attribute its element does not take is one finding at 2.0, not
-        // a second one for its value; at 3.0 the value is still judged.
+        // What only 3.0 adds, and the ARIA and `role` it allows.
+        for (body, at_2, at_3) in [
+            (r#"<rect width="1" height="1" paint-order="fill"/>"#, 1, 0),
+            (r#"<rect width="1" height="1" tabindex="0"/>"#, 1, 0),
+            (r#"<symbol width="1"/>"#, 1, 0),
+            (r#"<rect width="1" height="1" aria-label="x"/>"#, 1, 0),
+            (r#"<style aria-label="x"/>"#, 1, 1),
+            (r#"<rect width="1" height="1" role="img"/>"#, 1, 0),
+            (r#"<defs role="img"/>"#, 1, 1),
+            (r#"<g transform-box="fill-box"/>"#, 1, 0),
+        ] {
+            assert_eq!(count(body, false), at_2, "{body} at 2.0");
+            assert_eq!(count(body, true), at_3, "{body} at 3.0");
+        }
+        // An attribute its element does not take is one finding, not a
+        // second one for its value, at both versions.
         let both = |body: &str, is_epub3: bool| -> Vec<String> {
             let svg = format!(r#"{S}{body}</svg>"#);
             let doc = crate::ocf::parse_xml(&svg).unwrap();
@@ -3548,7 +3604,7 @@ mod tests {
         );
         assert_eq!(
             both(r#"<g preserveAspectRatio="bad"/>"#, true),
-            [r#"value of attribute "preserveAspectRatio" is invalid"#]
+            [r#"attribute "preserveAspectRatio" not allowed here"#]
         );
         assert_eq!(
             both(r#"<svg preserveAspectRatio="bad"/>"#, false),

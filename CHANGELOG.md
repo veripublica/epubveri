@@ -69,6 +69,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   same 4,411, leaving `href`, which epubcheck judges by URI rules we do not
   match yet. No book on our shelf and none of W3C's 209 test publications
   changes.
+- **EPUB 3: an SVG attribute is checked against its own element too**, at
+  usage level (RSC-025), as epubcheck's informative SVG check does. We
+  accepted any SVG attribute on any SVG element there. Each element now has
+  EPUB 2's list plus what EPUB 3 adds (`tabindex`, `lang`, `focusable`,
+  SVG 2's `href`, `paint-order` and `transform-*`). We probed 21,894
+  element–attribute pairs against epubcheck 5.4.0 and reject the same
+  18,698, apart from one thing: we still accept every `aria-*` name. ARIA
+  is allowed on every element but `style`.
+  - **`role` is accepted on the 19 elements epubcheck's grammar gives it**
+    (`svg`, `g`, `a`, `image`, `text`, `tspan`, `use`, `symbol`,
+    `foreignObject`, the basic shapes and three glyph elements) and reported
+    elsewhere. We used to accept it everywhere, on the belief that the
+    grammar had no `role` at all.
+  - No book on our shelf and none of W3C's 209 test publications changes.
 - **`paint-order`, `transform-box` and `transform-origin` were reported as
   unknown SVG attributes in EPUB 3** (RSC-025). They are in EPUB 3's SVG
   grammar and epubcheck accepts them. In EPUB 2 they stay errors, as there.
