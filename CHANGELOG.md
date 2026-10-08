@@ -54,6 +54,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   keywords on different filter primitives. An invalid value is now RSC-005,
   as in epubcheck. We probed 8,325 values against epubcheck 5.4.0 and now
   report exactly the same 3,103. No book on our shelf changes.
+- **EPUB 3: SVG attribute values are checked against EPUB 3's own SVG
+  grammar.** We checked five there. epubcheck checks some 60 at usage level
+  (RSC-025), and EPUB 3's grammar differs from EPUB 2's:
+  - Most keywords are compared exactly as written, so `visibility=" hidden "`
+    is invalid at EPUB 3 and valid at EPUB 2.
+  - Values differ: `visibility` also takes `collapse`, `version` may be `1.0`,
+    `1.1` or `1.2`, `mode` takes the SVG 2 blend modes, `operator` takes
+    `lighter`, and `preserveAspectRatio` may start with `defer`.
+  - `lang` must be a language tag or empty. `paint-order` is `normal` or a
+    list of `fill`, `stroke` and `markers`. `class` is free.
+
+  We probed 10,314 values against epubcheck 5.4.0 and now report exactly the
+  same 4,411, leaving `href`, which epubcheck judges by URI rules we do not
+  match yet. No book on our shelf and none of W3C's 209 test publications
+  changes.
+- **`paint-order`, `transform-box` and `transform-origin` were reported as
+  unknown SVG attributes in EPUB 3** (RSC-025). They are in EPUB 3's SVG
+  grammar and epubcheck accepts them. In EPUB 2 they stay errors, as there.
 - **An SVG `font` is checked for its required parts and their order.** A
   `font` must hold one `font-face`, then one `missing-glyph`, then any
   `glyph`, `hkern` and `vkern`; `desc`, `title` and `metadata` may only come
