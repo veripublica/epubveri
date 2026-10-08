@@ -462,11 +462,13 @@ pub(crate) fn check_vocabulary(
 /// sources, one answer, which is the check this project owes any list a
 /// script produced.
 ///
-/// It is a flat union, not a per-element table: an attribute valid on some
-/// SVG element but used on another passes here. That is a false negative,
-/// and the deliberate trade — the same one `SVG_ELEMENTS` makes, and for
-/// the same reason (`RSC-025` is usage-level, so a false positive costs
-/// more than a miss). What it does catch is the class actually reported:
+/// In **EPUB 3** it is a flat union, not a per-element table: an attribute
+/// valid on some SVG element but used on another passes here. That is a false
+/// negative, and the deliberate trade — the same one `SVG_ELEMENTS` makes, and
+/// for the same reason (`RSC-025` is usage-level, so a false positive costs
+/// more than a miss). **EPUB 2** judges each element by its own list
+/// (`svg11::SVG11_ATTRIBUTES`), because there the grammar is normative and a
+/// miss is a missing error. What it does catch is the class actually reported:
 /// an attribute SVG has no concept of at all, `<image alt="cover image">`
 /// being HTML's `alt` reaching into an SVG subtree (Doitsu, MobileRead
 /// #138). epubcheck reports that as `USAGE(RSC-025)`, because its full
@@ -750,13 +752,177 @@ const SVG_ATTRIBUTES: &[&str] = &[
 /// [`SVG2_ONLY_ELEMENTS`].
 const SVG3_ONLY_ATTRIBUTES: &[&str] = &["focusable", "href", "rel", "tabindex"];
 
+/// Which unprefixed attributes each SVG 1.1 element takes in **EPUB 2**,
+/// where epubcheck validates SVG against the full SVG 1.1 grammar
+/// normatively (`schema/20/rng/svg11.rng` standalone, the same modules
+/// through `content.rng` inline).
+///
+/// **Generated, not transcribed** (2026-10-08, epubcheck 5.4.0 tag v5.4.0).
+/// A one-off extractor resolved every `ref` reachable from each `<element>` in
+/// the 30 SVG modules, applying `<include>` overrides, and took the no-namespace
+/// `<attribute name>`s. It stops at nested elements, and `xlink:`/`xml:`
+/// attributes are namespaced, so they never appear. The `notAllowed` defines in
+/// the basic modules are all element classes that the full modules extend by
+/// `choice`, so a union is exactly the grammar's answer. Reading `content.rng`
+/// instead of `svg11.rng` gives the identical table. The groups are the
+/// grammar's own attribute classes, factored out by the same run.
+///
+/// **Checked against epubcheck itself, not only against the grammar.** A probe
+/// book put each of the 81 elements, in a valid context, under every attribute
+/// of [`SVG_ATTRIBUTES`] (20 per document, 1,053 documents). epubcheck rejected
+/// exactly the 18,559 pairs this table leaves out and none of the 2,501 it
+/// lists. The union of the table is [`SVG_ATTRIBUTES`] minus
+/// [`SVG3_ONLY_ATTRIBUTES`], so the two lists agree.
+///
+/// To regenerate, run the same walk over a newer checkout's `svg11.rng`. The
+/// grammar dates from 2003, so a change would be news.
+// Generated data, kept one element per row so a diff reads as a table.
+#[rustfmt::skip]
+mod svg11 {
+    /// `SVG.Presentation.attrib`.
+    pub(super) const PRESENTATION: &[&str] = &["alignment-baseline", "baseline-shift", "clip", "clip-path", "clip-rule", "color", "color-interpolation", "color-interpolation-filters", "color-profile", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "enable-background", "fill", "fill-opacity", "fill-rule", "filter", "flood-color", "flood-opacity", "font-family", "font-size", "font-size-adjust", "font-stretch", "font-style", "font-variant", "font-weight", "glyph-orientation-horizontal", "glyph-orientation-vertical", "image-rendering", "kerning", "letter-spacing", "lighting-color", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "overflow", "pointer-events", "shape-rendering", "stop-color", "stop-opacity", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-rendering", "unicode-bidi", "visibility", "word-spacing", "writing-mode"];
+
+    /// `SVG.GraphicalEvents.attrib`.
+    pub(super) const GRAPHICAL_EVENTS: &[&str] = &["onactivate", "onclick", "onfocusin", "onfocusout", "onload", "onmousedown", "onmousemove", "onmouseout", "onmouseover", "onmouseup"];
+
+    /// `SVG.DocumentEvents.attrib`.
+    pub(super) const DOCUMENT_EVENTS: &[&str] = &["onabort", "onerror", "onresize", "onscroll", "onunload", "onzoom"];
+
+    /// `SVG.AnimationEvents.attrib`.
+    pub(super) const ANIMATION_EVENTS: &[&str] = &["onbegin", "onend", "onload", "onrepeat"];
+
+    /// `SVG.AnimationTiming.attrib`.
+    pub(super) const ANIMATION_TIMING: &[&str] = &["begin", "dur", "end", "fill", "max", "min", "repeatCount", "repeatDur", "restart"];
+
+    /// `SVG.AnimationValue.attrib`.
+    pub(super) const ANIMATION_VALUE: &[&str] = &["by", "calcMode", "from", "keySplines", "keyTimes", "to", "values"];
+
+    /// `SVG.AnimationAddtion.attrib`.
+    pub(super) const ANIMATION_ADDITION: &[&str] = &["accumulate", "additive"];
+
+    /// `SVG.AnimationAttribute.attrib`.
+    pub(super) const ANIMATION_ATTRIBUTE: &[&str] = &["attributeName", "attributeType"];
+
+    /// `SVG.FilterPrimitiveWithIn.attrib`.
+    pub(super) const FILTER_PRIMITIVE_WITH_IN: &[&str] = &["height", "in", "result", "width", "x", "y"];
+
+    /// `SVG.FilterPrimitive.attrib`.
+    pub(super) const FILTER_PRIMITIVE: &[&str] = &["height", "result", "width", "x", "y"];
+
+    /// `SVG.Font.attrib`.
+    pub(super) const FONT: &[&str] = &["font-family", "font-size", "font-size-adjust", "font-stretch", "font-style", "font-variant", "font-weight"];
+
+    /// `SVG.Conditional.attrib`.
+    pub(super) const CONDITIONAL: &[&str] = &["requiredExtensions", "requiredFeatures", "systemLanguage"];
+
+    /// `SVG.Style.attrib`.
+    pub(super) const STYLE: &[&str] = &["class", "style"];
+
+    /// `SVG.External.attrib`.
+    pub(super) const EXTERNAL: &[&str] = &["externalResourcesRequired"];
+
+    /// Each element's attribute groups, sorted by element name in byte order
+    /// for a binary search.
+    pub(super) const SVG11_ATTRIBUTES: &[(&str, &[&[&str]])] = &[
+        ("a", &[PRESENTATION, GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["id", "target", "transform"]]),
+        ("altGlyph", &[GRAPHICAL_EVENTS, FONT, CONDITIONAL, STYLE, EXTERNAL, &["alignment-baseline", "baseline-shift", "clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "dx", "dy", "fill", "fill-opacity", "fill-rule", "filter", "format", "glyph-orientation-horizontal", "glyph-orientation-vertical", "glyphRef", "id", "image-rendering", "kerning", "letter-spacing", "mask", "opacity", "pointer-events", "rotate", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-rendering", "unicode-bidi", "visibility", "word-spacing", "x", "y"]]),
+        ("altGlyphDef", &[&["id"]]),
+        ("altGlyphItem", &[&["id"]]),
+        ("animate", &[ANIMATION_EVENTS, ANIMATION_TIMING, ANIMATION_VALUE, ANIMATION_ADDITION, ANIMATION_ATTRIBUTE, CONDITIONAL, EXTERNAL, &["id"]]),
+        ("animateColor", &[ANIMATION_EVENTS, ANIMATION_TIMING, ANIMATION_VALUE, ANIMATION_ADDITION, ANIMATION_ATTRIBUTE, CONDITIONAL, EXTERNAL, &["id"]]),
+        ("animateMotion", &[ANIMATION_EVENTS, ANIMATION_TIMING, ANIMATION_VALUE, ANIMATION_ADDITION, CONDITIONAL, EXTERNAL, &["id", "keyPoints", "origin", "path", "rotate"]]),
+        ("animateTransform", &[ANIMATION_EVENTS, ANIMATION_TIMING, ANIMATION_VALUE, ANIMATION_ADDITION, ANIMATION_ATTRIBUTE, CONDITIONAL, EXTERNAL, &["id", "type"]]),
+        ("circle", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "cx", "cy", "display", "fill", "fill-opacity", "fill-rule", "filter", "id", "image-rendering", "mask", "opacity", "pointer-events", "r", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-rendering", "transform", "visibility"]]),
+        ("clipPath", &[FONT, CONDITIONAL, STYLE, EXTERNAL, &["alignment-baseline", "baseline-shift", "clip-path", "clip-rule", "clipPathUnits", "color", "color-interpolation", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "fill", "fill-opacity", "fill-rule", "filter", "glyph-orientation-horizontal", "glyph-orientation-vertical", "id", "image-rendering", "kerning", "letter-spacing", "mask", "opacity", "pointer-events", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-rendering", "transform", "unicode-bidi", "visibility", "word-spacing", "writing-mode"]]),
+        ("color-profile", &[&["id", "local", "name", "rendering-intent"]]),
+        ("cursor", &[CONDITIONAL, EXTERNAL, &["id", "x", "y"]]),
+        ("definition-src", &[&["id"]]),
+        ("defs", &[PRESENTATION, GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["id", "transform"]]),
+        ("desc", &[STYLE, &["id"]]),
+        ("ellipse", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "cx", "cy", "display", "fill", "fill-opacity", "fill-rule", "filter", "id", "image-rendering", "mask", "opacity", "pointer-events", "rx", "ry", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-rendering", "transform", "visibility"]]),
+        ("feBlend", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id", "in2", "mode"]]),
+        ("feColorMatrix", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id", "type", "values"]]),
+        ("feComponentTransfer", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id"]]),
+        ("feComposite", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id", "in2", "k1", "k2", "k3", "k4", "operator"]]),
+        ("feConvolveMatrix", &[FILTER_PRIMITIVE_WITH_IN, &["bias", "color-interpolation-filters", "divisor", "edgeMode", "id", "kernelMatrix", "kernelUnitLength", "order", "preserveAlpha", "targetX", "targetY"]]),
+        ("feDiffuseLighting", &[FILTER_PRIMITIVE_WITH_IN, STYLE, &["color", "color-interpolation", "color-interpolation-filters", "color-rendering", "diffuseConstant", "id", "kernelUnitLength", "lighting-color", "surfaceScale"]]),
+        ("feDisplacementMap", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id", "in2", "scale", "xChannelSelector", "yChannelSelector"]]),
+        ("feDistantLight", &[&["azimuth", "elevation", "id"]]),
+        ("feFlood", &[FILTER_PRIMITIVE_WITH_IN, STYLE, &["color", "color-interpolation", "color-interpolation-filters", "color-rendering", "flood-color", "flood-opacity", "id"]]),
+        ("feFuncA", &[&["amplitude", "exponent", "id", "intercept", "offset", "slope", "tableValues", "type"]]),
+        ("feFuncB", &[&["amplitude", "exponent", "id", "intercept", "offset", "slope", "tableValues", "type"]]),
+        ("feFuncG", &[&["amplitude", "exponent", "id", "intercept", "offset", "slope", "tableValues", "type"]]),
+        ("feFuncR", &[&["amplitude", "exponent", "id", "intercept", "offset", "slope", "tableValues", "type"]]),
+        ("feGaussianBlur", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id", "stdDeviation"]]),
+        ("feImage", &[PRESENTATION, FILTER_PRIMITIVE, STYLE, EXTERNAL, &["id", "preserveAspectRatio"]]),
+        ("feMerge", &[FILTER_PRIMITIVE, &["color-interpolation-filters", "id"]]),
+        ("feMergeNode", &[&["id", "in"]]),
+        ("feMorphology", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id", "operator", "radius"]]),
+        ("feOffset", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "dx", "dy", "id"]]),
+        ("fePointLight", &[&["id", "x", "y", "z"]]),
+        ("feSpecularLighting", &[FILTER_PRIMITIVE_WITH_IN, STYLE, &["color", "color-interpolation", "color-interpolation-filters", "color-rendering", "id", "kernelUnitLength", "lighting-color", "specularConstant", "specularExponent", "surfaceScale"]]),
+        ("feSpotLight", &[&["id", "limitingConeAngle", "pointsAtX", "pointsAtY", "pointsAtZ", "specularExponent", "x", "y", "z"]]),
+        ("feTile", &[FILTER_PRIMITIVE_WITH_IN, &["color-interpolation-filters", "id"]]),
+        ("feTurbulence", &[FILTER_PRIMITIVE, &["baseFrequency", "color-interpolation-filters", "id", "numOctaves", "seed", "stitchTiles", "type"]]),
+        ("filter", &[PRESENTATION, STYLE, EXTERNAL, &["filterRes", "filterUnits", "height", "id", "primitiveUnits", "width", "x", "y"]]),
+        ("font", &[PRESENTATION, STYLE, EXTERNAL, &["horiz-adv-x", "horiz-origin-x", "horiz-origin-y", "id", "vert-adv-y", "vert-origin-x", "vert-origin-y"]]),
+        ("font-face", &[&["accent-height", "alphabetic", "ascent", "bbox", "cap-height", "descent", "font-family", "font-size", "font-stretch", "font-style", "font-variant", "font-weight", "hanging", "id", "ideographic", "mathematical", "overline-position", "overline-thickness", "panose-1", "slope", "stemh", "stemv", "strikethrough-position", "strikethrough-thickness", "underline-position", "underline-thickness", "unicode-range", "units-per-em", "v-alphabetic", "v-hanging", "v-ideographic", "v-mathematical", "widths", "x-height"]]),
+        ("font-face-format", &[&["id", "string"]]),
+        ("font-face-name", &[&["id", "name"]]),
+        ("font-face-src", &[&["id"]]),
+        ("font-face-uri", &[&["id"]]),
+        ("foreignObject", &[PRESENTATION, GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["height", "id", "transform", "width", "x", "y"]]),
+        ("g", &[PRESENTATION, GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["id", "transform"]]),
+        ("glyph", &[PRESENTATION, STYLE, &["arabic-form", "d", "glyph-name", "horiz-adv-x", "id", "lang", "orientation", "unicode", "vert-adv-y", "vert-origin-x", "vert-origin-y"]]),
+        ("glyphRef", &[FONT, STYLE, &["dx", "dy", "format", "glyphRef", "id", "x", "y"]]),
+        ("hkern", &[&["g1", "g2", "id", "k", "u1", "u2"]]),
+        ("image", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip", "clip-path", "clip-rule", "color", "color-interpolation", "color-profile", "color-rendering", "cursor", "display", "fill-opacity", "filter", "height", "id", "image-rendering", "mask", "opacity", "overflow", "pointer-events", "preserveAspectRatio", "shape-rendering", "stroke-opacity", "text-rendering", "transform", "visibility", "width", "x", "y"]]),
+        ("line", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "display", "fill", "fill-opacity", "fill-rule", "filter", "id", "image-rendering", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "pointer-events", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-rendering", "transform", "visibility", "x1", "x2", "y1", "y2"]]),
+        ("linearGradient", &[STYLE, EXTERNAL, &["color", "color-interpolation", "color-rendering", "gradientTransform", "gradientUnits", "id", "spreadMethod", "stop-color", "stop-opacity", "x1", "x2", "y1", "y2"]]),
+        ("marker", &[PRESENTATION, STYLE, EXTERNAL, &["id", "markerHeight", "markerUnits", "markerWidth", "orient", "preserveAspectRatio", "refX", "refY", "viewBox"]]),
+        ("mask", &[PRESENTATION, CONDITIONAL, STYLE, EXTERNAL, &["height", "id", "maskContentUnits", "maskUnits", "width", "x", "y"]]),
+        ("metadata", &[&["id"]]),
+        ("missing-glyph", &[PRESENTATION, STYLE, &["d", "horiz-adv-x", "id", "vert-adv-y", "vert-origin-x", "vert-origin-y"]]),
+        ("mpath", &[EXTERNAL, &["id"]]),
+        ("path", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "d", "display", "fill", "fill-opacity", "fill-rule", "filter", "id", "image-rendering", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "pathLength", "pointer-events", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-rendering", "transform", "visibility"]]),
+        ("pattern", &[PRESENTATION, CONDITIONAL, STYLE, EXTERNAL, &["height", "id", "patternContentUnits", "patternTransform", "patternUnits", "preserveAspectRatio", "viewBox", "width", "x", "y"]]),
+        ("polygon", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "display", "fill", "fill-opacity", "fill-rule", "filter", "id", "image-rendering", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "pointer-events", "points", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-rendering", "transform", "visibility"]]),
+        ("polyline", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "display", "fill", "fill-opacity", "fill-rule", "filter", "id", "image-rendering", "marker-end", "marker-mid", "marker-start", "mask", "opacity", "pointer-events", "points", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-rendering", "transform", "visibility"]]),
+        ("radialGradient", &[STYLE, EXTERNAL, &["color", "color-interpolation", "color-rendering", "cx", "cy", "fx", "fy", "gradientTransform", "gradientUnits", "id", "r", "spreadMethod", "stop-color", "stop-opacity"]]),
+        ("rect", &[GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "display", "fill", "fill-opacity", "fill-rule", "filter", "height", "id", "image-rendering", "mask", "opacity", "pointer-events", "rx", "ry", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-rendering", "transform", "visibility", "width", "x", "y"]]),
+        ("script", &[EXTERNAL, &["id", "type"]]),
+        ("set", &[ANIMATION_EVENTS, ANIMATION_TIMING, ANIMATION_ATTRIBUTE, CONDITIONAL, EXTERNAL, &["id", "to"]]),
+        ("stop", &[STYLE, &["color", "color-interpolation", "color-rendering", "id", "offset", "stop-color", "stop-opacity"]]),
+        ("style", &[&["id", "media", "title", "type"]]),
+        ("svg", &[PRESENTATION, GRAPHICAL_EVENTS, DOCUMENT_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["baseProfile", "contentScriptType", "contentStyleType", "height", "id", "preserveAspectRatio", "version", "viewBox", "width", "x", "y", "zoomAndPan"]]),
+        ("switch", &[PRESENTATION, GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["id", "transform"]]),
+        ("symbol", &[PRESENTATION, GRAPHICAL_EVENTS, STYLE, EXTERNAL, &["id", "preserveAspectRatio", "viewBox"]]),
+        ("text", &[GRAPHICAL_EVENTS, FONT, CONDITIONAL, STYLE, EXTERNAL, &["alignment-baseline", "baseline-shift", "clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "dx", "dy", "fill", "fill-opacity", "fill-rule", "filter", "glyph-orientation-horizontal", "glyph-orientation-vertical", "id", "image-rendering", "kerning", "lengthAdjust", "letter-spacing", "mask", "opacity", "pointer-events", "rotate", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-rendering", "textLength", "transform", "unicode-bidi", "visibility", "word-spacing", "writing-mode", "x", "y"]]),
+        ("textPath", &[GRAPHICAL_EVENTS, FONT, CONDITIONAL, STYLE, EXTERNAL, &["alignment-baseline", "baseline-shift", "clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "fill", "fill-opacity", "fill-rule", "filter", "glyph-orientation-horizontal", "glyph-orientation-vertical", "id", "image-rendering", "kerning", "lengthAdjust", "letter-spacing", "mask", "method", "opacity", "pointer-events", "shape-rendering", "spacing", "startOffset", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-rendering", "textLength", "unicode-bidi", "visibility", "word-spacing"]]),
+        ("title", &[STYLE, &["id"]]),
+        ("tref", &[GRAPHICAL_EVENTS, FONT, CONDITIONAL, STYLE, EXTERNAL, &["alignment-baseline", "baseline-shift", "clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "dx", "dy", "fill", "fill-opacity", "fill-rule", "filter", "glyph-orientation-horizontal", "glyph-orientation-vertical", "id", "image-rendering", "kerning", "lengthAdjust", "letter-spacing", "mask", "opacity", "pointer-events", "rotate", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-rendering", "textLength", "unicode-bidi", "visibility", "word-spacing", "x", "y"]]),
+        ("tspan", &[GRAPHICAL_EVENTS, FONT, CONDITIONAL, STYLE, EXTERNAL, &["alignment-baseline", "baseline-shift", "clip-path", "clip-rule", "color", "color-interpolation", "color-rendering", "cursor", "direction", "display", "dominant-baseline", "dx", "dy", "fill", "fill-opacity", "fill-rule", "filter", "glyph-orientation-horizontal", "glyph-orientation-vertical", "id", "image-rendering", "kerning", "lengthAdjust", "letter-spacing", "mask", "opacity", "pointer-events", "rotate", "shape-rendering", "stroke", "stroke-dasharray", "stroke-dashoffset", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-width", "text-anchor", "text-decoration", "text-rendering", "textLength", "unicode-bidi", "visibility", "word-spacing", "x", "y"]]),
+        ("use", &[PRESENTATION, GRAPHICAL_EVENTS, CONDITIONAL, STYLE, EXTERNAL, &["height", "id", "transform", "width", "x", "y"]]),
+        ("view", &[EXTERNAL, &["id", "preserveAspectRatio", "viewBox", "viewTarget", "zoomAndPan"]]),
+        ("vkern", &[&["g1", "g2", "id", "k", "u1", "u2"]]),
+    ];
+}
+
 fn is_recognized_attribute(name: &str, element: &str, is_epub3: bool) -> bool {
     if !is_epub3 {
-        // EPUB 2's SVG 1.1 grammar (`schema/20/rng/svg/`) has no ARIA at all
-        // and declares `lang` on `glyph` alone (`svg-basic-font.rng`); the
-        // flat list below carries all three for EPUB 3's sake. Measured on
-        // 5.4.0, inline and standalone: `role`, `aria-label` and `lang` on a
-        // `rect` are RSC-005, `lang` on a `glyph` is clean.
+        // EPUB 2 validates SVG against the whole SVG 1.1 grammar, so an
+        // attribute is judged against its own element's list: `font-size` on
+        // a `rect` and `fill` on a `stop` are RSC-005 there. The same table
+        // has no ARIA at all and `lang` on `glyph` alone (measured on 5.4.0,
+        // inline and standalone, before the table existed).
+        if let Ok(i) = svg11::SVG11_ATTRIBUTES.binary_search_by(|(e, _)| (*e).cmp(element)) {
+            return svg11::SVG11_ATTRIBUTES[i]
+                .1
+                .iter()
+                .any(|group| group.contains(&name));
+        }
+        // Not an SVG 1.1 element: the vocabulary check reports the element
+        // itself, and its attributes keep the flat list's answer.
         if SVG3_ONLY_ATTRIBUTES.contains(&name) || name == "role" || name.starts_with("aria-") {
             return false;
         }
@@ -2481,6 +2647,13 @@ fn check_attributes(
         for attr in n.attributes().filter(|a| a.namespace().is_none()) {
             let name = attr.name();
             let value = attr.value();
+            // At 2.0 an attribute its element does not take is reported as
+            // such by `check_attribute_vocabulary`, and that is all epubcheck
+            // says of it: its grammar never reaches the value. Judging the
+            // value too would make one fault two findings.
+            if !is_epub3 && !is_recognized_attribute(name, n.tag_name().name(), false) {
+                continue;
+            }
             let bad = if name == "preserveAspectRatio" {
                 !preserve_aspect_ratio_is_valid(value)
             } else if let Ok(i) = SVG_ENUM_ATTRS.binary_search_by_key(&name, |(a, _)| a) {
@@ -2623,6 +2796,81 @@ mod tests {
             .is_empty()
         );
         assert!(ids(r#"<image width="1" height="1"/>"#, true).is_empty());
+    }
+
+    /// At 2.0 an attribute is judged against its own element's SVG 1.1 list,
+    /// and at 3.0 against the flat list still. Each 2.0 row was among the
+    /// 21,060 pairs probed against 5.4.0 (see `svg11`).
+    #[test]
+    fn epub2_svg_attributes_are_judged_per_element() {
+        let count = |body: &str, is_epub3: bool| -> usize {
+            let svg = format!(r#"{S}{body}</svg>"#);
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_attribute_vocabulary(doc.root_element(), "s.svg", is_epub3, &mut report);
+            report.messages.len()
+        };
+        for (body, rejected_at_2) in [
+            (r#"<rect width="1" height="1" font-size="9"/>"#, 1),
+            (r#"<rect width="1" height="1" text-anchor="end"/>"#, 1),
+            (r#"<image width="1" height="1" fill="red"/>"#, 1),
+            (r#"<g x="1"/>"#, 1),
+            (
+                r#"<defs><linearGradient><stop offset="0" fill="red"/></linearGradient></defs>"#,
+                1,
+            ),
+            (r#"<text font-size="9" text-anchor="end">a</text>"#, 0),
+            (r#"<g font-size="9" fill="red" stroke="red"/>"#, 0),
+            (r#"<rect width="1" height="1" fill="red" opacity="1"/>"#, 0),
+            (
+                r#"<defs><linearGradient><stop offset="0" stop-color="red"/></linearGradient></defs>"#,
+                0,
+            ),
+        ] {
+            assert_eq!(count(body, false), rejected_at_2, "{body} at 2.0");
+            assert_eq!(count(body, true), 0, "{body} at 3.0");
+        }
+        // An attribute its element does not take is one finding at 2.0, not
+        // a second one for its value; at 3.0 the value is still judged.
+        let both = |body: &str, is_epub3: bool| -> Vec<String> {
+            let svg = format!(r#"{S}{body}</svg>"#);
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_attribute_vocabulary(doc.root_element(), "s.svg", is_epub3, &mut report);
+            check_required_attributes(doc.root_element(), "s.svg", is_epub3, &mut report);
+            report.messages.iter().map(|m| m.text.clone()).collect()
+        };
+        assert_eq!(
+            both(r#"<g preserveAspectRatio="bad"/>"#, false),
+            [r#"attribute "preserveAspectRatio" not allowed here"#]
+        );
+        assert_eq!(
+            both(r#"<g preserveAspectRatio="bad"/>"#, true),
+            [r#"value of attribute "preserveAspectRatio" is invalid"#]
+        );
+        assert_eq!(
+            both(r#"<svg preserveAspectRatio="bad"/>"#, false),
+            [r#"value of attribute "preserveAspectRatio" is invalid"#]
+        );
+    }
+
+    /// The generated table is sorted for its binary search, and its union is
+    /// the flat list minus what only EPUB 3 adds.
+    #[test]
+    fn the_svg11_table_is_sorted_and_agrees_with_the_flat_list() {
+        let table = svg11::SVG11_ATTRIBUTES;
+        assert_eq!(table.len(), 81);
+        assert!(table.windows(2).all(|w| w[0].0 < w[1].0));
+        let union: std::collections::BTreeSet<&str> = table
+            .iter()
+            .flat_map(|(_, groups)| groups.iter().flat_map(|g| g.iter().copied()))
+            .collect();
+        let flat: std::collections::BTreeSet<&str> = SVG_ATTRIBUTES
+            .iter()
+            .copied()
+            .filter(|a| !SVG3_ONLY_ATTRIBUTES.contains(a))
+            .collect();
+        assert_eq!(union, flat);
     }
 
     #[test]
@@ -2856,11 +3104,14 @@ mod tests {
             r#"<rect width="1" height="1" fill-rule="junk"/>"#,
             r#"<rect width="1" height="1" clip-rule="junk"/>"#,
             r#"<rect width="1" height="1" externalResourcesRequired="maybe"/>"#,
-            r#"<rect width="1" height="1" preserveAspectRatio="junk"/>"#,
+            // On a nested `svg`, which takes the attribute: `rect` does not,
+            // and there epubcheck never reaches the value (see
+            // `epub2_svg_attributes_are_judged_per_element`).
+            r#"<svg preserveAspectRatio="junk"/>"#,
             // A valid keyword with an invalid qualifier, and a valid one with
             // something after it - both fail the grammar's pattern.
-            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid tight"/>"#,
-            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid meet extra"/>"#,
+            r#"<svg preserveAspectRatio="xMidYMid tight"/>"#,
+            r#"<svg preserveAspectRatio="xMidYMid meet extra"/>"#,
         ] {
             assert_eq!(bad(body).len(), 1, "should be one finding: {body}");
         }
@@ -2871,9 +3122,9 @@ mod tests {
             r#"<rect width="1" height="1" externalResourcesRequired="true"/>"#,
             // The three spellings the local shelf actually uses, 309 times
             // across 260 books.
-            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid meet"/>"#,
-            r#"<rect width="1" height="1" preserveAspectRatio="none"/>"#,
-            r#"<rect width="1" height="1" preserveAspectRatio="xMidYMid"/>"#,
+            r#"<svg preserveAspectRatio="xMidYMid meet"/>"#,
+            r#"<svg preserveAspectRatio="none"/>"#,
+            r#"<svg preserveAspectRatio="xMidYMid"/>"#,
             // The seventeen unconstrained datatypes. Every one of these is
             // clean in epubcheck, measured, and reporting them would be a
             // restrictive divergence rather than a gap closed.

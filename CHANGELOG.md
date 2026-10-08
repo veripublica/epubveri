@@ -27,6 +27,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   grammar library reads it: a decomposed `ş` and `a·b` pass, `a²` does not,
   and a no-break space is never trimmed.
 
+### Fixed
+
+- **EPUB 2: an SVG attribute is checked against its own element.** We used
+  to accept any SVG 1.1 attribute on any SVG element, so `font-size` on a
+  `rect`, `fill` on a `stop` or `x` on a `g` passed here. epubcheck rejects
+  each of them (RSC-005), because EPUB 2 validates SVG against the whole SVG
+  1.1 grammar. Each of the 81 SVG 1.1 elements now has its own list, taken
+  from that grammar. We probed all 21,060 element–attribute pairs against
+  epubcheck 5.4.0 and now reject exactly the same 18,559. EPUB 3 is
+  unchanged: epubcheck's SVG check there is informative (RSC-025), and we
+  keep the shared list.
+  - An attribute its element does not take is reported as not allowed,
+    and its value is no longer judged. `preserveAspectRatio="junk"` on a
+    `rect` used to draw "value of attribute is invalid". It now draws
+    "attribute not allowed here", still one finding, as in epubcheck.
+  - No book on our 544-book shelf changes: none of its EPUB 2 SVG uses an
+    attribute on the wrong element.
+
 ## [0.23.0] - 2026-10-07
 
 ### Fixed
