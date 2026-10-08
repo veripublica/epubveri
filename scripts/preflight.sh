@@ -28,9 +28,15 @@ PASS=0
 FAIL=0
 declare -a FAILED
 
-ok()   { printf '  \033[32mok\033[0m    %s\n' "$1"; PASS=$((PASS + 1)); }
-bad()  { printf '  \033[31mFAIL\033[0m  %s\n' "$1"; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
-skip() { printf '  --    %s\n' "$1"; }
+# Every step ends in ok, bad or skip, so the seconds since the previous one
+# are that step's time, including the steps that are not run through
+# `check`. Printed so a slow pre-flight says which step to work on
+# (2026-10-08: nothing had ever been timed).
+STEP_T=$SECONDS
+took() { local d=$((SECONDS - STEP_T)); STEP_T=$SECONDS; printf '  \033[2m[%ds]\033[0m' "$d"; }
+ok()   { printf '  \033[32mok\033[0m    %s' "$1"; took; echo; PASS=$((PASS + 1)); }
+bad()  { printf '  \033[31mFAIL\033[0m  %s' "$1"; took; echo; FAIL=$((FAIL + 1)); FAILED+=("$1"); }
+skip() { printf '  --    %s' "$1"; took; echo; }
 head_() { printf '\n\033[1m%s\033[0m\n' "$1"; }
 
 # check <label> <command...> - runs it, keeps going either way.
@@ -441,7 +447,7 @@ fi
 
 # ------------------------------------------------------------------ verdict --
 printf '\n\033[1m%s\033[0m\n' "Verdict"
-echo "  $PASS passed, $FAIL failed"
+echo "  $PASS passed, $FAIL failed, in $((SECONDS / 60)) min $((SECONDS % 60)) s"
 if [ "$FAIL" -gt 0 ]; then
   printf '\033[31m  NOT READY\033[0m — fix these, then run again:\n'
   for f in "${FAILED[@]}"; do echo "    - $f"; done
