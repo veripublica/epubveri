@@ -1,4 +1,4 @@
-/* veripublica family-web — demo.css — template v5
+/* veripublica family-web — demo.css — template v6
  * https://github.com/veripublica/family-web
  *
  * THIS IS A COPY. DO NOT EDIT IT. A change worth making is made in family-web, and
@@ -223,15 +223,21 @@ button:disabled, select:disabled { opacity: .45; cursor: default; }
  *   <label class="opt"><input type="checkbox" id="…" /> Also run the
  *     <code>advisory</code> checks — slower, and they never fail a book.</label>
  *
+ * A hanging indent, not flex (#17). v5 shipped `display: flex`, and in a flex row
+ * every run of text is its own item: the example above rendered as three columns,
+ * split at each <code>. Here the sentence is plain inline text, so it reads as one
+ * paragraph however it is marked up — bare, or wrapped in a <span> — and the box
+ * sits on its first line. The padding is the box (13px) plus the old .5rem gap.
+ *
  * The <code> tint is --wash, the family's one tint (#4), not the 12% the component
  * arrived with: --muted text on it is 4.74:1 at worst (light, over --card), where 12%
  * fell to 4.46 and failed AA. measure.mjs holds that number. */
 .opt {
-  display: flex; align-items: flex-start; gap: .5rem;
+  display: block; position: relative; padding-left: 1.6em;
   margin: .75rem 0 0; font-size: .85rem; color: var(--muted);
   cursor: pointer; line-height: 1.4;
 }
-.opt input { margin-top: .15rem; }
+.opt input { position: absolute; left: 0; top: .2em; margin: 0; }
 .opt code {
   font-size: .8em; padding: 0 .25rem; border-radius: 4px;
   background: color-mix(in srgb, var(--accent) var(--wash), transparent);
