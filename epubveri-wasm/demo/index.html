@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- family-web template v3 (family-web v0.3.0) — https://github.com/veripublica/family-web
+<!-- family-web template v5 (family-web v0.5.0) — https://github.com/veripublica/family-web
      Shared look via tokens.css + demo.css (copied, never edited here).
      Only tool-specific styles live in the inline <style> below. -->
 <html lang="en">
@@ -26,7 +26,6 @@
          binding now returns the envelope's lowercase severity, so template v2's
          native .sev.<severity> classes apply directly (no shim). */
       .id { white-space: nowrap; }
-      #download { margin-bottom: 1rem; } /* layout spacing above the table */
     </style>
   </head>
   <body>
@@ -72,11 +71,11 @@
 
       <label class="opt">
         <input type="checkbox" id="advisory" />
-        Advisory checks (opt-in) — opinions epubcheck has no verdict on, in two
-        families: <code>NEXT-*</code> (a specification requires it and epubcheck
-        has not implemented it yet) and <code>ADV-*</code> (no specification says
-        anything, but the book is still probably wrong). Off by default; neither
-        ever changes the verdict.
+        <span>Advisory checks (opt-in) — opinions epubcheck has no verdict on, in
+        two families: <code>NEXT-*</code> (a specification requires it and
+        epubcheck has not implemented it yet) and <code>ADV-*</code> (no
+        specification says anything, but the book is still probably wrong). Off
+        by default; neither ever changes the verdict.</span>
       </label>
 
       <p class="status" id="status">Loading validator…</p>
@@ -105,10 +104,59 @@
         <code>epubveri-wasm</code> crate. <span id="ver"></span>
         <nav class="family">
           A <a href="https://github.com/veripublica">veripublica</a> tool ·
-          <a href="https://github.com/veripublica/epubveri" aria-current="page">epubveri</a>
-          <a href="https://github.com/veripublica/epubsana">epubsana</a>
-          <a href="https://github.com/veripublica/epublift">epublift</a>
+          <span id="family-tools">
+            <a href="https://github.com/veripublica/epubveri" aria-current="page">epubveri</a>
+            <a href="https://github.com/veripublica/epubsana">epubsana</a>
+            <a href="https://github.com/veripublica/kepubverto">kepubverto</a>
+            <a href="https://github.com/ePubLift/epublift">epublift</a>
+          </span>
         </nav>
+        <script>
+          // Family nav: the current list, without a release in every tool (#2).
+          //
+          // What is shared is DATA, not code. nav.json is read as JSON and turned
+          // into links with createElement/textContent; nothing from it is ever
+          // parsed as HTML or run. A bad entry is skipped, a bad file or a failed
+          // fetch leaves the fallback list above exactly as it was.
+          //
+          // Same host as the live demos (veripublica.github.io), so no third party
+          // is involved, and the request carries nothing from the page: not the
+          // reader's file, not a result. The no-upload promise above still holds.
+          (() => {
+            const box = document.getElementById("family-tools");
+            // This tool = the fallback's aria-current link, matched by name OR URL,
+            // so renaming either one in nav.json keeps "you are here" (#16).
+            const mark = box.querySelector('a[aria-current="page"]');
+            const here = { name: mark?.textContent.trim(), url: mark?.getAttribute("href") };
+            fetch("https://veripublica.github.io/family-web/nav.json")
+              .then((r) => (r.ok ? r.json() : null))
+              .then((data) => {
+                // GitHub only. Which repositories may appear is checked in family-web
+                // (check-nav.mjs, #13); the page holds just the host, so a new
+                // exception there never means a re-copy here.
+                const tools = (Array.isArray(data?.tools) ? data.tools : []).filter(
+                  (t) => typeof t?.name === "string" && /^https:\/\/github\.com\/[^\s]+$/.test(t?.url ?? ""),
+                );
+                if (!tools.length) return;
+                const key = (list) => list.map((t) => t.name + " " + t.url).join("\n");
+                const shown = [...box.querySelectorAll("a")].map((a) => ({
+                  name: a.textContent.trim(),
+                  url: a.getAttribute("href"),
+                }));
+                if (key(tools) === key(shown)) return; // already current: leave focus alone
+                box.replaceChildren(
+                  ...tools.flatMap((t) => {
+                    const a = document.createElement("a");
+                    a.href = t.url;
+                    a.textContent = t.name;
+                    if (t.name === here.name || t.url === here.url) a.setAttribute("aria-current", "page");
+                    return [a, " "];
+                  }),
+                );
+              })
+              .catch(() => {});
+          })();
+        </script>
       </footer>
     </main>
 

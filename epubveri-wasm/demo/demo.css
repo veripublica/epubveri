@@ -1,5 +1,10 @@
-/* veripublica family-web — demo.css — template v3
+/* veripublica family-web — demo.css — template v5
  * https://github.com/veripublica/family-web
+ *
+ * THIS IS A COPY. DO NOT EDIT IT. A change worth making is made in family-web, and
+ * your page's own styles go in your page's <style> block — see the template
+ * README, "Where does my new style go?". An edited copy is found by family-web's
+ * check-copies.mjs, and the next re-copy erases it. (#14)
  *
  * The shared skeleton of the family's WASM demo pages. Requires tokens.css.
  *
@@ -103,6 +108,9 @@ a { color: var(--accent); }
  *
  *   light  .verdict.valid 4.57  .verdict.invalid 4.71  .sev.fatal 9.00
  *   dark   .verdict.valid 7.00  .verdict.invalid 5.89  .sev.fatal 8.08
+ *
+ * Reproduce, and re-check after any palette change:
+ *   node template/measure.mjs --table
  *
  * One value, because three chips carrying three copies of the number is how one
  * of them ends up wrong again — which is exactly how this was found. (issue #4) */
@@ -208,18 +216,36 @@ button, select {
 button.primary { background: var(--accent); color: #fff; border-color: transparent; }
 button:disabled, select:disabled { opacity: .45; cursor: default; }
 
-/* Badge base — from epubsana. Semantic variants (which badge means what)
- * are each tool's own vocabulary and live in its local styles. */
-.badge {
-  font-size: .7rem; font-weight: 700; padding: .15rem .5rem;
-  border-radius: 6px; text-transform: uppercase; letter-spacing: .03em;
-  white-space: nowrap;
+/* Option row — from epubveri (#15). A checkbox (or radio) with a sentence of
+ * explanation beside it: an opt-in a tool offers before it runs. The whole row is
+ * the <label>, so the target is the sentence, not a 13px box.
+ *
+ *   <label class="opt"><input type="checkbox" id="…" /> Also run the
+ *     <code>advisory</code> checks — slower, and they never fail a book.</label>
+ *
+ * The <code> tint is --wash, the family's one tint (#4), not the 12% the component
+ * arrived with: --muted text on it is 4.74:1 at worst (light, over --card), where 12%
+ * fell to 4.46 and failed AA. measure.mjs holds that number. */
+.opt {
+  display: flex; align-items: flex-start; gap: .5rem;
+  margin: .75rem 0 0; font-size: .85rem; color: var(--muted);
+  cursor: pointer; line-height: 1.4;
+}
+.opt input { margin-top: .15rem; }
+.opt code {
+  font-size: .8em; padding: 0 .25rem; border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) var(--wash), transparent);
 }
 
-/* Result-view controls: the ordering select beside the download button. These
-   are *display* choices — changing them re-draws the table and never
-   re-validates, and never touches the downloaded JSON, which mirrors the CLI
-   where --sort reaches the human report and not --format json. */
+/* View controls — from epubveri (#15). A row above a result: a small label, the
+ * control it names, and an action pushed to the far end, so a mis-click cannot swap
+ * a view choice for, say, a download.
+ *
+ *   <div class="viewopts"><label for="sort">Order</label>
+ *     <select id="sort">…</select> <button>Download JSON</button></div>
+ *
+ * What a control in this row MEANS is the tool's own: in epubveri, ordering is
+ * display-only and never re-validates. That belongs in the page, not here. */
 .viewopts {
   display: flex; align-items: center; gap: .5rem;
   flex-wrap: wrap; margin: 0 0 1rem;
@@ -229,18 +255,12 @@ button:disabled, select:disabled { opacity: .45; cursor: default; }
   letter-spacing: .04em;
 }
 .viewopts select { font-size: .85rem; }
-/* The download button sits at the end of the row, pushed away from the
-   ordering control so a mis-click does not swap a view choice for a file. */
 .viewopts button { margin-left: auto; }
 
-/* Opt-in toggle under the drop zone (e.g. advisory checks). */
-.opt {
-  display: flex; align-items: flex-start; gap: .5rem;
-  margin: .75rem 0 0; font-size: .85rem; color: var(--muted);
-  cursor: pointer; line-height: 1.4;
-}
-.opt input { margin-top: .15rem; accent-color: var(--accent); }
-.opt code {
-  font-size: .8em; padding: 0 .25rem;
-  background: color-mix(in srgb, var(--accent) 12%, transparent); border-radius: 4px;
+/* Badge base — from epubsana. Semantic variants (which badge means what)
+ * are each tool's own vocabulary and live in its local styles. */
+.badge {
+  font-size: .7rem; font-weight: 700; padding: .15rem .5rem;
+  border-radius: 6px; text-transform: uppercase; letter-spacing: .03em;
+  white-space: nowrap;
 }
