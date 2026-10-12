@@ -10,6 +10,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-12
+
 ### Fixed
 
 - **EPUB 2: `<style>`, `<script>`, `<meta>` and `<base>` take XHTML 1.1's
