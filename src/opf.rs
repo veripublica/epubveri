@@ -7398,13 +7398,15 @@ fn check_text(
             // reference.type == LINK`, and it is the *warning* form. We
             // already had the severity right and the ID wrong (#70).
             //
-            // The EPUB 2 arm keeps the ID it had rather than taking
-            // epubcheck's error-level bare RSC-007, because OPF 2.0 has no
-            // package `<link>` to begin with, so which of us is right there
-            // is unmeasured. Not worth a restrictive change on a shape no
-            // book can legally contain.
+            // The EPUB 2 arm takes RSC-007w too rather than epubcheck's
+            // error-level bare RSC-007: OPF 2.0 has no package `<link>` to
+            // begin with, so which of us is right there is unmeasured, and an
+            // error is a restrictive change on a shape no book can legally
+            // contain. It used to keep the bare RSC-007 at warning, an
+            // epubcheck ID below epubcheck's grade, which FORMATS' `code`
+            // row rules out (conventions#35).
             report.push_node_attr(
-                if is_epub3 { RSC_007W } else { RSC_007 },
+                RSC_007W,
                 Severity::Warning,
                 format!("link references a missing resource '{href}'"),
                 opf_path,
@@ -16645,6 +16647,26 @@ mod tests {
             link(""),
             vec![crate::ids::RSC_007W],
             "undeclared and missing is still the undeclared-reference case"
+        );
+
+        // The EPUB 2 arm draws RSC-007w as well, never the bare RSC-007 at
+        // warning: an epubcheck id below epubcheck's own grade is what
+        // FORMATS' `code` row rules out (conventions#35).
+        let opf2 = r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <link rel="record" href="gone.xml" media-type="application/xml"/>
+  </metadata>
+  <manifest>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+        assert_eq!(
+            opf_ids_of(opf2, &[crate::ids::RSC_007, crate::ids::RSC_007W]),
+            vec![crate::ids::RSC_007W],
         );
 
         // A malformed property value is not a prefix usage. epubcheck reports

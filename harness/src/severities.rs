@@ -33,14 +33,12 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 
 /// (id, our severity, why it differs from epubcheck on purpose).
-const ALLOWED: &[(&str, &str, &str)] = &[(
-    "RSC-007",
-    "Warning",
-    "EPUB 2 arm of the package <link> check (src/opf.rs, `opf.link.missing_resource`): \
-     EPUB 3 uses epubcheck's RSC-007w warning; OPF 2.0 has no package <link>, so the \
-     bare id keeps the warning rather than make a restrictive change on a shape no \
-     valid book contains.",
-)];
+///
+/// Empty since 2026-10-12, and FORMATS' `code` row (conventions#35) keeps it
+/// that way for anything below epubcheck's grade: an epubcheck id may carry
+/// its own severity or a higher one, never a lower. The last entry, RSC-007 at
+/// warning on the EPUB 2 package `<link>` arm, now uses RSC-007w.
+const ALLOWED: &[(&str, &str, &str)] = &[];
 
 fn read(p: &Path) -> String {
     std::fs::read_to_string(p).unwrap_or_else(|e| {

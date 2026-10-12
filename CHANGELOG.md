@@ -10,6 +10,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **In an EPUB 2 book, a package `<link>` to a file that is not there is
+  RSC-007w, as in EPUB 3.** It used to be the bare RSC-007 at warning level.
+  epubcheck gives that id the error level, so a program keying on the id
+  would have expected an error. The severity is unchanged, so no verdict
+  moves.
+
 ## [0.24.0] - 2026-10-08
 
 ### Added
