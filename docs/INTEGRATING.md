@@ -59,7 +59,7 @@ One JSON object per run. Trimmed from a real run:
 {
   "tool": "epubveri",
   "tool_version": "0.17.4+7f8746a",
-  "convention": "0.6",
+  "convention": "0.7",
   "status": "problems",
   "inputs": [
     {

@@ -1,6 +1,6 @@
 //! The `--format json` machine envelope — the veripublica shared output format
 //! ([FORMATS.md](https://github.com/veripublica/conventions/blob/main/FORMATS.md),
-//! convention v0.6). One JSON object per run: a top-level verdict plus one
+//! convention v0.7). One JSON object per run: a top-level verdict plus one
 //! `Input` object per `-i`, each carrying its own findings.
 //!
 //! **This module is the veripublica family's reference implementation of the
@@ -42,7 +42,7 @@ use crate::report::{Message, Report};
 /// routine `epubveri` bump would have made their output claim a convention
 /// version they had not implemented. A defaulted parameter would have preserved
 /// exactly that; the compile error is the notification.
-const CONVENTION: &str = "0.6";
+const CONVENTION: &str = "0.7";
 
 /// The whole run: exactly one of these is printed to stdout in `json` mode.
 /// Generic over the tool-owned `summary` (`S`) and item `data` (`D`) slots
@@ -329,8 +329,8 @@ impl Outcome {
 }
 
 /// One item in an input's `items` array (FORMATS.md §1.3). Generic over the
-/// tool-owned `data` (`D`) slot. Build via [`Item::finding`] (verifier),
-/// [`Item::fix`] or [`Item::operation`] (transformer) so the `outcome`
+/// tool-owned `data` (`D`) slot. Build via [`Item::finding`] (any tool),
+/// [`Item::fix`] (repairer) or [`Item::operation`] (transformer) so the `outcome`
 /// invariant — required on `fix`/`operation`, never on `finding` — holds by
 /// construction.
 #[derive(Serialize)]
@@ -366,8 +366,14 @@ pub struct Item<D = Data> {
 }
 
 impl<D> Item<D> {
-    /// A `finding` item (a verifier reporting a defect): never carries an
-    /// `outcome`.
+    /// A `finding` item: a tool's grading of part of the input. Any tool may
+    /// emit one (FORMATS.md §1.3, conventions v0.7): a verifier reporting a
+    /// defect, or a transformer reporting a part it left untouched, which
+    /// FORMATS grades at `error` or above. Never carries an `outcome`.
+    ///
+    /// `severity` is not checked here, so the `code` row's rule is the
+    /// caller's: an epubcheck ID only at epubcheck's own severity or higher,
+    /// and a tool-owned code under a prefix epubcheck does not use.
     pub fn finding(
         code: String,
         rule: Option<&'static str>,

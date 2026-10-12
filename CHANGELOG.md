@@ -25,6 +25,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Changed
 
+- **The JSON envelope's `convention` key is now `"0.7"`**, and `--help` ends
+  "Conforms to veripublica conventions v0.7". Version 0.7 lets any tool emit
+  findings, and its `code` rule allows an epubcheck ID only at epubcheck's
+  severity or higher. The RSC-007 change below is the one place where that
+  rule applied to us. Version 0.7 also says a long option name means one
+  thing in every family tool. Every long option epubveri has is either its
+  own or a reserved one, so that needed no change. The envelope's shape is
+  unchanged; only the `Item::finding` docs say more.
 - **In an EPUB 2 book, a package `<link>` to a file that is not there is
   RSC-007w, as in EPUB 3.** It used to be the bare RSC-007 at warning level.
   epubcheck gives that id the error level, so a program keying on the id
