@@ -1180,7 +1180,7 @@ mod tests {
                 g,
                 roxmltree::Document::parse(&format!(
                     "<html {XHTML_NS_DECLS}><head><title>t</title>\
-                     <meta name=\"a\" content=\"b\"/><style>p{{}}</style></head>\
+                     <meta name=\"a\" content=\"b\"/><style type=\"text/css\">p{{}}</style></head>\
                      <body><p>x</p></body></html>"
                 ))
                 .unwrap()
@@ -1861,7 +1861,10 @@ mod tests {
             assert!(ok(&three, s), "EPUB 3 style accepts {s}");
         }
         assert!(
-            ok(&two, r#"<style media="all">p{color:red}</style>"#),
+            ok(
+                &two,
+                r#"<style type="text/css" media="all">p{color:red}</style>"#
+            ),
             "EPUB 2 style keeps media (0.8.3)"
         );
 
@@ -1873,6 +1876,57 @@ mod tests {
             ok(&three, &link(r#"sizes="16x16""#)),
             "grammar allows sizes"
         );
+    }
+
+    /// XHTML 1.1 gives `meta`, `style`, `script` and `base` their own
+    /// attribute lists, not `Common.attrib`, and makes `type` (style, script)
+    /// and `href` (base) required. All four took the shared EPUB 2 global set,
+    /// so `<style class="…">` and a `<style>` with no `type` passed; each shape
+    /// below was measured on epubcheck 5.4.0, one EPUB 2 book apiece, and is
+    /// RSC-005 there. The accepted shapes are what epubcheck also passes.
+    #[test]
+    fn epub2_head_elements_take_their_own_attribute_lists() {
+        let two = xhtml_grammar_epub2();
+        let ok = |h: &str| {
+            validate_node_report(
+                &two,
+                roxmltree::Document::parse(&format!(
+                    "<html {XHTML_NS_DECLS}><head><title>t</title>{h}</head>\
+                     <body><p>x</p></body></html>"
+                ))
+                .unwrap()
+                .root_element(),
+            )
+            .is_empty()
+        };
+        for h in [
+            r#"<style type="text/css" title="t" dir="ltr" lang="en" media="all" xml:space="preserve">p{}</style>"#,
+            r#"<meta name="n" content="c" scheme="s" dir="ltr" lang="en"/>"#,
+            r#"<script type="text/javascript" charset="utf-8" defer="defer" src="s.js"></script>"#,
+            r#"<base href="c.xhtml" target="_self"/>"#,
+        ] {
+            assert!(ok(h), "EPUB 2 accepts {h}");
+        }
+        for h in [
+            r#"<style>p{}</style>"#,
+            r#"<style type="text/css" class="k">p{}</style>"#,
+            r#"<style type="text/css" id="x">p{}</style>"#,
+            r#"<style type="text/css" style="color:red">p{}</style>"#,
+            r#"<style type="text/css" xml:space="default">p{}</style>"#,
+            r#"<meta name="n" content="c" id="x"/>"#,
+            r#"<meta name="n" content="c" class="k"/>"#,
+            r#"<meta name="n" content="c" title="t"/>"#,
+            r#"<meta http-equiv="a b" content="c"/>"#,
+            r#"<script></script>"#,
+            r#"<script type="text/javascript" id="x"></script>"#,
+            r#"<script type="text/javascript" xml:lang="en"></script>"#,
+            r#"<script type="text/javascript" title="t"></script>"#,
+            r#"<base/>"#,
+            r#"<base href="c.xhtml" id="x"/>"#,
+            r#"<base href="c.xhtml" lang="en"/>"#,
+        ] {
+            assert!(!ok(h), "EPUB 2 rejects {h}");
+        }
     }
 
     /// #58, grammar round: the rest of XHTML 1.1's `a` and `img` attribute

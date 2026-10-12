@@ -1752,10 +1752,14 @@
     </element>
   </define>
 
+  <!-- XHTML 1.1's script.attlist (script.rng): `charset`, `type`
+       **required**, `src`, `defer`, `xml:space`, and no global attributes at
+       all - not even `id` or `xml:lang`. It had the whole `Common` set and an
+       optional `type`; every one of those was RSC-005 in epubcheck. -->
   <define name="scriptEl-epub2">
-    <element name="script"><ref name="globalAttrs-epub2"/>
+    <element name="script">
       <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
-      <optional><attribute name="type"><data type="string"/></attribute></optional>
+      <attribute name="type"><data type="string"/></attribute>
       <optional><attribute name="charset"><data type="string"/></attribute></optional>
       <optional><attribute name="defer"><value>defer</value></attribute></optional>
       <optional><attribute name="xml:space"><value>preserve</value></attribute></optional>
@@ -2698,9 +2702,10 @@
     </optional>
   </define>
 
-  <!-- Head contents for EPUB 2. Identical to the EPUB 3 pool except that
-       `<meta>` loses `charset`: that is the HTML5 spelling, and XHTML 1.1's
-       meta takes http-equiv/content instead. Same issue, same book. -->
+  <!-- Head contents for EPUB 2. Same elements as the EPUB 3 pool, but each
+       carries XHTML 1.1's own attribute list rather than the shared global
+       set: `<meta>` loses `charset` (the HTML5 spelling), and `meta`, `style`,
+       `script` and `base` take only what their modules declare. -->
   <define name="headContentsCommon-epub2">
     <zeroOrMore>
       <choice>
@@ -2713,8 +2718,13 @@
              chose the nine put each attribute on a `<p>`, which answers "is
              this global?" and not "does any element declare it". Check the
              latter before removing anything from a shared set. -->
-        <element name="meta"><ref name="globalAttrsCore-epub2"/>
-          <optional><attribute name="http-equiv"><data type="string"/></attribute></optional>
+        <!-- `I18n` only, not `Common`: `id`, `class`, `style` and `title`
+             passed here on `<meta>` and are RSC-005 in epubcheck, and so is an
+             `http-equiv` with a space in it (NMTOKEN, `meta.rng`:15). The same
+             gap was open on `style`, `script` and `base` below; all four were
+             measured on 5.4.0, one EPUB 2 book per attribute. -->
+        <element name="meta"><ref name="i18nAttrs-epub2"/>
+          <optional><attribute name="http-equiv"><data type="NMTOKEN"/></attribute></optional>
           <!-- `name` is an NMTOKEN here (`meta.rng`:19), so `<meta name="a b">`
                is an error - no spaces. HTML5 dropped the type and takes a free
                string, which is why this is the split copy and `metaEl` above
@@ -2725,15 +2735,23 @@
           <optional><attribute name="scheme"><data type="string"/></attribute></optional>
         </element>
         <ref name="linkEl-epub2"/>
-        <element name="style"><ref name="globalAttrsCore-epub2"/>
-          <optional><attribute name="xml:space"><choice><value>default</value><value>preserve</value></choice></attribute></optional>
-          <optional><attribute name="type"><data type="string"/></attribute></optional>
+        <!-- XHTML 1.1's style.attlist (style.rng): `title`, `I18n`, `type`
+             **required**, `media`, and `xml:space` with `preserve` as its only
+             value. It had the whole `Common` set and an optional `type`, so
+             `<style class="…">` and a `<style>` with no `type` passed; both are
+             RSC-005 in epubcheck. kepubverto wrote the first into every EPUB 2
+             document it converted, and our VALID hid it. -->
+        <element name="style"><ref name="i18nAttrs-epub2"/>
+          <optional><attribute name="title"><data type="string"/></attribute></optional>
+          <optional><attribute name="xml:space"><value>preserve</value></attribute></optional>
+          <attribute name="type"><data type="string"/></attribute>
           <optional><attribute name="media"><data type="string"/></attribute></optional>
           <text/>
         </element>
+        <!-- XHTML 1.1's base.attlist (base.rng, plus target.rng): `href`
+             **required** and `target`, nothing else - no global attributes. -->
         <element name="base">
-          <ref name="globalAttrsCore-epub2"/>
-          <optional><attribute name="href"><data type="anyURI"/></attribute></optional>
+          <attribute name="href"><data type="anyURI"/></attribute>
           <optional><attribute name="target"><data type="string"/></attribute></optional>
         </element>
         <ref name="scriptEl-epub2"/>

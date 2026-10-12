@@ -10,6 +10,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **EPUB 2: `<style>`, `<script>`, `<meta>` and `<base>` take XHTML 1.1's
+  own attribute lists.** They took the shared set (`id`, `class`, `style`,
+  `title`), so `<style class="…">` and a `<style>` or `<script>` with no
+  `type` passed here. epubcheck reports all of them as RSC-005, and so do we
+  now. So do a `<base>` with no `href`, global attributes on `<script>` and
+  `<base>`, an `http-equiv` with a space in it, and `xml:space="default"`
+  on `<style>`. Each shape was checked against epubcheck 5.4.0 with one
+  EPUB 2 book per attribute. EPUB 3 is unaffected. Reported by kepubverto,
+  whose converter had been writing `<style class="kobostylehacks">` into
+  EPUB 2 books that we called valid.
+
 ### Changed
 
 - **In an EPUB 2 book, a package `<link>` to a file that is not there is
