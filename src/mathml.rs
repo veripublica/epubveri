@@ -18,7 +18,7 @@
 //!   walk as the top-level check).
 
 use crate::ids::*;
-use crate::report::{Report, Severity};
+use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
 pub(crate) const MATHML_NS: &str = "http://www.w3.org/1998/Math/MathML";
@@ -122,6 +122,23 @@ fn check_presentation_content(node: roxmltree::Node, path: &str, report: &mut Re
             continue;
         }
         if !PRESENTATION_ELEMENTS.contains(&name) {
+            // The content grammar reaches most of MathML now and blames the
+            // same element first, so this pushed a second RSC-005 at the
+            // same position (`mathml-contentmathml-error`: four findings to
+            // epubcheck's two). It stays for what the grammar does not reach
+            // (inside `annotation-xml` and `epub:switch`, where the corpus
+            // misses two fixtures without it), and stands aside where the
+            // grammar already spoke.
+            let at = Position::of(child);
+            let already = report.messages.iter().any(|m| {
+                m.id == RSC_005
+                    && m.violation_kind.is_some()
+                    && m.position == Some(at)
+                    && m.location.as_deref() == Some(path)
+            });
+            if already {
+                continue;
+            }
             report.push_node(
                 RSC_005,
                 Severity::Error,

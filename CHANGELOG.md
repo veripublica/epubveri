@@ -12,6 +12,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **An `img` with a `srcset` and no `src` is valid in EPUB 3.** We
+  required `src` and reported RSC-005, an error that made the book invalid.
+  epubcheck's grammar takes `src`, `srcset` or both, and so do we now. An
+  `img` with neither is still RSC-005. EPUB 2 is unchanged: XHTML 1.1
+  requires `src`.
 - **EPUB 2: an element from another namespace inside an SVG `title` is
   allowed.** We reported RSC-005 ("elements from namespace … are not
   allowed"). That is EPUB 3's rule, from the NVDL that EPUB 3 adds for SVG
@@ -21,12 +26,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   RSC-005.** SVG 1.1 allows only text in those three, and epubcheck reports
   each such child once. We reported nothing. A `<tspan>` inside a `<title>`
   is the likely real case.
-- **One finding where epubcheck counts one, inside an SVG `title`.**
-  Foreign markup inside an SVG `title` at EPUB 3. A run of elements in one
-  namespace now counts as one finding, as in epubcheck's NVDL. So an `svg`
-  inside a `body` inside a `title` is one finding, not one for each of its
-  elements. Markup inside a rejected run is no longer validated a second
-  time.
+- **RSC-008 is reported once per undeclared resource.** We reported it once
+  per reference, so an image that is missing from the manifest and shown on
+  every page drew one error per page. epubcheck reports each resource once
+  per rendition, and so do we now. The verdict does not change.
+- **One finding per reference where epubcheck counts one.** Four places
+  reported the same fault more than once:
+  - An `img` whose `src` also appears in its `srcset`. epubcheck counts
+    each distinct URL in `src` and `srcset` once per element, for RSC-007,
+    RSC-008 and the OBS-001 on a manifest fallback.
+  - Content MathML (`apply`, `cn`, …) at the top of a `math` element. The
+    grammar and the MathML check each reported it at the same position.
+  - Foreign markup inside an SVG `title` at EPUB 3. A run of elements in one
+    namespace now counts as one finding, as in epubcheck's NVDL. So an `svg`
+    inside a `body` inside a `title` is one finding, not one for each of its
+    elements. Markup inside a rejected run is no longer validated a second
+    time.
+  - A deprecated reserved prefix (`xsd:`, `msv:`, `prism:`) that the book
+    re-declares to another URI. epubcheck warns once (OPF-086c), at the
+    declaration. We also warned at each use.
 
 ### Changed
 

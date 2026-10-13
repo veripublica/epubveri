@@ -1769,9 +1769,18 @@
 
   <define name="imgAttrsCommon">
     <ref name="globalAttrs"/>
-    <attribute name="src"><data type="anyURI"/></attribute>
+    <!-- `src`, `srcset` or both: embed.rnc's `shared-img.attrs` is
+         `(src & srcset?) | (srcset & src?)`. `src` alone was required here,
+         so an `img` carrying only a `srcset` was an RSC-005 error that
+         epubcheck 5.4.0 does not report (measured, 2026-10-14). -->
+    <choice>
+      <group>
+        <attribute name="src"><data type="anyURI"/></attribute>
+        <optional><attribute name="srcset"><data type="string"/></attribute></optional>
+      </group>
+      <attribute name="srcset"><data type="string"/></attribute>
+    </choice>
     <optional><attribute name="alt"><data type="string"/></attribute></optional>
-    <optional><attribute name="srcset"><data type="string"/></attribute></optional>
     <optional><attribute name="sizes"><data type="string"/></attribute></optional>
     <optional><attribute name="usemap"><data type="string"/></attribute></optional>
     <!-- #33: img.attrs completion (embed.rnc). -->

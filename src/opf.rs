@@ -3049,7 +3049,23 @@ fn check_prefix_usage(
         // declares the prefix — and a book that declares *and* uses one gets
         // two findings, one per site. Measured against 5.4.0 on its own
         // `deprecated-prefix-declaration-used-warning` fixture.
-        if is_epub3 && DEPRECATED_PREFIXES_34.contains(&prefix) && is_reserved(prefix) {
+        //
+        // **Unless the book re-declared the prefix to another URI.**
+        // `parsePrefixDeclaration` then puts an `UncheckedVocab` under it,
+        // whose `isDeprecated` is false, so the declaration draws OPF-086c
+        // (above, with OPF-007) and the use draws nothing. We gave the use
+        // a second warning, on epubcheck's own
+        // `deprecated-prefix-declaration-overridden-warning` fixture. A
+        // declaration with the reserved URI itself finds the deprecated
+        // vocabulary in the handler's known map, and the use still warns.
+        let overridden = declared
+            .get(prefix)
+            .is_some_and(|uri| !reserved.iter().any(|(n, u)| *n == prefix && u == uri));
+        if is_epub3
+            && DEPRECATED_PREFIXES_34.contains(&prefix)
+            && is_reserved(prefix)
+            && !overridden
+        {
             report.push_full(
                 OPF_086C,
                 Severity::Warning,
@@ -4937,6 +4953,49 @@ fn line_col_at(xml: &str, off: usize) -> Position {
 }
 
 pub fn check(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
+    let start = report.messages.len();
+    check_rendition(ocf, opf_path, options, report);
+    keep_first_undeclared(report, start);
+}
+
+/// RSC-008 once per undeclared resource, not once per reference to it.
+///
+/// epubcheck has a single RSC-008 site, `ResourceReferencesChecker`, and it
+/// keeps a set of the resources it has already reported there: "Report
+/// undeclared Publication Resources (once)". Three `<img>` elements showing
+/// one undeclared image were three errors here and one there, and an image
+/// used on every page of a book was one error per page. We report from nine
+/// places (markup, `srcset`, CSS, the guide, the NCX, remote references, …),
+/// so the rule is applied once, here, over everything a rendition reported.
+/// The checker runs per rendition there, and so does this.
+///
+/// The target is the reference resolved against the reporting file's
+/// directory, or the URL itself when remote: what the finding's
+/// `params[0]` carries, as written. The first finding in report order
+/// survives; positions are ours to move.
+fn keep_first_undeclared(report: &mut Report, start: usize) {
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut i = start;
+    while i < report.messages.len() {
+        let m = &report.messages[i];
+        if m.id == RSC_008
+            && let (Some(loc), Some(raw)) = (m.location.as_deref(), m.params.first())
+        {
+            let target = if is_remote_url(raw) {
+                raw.clone()
+            } else {
+                nfc(&resolve(&parent_dir(loc), &strip_url_fragment(raw)))
+            };
+            if !seen.insert(target) {
+                report.messages.remove(i);
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+fn check_rendition(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
         None => {
@@ -10227,9 +10286,14 @@ fn check_text(
                 if srcset_attr.value().contains("data:") {
                     continue;
                 }
+                // One reference per distinct string across `src` and
+                // `srcset`, as `OPSHandler30.checkImage` registers them (see
+                // the OBS-001 walk below): `src="gone.png" srcset="gone.png,
+                // b.png 2x"` is two RSC-007s there and was three here.
+                let mut seen: HashSet<&str> = n.attr_no_ns("src").into_iter().collect();
                 for candidate in srcset_attr.value().split(',') {
                     let url = candidate.xml_tokens().next().unwrap_or("");
-                    if url.is_empty() || is_external(url) {
+                    if url.is_empty() || is_external(url) || !seen.insert(url) {
                         continue;
                     }
                     let resolved = nfc(&resolve(&dir, url));
@@ -10573,12 +10637,24 @@ fn check_text(
             // `<source srcset>` pointing at a resource with a fallback, and
             // it was the only OBS-001 the 1086-book oracle run found us
             // missing.
+            //
+            // Per *distinct string*, though: `OPSHandler30.checkImage` puts
+            // `src` and every `srcset` URL into one `TreeSet<String>` and
+            // registers each member once, so `src="a.xyz" srcset="a.xyz,
+            // b.xyz 2x"` is two references there and was three findings
+            // here (its `foreign-xhtml-picture-img-srcset-error` and
+            // `…-manifest-fallback-valid` fixtures). The strings are compared
+            // as written, so `./a.xyz` beside `a.xyz` still counts twice.
             if is_epub3 && matches!(node.tag_name().name(), "img" | "source") {
+                let mut seen: HashSet<&str> = node.attr_no_ns("src").into_iter().collect();
                 for cand in node.attr_no_ns("srcset").unwrap_or("").split(',') {
                     let Some(url) = cand.xml_tokens().next() else {
                         continue;
                     };
                     if url.is_empty() || is_external(url) || is_remote_url(url) {
+                        continue;
+                    }
+                    if !seen.insert(url) {
                         continue;
                     }
                     let key = nfc(&resolve(&dir, &strip_url_fragment(url)));
@@ -21209,6 +21285,64 @@ mod tests {
         );
     }
 
+    /// How many references epubcheck makes of image markup, measured on
+    /// 5.4.0 one book per shape (2026-10-14). `OEBPS/meta.xml` is present
+    /// and undeclared in this book, so it is the RSC-008 target.
+    #[test]
+    fn image_references_count_as_epubcheck_counts_them() {
+        let count = |body: &str, id: &str| -> usize {
+            let ch1 = format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                 <body>{body}</body></html>"
+            );
+            crate::validate_bytes(epub_with_ch1(&ch1))
+                .messages
+                .iter()
+                .filter(|m| m.id == id)
+                .count()
+        };
+        use crate::ids::{RSC_005, RSC_007, RSC_008};
+        // RSC-008 once per undeclared resource, however many references and
+        // however they are spelled.
+        assert_eq!(
+            count(
+                r#"<p><img src="meta.xml" alt="a"/><img src="meta.xml" alt="b"/><img src="./meta.xml" alt="c"/></p>"#,
+                RSC_008
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                r#"<p><img src="meta.xml" alt="a"/><img srcset="meta.xml 2x" alt="b"/></p>"#,
+                RSC_008
+            ),
+            1
+        );
+        // RSC-007 once per distinct string within one element's src and
+        // srcset, and again per element.
+        assert_eq!(
+            count(
+                r#"<p><img src="gone.png" srcset="gone.png, gone2.png 2x" alt="a"/></p>"#,
+                RSC_007
+            ),
+            2
+        );
+        assert_eq!(
+            count(
+                r#"<p><picture><source srcset="gone.png, gone.png 2x"/><img src="gone.png" alt="a"/></picture></p>"#,
+                RSC_007
+            ),
+            2
+        );
+        // An `img` may carry `srcset` without `src`; neither is RSC-005.
+        assert_eq!(
+            count(r#"<p><img srcset="gone.png 2x" alt="a"/></p>"#, RSC_005),
+            0
+        );
+        assert_eq!(count(r#"<p><img alt="a"/></p>"#, RSC_005), 1);
+    }
+
     fn epub_with_opf(opf: Option<&str>, ch1: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
@@ -27552,6 +27686,60 @@ mod tests {
         for undeclared in ["xsd", "dcterms", "a11y", "marc", "foo"] {
             assert_eq!(doc(undeclared), vec![OPF_028], "{undeclared}");
         }
+    }
+
+    /// Content MathML at the top of `<math>` is one RSC-005 per element, as
+    /// in epubcheck: the grammar's, not the grammar's and then the MathML
+    /// check's at the same position.
+    #[test]
+    fn content_mathml_is_reported_once_per_element() {
+        let ch = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body>
+<math xmlns="http://www.w3.org/1998/Math/MathML"><apply><plus/><cn>1</cn><cn>2</cn></apply></math>
+<math xmlns="http://www.w3.org/1998/Math/MathML"><cn>1</cn></math>
+</body></html>"#;
+        let texts: Vec<String> = crate::validate_bytes(epub_with_opf(None, ch))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_005)
+            .map(|m| m.text.clone())
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+
+    /// A deprecated reserved prefix re-declared to another URI warns once,
+    /// at the declaration: the use resolves to the book's own vocabulary.
+    /// Declared with the reserved URI itself, both sites warn. Both shapes
+    /// are epubcheck 5.4.0's (its `…-overridden-warning` and
+    /// `…-used-warning` fixtures).
+    #[test]
+    fn a_deprecated_prefix_overridden_to_another_uri_warns_at_the_declaration_only() {
+        let count = |uri: &str| -> usize {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid" prefix="xsd: {uri}">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">u</dc:identifier><dc:title>t</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    <meta property="xsd:string">x</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            const CH: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body><p>x</p></body></html>"#;
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::OPF_086C)
+                .count()
+        };
+        assert_eq!(count("http://example.org/#"), 1);
+        assert_eq!(count("http://www.w3.org/2001/XMLSchema#"), 2);
     }
 
     /// The two EPUB 3.4 deprecations that graduated when epubcheck 5.4.0
