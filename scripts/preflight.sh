@@ -261,7 +261,15 @@ else
   # a two-way shuffle repeats itself half the time. epubcheck's fixtures are
   # where the 2026-10-02 cases showed; the shelf, when present, adds real
   # books.
+  #
+  # Books run in parallel, one worker per performance core (as `compare`
+  # does; DETERMINISM_JOBS overrides). The three runs of one book stay in one
+  # worker, one after another, so what is compared is unchanged; only
+  # different books overlap. Each worker prints exactly one line per book,
+  # and a book that printed nothing counts as a failure, so a worker that
+  # died cannot pass for a stable book.
   DET_BOOKS="$(jq -r .target_directory <<< "$META")/determinism-books"
+  DET_JOBS="${DETERMINISM_JOBS:-$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || nproc 2>/dev/null || echo 4)}"
   check "determinism (corpus fixtures + shelf, 3 runs each, identical output)" \
     bash -c '
       set -e
@@ -269,25 +277,33 @@ else
       bin="$1/release/epubveri"
       rm -rf "$2"
       cargo run --release -q -p epubveri-harness --bin corpus -- --dump-books "$2" >/dev/null 2>&1
-      n=0; unstable=0
-      while IFS= read -r -d "" f; do
-        n=$((n+1)); first=""
+      one_book() {
+        local f="$1" first="" out h i
         for i in 1 2 3; do
           out=$("$bin" -u --advisory --format json -i "$f" 2>/dev/null || true)
           # Empty output on every run would compare equal; that is a binary
           # that did not run, not a deterministic one.
           if ! printf "%s" "$out" | jq -e .inputs >/dev/null 2>&1; then
-            echo "no report for: $f"; exit 1
+            echo "noreport $f"; return
           fi
           h=$(printf "%s" "$out" | cksum)
           if [ -z "$first" ]; then first=$h
-          elif [ "$h" != "$first" ]; then echo "differs between runs: $f"; unstable=$((unstable+1)); break; fi
+          elif [ "$h" != "$first" ]; then echo "unstable $f"; return; fi
         done
-      done < <(find "$2" "$3" -name "*.epub" -print0 2>/dev/null)
-      echo "$n books, $unstable unstable"
-      [ "$n" -gt 0 ] && [ "$unstable" -eq 0 ]
+        echo "stable $f"
+      }
+      export -f one_book; export bin
+      n=$(find "$2" "$3" -name "*.epub" 2>/dev/null | wc -l | tr -d " ")
+      res=$(find "$2" "$3" -name "*.epub" -print0 2>/dev/null \
+        | xargs -0 -n 1 -P "$4" bash -c "one_book \"\$1\"" _)
+      stable=$(grep -c "^stable " <<< "$res" || true)
+      grep "^noreport " <<< "$res" | sed "s/^noreport /no report for: /" || true
+      grep "^unstable " <<< "$res" | sed "s/^unstable /differs between runs: /" || true
+      unstable=$(grep -c "^unstable " <<< "$res" || true)
+      echo "$n books, $unstable unstable, $4 workers"
+      [ "$n" -gt 0 ] && [ "$stable" -eq "$n" ]
     ' _ "$(jq -r .target_directory <<< "$META")" "$DET_BOOKS" \
-      "${SHELF_DIR_FOR_DETERMINISM:-$HOME/Documents/Projects/ebook-shelf}"
+      "${SHELF_DIR_FOR_DETERMINISM:-$HOME/Documents/Projects/ebook-shelf}" "$DET_JOBS"
 
   # Mutation fuzzing, fixed seeds so the gate is deterministic. Two seeds of
   # 3,000 because that is what it takes: with the `scan_references` panic put
