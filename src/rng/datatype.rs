@@ -174,10 +174,27 @@ impl Datatype {
     ///               case belongs to RSC-020, separately and partially
     ///   `http://a b` accepted
     ///
-    /// Only those four rejections are implemented. Anything not on the measured
-    /// list is accepted, on the same reasoning RSC-020 is left partial: a guess
-    /// about an unreadable implementation, applied to 39 schema sites, would
-    /// invent errors on real books.
+    /// Three more rules, measured on 5.4.0 on 2026-10-14 over 70 values, each
+    /// as an XHTML `<a href>` (where Jing's verdict is an ERROR) and an SVG
+    /// one (a usage RSC-025):
+    ///
+    ///   `a#b#`, `##`         rejected - a second `#`
+    ///   `1:x`, `a_b:c`, `é:x`, `-a:b`, `a:`
+    ///                        rejected - a colon in the first segment makes
+    ///               the part before it a scheme, which must be a letter and
+    ///               then letters, digits, `+`, `-` or `.`, and must be
+    ///               followed by something; `a/b:c`, `a?b:c` and `./1a:b`
+    ///               have no scheme and are accepted
+    ///   `a[b`, `]`, `http://h/[x]`, `http://[x]/`
+    ///                        rejected - a bracket before the query or
+    ///               fragment, unless it encloses an IPv6 host
+    ///               (`http://[::1]:80/a`, `//[::1]/` and `?[x]`, `#[x]` are
+    ///               accepted)
+    ///
+    /// Anything not on the measured list is still accepted, on the same
+    /// reasoning RSC-020 is left partial: a guess about an unreadable
+    /// implementation, applied to 39 schema sites, would invent errors on
+    /// real books.
     fn is_any_uri(s: &str) -> bool {
         // A percent sign must introduce two hex digits.
         let b = s.as_bytes();
@@ -208,6 +225,49 @@ impl Datatype {
             && rest.is_empty()
         {
             return false;
+        }
+        // At most one fragment.
+        if s.matches('#').count() > 1 {
+            return false;
+        }
+        // A colon in the first segment: what precedes it is a scheme.
+        let first_segment_end = s.find(['/', '?', '#']).unwrap_or(s.len());
+        let mut after_scheme = s;
+        if let Some(colon) = s[..first_segment_end].find(':') {
+            let scheme = &s[..colon];
+            let well_formed = scheme
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+            if !well_formed || colon + 1 == s.len() {
+                return false;
+            }
+            after_scheme = &s[colon + 1..];
+        }
+        // Brackets before the query and fragment only around an IPv6 host.
+        let before_query =
+            &after_scheme[..after_scheme.find(['?', '#']).unwrap_or(after_scheme.len())];
+        if before_query.contains(['[', ']']) {
+            let Some(rest) = before_query.strip_prefix("//") else {
+                return false;
+            };
+            let authority = &rest[..rest.find('/').unwrap_or(rest.len())];
+            let path = &rest[authority.len()..];
+            let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+            let ipv6 = host_port.strip_prefix('[').and_then(|h| h.split_once(']'));
+            let Some((addr, port)) = ipv6 else {
+                return false;
+            };
+            if path.contains(['[', ']'])
+                || addr.parse::<std::net::Ipv6Addr>().is_err()
+                || !(port.is_empty() || port.starts_with(':'))
+                || port.contains(['[', ']'])
+            {
+                return false;
+            }
         }
         true
     }
@@ -423,6 +483,94 @@ mod tests {
         // the six that separate the two types, stated as the difference itself
         for exp in ["1e3", "-2.5E-3", "1.0e+3", "INF", "-INF", "NaN"] {
             assert!(D::Float.allows(exp) && !D::Decimal.allows(exp), "{exp:?}");
+        }
+    }
+
+    /// `xsd:anyURI` as Jing judges it, every value measured on epubcheck
+    /// 5.4.0 as an XHTML `<a href>` (2026-10-14; the first four rejections
+    /// on 5.3.0 before that).
+    #[test]
+    fn any_uri_follows_jing() {
+        for ok in [
+            "a b",
+            "a\\b",
+            "a|b",
+            "a^b",
+            "a`b",
+            "a{b}",
+            "<x>",
+            "a\"b",
+            "%41",
+            "%E9",
+            "\u{e9}",
+            "http://x",
+            "http://\u{e9}.com/",
+            "mailto:x",
+            "urn:x",
+            "x:y:z",
+            "a+b:c",
+            "A1+-.:x",
+            "http:x",
+            "http:/x",
+            "//h",
+            "a/b:c",
+            "a?b:c",
+            "a#b:c",
+            "./1a:b",
+            "#",
+            "a#",
+            "http://h#",
+            "x y#a b",
+            "http://[::1]",
+            "http://[::1]:80/a",
+            "http://u@[::1]/",
+            "//[::1]/",
+            "http://[::1]/x",
+            "#[x]",
+            "?[x]",
+            "x?[a]",
+            "http://h/p?[q]",
+            "http://a:b@c",
+            "http://a:99999",
+            "http://a:x",
+        ] {
+            assert!(D::AnyUri.allows(ok), "anyURI should accept {ok:?}");
+        }
+        for bad in [
+            "%zz",
+            "%",
+            "a%2",
+            "http://x/%zz",
+            "http://h/a#%zz",
+            ":",
+            "//",
+            "http://",
+            "c.xhtml#a#b",
+            "#a#b",
+            "a#b#",
+            "##",
+            "http://h/p#f#g",
+            "1a:b",
+            "1:x",
+            "-a:b",
+            ".a:b",
+            "a_b:c",
+            "\u{e9}:x",
+            "a:",
+            "a:%",
+            "a[b",
+            "a]b",
+            "[x]",
+            "[",
+            "]",
+            "a/[b]",
+            "http://[bad",
+            "http://x]y",
+            "http://[x]/",
+            "http://h/[x]",
+            "//h/[x]",
+        ] {
+            assert!(!D::AnyUri.allows(bad), "anyURI should reject {bad:?}");
         }
     }
 

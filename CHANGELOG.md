@@ -26,6 +26,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   RSC-005.** SVG 1.1 allows only text in those three, and epubcheck reports
   each such child once. We reported nothing. A `<tspan>` inside a `<title>`
   is the likely real case.
+- **A URL that epubcheck's grammar rejects as `xsd:anyURI` is RSC-005 in
+  XHTML.** That means a second `#` (`a#b#c`), a bracket outside an IPv6
+  host (`image[1].jpg`, `http://h/[x]`), or a colon after something that
+  cannot be a scheme (`1:x`, `a_b:c`, or `a:` with nothing after it). We
+  knew four shapes and missed these, so a book with an `href` like
+  `image[1].jpg` passed here and failed in epubcheck. All 70 values in two
+  probe sets now get the same verdict as in epubcheck. Spaces, `|`, `^`,
+  `{}`, `[` in the query or fragment and `http://[::1]/` stay accepted, as
+  there.
+- **EPUB 3 SVG: SVG 2's `href` and nine ARIA attributes have their values
+  checked**, as a usage-level RSC-025, as in epubcheck's informative SVG
+  grammar. The `href` check uses the same URL rules as above. The ARIA ones
+  are `aria-hidden`, `aria-atomic`, `aria-busy`, `aria-disabled`,
+  `aria-current`, `aria-haspopup`, `aria-invalid`, `aria-live` and
+  `aria-relevant`. We checked neither. Other `aria-*` attributes depend on
+  the element's `role`, and are still not checked. `xlink:href` is not
+  checked, as in epubcheck.
 - **`epub:type` on `head` or `template` is RSC-005**, as on `title`,
   `meta` and the other metadata elements. epubcheck allows `epub:type` on
   every element except those, and reports it there. We accepted it on these

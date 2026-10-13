@@ -2477,6 +2477,47 @@ fn is_one_token_of(value: &str, allowed: &[&str]) -> bool {
     tokens.next().is_some_and(|t| allowed.contains(&t)) && tokens.next().is_none()
 }
 
+/// The value of an `aria.global` attribute on an EPUB 3 SVG element, or
+/// `None` for any other attribute.
+///
+/// epubcheck's informative SVG grammar adds `aria.global` to every SVG
+/// element (`epub-svg-strict-inc.rnc`: `SVG.Core.attrib &= aria.global?`),
+/// and `mod/html5/aria.rnc` gives nine of its attributes a value space,
+/// compared as written (`string "true"`), except `aria-relevant`'s `token
+/// "all"` and its lists. These are the only ARIA values it checks there
+/// whatever the element and its `role`, so a finding here holds in every
+/// case. The other `aria-*` attributes come with a `role`, and epubcheck
+/// answers those with a missing `role` or an attribute not allowed as often
+/// as with a bad value; they stay unjudged. Measured on 5.4.0, inline,
+/// 2026-10-14.
+fn svg_global_aria_value_is_valid(attr: &str, value: &str) -> Option<bool> {
+    let one_of = |allowed: &[&str]| Some(allowed.contains(&value));
+    match attr {
+        "aria-atomic" | "aria-busy" | "aria-disabled" | "aria-hidden" => one_of(&["true", "false"]),
+        "aria-current" => one_of(&["page", "step", "location", "date", "time", "true", "false"]),
+        "aria-haspopup" => one_of(&["true", "false", "menu", "listbox", "tree", "grid", "dialog"]),
+        "aria-invalid" => one_of(&["true", "false", "grammar", "spelling"]),
+        "aria-live" => one_of(&["off", "polite", "assertive"]),
+        "aria-relevant" => {
+            // `token "all"`, or additions/removals/text in any order, each
+            // at most once (the grammar's six ordered lists).
+            let mut seen: Vec<&str> = Vec::new();
+            let listed = value.xml_tokens().all(|t| {
+                matches!(t, "additions" | "removals" | "text") && !seen.contains(&t) && {
+                    seen.push(t);
+                    true
+                }
+            });
+            let all = {
+                let mut t = value.xml_tokens();
+                t.next() == Some("all") && t.next().is_none()
+            };
+            Some(all || (listed && !seen.is_empty()))
+        }
+        _ => None,
+    }
+}
+
 /// Whether the grammar of the book's version accepts `value` for `attr` on
 /// `element`, or `None` when it does not constrain that value. At 2.0 the
 /// caller has already established that `element` takes `attr`; at 3.0 this
@@ -2484,6 +2525,21 @@ fn is_one_token_of(value: &str, allowed: &[&str]) -> bool {
 /// flat list there.
 fn svg_value_is_valid(element: &str, attr: &str, value: &str, is_epub3: bool) -> Option<bool> {
     use svg11::{Scope, Value};
+    // Not on an element the vocabulary does not know: epubcheck reports the
+    // element and never reaches its attributes.
+    if is_epub3
+        && is_recognized_element(element, true)
+        && let Some(valid) = svg_global_aria_value_is_valid(attr, value)
+    {
+        return Some(valid);
+    }
+    // SVG 2's `href` is `xsd:anyURI` in epubcheck's EPUB 3 copy of the SVG
+    // modules, judged by the same Jing rules as an XHTML `href` (there an
+    // error, here a usage note); `xlink:href` is not checked there at all.
+    // Measured on 5.4.0 with the same 29 values as the XHTML side.
+    if is_epub3 && attr == "href" && takes_attribute_at_3(element, attr) {
+        return Some(crate::rng::datatype::Datatype::AnyUri.allows(value));
+    }
     let table = if is_epub3 {
         // An attribute the element does not take is reported as such by
         // `check_attribute_vocabulary`, and that is all epubcheck says of it.
@@ -3710,6 +3766,50 @@ mod tests {
 
     /// The generated table is sorted for its binary search, and its union is
     /// the flat list minus what only EPUB 3 adds.
+    /// EPUB 3 SVG: the nine valued `aria.global` attributes and SVG 2's
+    /// `href` are judged as epubcheck's informative grammar judges them
+    /// (a 343-shape ARIA matrix and 29 `href` values on 5.4.0, 2026-10-14).
+    #[test]
+    fn epub3_svg_global_aria_values_and_href_are_judged() {
+        let bad = |body: &str, is_epub3: bool| -> usize {
+            let svg = format!(r#"{S}{body}</svg>"#);
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_required_attributes(doc.root_element(), "s.svg", is_epub3, &mut report);
+            report
+                .messages
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.svg_invalid_attribute_value"))
+                .count()
+        };
+        for (body, expected) in [
+            (r#"<g aria-hidden="maybe"/>"#, 1),
+            (r#"<g aria-hidden="TRUE"/>"#, 1),
+            (r#"<g aria-hidden=" true"/>"#, 1),
+            (r#"<g aria-hidden="true"/>"#, 0),
+            (r#"<g aria-current="Page"/>"#, 1),
+            (r#"<g aria-current="date"/>"#, 0),
+            (r#"<g aria-haspopup="list"/>"#, 1),
+            (r#"<g aria-live="rude"/>"#, 1),
+            (r#"<g aria-relevant=" all "/>"#, 0),
+            (r#"<g aria-relevant="removals additions text"/>"#, 0),
+            (r#"<g aria-relevant="additions additions"/>"#, 1),
+            (r#"<g aria-relevant="all text"/>"#, 1),
+            (r#"<g aria-relevant=""/>"#, 1),
+            (r#"<g aria-label="anything"/>"#, 0),
+            // An element the vocabulary does not know is reported as such,
+            // and its attributes are never reached.
+            (r#"<zzz aria-hidden="maybe"/>"#, 0),
+            (r#"<a href="a#b#c"><text>x</text></a>"#, 1),
+            (r#"<a href="a[b"><text>x</text></a>"#, 1),
+            (r#"<a href="a b"><text>x</text></a>"#, 0),
+        ] {
+            assert_eq!(bad(body, true), expected, "{body}");
+        }
+        // EPUB 2's SVG 1.1 knows neither.
+        assert_eq!(bad(r#"<g aria-hidden="maybe"/>"#, false), 0);
+    }
+
     #[test]
     fn an_svg_attribute_not_allowed_carries_a_rule_key_and_points_at_the_attribute() {
         let svg = format!("{S}\n<rect width=\"1\" height=\"1\"   font-size=\"9\"/></svg>");
