@@ -54,6 +54,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   form `epub:default` no longer accepts foreign markup, and `epub:case`
   accepts foreign markup only outside the XHTML and MathML namespaces. All
   15 switch shapes probed now match epubcheck.
+- **EPUB 3: the XHTML inside an SVG `title` is checked against its content
+  model**, which is `html`, `body` or flow content, as in epubcheck. So
+  `test <body>…</body>` is "element body not allowed here". We checked only
+  the namespaces and `href`. The new findings carry the rule key
+  `svg.title.content_model` and a `violation_kind`. All 14 shapes probed
+  match epubcheck.
 - **A link with only a query string, such as `href="?x"`, points at its own
   document.** We resolved it to the document's folder and reported that
   folder as a missing resource (RSC-007, an error). epubcheck reports only

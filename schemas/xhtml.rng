@@ -359,6 +359,23 @@
     </element>
   </define>
 
+  <!-- The content of an EPUB 3 SVG `title`: `svg.title.inner =
+       common.inner.anyhtml`, which is `html | body | flow`
+       (`mod/epub-shared-inc.rnc`). Not reachable from `start`; `svg.rs`
+       enters the grammar here, around a title's XHTML, so the three
+       alternatives are tried together as Jing tries them and the one that
+       survives decides the finding. The element name is a wrapper of ours
+       and never appears in a book. -->
+  <define name="svgTitleContentEl">
+    <element name="svg-title-content">
+      <choice>
+        <ref name="htmlEl"/>
+        <ref name="bodyEl"/>
+        <ref name="flowContent"/>
+      </choice>
+    </element>
+  </define>
+
   <define name="bodyEl">
     <element name="body"><ref name="bodyAttrs"/><ref name="bodyOnlyEvents"/><ref name="flowContent"/></element>
   </define>

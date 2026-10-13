@@ -76,6 +76,16 @@ pub fn xhtml_grammar() -> Grammar {
     g
 }
 
+/// The EPUB 3 grammar entered at `svgTitleContentEl`: the content model of
+/// an SVG `title` (`html | body | flow`) inside a wrapper element of ours, for
+/// `svg::check_title_xhtml`. Custom elements as in the full grammar.
+pub fn svg_title_content_grammar() -> Grammar {
+    let mut g = load_from_define(XHTML_RNG, "svgTitleContentEl")
+        .expect("built-in xhtml.rng svg title root must parse");
+    g.custom_elements = true;
+    g
+}
+
 /// Load the built-in **EPUB 2** (XHTML 1.1 + OPS 2.0.1) content-document
 /// grammar - the same schema, entered at its EPUB 2 root so it shares all the
 /// version-independent machinery and differs only in the element pool (issue

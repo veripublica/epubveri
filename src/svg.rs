@@ -1915,8 +1915,12 @@ fn check_href_attribute(n: roxmltree::Node, path: &str, report: &mut Report) {
 /// the same section as `title` itself, and the grammar's flow content takes
 /// `svg`, so it draws nothing. Each shape was probed on 5.4.0 (2026-10-14).
 pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &mut Report) {
+    // The XHTML half first. When it runs, the grammar answers `href` itself,
+    // so the hand check below stands aside rather than say it twice.
+    let validated = check_title_xhtml(title, path, report);
     walk_title_sections(title, Some(SVG_NS), false, &mut |n, step| match step {
-        TitleStep::Xhtml => check_href_attribute(n, path, report),
+        TitleStep::Xhtml if !validated => check_href_attribute(n, path, report),
+        TitleStep::Xhtml => {}
         TitleStep::Rejected => {
             let ns = n.tag_name().namespace().unwrap_or("");
             report.push_node(
@@ -1931,6 +1935,92 @@ pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &m
         }
         TitleStep::Unvalidated => {}
     });
+}
+
+/// The XHTML inside an EPUB 3 SVG `title`, against its content model:
+/// `svg.title.inner = common.inner.anyhtml`, which is `html | body | flow`
+/// (`mod/epub-shared-inc.rnc`). The XHTML is attached to the SVG section
+/// and validated with it; what NVDL rejected is not part of it. So `text
+/// <body>…</body>` is "element body not allowed here" (flow content met a
+/// `body`), a lone `body` or a whole `html` is fine, and a `span` with an
+/// `href` is an attribute fault. Measured on 5.4.0, 2026-10-14; the first
+/// of these, `title-content-invalid-html-error.svg`, is epubcheck's own.
+///
+/// The title's content is cut out of the source and re-parsed inside a
+/// wrapper element that the grammar gives exactly that model
+/// (`svgTitleContentEl`), so the three alternatives are tried together, as
+/// Jing tries them: `<body/>text` is "text not allowed" (the body branch
+/// survived the body), and `text<body/>` is "body not allowed" (only flow
+/// survived the text). Every rejected section
+/// blanked to spaces of the same length so each offset still points at the
+/// same character, and findings are mapped back to the real file. Returns
+/// whether it ran: not when the title holds no XHTML element, and not when
+/// it holds an SVG element directly, whose unprefixed name would land in
+/// the wrapper's XHTML namespace.
+fn check_title_xhtml(title: roxmltree::Node, path: &str, report: &mut Report) -> bool {
+    let kids: Vec<_> = title.children().filter(|c| c.is_element()).collect();
+    if !kids
+        .iter()
+        .any(|c| c.tag_name().namespace() == Some(XHTML_NS))
+        || kids
+            .iter()
+            .any(|c| c.tag_name().namespace() == Some(SVG_NS))
+    {
+        return false;
+    }
+    let (Some(first), Some(last)) = (title.first_child(), title.last_child()) else {
+        return false;
+    };
+    let text = title.document().input_text();
+    let (start, end) = (first.range().start, last.range().end);
+    let mut inner = text.as_bytes()[start..end].to_vec();
+    walk_title_sections(title, Some(SVG_NS), false, &mut |n, step| {
+        if matches!(step, TitleStep::Rejected) {
+            let r = n.range();
+            inner[r.start - start..r.end - start].fill(b' ');
+        }
+    });
+    let Ok(inner) = String::from_utf8(inner) else {
+        return false;
+    };
+    let decls = prefixed_ns_decls(title.document().root_element());
+    let prefix = format!("<svg-title-content xmlns=\"{XHTML_NS}\"{decls}>");
+    let suffix = "</svg-title-content>";
+    let wrapped = format!("{prefix}{inner}{suffix}");
+    let Ok(doc) = crate::ocf::parse_xml(&wrapped) else {
+        return false;
+    };
+    let grammar = crate::rng::svg_title_content_grammar();
+    for blame in crate::rng::validate_node_report(&grammar, doc.root_element()) {
+        let at = blame
+            .attribute()
+            .map_or(blame.node().range().start, |a| a.range().start);
+        let Some(offset) = at
+            .checked_sub(prefix.len())
+            .filter(|o| *o < inner.len())
+            .map(|o| o + start)
+        else {
+            continue;
+        };
+        // The wrapper is ours; a finding that names it (stray text directly
+        // inside it) is about the author's `title`.
+        let (msg, mut params) = blame.describe();
+        let msg = msg.replace("\"svg-title-content\"", "\"title\"");
+        for p in params.iter_mut().filter(|p| *p == "svg-title-content") {
+            *p = "title".to_string();
+        }
+        report.push_full(
+            RSC_005,
+            Severity::Error,
+            msg,
+            path,
+            Position::of_offset(text, offset),
+            "svg.title.content_model",
+            params,
+        );
+        report.attach_violation_kind(blame.kind());
+    }
+    true
 }
 
 /// Every element inside a section that an SVG `title` rejected (see
@@ -5358,6 +5448,67 @@ mod tests {
                 .messages
                 .iter()
                 .map(|m| m.params[0].as_str())
+                .collect();
+            assert_eq!(got, expected, "{inner}");
+        }
+    }
+
+    /// The XHTML in an EPUB 3 SVG title against `html | body | flow`, the
+    /// alternatives tried together. Each verdict is epubcheck 5.4.0's
+    /// (2026-10-14), its own `title-content-invalid-html-error` first.
+    #[test]
+    fn title_xhtml_follows_its_content_model() {
+        const X: &str = r#"xmlns="http://www.w3.org/1999/xhtml""#;
+        for (inner, expected) in [
+            (
+                format!("test <body {X}>t</body>"),
+                vec![r#"element "body" is not allowed here"#],
+            ),
+            (format!("<body {X}><p>x</p></body>"), vec![]),
+            (
+                format!("<html {X}><head><title>a</title></head><body><p>x</p></body></html>"),
+                vec![],
+            ),
+            (format!("<div {X}><p>x</p></div>"), vec![]),
+            (
+                format!("<p {X}>x <span href=\"#a\">s</span></p>"),
+                vec![r#"attribute "href" is not allowed here"#],
+            ),
+            (
+                format!("<li {X}>x</li>"),
+                vec![r#"element "li" is not allowed here"#],
+            ),
+            (
+                format!("<body {X}/>after"),
+                vec![r#"stray text is not allowed directly in "title"; wrap it in an element"#],
+            ),
+            (
+                format!("<body {X}/><body {X}/>"),
+                vec![r#"element "body" is not allowed here"#],
+            ),
+            (
+                format!("<html {X}><body/></html>"),
+                vec![r#"element "body" is not allowed yet; missing required element "head""#],
+            ),
+            (
+                format!("<body {X}><p>x</p></body> <p {X}>y</p>"),
+                vec![r#"element "p" is not allowed here"#],
+            ),
+            // A rejected section is not part of what the grammar sees.
+            (
+                format!("<p {X}>a <x:foo xmlns:x=\"urn:x\"/></p>"),
+                vec![r#"elements from namespace "urn:x" are not allowed"#],
+            ),
+        ] {
+            let xml = format!("<svg xmlns=\"{SVG_NS}\"><title>{inner}</title></svg>");
+            let d = doc(&xml);
+            let title = d.root_element().first_element_child().unwrap();
+            let mut report = Report::new();
+            check_title_content(title, "s.svg", &mut report);
+            let got: Vec<String> = report
+                .messages
+                .iter()
+                .map(|m| m.text.split("; expected").next().unwrap().to_string())
                 .collect();
             assert_eq!(got, expected, "{inner}");
         }
