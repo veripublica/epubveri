@@ -598,7 +598,14 @@ fn check_audio(
             );
         }
     }
-    let begin = node.attr_no_ns("clipBegin").and_then(parse_clock_value);
+    // A missing `clipBegin` is 0 (`OverlayHandler.checkTime`), so
+    // `clipEnd="0"` alone is MED-009, as on epubcheck's own
+    // `clip-times-equal-error` fixture; a missing `clipEnd` plays to the end
+    // and compares with nothing.
+    let begin = match node.attr_no_ns("clipBegin") {
+        Some(v) => parse_clock_value(v),
+        None => Some(0.0),
+    };
     let end = node.attr_no_ns("clipEnd").and_then(parse_clock_value);
     if let (Some(b), Some(e)) = (begin, end) {
         if b > e {
@@ -861,6 +868,28 @@ mod tests {
         let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
         let (findings, _) = run(smil, &names, &HashMap::new());
         assert!(findings.contains(&MED_009));
+    }
+
+    /// A missing `clipBegin` is 0; a missing `clipEnd` compares with nothing.
+    #[test]
+    fn a_missing_clip_begin_is_zero() {
+        let names = idx(&["OEBPS/c.xhtml", "OEBPS/c.mp3"]);
+        let med = |audio: &str| {
+            let smil = format!(
+                r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+            <body><par id="p"><text src="c.xhtml#t"/>{audio}</par></body>
+        </smil>"#
+            );
+            let (findings, _) = run(&smil, &names, &HashMap::new());
+            findings
+                .into_iter()
+                .filter(|id| *id == MED_008 || *id == MED_009)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(med(r#"<audio src="c.mp3" clipEnd="0"/>"#), [MED_009]);
+        assert_eq!(med(r#"<audio src="c.mp3" clipEnd="00:00:00"/>"#), [MED_009]);
+        assert!(med(r#"<audio src="c.mp3" clipEnd="1s"/>"#).is_empty());
+        assert!(med(r#"<audio src="c.mp3" clipBegin="1s"/>"#).is_empty());
     }
 
     #[test]

@@ -26,6 +26,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   RSC-005.** SVG 1.1 allows only text in those three, and epubcheck reports
   each such child once. We reported nothing. A `<tspan>` inside a `<title>`
   is the likely real case.
+- **`epub:type` on `head` or `template` is RSC-005**, as on `title`,
+  `meta` and the other metadata elements. epubcheck allows `epub:type` on
+  every element except those, and reports it there. We accepted it on these
+  two.
+- **A Media Overlay `audio` with `clipEnd="0"` and no `clipBegin` is
+  MED-009.** A missing `clipBegin` means 0, so the two are equal. epubcheck
+  reports it, and its own fixture has the case.
+- **Multiple renditions: the profile comes from the first package that
+  declares a type.** We read only the first package. A book whose first
+  rendition has no `dc:type`, followed by an edupub rendition, was not
+  checked as edupub at all; epubcheck checks every rendition under that
+  profile. A rendition without the edupub `dc:type` is now one RSC-005, not
+  two.
 - **RSC-008 is reported once per undeclared resource.** We reported it once
   per reference, so an image that is missing from the manifest and shown on
   every page drew one error per page. epubcheck reports each resource once

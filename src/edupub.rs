@@ -857,18 +857,14 @@ pub(crate) fn check_multi_rendition_dc_type(
             Vec::new(),
         );
     }
-    for (opf_path, dc_type) in &rendition_dc_types {
-        if !is_edupub(dc_type.as_deref()) {
-            report.push_at_rule(
-                RSC_005,
-                Severity::Error,
-                "this rendition is missing dc:type for an edupub multi-rendition publication",
-                opf_path.clone(),
-                "edupub.multi_rendition.missing_rendition_dc_type",
-                Vec::new(),
-            );
-        }
-    }
+    // A rendition without the dc:type is not reported here. epubcheck says
+    // that once, from `edu-opf.sch` ("The dc:type identifier \"edupub\" is
+    // required"), which runs on every rendition once the profile is selected
+    // (by the first *typed* package, see `validate_bytes_with_options`), and
+    // which `check_teacher_edition_and_accessibility` is here. A second
+    // finding from this function, at the same rendition, was the only
+    // difference on `edupub-multiple-renditions-dctype-missing-for-
+    // rendition-error`. Measured on 5.4.0 in both rootfile orders.
 }
 
 #[cfg(test)]

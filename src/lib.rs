@@ -205,11 +205,28 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
         None => epub3 == Some(true),
     };
     let requested = options.profile.as_deref().filter(|p| PROFILES.contains(p));
+    // "The first package document" is the first one *declaring a type*:
+    // `OCFCheckerState.getPublicationTypes()` returns the first entry of a
+    // map that only typed packages enter (`addType`, and only for a type
+    // `PublicationType` knows). So a multi-rendition book whose first
+    // rendition has no `dc:type` takes its profile from the next one, and
+    // every rendition is validated under it; OPF-064 still points at the
+    // first rootfile (measured on 5.4.0 with epubcheck's
+    // `edupub-multiple-renditions-dctype-missing-for-rendition-error`
+    // fixture, its rootfiles swapped).
     let switched = if validated_as_3 {
-        opf_paths.first().and_then(|p| {
+        const KNOWN: [&str; 5] = ["epub", "dictionary", "edupub", "index", "preview"];
+        let first_typed = opf_paths.iter().find_map(|p| {
             let types = peek_dc_types(&mut container, p);
-            type_compatible_profile(&types, requested).map(|sw| (p.clone(), sw))
-        })
+            types
+                .iter()
+                .any(|t| KNOWN.iter().any(|k| t.eq_ignore_ascii_case(k)))
+                .then_some(types)
+        });
+        first_typed
+            .and_then(|types| type_compatible_profile(&types, requested))
+            .zip(opf_paths.first())
+            .map(|(sw, p)| (p.clone(), sw))
     } else {
         None
     };
@@ -580,6 +597,78 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// With several renditions, the profile comes from the first package
+    /// that declares a type, not from the first package: an untyped first
+    /// rendition before an edupub one is validated as edupub too, and
+    /// OPF-064 points at the first rootfile. epubcheck 5.4.0 on its own
+    /// multi-rendition fixture with the rootfiles swapped.
+    #[test]
+    fn the_first_typed_rendition_selects_the_profile() {
+        let opf = |types: &str| {
+            format!(
+                r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>{types}
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        let (untyped, edupub) = (opf(""), opf("<dc:type>edupub</dc:type>"));
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let opts = zip::write::SimpleFileOptions::default();
+            for (name, data) in [
+                (
+                    "META-INF/container.xml",
+                    r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:rendition="http://www.idpf.org/2013/rendition"><rootfiles><rootfile full-path="OEBPS/a.opf" media-type="application/oebps-package+xml"/><rootfile full-path="OEBPS/b.opf" media-type="application/oebps-package+xml" rendition:layout="pre-paginated"/></rootfiles></container>"#,
+                ),
+                ("OEBPS/a.opf", untyped.as_str()),
+                ("OEBPS/b.opf", edupub.as_str()),
+                (
+                    "OEBPS/nav.xhtml",
+                    r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head><body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav></body></html>"#,
+                ),
+                (
+                    "OEBPS/ch1.xhtml",
+                    r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>x</p></body></html>"#,
+                ),
+            ] {
+                z.start_file(name, opts).unwrap();
+                z.write_all(data.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        let r = crate::validate_bytes(buf);
+        let at = |pred: &dyn Fn(&crate::report::Message) -> bool| -> Vec<String> {
+            r.messages
+                .iter()
+                .filter(|m| pred(m))
+                .filter_map(|m| m.location.clone())
+                .collect()
+        };
+        assert_eq!(at(&|m| m.id == crate::ids::OPF_064), ["OEBPS/a.opf"]);
+        assert_eq!(
+            at(&|m| m.text.contains("\"edupub\" is required")),
+            ["OEBPS/a.opf"]
+        );
     }
 
     /// OPF-064, and the override behind it, as epubcheck 5.4.0 does both

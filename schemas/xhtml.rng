@@ -58,7 +58,11 @@
 
   <define name="headEl">
     <element name="head">
-      <ref name="globalAttrs"/>
+      <!-- No `epub:type`: epubcheck adds it element by element, "on all
+           elements except the `head` element [and] metadata content"
+           (`epub-xhtml-integration.rnc`), the way `title` and `meta` have
+           it here. Measured on 5.4.0, 2026-10-14. -->
+      <ref name="globalAttrsCore"/>
       <interleave>
         <!-- HTML5 makes a missing <title> a soft rule, and epubcheck reports
              it as an RSC-017 *warning* (its Schematron message there starts
@@ -176,7 +180,11 @@
        rather than as named patterns. Close it if a real book turns up. -->
   <define name="templateEl">
     <element name="template">
-      <ref name="globalAttrs"/>
+      <!-- No `epub:type`: epubcheck adds it element by element, "on all
+           elements except the `head` element [and] metadata content"
+           (`epub-xhtml-integration.rnc`), the way `title` and `meta` have
+           it here. Measured on 5.4.0, 2026-10-14. -->
+      <ref name="globalAttrsCore"/>
       <mixed>
         <zeroOrMore>
           <choice>
