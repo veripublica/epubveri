@@ -9135,6 +9135,9 @@ fn check_text(
             // names: it is about RSC-025, and the EPUB 2 arm reports RSC-005.
             crate::svg::check_vocabulary(svg_root, &path, is_epub3, report);
             crate::svg::check_attribute_vocabulary(svg_root, &path, is_epub3, report);
+            if is_epub3 {
+                crate::svg::check_aria(svg_root, &path, report);
+            }
             // Required attributes are asked at BOTH versions, which is why
             // this sits outside the branch above (#93). epubcheck runs the
             // SVG 1.1 grammar normatively for EPUB 2 and informatively for
@@ -12283,6 +12286,9 @@ fn check_text(
             report,
         );
         crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, is_epub3, report);
+        if is_epub3 {
+            crate::svg::check_aria(d.root_element(), doc_path, report);
+        }
         crate::svg::check_content_model(d.root_element(), doc_path, is_epub3, report);
         if !is_epub3 {
             crate::svg::check_epub2_xhtml_children(d.root_element(), doc_path, report);

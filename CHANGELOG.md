@@ -60,6 +60,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the namespaces and `href`. The new findings carry the rule key
   `svg.title.content_model` and a `violation_kind`. All 14 shapes probed
   match epubcheck.
+- **EPUB 3 SVG: ARIA attributes are checked against the element's `role`**,
+  as a usage-level RSC-025, as in epubcheck's informative SVG grammar. On
+  the 19 SVG elements that take a `role`, each `aria-*` attribute beyond the
+  global set must be allowed by the role, or by the element's implicit role
+  when there is no `role`. Otherwise it is "not allowed here", or the
+  element is missing `role`. A role's required attributes are checked
+  (`role="checkbox"` needs `aria-checked`), the `role` value must be one of
+  the 125 roles, spelled exactly, and values are checked by their types.
+  The attributes are read in order, as Jing reads them, so the counts match
+  too. On other SVG elements only the global ARIA attributes are allowed.
+  We accepted any `aria-*` attribute on SVG before. Two probe sets of 283
+  shapes in all match epubcheck finding for finding.
 - **A link with only a query string, such as `href="?x"`, points at its own
   document.** We resolved it to the document's folder and reported that
   folder as a missing resource (RSC-007, an error). epubcheck reports only

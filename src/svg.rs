@@ -2567,6 +2567,199 @@ fn is_one_token_of(value: &str, allowed: &[&str]) -> bool {
     tokens.next().is_some_and(|t| allowed.contains(&t)) && tokens.next().is_none()
 }
 
+/// `RSC-025` (usage): ARIA attributes on EPUB 3 SVG elements, beyond
+/// `aria.global`, as epubcheck's informative grammar takes them.
+///
+/// The 19 elements that take a `role` (`SVG30_ROLE_ELEMENTS`) carry either
+/// their implicit role's attributes or `common.attrs.aria`, one alternative
+/// per role, each needing its `role` attribute (`mod/svg11/*.rnc`,
+/// `mod/html5/aria.rnc`). Jing reads the attributes in document order and
+/// each one narrows the alternatives still alive, and this does the same:
+///
+/// - an attribute no living alternative allows is "not allowed here" and
+///   narrows nothing (`aria-checked` then `aria-pressed`, with no role: no
+///   role takes both);
+/// - a known attribute with a bad value is that value error, and still counts;
+/// - a `role` that is not one of the 123, spelled exactly, is a value error,
+///   after which no attribute is judged against a role;
+/// - at the end, without a `role`, an element whose implicit alternative did
+///   not survive is missing `role`, once; with one, it is missing whatever
+///   that role requires.
+///
+/// Any other element the vocabulary knows takes `aria.global` alone, so any
+/// other `aria-*` name there is not allowed. Measured on 5.4.0, inline,
+/// 2026-10-14, over a 28-shape matrix of the cases above and the
+/// element-by-element implicit roles.
+pub(crate) fn check_aria(svg_root: roxmltree::Node, path: &str, report: &mut Report) {
+    check_aria_of(svg_root, path, report);
+    for child in svg_root
+        .children()
+        .filter(|c| c.is_element() && c.tag_name().namespace() == Some(SVG_NS))
+    {
+        if matches!(child.tag_name().name(), "foreignObject" | "title") {
+            check_aria_of(child, path, report);
+            continue;
+        }
+        check_aria(child, path, report);
+    }
+}
+
+fn check_aria_of(n: roxmltree::Node, path: &str, report: &mut Report) {
+    use crate::aria_roles::{
+        COMMON_ROLE_ATTRS, GLOBAL_ATTRS, IMPLICIT_GROUP, IMPLICIT_IMG, IMPLICIT_LINK,
+        REQUIRED_ATTRS,
+    };
+    let name = n.tag_name().name();
+    if !is_recognized_element(name, true) || name == "style" {
+        return;
+    }
+    let not_allowed = |report: &mut Report, a: roxmltree::Attribute| {
+        report.push_node_attr(
+            RSC_025,
+            Severity::Usage,
+            format!("attribute \"{}\" not allowed here", a.name()),
+            path,
+            n,
+            a,
+            "svg.attributes.attribute_not_allowed",
+            vec![a.name().to_string(), name.to_string()],
+        );
+    };
+    let bad_value = |report: &mut Report, a: roxmltree::Attribute| {
+        report.push_full(
+            RSC_025,
+            Severity::Usage,
+            format!("value of attribute \"{}\" is invalid", a.name()),
+            path,
+            Position::of_attr(n, a),
+            "opf.content_document.svg_invalid_attribute_value",
+            vec![a.name().to_string(), a.value().to_string()],
+        );
+    };
+    let aria = |a: &roxmltree::Attribute| {
+        a.namespace().is_none()
+            && a.name().starts_with("aria-")
+            && !GLOBAL_ATTRS.contains(&a.name())
+    };
+    if !SVG30_ROLE_ELEMENTS.contains(&name) {
+        for a in n.attributes().filter(aria) {
+            not_allowed(report, a);
+        }
+        return;
+    }
+    let implicit: &[&str] = match name {
+        "a" => IMPLICIT_LINK,
+        "image" => IMPLICIT_IMG,
+        "g" | "text" | "tspan" | "altGlyph" | "glyphRef" | "glyph" | "foreignObject"
+        | "polyline" => IMPLICIT_GROUP,
+        _ => &[],
+    };
+    // The alternatives still alive: each role, and the implicit one (`None`).
+    let mut alive: Vec<Option<&str>> = COMMON_ROLE_ATTRS.iter().map(|(r, _)| Some(*r)).collect();
+    alive.push(None);
+    let allows = |alt: Option<&str>, attr: &str| match alt {
+        None => implicit.contains(&attr),
+        Some(r) => COMMON_ROLE_ATTRS
+            .iter()
+            .find(|(x, _)| *x == r)
+            .is_some_and(|(_, attrs)| attrs.contains(&attr)),
+    };
+    let mut role: Option<&str> = None;
+    let mut role_invalid = false;
+    for a in n.attributes().filter(|a| a.namespace().is_none()) {
+        if a.name() == "role" {
+            let v = a.value();
+            if alive.contains(&Some(v)) {
+                alive.retain(|alt| *alt == Some(v));
+                role = Some(v);
+            } else {
+                bad_value(report, a);
+                role_invalid = true;
+                alive.retain(Option::is_some);
+            }
+            continue;
+        }
+        if !aria(&a) {
+            continue;
+        }
+        let narrowed: Vec<_> = alive
+            .iter()
+            .copied()
+            .filter(|alt| allows(*alt, a.name()))
+            .collect();
+        if narrowed.is_empty() {
+            not_allowed(report, a);
+            continue;
+        }
+        alive = narrowed;
+        if aria_value_is_valid(a.name(), a.value()) == Some(false) {
+            bad_value(report, a);
+        }
+    }
+    if role_invalid {
+        return;
+    }
+    let missing: Vec<&str> = match role {
+        Some(r) => REQUIRED_ATTRS
+            .iter()
+            .filter(|(x, attr)| *x == r && n.attr_no_ns(attr).is_none())
+            .map(|(_, attr)| *attr)
+            .collect(),
+        None if !alive.contains(&None) => vec!["role"],
+        None => Vec::new(),
+    };
+    if !missing.is_empty() {
+        let quoted: Vec<String> = missing.iter().map(|m| format!("\"{m}\"")).collect();
+        report.push_node(
+            RSC_025,
+            Severity::Usage,
+            format!(
+                "SVG element \"{name}\" has no required attribute{} {}",
+                if missing.len() > 1 { "s" } else { "" },
+                quoted.join(" and ")
+            ),
+            path,
+            n,
+            "opf.content_document.svg_missing_required_attribute",
+            std::iter::once(name.to_string())
+                .chain(missing.iter().map(|m| m.to_string()))
+                .collect(),
+        );
+    }
+}
+
+/// The value space of an ARIA attribute as `mod/html5/aria.rnc` gives it
+/// (the same rows as `ariaAttrs` in `schemas/xhtml.rng`), or `None` for one
+/// that is free text or an idref. Enumerations compare as written.
+fn aria_value_is_valid(attr: &str, value: &str) -> Option<bool> {
+    use crate::rng::datatype::Datatype as D;
+    if let Some(v) = svg_global_aria_value_is_valid(attr, value) {
+        return Some(v);
+    }
+    let one_of = |allowed: &[&str]| Some(allowed.contains(&value));
+    match attr {
+        "aria-autocomplete" => one_of(&["both", "inline", "list", "none"]),
+        "aria-checked" | "aria-pressed" => one_of(&["false", "mixed", "true", "undefined"]),
+        "aria-expanded" | "aria-selected" => one_of(&["false", "true", "undefined"]),
+        "aria-modal"
+        | "aria-multiline"
+        | "aria-multiselectable"
+        | "aria-readonly"
+        | "aria-required" => one_of(&["false", "true"]),
+        "aria-orientation" => one_of(&["horizontal", "undefined", "vertical"]),
+        "aria-sort" => one_of(&["ascending", "descending", "none", "other"]),
+        "aria-colindex" | "aria-colspan" | "aria-level" | "aria-posinset" | "aria-rowindex"
+        | "aria-rowspan" => Some(D::PositiveInteger.allows(value)),
+        // `common.data.integer.non-negative | string "-1"`: the integer is
+        // whitespace-collapsed, the `-1` is compared as written.
+        "aria-colcount" | "aria-rowcount" | "aria-setsize" => {
+            Some(D::NonNegativeInteger.allows(value) || value == "-1")
+        }
+        "aria-valuemax" | "aria-valuemin" | "aria-valuenow" => Some(D::Float.allows(value)),
+        _ => None,
+    }
+}
+
 /// The value of an `aria.global` attribute on an EPUB 3 SVG element, or
 /// `None` for any other attribute.
 ///
@@ -3856,6 +4049,104 @@ mod tests {
 
     /// The generated table is sorted for its binary search, and its union is
     /// the flat list minus what only EPUB 3 adds.
+    /// Role-dependent ARIA on EPUB 3 SVG, read attribute by attribute as Jing
+    /// reads it. Every row is epubcheck 5.4.0's verdict (2026-10-14; two
+    /// matrices of 283 shapes in all agree finding for finding).
+    #[test]
+    fn epub3_svg_aria_follows_the_role_alternatives() {
+        let run = |body: &str| -> Vec<String> {
+            let svg = format!(r#"{S}{body}</svg>"#);
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_aria(doc.root_element(), "s.svg", &mut report);
+            report.messages.iter().map(|m| m.text.clone()).collect()
+        };
+        const R: &str = r#"width="1" height="1""#;
+        let none: Vec<String> = Vec::new();
+        assert_eq!(
+            run(r#"<g aria-expanded="true" aria-activedescendant="x"/>"#),
+            none
+        );
+        assert_eq!(
+            run(&format!(r#"<rect {R} aria-expanded="true"/>"#)),
+            [r#"SVG element "rect" has no required attribute "role""#]
+        );
+        assert_eq!(
+            run(&format!(
+                r#"<rect {R} aria-checked="true" aria-level="2"/>"#
+            )),
+            [r#"SVG element "rect" has no required attribute "role""#]
+        );
+        assert_eq!(
+            run(&format!(
+                r#"<rect {R} aria-checked="true" aria-pressed="true"/>"#
+            )),
+            [
+                r#"attribute "aria-pressed" not allowed here"#,
+                r#"SVG element "rect" has no required attribute "role""#
+            ]
+        );
+        assert_eq!(
+            run(&format!(r#"<rect {R} aria-foo="x"/>"#)),
+            [r#"attribute "aria-foo" not allowed here"#]
+        );
+        assert_eq!(
+            run(&format!(r#"<rect {R} role="checkbox"/>"#)),
+            [r#"SVG element "rect" has no required attribute "aria-checked""#]
+        );
+        assert_eq!(
+            run(&format!(
+                r#"<rect {R} role="checkbox" aria-checked="maybe"/>"#
+            )),
+            [r#"value of attribute "aria-checked" is invalid"#]
+        );
+        assert_eq!(
+            run(&format!(
+                r#"<rect {R} role="checkbox" aria-checked="true" aria-level="2"/>"#
+            )),
+            [r#"attribute "aria-level" not allowed here"#]
+        );
+        for role in ["foo", "CHECKBOX", " checkbox", "img presentation"] {
+            assert_eq!(
+                run(&format!(r#"<rect {R} role="{role}" aria-checked="true"/>"#)),
+                [r#"value of attribute "role" is invalid"#],
+                "{role}"
+            );
+        }
+        for role in ["presentation", "none", "doc-pageheader", "img"] {
+            assert_eq!(
+                run(&format!(r#"<rect {R} role="{role}"/>"#)),
+                none,
+                "{role}"
+            );
+        }
+        assert_eq!(
+            run(&format!(r#"<rect {R} aria-level="0"/>"#)),
+            [
+                r#"value of attribute "aria-level" is invalid"#,
+                r#"SVG element "rect" has no required attribute "role""#
+            ]
+        );
+        assert_eq!(
+            run(&format!(r#"<rect {R} role="table" aria-rowcount=" -1 "/>"#)),
+            [r#"value of attribute "aria-rowcount" is invalid"#]
+        );
+        assert_eq!(
+            run(&format!(r#"<rect {R} role="table" aria-rowcount="-1"/>"#)),
+            none
+        );
+        assert_eq!(
+            run(r#"<g role="img" aria-level="1"/>"#),
+            [r#"attribute "aria-level" not allowed here"#]
+        );
+        // An element without a role takes `aria.global` alone.
+        assert_eq!(
+            run(r#"<defs aria-expanded="true"/>"#),
+            [r#"attribute "aria-expanded" not allowed here"#]
+        );
+        assert_eq!(run(r#"<defs aria-label="x"/>"#), none);
+    }
+
     /// EPUB 3 SVG: the nine valued `aria.global` attributes and SVG 2's
     /// `href` are judged as epubcheck's informative grammar judges them
     /// (a 343-shape ARIA matrix and 29 `href` values on 5.4.0, 2026-10-14).
