@@ -1233,6 +1233,7 @@
     <choice>
       <ref name="timeEl"/>
       <ref name="phrasingChoiceNoTime"/>
+      <ref name="epubSwitchEl-phrasing"/>
     </choice>
   </define>
 
@@ -2514,50 +2515,83 @@
     </element>
   </define>
 
-  <!-- ============ epub:switch (real sequencing: case* then default?) ============ -->
+  <!-- ============ epub:switch (`mod/epub-switch.rnc`) ============ -->
 
-  <!-- epub:case/epub:default hold a fallback rendition, which is often
-       *foreign* markup (MathML/CML/etc — the whole point of epub:switch),
-       not necessarily XHTML flow content. So their content is either
-       ordinary flow content or opaque foreign elements. -->
-  <define name="switchBranchContent">
+  <!-- `epub:case` holds a fallback rendition that is often *foreign* markup
+       (MathML/CML/etc - the whole point of epub:switch): `epub.switch.any`,
+       flow content, text, or an element in any namespace but XHTML and
+       MathML, whose own content is the same mix. An XHTML element that is not
+       flow content (`<li>`) is not allowed there; `anyForeignElement`, used
+       here until 2026-10-14, took any name. -->
+  <define name="switchCaseContent">
     <mixed>
       <zeroOrMore>
         <choice>
           <ref name="flowChoice"/>
-          <ref name="anyForeignElement"/>
+          <ref name="switchAnyElement"/>
         </choice>
       </zeroOrMore>
     </mixed>
   </define>
 
+  <define name="switchAnyElement">
+    <element>
+      <anyName>
+        <except>
+          <nsName ns="http://www.w3.org/1999/xhtml"/>
+          <nsName ns="http://www.w3.org/1998/Math/MathML"/>
+        </except>
+      </anyName>
+      <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
+      <ref name="switchCaseContent"/>
+    </element>
+  </define>
+
+  <define name="epubCaseEl">
+    <element name="epub:case">
+      <ref name="globalAttrs"/>
+      <attribute name="required-namespace"><data type="anyURI"/></attribute>
+      <optional><attribute name="required-version"><data type="token"/></attribute></optional>
+      <ref name="switchCaseContent"/>
+    </element>
+  </define>
+
+  <!-- `epub.switch.case.flow+, epub.switch.default.flow` (epub-switch.rnc):
+       at least one case, and a default that is NOT optional. Ours was
+       `case*, default?`, so a switch with no case and one with no default
+       both validated - the only two scenarios in the whole corpus where a
+       book epubcheck fails came out of here with exit 0.
+
+       epubcheck reports them from opposite ends: no case is "element
+       epub:default not allowed yet" (the default arrived before its
+       required sibling), no default is "element epub:switch incomplete".
+       Both are RSC-005 and both fall out of the cardinality.
+
+       Two forms, as there: in flow content the default holds flow content,
+       in phrasing content it holds phrasing content, and neither takes
+       foreign markup (`common.inner.flow`, `common.inner.phrasing`). We had
+       the flow form only, so an `epub:switch` inside a `<p>` was "not
+       allowed here", an error epubcheck does not report. -->
   <define name="epubSwitchEl">
     <element name="epub:switch">
       <ref name="globalAttrs"/>
       <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
-      <!-- `epub.switch.case.flow+, epub.switch.default.flow` (epub-switch.rnc):
-           at least one case, and a default that is NOT optional. Ours was
-           `case*, default?`, so a switch with no case and one with no default
-           both validated - the only two scenarios in the whole corpus where a
-           book epubcheck fails came out of here with exit 0. They were
-           invisible until the detection-recall denominator was fixed and the
-           ratio stopped reading 84%.
-
-           epubcheck reports them from opposite ends: no case is "element
-           epub:default not allowed yet" (the default arrived before its
-           required sibling), no default is "element epub:switch incomplete".
-           Both are RSC-005 and both fall out of the cardinality. -->
-      <oneOrMore>
-        <element name="epub:case">
-          <ref name="globalAttrs"/>
-          <attribute name="required-namespace"><data type="anyURI"/></attribute>
-          <optional><attribute name="required-version"><data type="token"/></attribute></optional>
-          <ref name="switchBranchContent"/>
-        </element>
-      </oneOrMore>
+      <oneOrMore><ref name="epubCaseEl"/></oneOrMore>
       <element name="epub:default">
         <ref name="globalAttrs"/>
-        <ref name="switchBranchContent"/>
+        <ref name="flowContent"/>
+      </element>
+    </element>
+  </define>
+
+  <define name="epubSwitchEl-phrasing">
+    <element name="epub:switch">
+      <ref name="globalAttrs"/>
+      <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
+      <oneOrMore><ref name="epubCaseEl"/></oneOrMore>
+      <element name="epub:default">
+        <ref name="globalAttrs"/>
+        <ref name="phrasingContent"/>
       </element>
     </element>
   </define>

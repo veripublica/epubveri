@@ -770,6 +770,72 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// Jing's `startTagOpenRecoverDeriv`: where the element would be allowed
+    /// if required content ahead of it were skipped. A `Group`'s second half
+    /// is reachable whether or not the first is nullable; everything else
+    /// derives as `start_tag_open_deriv` does. Only asked after the plain
+    /// derivative has failed, to tell "not allowed yet; missing required
+    /// element X" (the element is in the model, out of order) from "not
+    /// allowed here".
+    fn start_tag_open_recover(&self, p: &Pat, ns: &str, local: &str) -> Pat {
+        self.start_tag_open_recover_in(p, ns, local, &mut HashSet::new())
+    }
+
+    fn start_tag_open_recover_in(
+        &self,
+        p: &Pat,
+        ns: &str,
+        local: &str,
+        busy: &mut HashSet<usize>,
+    ) -> Pat {
+        match &**p {
+            Pattern::Choice(a, b) => choice(
+                self.start_tag_open_recover_in(a, ns, local, busy),
+                self.start_tag_open_recover_in(b, ns, local, busy),
+            ),
+            Pattern::Group(a, b) => {
+                let b2 = b.clone();
+                let x = apply_after(&self.start_tag_open_recover_in(a, ns, local, busy), &|k| {
+                    group(k, b2.clone())
+                });
+                choice(x, self.start_tag_open_recover_in(b, ns, local, busy))
+            }
+            Pattern::Interleave(a, b) => {
+                let b2 = b.clone();
+                let a2 = a.clone();
+                choice(
+                    apply_after(&self.start_tag_open_recover_in(a, ns, local, busy), &|k| {
+                        interleave(k, b2.clone())
+                    }),
+                    apply_after(&self.start_tag_open_recover_in(b, ns, local, busy), &|k| {
+                        interleave(a2.clone(), k)
+                    }),
+                )
+            }
+            Pattern::OneOrMore(a) => {
+                let a2 = a.clone();
+                apply_after(&self.start_tag_open_recover_in(a, ns, local, busy), &|k| {
+                    group(k, choice(one_or_more(a2.clone()), empty()))
+                })
+            }
+            Pattern::After(a, b) => {
+                let b2 = b.clone();
+                apply_after(&self.start_tag_open_recover_in(a, ns, local, busy), &|k| {
+                    after(k, b2.clone())
+                })
+            }
+            Pattern::Ref(i) => {
+                if !busy.insert(*i) {
+                    return not_allowed();
+                }
+                let r = self.start_tag_open_recover_in(&self.defs[*i], ns, local, busy);
+                busy.remove(i);
+                r
+            }
+            _ => self.start_tag_open_deriv(p, ns, local),
+        }
+    }
+
     fn value_match(&self, p: &Pat, s: &str) -> bool {
         (self.nullable(p) && is_ws(s)) || self.nullable(&self.text_deriv_top(p, s))
     }
@@ -985,6 +1051,32 @@ impl<'a> Env<'a> {
         }
     }
 
+    /// `start_tag_close_deriv` with every attribute still wanted taken as
+    /// present: Jing's `ignoreMissingAttributes`. Only for recovery, after the
+    /// missing attribute has been blamed, so the element's content is still
+    /// checked against its own model.
+    fn start_tag_close_recover(&self, p: &Pat) -> Pat {
+        match &**p {
+            Pattern::Choice(a, b) => choice(
+                self.start_tag_close_recover(a),
+                self.start_tag_close_recover(b),
+            ),
+            Pattern::Group(a, b) => group(
+                self.start_tag_close_recover(a),
+                self.start_tag_close_recover(b),
+            ),
+            Pattern::Interleave(a, b) => interleave(
+                self.start_tag_close_recover(a),
+                self.start_tag_close_recover(b),
+            ),
+            Pattern::OneOrMore(a) => one_or_more(self.start_tag_close_recover(a)),
+            Pattern::After(a, b) => after(self.start_tag_close_recover(a), b.clone()),
+            Pattern::Attribute(_, _) => empty(),
+            Pattern::Ref(i) => self.start_tag_close_recover(&self.defs[*i]),
+            _ => p.clone(),
+        }
+    }
+
     fn end_tag_deriv(&self, p: &Pat) -> Pat {
         match &**p {
             Pattern::Choice(a, b) => choice(self.end_tag_deriv(a), self.end_tag_deriv(b)),
@@ -1062,6 +1154,32 @@ impl<'a> Env<'a> {
                         // amounts to. Attributes go unchecked, matching its
                         // `attr.any*`.
                         let _ = self.children_deriv(&cur, n, blames, true);
+                        continue;
+                    }
+                    // **Not allowed *yet*** (Jing's `startTagOpenRecoverDeriv`):
+                    // the element is in the model, but required content ahead
+                    // of it is missing. Jing says so once, "element X not
+                    // allowed yet; missing required element Y", and carries on
+                    // as if Y had been there, consuming X. So the parent is not
+                    // also incomplete, and what follows is judged from after X.
+                    // `<epub:switch><epub:default/></epub:switch>` was two
+                    // findings here (the default not allowed, the switch
+                    // incomplete) and is one there; `<epub:default/>` before a
+                    // `<epub:case>` was the same two plus nothing for the case,
+                    // where epubcheck reports the case as not allowed after the
+                    // default. Measured on 5.4.0 over 15 switch shapes.
+                    let recovered = self.start_tag_open_recover(&cur, ns, local);
+                    if !is_not_allowed(&recovered) {
+                        let mut required = Vec::new();
+                        self.required_names(&cur, &mut required, &mut HashSet::new());
+                        blames.push(Blame::Element(
+                            n,
+                            ElementFault::NotAllowedYet(required.into_iter().next()),
+                        ));
+                        cur = self.child_deriv_opened(recovered, n, blames);
+                        if is_not_allowed(&cur) {
+                            break;
+                        }
                         continue;
                     }
                     // Name not allowed here: report and skip it, keeping `cur`
@@ -1228,7 +1346,7 @@ impl<'a> Env<'a> {
     ) -> Pat {
         let ns = node.tag_name().namespace().unwrap_or("");
         let local = node.tag_name().name();
-        let mut cur = self.start_tag_open(p, ns, local);
+        let cur = self.start_tag_open(p, ns, local);
         if is_not_allowed(&cur) {
             // Only reached for the root element; sibling name-mismatches are
             // handled (and skipped) in `children_deriv`.
@@ -1237,6 +1355,18 @@ impl<'a> Env<'a> {
             blames.push(Blame::Element(node, ElementFault::NotAllowed(expected)));
             return cur;
         }
+        self.child_deriv_opened(cur, node, blames)
+    }
+
+    /// The rest of [`child_deriv`](Self::child_deriv), from the pattern its
+    /// start tag opened into: attributes, content, end tag.
+    fn child_deriv_opened<'d, 'i>(
+        &self,
+        opened: Pat,
+        node: roxmltree::Node<'d, 'i>,
+        blames: &mut Vec<Blame<'d, 'i>>,
+    ) -> Pat {
+        let mut cur = opened;
         // Set when an attribute is *present* but its value is rejected. The
         // recovery below reverts such an attribute as if it were never
         // written, which is right for carrying on — and wrong for the
@@ -1349,7 +1479,25 @@ impl<'a> Env<'a> {
             // nullability check, which is exactly "carry on as if this element
             // had been well-formed". The blame is already recorded, so this
             // cannot silently accept anything.
-            return self.end_tag_recover(&before_close);
+            //
+            // **But the content is still checked first**, against the model
+            // with the missing attributes taken as present, as Jing does
+            // (`ignoreMissingAttributes`). Returning straight away skipped
+            // the element's whole subtree: an `<object>` with no `data` hid
+            // the `<param>` inside it, which epubcheck reports as well
+            // (`obsolete-object-param-error`, two findings there, one here).
+            cur = self.start_tag_close_recover(&before_close);
+            if is_not_allowed(&cur) {
+                return self.end_tag_recover(&before_close);
+            }
+        } else if is_not_allowed(&cur) {
+            // The value error already blamed is the whole finding (#123); go
+            // on into the content the same way rather than descending with
+            // `NotAllowed`, which no child can satisfy.
+            cur = self.start_tag_close_recover(&before_close);
+            if is_not_allowed(&cur) {
+                return self.end_tag_recover(&before_close);
+            }
         }
         cur = self.children_deriv(&cur, node, blames, false);
         if is_not_allowed(&cur) {
@@ -1455,6 +1603,12 @@ pub enum ElementFault {
     /// tail - empty when the position admits only wildcard-named content, in
     /// which case no suggestion is made.
     NotAllowed(Vec<String>),
+    /// The element is in the model but arrived before required content:
+    /// Jing's "not allowed yet; missing required element X", with the one
+    /// element the model demands first when it demands exactly one. A
+    /// consumer sees the same `element_not_allowed` kind as for
+    /// [`NotAllowed`](ElementFault::NotAllowed).
+    NotAllowedYet(Option<String>),
     /// The element is missing one or more required attributes, named.
     ///
     /// epubcheck spells them out — `missing required attributes "content"
@@ -1569,6 +1723,7 @@ impl<'d, 'i> Blame<'d, 'i> {
         use crate::report::ViolationKind as K;
         match self {
             Blame::Element(_, ElementFault::NotAllowed(_)) => K::ElementNotAllowed,
+            Blame::Element(_, ElementFault::NotAllowedYet(_)) => K::ElementNotAllowed,
             Blame::Element(_, ElementFault::IncompleteContent { .. }) => K::IncompleteContent,
             Blame::Element(_, ElementFault::MissingAttribute(_)) => K::MissingAttribute,
             Blame::Text { .. } => K::StrayText,
@@ -1693,6 +1848,15 @@ impl<'d, 'i> Blame<'d, 'i> {
                             ),
                         }
                     }
+                    ElementFault::NotAllowedYet(missing) => match missing {
+                        Some(m) => {
+                            params.push(m.clone());
+                            format!(
+                                "element \"{name}\" is not allowed yet; missing required element \"{m}\""
+                            )
+                        }
+                        None => format!("element \"{name}\" is not allowed yet"),
+                    },
                     ElementFault::IncompleteContent { missing, expected } => {
                         // What is missing, *appended* rather than substituted.
                         // epubcheck says `element "html" incomplete; missing

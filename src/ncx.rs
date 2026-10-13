@@ -730,7 +730,7 @@ fn is_nav_point_content_model(blame: &crate::rng::Blame) -> bool {
         Blame::Element(n, ElementFault::IncompleteContent { .. }) => {
             n.tag_name().name() == "navPoint"
         }
-        Blame::Element(n, ElementFault::NotAllowed(_)) => {
+        Blame::Element(n, ElementFault::NotAllowed(_) | ElementFault::NotAllowedYet(_)) => {
             matches!(n.tag_name().name(), "navLabel" | "content")
                 && n.parent()
                     .is_some_and(|p| p.is_element() && p.tag_name().name() == "navPoint")

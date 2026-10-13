@@ -35,6 +35,25 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   probe sets now get the same verdict as in epubcheck. Spaces, `|`, `^`,
   `{}`, `[` in the query or fragment and `http://[::1]/` stay accepted, as
   there.
+- **An element that is missing a required attribute still has its content
+  checked.** We reported the missing attribute and skipped everything
+  inside the element. So an `<object>` without `data` hid the `<param>`
+  inside it, which epubcheck also reports. The content is now checked as
+  if the attribute were there, as Jing does.
+- **An element that comes before required content is one finding: "not
+  allowed yet; missing required element X".** This is Jing's wording and
+  epubcheck's count. We reported two findings: the element was "not
+  allowed here" and its parent was "incomplete". Examples are `<html>`
+  with a `body` and no `head`, or an `epub:default` before any
+  `epub:case`. The element now counts as consumed, so what follows it is
+  judged from there, as in epubcheck. Its `violation_kind` is
+  `element_not_allowed`, as before.
+- **`epub:switch` follows epubcheck's grammar.** Inside a `<p>` it was "not
+  allowed here", an error that epubcheck does not report; it now has its
+  phrasing form, where `epub:default` holds phrasing content. In either
+  form `epub:default` no longer accepts foreign markup, and `epub:case`
+  accepts foreign markup only outside the XHTML and MathML namespaces. All
+  15 switch shapes probed now match epubcheck.
 - **A link with only a query string, such as `href="?x"`, points at its own
   document.** We resolved it to the document's folder and reported that
   folder as a missing resource (RSC-007, an error). epubcheck reports only

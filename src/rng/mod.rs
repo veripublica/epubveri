@@ -700,7 +700,9 @@ mod tests {
     /// Tier-C: a "not allowed here" finding names what *would* have fit when
     /// the position's model is tight enough for the list to be a real
     /// constraint. `<html>` wants `head` then `body`, so a document that puts
-    /// `body` where `head` belongs gets told exactly that.
+    /// `body` where `head` belongs gets told exactly that - since 2026-10-14
+    /// in Jing's own form, "not allowed yet; missing required element", one
+    /// finding, as epubcheck 5.4.0 reports it.
     #[test]
     fn not_allowed_names_the_expected_element_when_the_set_is_small() {
         let g = xhtml_grammar();
@@ -708,9 +710,9 @@ mod tests {
         let doc = roxmltree::Document::parse(&xml).unwrap();
         let blames = validate_node_report(&g, doc.root_element());
         let texts: Vec<String> = blames.iter().map(|b| b.describe().0).collect();
-        assert!(
-            texts.iter().any(|t| t.contains("expected \"head\"")),
-            "expected a \"head\" suggestion; got {texts:?}"
+        assert_eq!(
+            texts,
+            ["element \"body\" is not allowed yet; missing required element \"head\""]
         );
         // The suggestion also travels as structured params, for machine
         // consumers and i18n.
