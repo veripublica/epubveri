@@ -10,6 +10,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-14
+
 ### Fixed
 
 - **An `img` with a `srcset` and no `src` is valid in EPUB 3.** We
@@ -125,6 +127,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Changed
 
+- **API: `rng::ElementFault` has a new variant, `NotAllowedYet(Option<String>)`**
+  ("not allowed yet; missing required element X"; see Fixed). Code that
+  matches on `ElementFault` exhaustively needs an arm for it, which is why
+  this release is 0.26.0. `Blame::kind` maps it to `element_not_allowed`, so
+  a consumer that groups by `violation_kind` sees no new kind. Also new,
+  additive: `rng::svg_title_content_grammar`.
 - **An SVG attribute that its element does not take now carries a rule key,
   `svg.attributes.attribute_not_allowed`.** `params` holds the attribute
   name and the element's local name, for example `["font-size", "rect"]`.
