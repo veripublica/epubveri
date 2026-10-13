@@ -10,6 +10,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **An SVG attribute that its element does not take now carries a rule key,
+  `svg.attributes.attribute_not_allowed`.** `params` holds the attribute
+  name and the element's local name, for example `["font-size", "rect"]`.
+  This is the RSC-005 at EPUB 2 and the usage-level RSC-025 at EPUB 3. It
+  had no key, so a repair tool could not dispatch on it. Its position now
+  points at the attribute instead of the element's start tag, as every
+  other attribute fault does. The id, severity and text are unchanged, and
+  `violation_kind` stays empty as on the other hand-written SVG checks.
+
 ## [0.25.0] - 2026-10-12
 
 ### Fixed

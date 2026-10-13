@@ -1365,12 +1365,21 @@ fn check_attrs_of(n: roxmltree::Node, path: &str, is_epub3: bool, report: &mut R
             } else {
                 (RSC_005, Severity::Error)
             };
-            report.push_at_pos(
+            // Anchored at the attribute, like every other attribute fault
+            // (`Position::of_attr`), so a repairer is handed the thing to
+            // remove rather than the start tag around it. `params` is the
+            // attribute as written (unprefixed, by the filter above) and the
+            // element's local name, since the same attribute is allowed on
+            // one SVG element and not another.
+            report.push_node_attr(
                 id,
                 severity,
                 format!("attribute \"{name}\" not allowed here"),
                 path,
-                Position::of(n),
+                n,
+                attr,
+                "svg.attributes.attribute_not_allowed",
+                vec![name.to_string(), n.tag_name().name().to_string()],
             );
         }
     }
@@ -3614,6 +3623,24 @@ mod tests {
 
     /// The generated table is sorted for its binary search, and its union is
     /// the flat list minus what only EPUB 3 adds.
+    #[test]
+    fn an_svg_attribute_not_allowed_carries_a_rule_key_and_points_at_the_attribute() {
+        let svg = format!("{S}\n<rect width=\"1\" height=\"1\"   font-size=\"9\"/></svg>");
+        for is_epub3 in [false, true] {
+            let doc = crate::ocf::parse_xml(&svg).unwrap();
+            let mut report = Report::default();
+            check_attribute_vocabulary(doc.root_element(), "s.svg", is_epub3, &mut report);
+            let [m] = report.messages.as_slice() else {
+                panic!("one finding expected: {:?}", report.messages);
+            };
+            assert_eq!(m.rule, Some("svg.attributes.attribute_not_allowed"));
+            assert_eq!(m.params, ["font-size", "rect"]);
+            assert_eq!(m.violation_kind, None);
+            let pos = m.position.unwrap();
+            assert_eq!((pos.line, pos.column), (2, 30), "at 3.0: {is_epub3}");
+        }
+    }
+
     #[test]
     fn the_svg11_table_is_sorted_and_agrees_with_the_flat_list() {
         let table = svg11::SVG11_ATTRIBUTES;
