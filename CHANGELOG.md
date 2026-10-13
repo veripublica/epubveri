@@ -60,6 +60,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the namespaces and `href`. The new findings carry the rule key
   `svg.title.content_model` and a `violation_kind`. All 14 shapes probed
   match epubcheck.
+- **XHTML ARIA values are compared as written.** `aria-hidden=" true"`,
+  `aria-live="polite "` and `aria-rowcount=" -1 "` are RSC-005 errors in
+  epubcheck, because its grammar spells these values as exact strings. We
+  trimmed the value first and accepted them. Integers are still trimmed
+  (`aria-level=" 2 "` is fine) and so is `aria-relevant`'s `all`, as in
+  epubcheck.
 - **EPUB 3 SVG: ARIA attributes are checked against the element's `role`**,
   as a usage-level RSC-025, as in epubcheck's informative SVG grammar. On
   the 19 SVG elements that take a `role`, each `aria-*` attribute beyond the

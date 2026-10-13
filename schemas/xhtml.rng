@@ -814,53 +814,59 @@
        Every row below was measured against epubcheck 5.4.0 on 2026-09-21,
        one value per run - see the `aria_values` tests. `float` is `xsd:float`
        and NOT `xsd:decimal`; that distinction is carried in
-       `rng::datatype::Datatype::Float` and has its own test. -->
+       `rng::datatype::Datatype::Float` and has its own test. 
+       **Enumerations compare as written** (2026-10-14): `aria.rnc` spells them
+       `string "true"`, not the token default of a bare `<value>`, so
+       `aria-hidden=" true"` and `aria-rowcount=" -1 "` are errors in
+       epubcheck 5.4.0 and passed here. `aria-relevant`'s `all` is the one
+       `token` among them and stays one.
+  -->
   <define name="ariaAttrs">
     <optional><attribute name="aria-activedescendant"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-atomic"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
-    <optional><attribute name="aria-autocomplete"><choice><value>both</value><value>inline</value><value>list</value><value>none</value></choice></attribute></optional> <!-- enum: both inline list none -->
+    <optional><attribute name="aria-atomic"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-autocomplete"><choice><value type="string">both</value><value type="string">inline</value><value type="string">list</value><value type="string">none</value></choice></attribute></optional> <!-- enum: both inline list none -->
     <optional><attribute name="aria-braillelabel"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-brailleroledescription"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-busy"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
-    <optional><attribute name="aria-checked"><choice><value>false</value><value>mixed</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false mixed true undefined -->
-    <optional><attribute name="aria-colcount"><choice><data type="nonNegativeInteger"/><value>-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
+    <optional><attribute name="aria-busy"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-checked"><choice><value type="string">false</value><value type="string">mixed</value><value type="string">true</value><value type="string">undefined</value></choice></attribute></optional> <!-- enum: false mixed true undefined -->
+    <optional><attribute name="aria-colcount"><choice><data type="nonNegativeInteger"/><value type="string">-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
     <optional><attribute name="aria-colindex"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
     <optional><attribute name="aria-colspan"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
     <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-current"><choice><value>date</value><value>false</value><value>location</value><value>page</value><value>step</value><value>time</value><value>true</value></choice></attribute></optional> <!-- enum: date false location page step time true -->
+    <optional><attribute name="aria-current"><choice><value type="string">date</value><value type="string">false</value><value type="string">location</value><value type="string">page</value><value type="string">step</value><value type="string">time</value><value type="string">true</value></choice></attribute></optional> <!-- enum: date false location page step time true -->
     <optional><attribute name="aria-describedby"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-details"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-disabled"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-disabled"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
     <optional><attribute name="aria-errormessage"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-expanded"><choice><value>false</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false true undefined -->
+    <optional><attribute name="aria-expanded"><choice><value type="string">false</value><value type="string">true</value><value type="string">undefined</value></choice></attribute></optional> <!-- enum: false true undefined -->
     <optional><attribute name="aria-flowto"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-haspopup"><choice><value>dialog</value><value>false</value><value>grid</value><value>listbox</value><value>menu</value><value>tree</value><value>true</value></choice></attribute></optional> <!-- enum: dialog false grid listbox menu tree true -->
-    <optional><attribute name="aria-hidden"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
-    <optional><attribute name="aria-invalid"><choice><value>false</value><value>grammar</value><value>spelling</value><value>true</value></choice></attribute></optional> <!-- enum: false grammar spelling true -->
+    <optional><attribute name="aria-haspopup"><choice><value type="string">dialog</value><value type="string">false</value><value type="string">grid</value><value type="string">listbox</value><value type="string">menu</value><value type="string">tree</value><value type="string">true</value></choice></attribute></optional> <!-- enum: dialog false grid listbox menu tree true -->
+    <optional><attribute name="aria-hidden"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-invalid"><choice><value type="string">false</value><value type="string">grammar</value><value type="string">spelling</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false grammar spelling true -->
     <optional><attribute name="aria-keyshortcuts"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-label"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-labelledby"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-level"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
-    <optional><attribute name="aria-live"><choice><value>assertive</value><value>off</value><value>polite</value></choice></attribute></optional> <!-- enum: assertive off polite -->
-    <optional><attribute name="aria-modal"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
-    <optional><attribute name="aria-multiline"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
-    <optional><attribute name="aria-multiselectable"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
-    <optional><attribute name="aria-orientation"><choice><value>horizontal</value><value>undefined</value><value>vertical</value></choice></attribute></optional> <!-- enum: horizontal undefined vertical -->
+    <optional><attribute name="aria-live"><choice><value type="string">assertive</value><value type="string">off</value><value type="string">polite</value></choice></attribute></optional> <!-- enum: assertive off polite -->
+    <optional><attribute name="aria-modal"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-multiline"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-multiselectable"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-orientation"><choice><value type="string">horizontal</value><value type="string">undefined</value><value type="string">vertical</value></choice></attribute></optional> <!-- enum: horizontal undefined vertical -->
     <optional><attribute name="aria-owns"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-placeholder"><data type="string"/></attribute></optional>
     <optional><attribute name="aria-posinset"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
-    <optional><attribute name="aria-pressed"><choice><value>false</value><value>mixed</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false mixed true undefined -->
-    <optional><attribute name="aria-readonly"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-pressed"><choice><value type="string">false</value><value type="string">mixed</value><value type="string">true</value><value type="string">undefined</value></choice></attribute></optional> <!-- enum: false mixed true undefined -->
+    <optional><attribute name="aria-readonly"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
     <optional><attribute name="aria-relevant"><choice><value>all</value><list><value>additions</value><optional><value>removals</value></optional><optional><value>text</value></optional></list><list><value>additions</value><optional><value>text</value></optional><optional><value>removals</value></optional></list><list><value>removals</value><optional><value>additions</value></optional><optional><value>text</value></optional></list><list><value>removals</value><optional><value>text</value></optional><optional><value>additions</value></optional></list><list><value>text</value><optional><value>additions</value></optional><optional><value>removals</value></optional></list><list><value>text</value><optional><value>removals</value></optional><optional><value>additions</value></optional></list></choice></attribute></optional> <!-- "all" alone, or additions/removals/text combined without repeats: epubcheck spells this as six ordered list branches and so do we -->
-    <optional><attribute name="aria-required"><choice><value>false</value><value>true</value></choice></attribute></optional> <!-- enum: false true -->
+    <optional><attribute name="aria-required"><choice><value type="string">false</value><value type="string">true</value></choice></attribute></optional> <!-- enum: false true -->
     <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
-    <optional><attribute name="aria-rowcount"><choice><data type="nonNegativeInteger"/><value>-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
+    <optional><attribute name="aria-rowcount"><choice><data type="nonNegativeInteger"/><value type="string">-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
     <optional><attribute name="aria-rowindex"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
     <optional><attribute name="aria-rowspan"><data type="positiveInteger"/></attribute></optional> <!-- positiveInteger -->
-    <optional><attribute name="aria-selected"><choice><value>false</value><value>true</value><value>undefined</value></choice></attribute></optional> <!-- enum: false true undefined -->
-    <optional><attribute name="aria-setsize"><choice><data type="nonNegativeInteger"/><value>-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
-    <optional><attribute name="aria-sort"><choice><value>ascending</value><value>descending</value><value>none</value><value>other</value></choice></attribute></optional> <!-- enum: ascending descending none other -->
+    <optional><attribute name="aria-selected"><choice><value type="string">false</value><value type="string">true</value><value type="string">undefined</value></choice></attribute></optional> <!-- enum: false true undefined -->
+    <optional><attribute name="aria-setsize"><choice><data type="nonNegativeInteger"/><value type="string">-1</value></choice></attribute></optional> <!-- nonNegativeInteger or -1 -->
+    <optional><attribute name="aria-sort"><choice><value type="string">ascending</value><value type="string">descending</value><value type="string">none</value><value type="string">other</value></choice></attribute></optional> <!-- enum: ascending descending none other -->
     <optional><attribute name="aria-valuemax"><data type="float"/></attribute></optional> <!-- float -->
     <optional><attribute name="aria-valuemin"><data type="float"/></attribute></optional> <!-- float -->
     <optional><attribute name="aria-valuenow"><data type="float"/></attribute></optional> <!-- float -->

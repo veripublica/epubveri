@@ -30704,6 +30704,16 @@ mod tests {
         bad(r#"<p aria-current="ZZZ">x</p>"#);
         ok(r#"<p role="checkbox" aria-checked="mixed">x</p>"#);
         bad(r#"<p role="checkbox" aria-checked="ZZZ">x</p>"#);
+        // Enumerations compare as written (`string "true"` in aria.rnc), the
+        // integers collapse whitespace and `all` is a token (5.4.0,
+        // 2026-10-14).
+        bad(r#"<p aria-hidden=" true">x</p>"#);
+        bad(r#"<p aria-live="polite ">x</p>"#);
+        bad(r#"<span role="checkbox" aria-checked=" true">x</span>"#);
+        bad(r#"<div role="table" aria-rowcount=" -1 ">x</div>"#);
+        ok(r#"<div role="table" aria-rowcount=" 3 ">x</div>"#);
+        ok(r#"<h1 aria-level=" 2 ">x</h1>"#);
+        ok(r#"<p aria-relevant=" all ">x</p>"#);
 
         // `aria-relevant` is the ONE real token list; the "list" and "listbox"
         // in `aria-autocomplete`/`aria-haspopup` are values, not constructs.
