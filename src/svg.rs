@@ -1903,27 +1903,101 @@ fn check_href_attribute(n: roxmltree::Node, path: &str, report: &mut Report) {
 /// this is NOT a flow-content check: a real valid fixture uses a bare
 /// `<body>`, and even a whole embedded `<html>` document, as title
 /// content.
+///
+/// The unit is epubcheck's NVDL *section* (`epub-svg-30.nvdl`, mode
+/// `allowOnlyHTML` in the `title` context), not the element: a run of
+/// elements in one namespace is one section, and a rejected section is
+/// reported once, at the element where the namespace changed. An XHTML
+/// `body` holding an `<svg>` with a `title` and a `desc` inside is one
+/// finding there and was three here. What sits under a rejected section is
+/// not validated, except that a further change of namespace opens a new
+/// section and is rejected again. An SVG element straight under `title` is
+/// the same section as `title` itself, and the grammar's flow content takes
+/// `svg`, so it draws nothing. Each shape was probed on 5.4.0 (2026-10-14).
 pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &mut Report) {
-    // `descendants()` includes the node itself first - skip it (title's
-    // own namespace is SVG, not XHTML, and isn't part of its own content).
-    for n in title.descendants().skip(1).filter(|n| n.is_element()) {
-        let ns = n.tag_name().namespace();
-        if ns != Some(XHTML_NS) {
+    walk_title_sections(title, Some(SVG_NS), false, &mut |n, step| match step {
+        TitleStep::Xhtml => check_href_attribute(n, path, report),
+        TitleStep::Rejected => {
+            let ns = n.tag_name().namespace().unwrap_or("");
             report.push_node(
                 RSC_005,
                 Severity::Error,
-                format!(
-                    "elements from namespace \"{}\" are not allowed",
-                    ns.unwrap_or("")
-                ),
+                format!("elements from namespace \"{ns}\" are not allowed"),
                 path,
                 n,
                 "svg.title.foreign_namespace",
-                vec![ns.unwrap_or("").to_string()],
+                vec![ns.to_string()],
             );
+        }
+        TitleStep::Unvalidated => {}
+    });
+}
+
+/// Every element inside a section that an SVG `title` rejected (see
+/// `check_title_content`). epubcheck validates nothing there, so the
+/// callers that visit each `foreignObject` and each SVG `title` of a document
+/// skip these: a `foreignObject` inside a rejected `<svg>` drew a second
+/// finding here, and a `title` inside one reported its own content twice.
+pub(crate) fn inside_rejected_title_sections(
+    doc_root: roxmltree::Node,
+) -> std::collections::HashSet<roxmltree::NodeId> {
+    let mut inside = std::collections::HashSet::new();
+    for title in doc_root.descendants().filter(|n| {
+        n.is_element() && n.tag_name().name() == "title" && n.tag_name().namespace() == Some(SVG_NS)
+    }) {
+        if inside.contains(&title.id()) {
             continue;
         }
-        check_href_attribute(n, path, report);
+        walk_title_sections(title, Some(SVG_NS), false, &mut |n, step| {
+            if matches!(step, TitleStep::Rejected | TitleStep::Unvalidated) {
+                inside.extend(n.descendants().map(|d| d.id()));
+            }
+        });
+    }
+    inside
+}
+
+enum TitleStep {
+    /// An XHTML element attached to a section that is validated.
+    Xhtml,
+    /// The first element of a section this context rejects.
+    Rejected,
+    /// An element inside a rejected section that opens no new one.
+    Unvalidated,
+}
+
+fn walk_title_sections(
+    parent: roxmltree::Node,
+    parent_ns: Option<&str>,
+    rejected: bool,
+    f: &mut impl FnMut(roxmltree::Node, TitleStep),
+) {
+    for n in parent.children().filter(|n| n.is_element()) {
+        let ns = n.tag_name().namespace();
+        if ns == Some(XHTML_NS) {
+            // Attached to the parent section, so validated only when that
+            // section is not itself rejected.
+            f(
+                n,
+                if rejected {
+                    TitleStep::Unvalidated
+                } else {
+                    TitleStep::Xhtml
+                },
+            );
+            walk_title_sections(n, ns, rejected, f);
+        } else if ns == parent_ns {
+            // Same section. Under a rejected one, keep looking for nested
+            // sections; an SVG child of `title` itself is allowed content,
+            // which the callers' own walk over the document goes on to check.
+            if rejected {
+                f(n, TitleStep::Unvalidated);
+                walk_title_sections(n, ns, true, f);
+            }
+        } else {
+            f(n, TitleStep::Rejected);
+            walk_title_sections(n, ns, true, f);
+        }
     }
 }
 
@@ -2115,7 +2189,8 @@ fn epub2_grammar_reaches(n: roxmltree::Node) -> bool {
 }
 
 /// EPUB 2: an XHTML element as the child of any SVG element but
-/// `foreignObject` is RSC-005.
+/// `foreignObject` is RSC-005, and so is an SVG element as the child of
+/// `desc`, `title` or `metadata`.
 ///
 /// SVG 1.1's grammar has no place for foreign elements outside
 /// `foreignObject` (its `foreignElement` alternative is commented out in
@@ -2137,11 +2212,23 @@ pub(crate) fn check_epub2_xhtml_children(
             && n.tag_name().name() != "foreignObject"
             && epub2_grammar_reaches(*n)
     }) {
-        for child in parent
-            .children()
-            .filter(|c| c.is_element() && c.tag_name().namespace() == Some(XHTML_NS))
-        {
+        // `desc`, `title` and `metadata` take text alone, so an SVG element
+        // there is a fault of the same kind. One RSC-005 per child, as for
+        // XHTML; what the child holds is not reported again on that account
+        // (measured on 5.4.0, inline, 2026-10-14: `rect` in `desc`, `g` in
+        // `metadata`, `tspan` in `title`, two children = two findings).
+        let text_only = matches!(parent.tag_name().name(), "desc" | "title" | "metadata");
+        for child in parent.children().filter(|c| {
+            c.is_element()
+                && (c.tag_name().namespace() == Some(XHTML_NS)
+                    || (text_only && c.tag_name().namespace() == Some(SVG_NS)))
+        }) {
             let name = child.tag_name().name();
+            let rule = if child.tag_name().namespace() == Some(XHTML_NS) {
+                "svg.content_model.xhtml_child"
+            } else {
+                "svg.content_model.text_only_parent"
+            };
             report.push_node(
                 RSC_005,
                 Severity::Error,
@@ -2151,7 +2238,7 @@ pub(crate) fn check_epub2_xhtml_children(
                 ),
                 path,
                 child,
-                "svg.content_model.xhtml_child",
+                rule,
                 vec![name.to_string(), parent.tag_name().name().to_string()],
             );
         }
@@ -3715,6 +3802,43 @@ mod tests {
         );
     }
 
+    /// `desc`, `title` and `metadata` take text alone in SVG 1.1: an SVG
+    /// child is one finding each, an element in another namespace none
+    /// (measured on 5.4.0 inline, 2026-10-14).
+    #[test]
+    fn epub2_svg_element_in_a_text_only_parent_is_rsc_005() {
+        let t = "svg.content_model.text_only_parent";
+        assert_eq!(
+            epub2_rules(&format!("{S}<desc>{RECT}</desc></svg>"), true),
+            [t]
+        );
+        assert_eq!(
+            epub2_rules(&format!("{S}<metadata><g/></metadata></svg>"), true),
+            [t]
+        );
+        assert_eq!(
+            epub2_rules(
+                &format!("{S}<text><title><tspan>x</tspan></title>t</text></svg>"),
+                true
+            ),
+            [t]
+        );
+        assert_eq!(
+            epub2_rules(
+                &format!("{S}<desc>{RECT}<circle r=\"1\"/></desc></svg>"),
+                true
+            ),
+            [t, t]
+        );
+        assert!(
+            epub2_rules(
+                &format!("{S}<title><x:a xmlns:x=\"urn:x\"/></title></svg>"),
+                true
+            )
+            .is_empty()
+        );
+    }
+
     #[test]
     fn epub2_xhtml_outside_foreign_object_is_rsc_005_and_svg_below_it_is_not_checked() {
         let child = "svg.content_model.xhtml_child";
@@ -5080,9 +5204,85 @@ mod tests {
             .unwrap();
         let mut report = Report::new();
         check_title_content(title, "c.xhtml", &mut report);
-        // Only the nested svg (and its own nested title) are foreign - the
-        // xhtml <body> itself must not be flagged.
-        assert!(!report.messages.is_empty());
+        // The nested svg opens one rejected section, its own title included;
+        // the xhtml <body> itself is not flagged.
+        assert_eq!(
+            report
+                .messages
+                .iter()
+                .map(|m| m.params.clone())
+                .collect::<Vec<_>>(),
+            [["http://www.w3.org/2000/svg"]]
+        );
+    }
+
+    /// One finding per rejected NVDL section, each count probed on 5.4.0
+    /// (2026-10-14), standalone and inline at EPUB 3.
+    #[test]
+    fn title_reports_each_rejected_section_once() {
+        const X: &str = "http://www.w3.org/1999/xhtml";
+        for (inner, expected) in [
+            // svg inside body: its title, desc and foreignObject are the
+            // same section; x:foo inside it is a new one, and an svg inside
+            // x:foo another.
+            (
+                format!(
+                    "<body xmlns=\"{X}\"><svg xmlns=\"{SVG_NS}\"><title>a</title><desc>d</desc>\
+                     <foreignObject><p xmlns=\"{X}\"><span href=\"#x\">s</span></p></foreignObject>\
+                     <x:foo xmlns:x=\"urn:x\"><x:bar/><svg xmlns=\"{SVG_NS}\"/></x:foo></svg></body>"
+                ),
+                vec![SVG_NS, "urn:x", SVG_NS],
+            ),
+            // XHTML under a rejected section is not validated (no href
+            // finding), but a namespace opened inside it is rejected.
+            (
+                format!(
+                    "<x:a xmlns:x=\"urn:x\"><p xmlns=\"{X}\"><span href=\"#x\">s</span>\
+                     <y:b xmlns:y=\"urn:y\"/></p></x:a>"
+                ),
+                vec!["urn:x", "urn:y"],
+            ),
+            // An svg straight under title is title's own section.
+            (
+                "<x:a xmlns:x=\"urn:x\"/><y:b xmlns:y=\"urn:y\"><y:c/></y:b><svg><rect/></svg>"
+                    .to_string(),
+                vec!["urn:x", "urn:y"],
+            ),
+        ] {
+            let xml = format!("<svg xmlns=\"{SVG_NS}\"><title>{inner}</title></svg>");
+            let d = doc(&xml);
+            let title = d.root_element().first_element_child().unwrap();
+            let mut report = Report::new();
+            check_title_content(title, "c.xhtml", &mut report);
+            let got: Vec<_> = report
+                .messages
+                .iter()
+                .map(|m| m.params[0].as_str())
+                .collect();
+            assert_eq!(got, expected, "{inner}");
+        }
+    }
+
+    /// The callers skip a `foreignObject` or `title` inside a rejected
+    /// section, and keep one under an svg that is title's own content.
+    #[test]
+    fn nothing_inside_a_rejected_title_section_is_visited_again() {
+        let xml = format!(
+            "<svg xmlns=\"{SVG_NS}\"><title><body xmlns=\"http://www.w3.org/1999/xhtml\">\
+             <svg xmlns=\"{SVG_NS}\"><foreignObject id=\"in\"/><title id=\"t\"/></svg></body></title>\
+             <g><title><svg><foreignObject id=\"own\"/></svg></title></g></svg>"
+        );
+        let d = doc(&xml);
+        let skipped = inside_rejected_title_sections(d.root_element());
+        let by_id = |id: &str| {
+            d.descendants()
+                .find(|n| n.attribute("id") == Some(id))
+                .unwrap()
+                .id()
+        };
+        assert!(skipped.contains(&by_id("in")));
+        assert!(skipped.contains(&by_id("t")));
+        assert!(!skipped.contains(&by_id("own")));
     }
 
     #[test]

@@ -10,6 +10,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **EPUB 2: an element from another namespace inside an SVG `title` is
+  allowed.** We reported RSC-005 ("elements from namespace … are not
+  allowed"). That is EPUB 3's rule, from the NVDL that EPUB 3 adds for SVG
+  titles. EPUB 2 validates SVG 1.1, which ignores other namespaces there,
+  and epubcheck reports nothing.
+- **EPUB 2: an SVG element inside an SVG `desc`, `title` or `metadata` is
+  RSC-005.** SVG 1.1 allows only text in those three, and epubcheck reports
+  each such child once. We reported nothing. A `<tspan>` inside a `<title>`
+  is the likely real case.
+- **One finding where epubcheck counts one, inside an SVG `title`.**
+  Foreign markup inside an SVG `title` at EPUB 3. A run of elements in one
+  namespace now counts as one finding, as in epubcheck's NVDL. So an `svg`
+  inside a `body` inside a `title` is one finding, not one for each of its
+  elements. Markup inside a rejected run is no longer validated a second
+  time.
+
 ### Changed
 
 - **An SVG attribute that its element does not take now carries a rule key,

@@ -9090,10 +9090,19 @@ fn check_text(
                 crate::svg::check_link_labels(svg_root, &path, report);
             }
         }
+        // EPUB 3 only: the namespace rule is its NVDL's `allowOnlyHTML`.
+        // EPUB 2's SVG 1.1 `title` takes text alone and leaves elements in
+        // other namespaces alone (measured on 5.4.0, inline).
+        let in_rejected = if is_epub3 {
+            crate::svg::inside_rejected_title_sections(d.root_element())
+        } else {
+            Default::default()
+        };
         for fo in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "foreignObject"
                 && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+                && !in_rejected.contains(&n.id())
         }) {
             crate::svg::check_foreign_object(
                 fo,
@@ -9109,6 +9118,8 @@ fn check_text(
             n.is_element()
                 && n.tag_name().name() == "title"
                 && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+                && !in_rejected.contains(&n.id())
+                && is_epub3
         }) {
             crate::svg::check_title_content(svg_title, &path, report);
         }
@@ -12289,10 +12300,19 @@ fn check_text(
         if is_epub3 {
             crate::svg::check_link_labels(d.root_element(), doc_path, report);
         }
+        // EPUB 3 only: the namespace rule is its NVDL's `allowOnlyHTML`.
+        // EPUB 2's SVG 1.1 `title` takes text alone and leaves elements in
+        // other namespaces alone (measured on 5.4.0, inline).
+        let in_rejected = if is_epub3 {
+            crate::svg::inside_rejected_title_sections(d.root_element())
+        } else {
+            Default::default()
+        };
         for fo in d.descendants().filter(|n| {
             n.is_element()
                 && n.tag_name().name() == "foreignObject"
                 && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+                && !in_rejected.contains(&n.id())
         }) {
             crate::svg::check_foreign_object(
                 fo,
@@ -12308,6 +12328,8 @@ fn check_text(
             n.is_element()
                 && n.tag_name().name() == "title"
                 && n.tag_name().namespace() == Some(crate::svg::SVG_NS)
+                && !in_rejected.contains(&n.id())
+                && is_epub3
         }) {
             crate::svg::check_title_content(svg_title, doc_path, report);
         }
