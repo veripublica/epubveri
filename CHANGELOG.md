@@ -35,6 +35,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   probe sets now get the same verdict as in epubcheck. Spaces, `|`, `^`,
   `{}`, `[` in the query or fragment and `http://[::1]/` stay accepted, as
   there.
+- **A link with only a query string, such as `href="?x"`, points at its own
+  document.** We resolved it to the document's folder and reported that
+  folder as a missing resource (RSC-007, an error). epubcheck reports only
+  RSC-033 for the query, and so do we now.
 - **EPUB 3 SVG: SVG 2's `href` and nine ARIA attributes have their values
   checked**, as a usage-level RSC-025, as in epubcheck's informative SVG
   grammar. The `href` check uses the same URL rules as above. The ARIA ones

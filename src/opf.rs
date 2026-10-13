@@ -233,6 +233,22 @@ fn parent_dir(path: &str) -> String {
     }
 }
 
+/// The container path a reference from the document at `doc_path` names.
+/// Like [`resolve`], except that a reference with an empty path and a query
+/// (`?x`, `?x#top`) is the document itself, as a fragment-only one is;
+/// `resolve` would name its directory, which no check should look up as a
+/// resource. epubcheck reports RSC-033 for the query and nothing else.
+fn resolve_ref(dir: &str, doc_path: &str, href: &str) -> String {
+    if href
+        .trim_start_matches(crate::url::is_url_edge_space)
+        .starts_with('?')
+    {
+        doc_path.to_string()
+    } else {
+        resolve(dir, href)
+    }
+}
+
 fn hex(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -10756,7 +10772,7 @@ fn check_text(
                             vec![v.to_string()],
                         );
                     }
-                    let key = nfc(&resolve(&dir, &strip_url_fragment(v)));
+                    let key = nfc(&resolve_ref(&dir, &path, &strip_url_fragment(v)));
                     resource_refs.insert(key.clone());
                     // The same declared/present matrix the no-namespace
                     // attribute walk below applies. It could not reach here:
@@ -11225,7 +11241,7 @@ fn check_text(
                     {
                         continue;
                     }
-                    let resolved = nfc(&resolve(&dir, v));
+                    let resolved = nfc(&resolve_ref(&dir, &path, v));
                     // The matrix and its reasoning live in
                     // `classify_resource_ref`; only the anchoring is here.
                     match classify_resource_ref(&resolved, &manifest_paths, &name_index, opf_path) {
@@ -11378,7 +11394,7 @@ fn check_text(
                                 vec![href.to_string()],
                             );
                         }
-                        let target = nfc(&resolve(&dir, href));
+                        let target = nfc(&resolve_ref(&dir, &path, href));
                         hyperlink_targets.insert(target.clone());
                         if target != opf_own_name_nfc
                             && let Some(abort) = hyperlink_abort(
@@ -21283,6 +21299,23 @@ mod tests {
             "a GENERIC reference may be remote when the manifest declares it audio, \
              video or a font - so neither message is right here"
         );
+    }
+
+    /// A reference with an empty path and a query is the document itself:
+    /// RSC-033 for the query, and no RSC-007 for a "missing" directory
+    /// (epubcheck 5.4.0, 2026-10-14).
+    #[test]
+    fn a_query_only_href_names_its_own_document() {
+        let ch1 = r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body><p><a href="?x">a</a> <a href="?y#top">b</a></p><p id="top">t</p></body></html>"#;
+        let ids: Vec<&str> = crate::validate_bytes(epub_with_ch1(ch1))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .filter(|id| id.starts_with("RSC-0"))
+            .collect();
+        assert_eq!(ids, [crate::ids::RSC_033, crate::ids::RSC_033], "{ids:?}");
     }
 
     /// How many references epubcheck makes of image markup, measured on
