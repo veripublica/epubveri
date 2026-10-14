@@ -439,12 +439,20 @@ pub(crate) fn check_vocabulary(
         }
         let name = child.tag_name().name();
         if !is_recognized_element(name, is_epub3) {
-            report.push_at_pos(
+            // Keyed and pathed like `svg.attributes.attribute_not_allowed`,
+            // its attribute-side twin: an HTML-minded tool that writes
+            // `viewbox` also writes `lineargradient`, and a repairer can only
+            // dispatch on the second if it carries a rule, the name as
+            // written and the parent's local name (2026-10-14; until then
+            // this finding had none of the three).
+            report.push_node(
                 id,
                 severity,
                 format!("element \"{name}\" not allowed here"),
                 path,
-                Position::of(child),
+                child,
+                "svg.elements.element_not_allowed",
+                vec![name.to_string(), svg_root.tag_name().name().to_string()],
             );
         }
         if matches!(name, "foreignObject" | "title") {
@@ -2300,6 +2308,11 @@ pub(crate) fn check_epub2_xhtml_children(
         n.is_element()
             && n.tag_name().namespace() == Some(SVG_NS)
             && n.tag_name().name() != "foreignObject"
+            // An element the vocabulary does not know is reported once, by
+            // `check_vocabulary`, and its content is not judged again: a
+            // lowercased `<foreignobject><div/>` is one RSC-005 in epubcheck
+            // 5.4.0, not two (measured 2026-10-14).
+            && is_recognized_element(n.tag_name().name(), false)
             && epub2_grammar_reaches(*n)
     }) {
         // `desc`, `title` and `metadata` take text alone, so an SVG element
@@ -3297,6 +3310,14 @@ pub(crate) fn check_content_model(
                     continue;
                 }
                 let cname = child.tag_name().name();
+                // A name the vocabulary does not know is `check_vocabulary`'s
+                // finding, under every parent - not only under containers, as
+                // the guard below used to be the only place to say. A
+                // lowercased `textpath` in `<text>` or `fegaussianblur` in
+                // `<filter>` drew it twice, where epubcheck reports once.
+                if !is_recognized_element(cname, is_epub3) {
+                    continue;
+                }
                 if model.animation && SVG_ANIMATION_ELEMENTS.contains(&cname) {
                     continue;
                 }
@@ -4206,6 +4227,65 @@ mod tests {
             assert_eq!(m.violation_kind, None);
             let pos = m.position.unwrap();
             assert_eq!((pos.line, pos.column), (2, 30), "at 3.0: {is_epub3}");
+        }
+    }
+
+    /// A lowercased SVG element name - what an HTML-minded tool writes for
+    /// `textPath` or `linearGradient` - is one finding, keyed like its
+    /// attribute twin so a repairer can dispatch on it, under any parent and
+    /// whatever it contains. epubcheck 5.4.0 reports each of these shapes
+    /// once at EPUB 3 (measured 2026-10-14); at EPUB 2 its Jing repeats the
+    /// element at its first child, which is not reproduced.
+    #[test]
+    fn an_unknown_svg_element_is_one_keyed_finding_under_any_parent() {
+        let xlink = "xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
+        for (body, name, parent) in [
+            (
+                "<defs><path id=\"p\" d=\"M0 0\"/></defs><text><textpath xlink:href=\"#p\">x</textpath></text>",
+                "textpath",
+                "text",
+            ),
+            (
+                "<defs><filter id=\"f\"><fegaussianblur stdDeviation=\"1\"/></filter></defs>",
+                "fegaussianblur",
+                "filter",
+            ),
+            (
+                "<defs><lineargradient id=\"g\"><stop offset=\"0\"/></lineargradient></defs>",
+                "lineargradient",
+                "defs",
+            ),
+            (
+                "<foreignobject width=\"1\" height=\"1\"><div xmlns=\"http://www.w3.org/1999/xhtml\">x</div></foreignobject>",
+                "foreignobject",
+                "svg",
+            ),
+        ] {
+            let svg = format!(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" {xlink} viewBox=\"0 0 1 1\">{body}</svg>"
+            );
+            for is_epub3 in [false, true] {
+                let doc = crate::ocf::parse_xml(&svg).unwrap();
+                let root = doc.root_element();
+                let mut report = Report::default();
+                check_vocabulary(root, "s.svg", is_epub3, &mut report);
+                check_content_model(root, "s.svg", is_epub3, &mut report);
+                if !is_epub3 {
+                    check_epub2_xhtml_children(root, "s.svg", &mut report);
+                }
+                let [m] = report.messages.as_slice() else {
+                    panic!("{name}, 3.0: {is_epub3}: {:?}", report.messages);
+                };
+                assert_eq!(m.rule, Some("svg.elements.element_not_allowed"));
+                assert_eq!(m.params, [name, parent]);
+                assert!(
+                    m.element_path
+                        .as_ref()
+                        .is_some_and(|p| p.path.ends_with(&format!(":{name}[1]"))),
+                    "{:?}",
+                    m.element_path
+                );
+            }
         }
     }
 

@@ -10,7 +10,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **An SVG element name that SVG does not know now carries a rule key,
+  `svg.elements.element_not_allowed`.** Its `params` are the name as
+  written and its parent's local name, and it carries an `element_path`.
+  This is the shape `svg.attributes.attribute_not_allowed` already has. The
+  common case is a camelCase name lowercased by a tool that treated XHTML
+  as HTML, such as `lineargradient`, `clippath` or `textpath`. A repairer
+  can now dispatch on it. Before, the finding had no rule, no params and
+  no path.
+
 ### Fixed
+
+- **A lowercased SVG element name is one finding, as in epubcheck.** Under
+  `<text>` or `<filter>`, `textpath` and `fegaussianblur` were reported
+  twice: once as an unknown name and again by the content-model check. In
+  EPUB 2, a lowercased `foreignobject` drew a second finding for its XHTML
+  content. epubcheck reports each of these once.
 
 - **MathML attributes are now checked by name, as epubcheck checks them.**
   Until now every MathML element accepted any attribute, so a book that
