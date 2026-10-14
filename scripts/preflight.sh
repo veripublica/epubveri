@@ -75,6 +75,28 @@ grep -q "^## \[$VERSION\]" CHANGELOG.md \
   && ok "CHANGELOG.md has a [$VERSION] section" \
   || bad "CHANGELOG.md has no [$VERSION] section"
 
+# Added 2026-10-14: epublift (and epubsana's browser build) load the npm
+# package's wasm-bindgen glue through a hand-written loader instead of a
+# `--target web` build. That loader breaks if wasm-bindgen renames
+# `__wbg_set_wasm` / `__wbindgen_start` or the import-module name, and the
+# promise we made them is a line in the release notes whenever it moves.
+# So a wasm-bindgen move since the previous tag needs the CHANGELOG section
+# to say so.
+PREV_TAG=$(git tag --sort=-v:refname | grep -vFx "v$VERSION" | head -1)
+wbg_version() { awk '/^name = "wasm-bindgen"$/ { getline; gsub(/version = |"/, ""); print; exit }'; }
+WBG_NOW=$(wbg_version < Cargo.lock)
+WBG_PREV=$(git show "$PREV_TAG:Cargo.lock" 2>/dev/null | wbg_version)
+if [ -z "$WBG_NOW" ] || [ -z "$WBG_PREV" ]; then
+  bad "could not read wasm-bindgen from Cargo.lock (now '$WBG_NOW', $PREV_TAG '$WBG_PREV')"
+elif [ "$WBG_NOW" = "$WBG_PREV" ]; then
+  ok "wasm-bindgen unchanged since $PREV_TAG ($WBG_NOW)"
+elif awk -v v="$VERSION" '$0 ~ "^## \\[" { s = index($0, "[" v "]") > 0; next } s' CHANGELOG.md \
+     | grep -q "wasm-bindgen"; then
+  ok "wasm-bindgen $WBG_PREV → $WBG_NOW, and the CHANGELOG section says so"
+else
+  bad "wasm-bindgen moved $WBG_PREV → $WBG_NOW since $PREV_TAG; say so in the [$VERSION] CHANGELOG section (epublift's loader depends on the glue)"
+fi
+
 # Reminder rather than a check: no script can tell whether the notes are
 # complete. 0.9.2's omitted the whole hostile suite, the largest thing in it.
 echo "  note: read \`git log v<prev>..HEAD\` against the CHANGELOG section by eye —"
