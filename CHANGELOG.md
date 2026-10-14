@@ -28,6 +28,21 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   twice: once as an unknown name and again by the content-model check. In
   EPUB 2, a lowercased `foreignobject` drew a second finding for its XHTML
   content. epubcheck reports each of these once.
+- **A remote `xml:base` now applies wherever it is set, as in epubcheck.**
+  Until now only a `<base href>` or an `xml:base` on the root element
+  counted, and either one was applied to the whole document. epubcheck
+  moves the base at the start tag of any element that carries `xml:base`,
+  whether XHTML, SVG or MathML. It does not move the base back when the
+  element ends. A later `<img src>` is then a remote resource, which
+  draws RSC-006 and OPF-014 (the `remote-resources` property is missing),
+  and the local file it named is left unreferenced (OPF-097). An earlier
+  `<img src>` is not affected. An image fetched through a remote base now
+  asks for the `remote-resources` property, as a directly remote one
+  already did. A stylesheet still does not.
+- **ACC-009: a plain `annotation` is not alternative text for MathML.** Only
+  `alttext` or an `annotation-xml` counts, as in epubcheck. A `<semantics>`
+  whose only alternative is an `annotation`, which is often TeX, now draws
+  the usage finding.
 - **EPUB 2: XHTML inside an inline SVG `title` is now checked as XHTML.**
   We already reported the misplaced element, such as a `body` or a `p`. Now
   what is inside it is also checked against XHTML's own definition, as

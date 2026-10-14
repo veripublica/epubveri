@@ -887,7 +887,7 @@ fn item_property_media_types(token: &str) -> Option<&'static [&'static str]> {
 }
 
 /// ACC-009 (usage): a MathML `<math>` with neither `alttext` nor an
-/// `annotation`/`annotation-xml` alternative. EPUB 3 only. Shared by XHTML
+/// `annotation-xml` alternative. EPUB 3 only. Shared by XHTML
 /// content documents and standalone SVG, whose `foreignObject` may hold
 /// MathML too: epubcheck reports it there (measured on 5.4.0, a `<math>`
 /// directly in a standalone SVG's `foreignObject`), and we only asked XHTML.
@@ -903,9 +903,14 @@ fn check_mathml_alternative_text(
             && n.tag_name().name() == "math"
             && n.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
     }) {
+        // `annotation-xml` only. A plain `annotation` (text, often TeX) is
+        // not an alternative to epubcheck: `OPSHandler30` sets
+        // `hasAltorAnnotation` from `alttext` and on `annotation-xml`, and
+        // nothing else. Measured on 5.4.0 (2026-10-14): `<semantics>` with
+        // only an `annotation` draws ACC-009 there; it was silent here.
         let has_annotation = n.descendants().any(|c| {
             c.is_element()
-                && matches!(c.tag_name().name(), "annotation" | "annotation-xml")
+                && c.tag_name().name() == "annotation-xml"
                 && c.tag_name().namespace() == Some("http://www.w3.org/1998/Math/MathML")
         });
         if !n.has_attr_no_ns("alttext") && !has_annotation {
@@ -10004,16 +10009,41 @@ fn check_text(
         // the <a href> pass below uses it to reclassify targets as remote
         // (RSC-006), and the attribute walk uses it to not go looking for
         // them on disk.
-        let remote_base: Option<&str> = d
+        //
+        // **From where it is set, not for the whole document.** epubcheck's
+        // `BaseURLHandler` moves the base at the start tag of any element
+        // carrying `xml:base` - an XHTML `p`, an SVG, a MathML `mi` alike -
+        // or of an XHTML `base`, and never moves it back at the end tag. So a
+        // reference after `<p xml:base="http://e.org/">a</p>` resolves
+        // remotely and one before it does not (measured on 5.4.0,
+        // 2026-10-14, nine shapes). We used to look only at `<base>` and the
+        // root's `xml:base`, and apply either to the whole document.
+        let remote_bases: Vec<(usize, &str)> = d
             .descendants()
-            .find(|n| n.is_element() && n.tag_name().name() == "base")
-            .and_then(|n| n.attr_no_ns("href"))
-            .filter(|v| is_remote_url(v))
-            .or_else(|| {
-                d.root_element()
-                    .attribute(("http://www.w3.org/XML/1998/namespace", "base"))
-                    .filter(|v| is_remote_url(v))
-            });
+            .filter(|n| n.is_element())
+            .filter_map(|n| {
+                let set = if n.tag_name().name() == "base"
+                    && n.tag_name().namespace() == Some("http://www.w3.org/1999/xhtml")
+                {
+                    n.attr_no_ns("href")
+                } else {
+                    n.attribute(("http://www.w3.org/XML/1998/namespace", "base"))
+                }?;
+                Some((n.range().start, set))
+            })
+            .filter(|(_, v)| is_remote_url(v))
+            .collect();
+        // The remote base in force at `node`, if any: the last one set at or
+        // before its start tag. A later relative `xml:base` resolves against
+        // a remote one and stays remote, so only remote ones are kept.
+        let remote_base_at = |node: roxmltree::Node| -> Option<&str> {
+            let at = node.range().start;
+            remote_bases
+                .iter()
+                .rev()
+                .find(|(start, _)| *start <= at)
+                .map(|(_, v)| *v)
+        };
 
         {
             let mut frag_id_cache: HashMap<String, Option<IdMap>> = HashMap::new();
@@ -10095,7 +10125,7 @@ fn check_text(
                 // We had it exactly the wrong way round: RSC-006 on every
                 // relative `<a href>` in such a document, and silence on the
                 // stylesheet. Measured on both of the corpus's base fixtures.
-                if remote_base.is_some() {
+                if remote_base_at(a).is_some() {
                     continue;
                 }
                 let (path_part, frag) = match crate::url::trim_url(href).split_once('#') {
@@ -10257,7 +10287,10 @@ fn check_text(
                 }
             }
             for (n, href, ref_kind) in typed_refs {
-                if crate::url::is_absolute(&href) || is_remote_url(&href) || remote_base.is_some() {
+                if crate::url::is_absolute(&href)
+                    || is_remote_url(&href)
+                    || remote_base_at(n).is_some()
+                {
                     continue;
                 }
                 let Some((path_part, frag)) = crate::url::trim_url(&href).split_once('#') else {
@@ -10967,7 +11000,7 @@ fn check_text(
                         // applied or loaded by nothing (MobileRead #284).
                         // One `continue` was serving two questions; only one
                         // of them is epubcheck's.
-                        if remote_base.is_none() && !is_external(v) {
+                        if remote_base_at(node).is_none() && !is_external(v) {
                             resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(v))));
                         }
                         continue;
@@ -10985,7 +11018,9 @@ fn check_text(
                     // `*-base-url-remote-relative-path-error` books, where it
                     // reports OPF-097 on the untouched `style.css` and we
                     // reported nothing.
-                    if remote_base.is_none() && !is_external(v) && is_resource_reference(node, attr)
+                    if remote_base_at(node).is_none()
+                        && !is_external(v)
+                        && is_resource_reference(node, attr)
                     {
                         let key = nfc(&resolve(&dir, &strip_url_fragment(v)));
                         // `OBS-001`: EPUB 3.4 marks the *manifest* content
@@ -11074,7 +11109,7 @@ fn check_text(
                                 && m.params.first().is_some_and(|p| p == u)
                         })
                     };
-                    // `remote_base.is_none()` for the same reason its two
+                    // `remote_base_at(node).is_none()` for the same reason its two
                     // neighbours above carry it: under a `<base href>` that
                     // points somewhere remote, a relative reference resolves
                     // against *that* and never addresses the container at
@@ -11083,7 +11118,7 @@ fn check_text(
                     // in such a document drew RSC-026 where epubcheck is
                     // silent (measured, one book).
                     if !already
-                        && remote_base.is_none()
+                        && remote_base_at(node).is_none()
                         && !is_external(v)
                         && !v.trim_matches(crate::url::is_url_edge_space).is_empty()
                         && href_leaks_container_root(
@@ -11251,9 +11286,23 @@ fn check_text(
                     // document never asked for (issue #26; epubcheck reports
                     // only the RSC-006 that the remote resolution itself
                     // earns).
-                    if let Some(base) = remote_base {
+                    if let Some(base) = remote_base_at(node) {
                         let resolved_remote = join_base(base, v);
                         let bare = strip_url_fragment(&resolved_remote);
+                        // A resource fetched through a remote base is a remote
+                        // resource like any other, and asks for the
+                        // `remote-resources` property on the same terms as the
+                        // direct path above: not for a hyperlink or `cite`, and
+                        // not for a stylesheet. `<p xml:base="http://…">` before
+                        // an `<img src>` draws OPF-014 from epubcheck 5.4.0; its
+                        // own `…-base-url-remote-relative-path-error` fixtures
+                        // carry only a stylesheet, and expect RSC-006 alone.
+                        if !((tag == "a" && attr == "href") || attr == "cite")
+                            && tag != "link"
+                            && is_resource_reference(node, attr)
+                        {
+                            has_remote.get_or_insert(node);
+                        }
                         if is_restricted_remote_ref(tag, attr, node, &bare, &remote_manifest) {
                             report.push_node(
                                 RSC_006,
@@ -27857,6 +27906,94 @@ mod tests {
             .map(|m| m.text.clone())
             .collect();
         assert_eq!(texts.len(), 2, "{texts:?}");
+    }
+
+    /// A remote `xml:base` on any element - XHTML, SVG or MathML - moves the
+    /// base from its start tag on and never back, as epubcheck's
+    /// `BaseURLHandler` does: a later `img` is a remote resource (RSC-006 and
+    /// the `remote-resources` property, OPF-014), an earlier one is not.
+    /// Shapes measured on 5.4.0 (2026-10-14).
+    #[test]
+    fn a_remote_xml_base_applies_from_its_element_on() {
+        let ids = |body: &str| {
+            let ch = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body>{body}</body></html>"#
+            );
+            let mut v: Vec<&str> = crate::validate_bytes(epub_with_opf(None, &ch))
+                .messages
+                .iter()
+                .filter(|m| {
+                    m.id == "RSC-006"
+                        || (m.id == "OPF-014" && m.params.iter().any(|p| p == "remote-resources"))
+                })
+                .map(|m| m.id)
+                .collect();
+            v.sort();
+            v
+        };
+        const IMG: &str = r#"<p><img src="i.png" alt="x"/></p>"#;
+        const M: &str = r#"xmlns="http://www.w3.org/1998/Math/MathML" alttext="m""#;
+        let remote = ["OPF-014", "RSC-006"];
+        assert_eq!(
+            ids(&format!(r#"<p xml:base="http://e.org/">a</p>{IMG}"#)),
+            remote
+        );
+        assert_eq!(
+            ids(&format!(r#"<div xml:base="http://e.org/">{IMG}</div>"#)),
+            remote
+        );
+        assert_eq!(
+            ids(&format!(
+                r#"<p><math {M}><mi xml:base="http://e.org/">x</mi></math></p>{IMG}"#
+            )),
+            remote,
+            "MathML moves the base too"
+        );
+        assert_eq!(
+            ids(r#"<p><img xml:base="http://e.org/" src="i.png" alt="x"/></p>"#),
+            remote,
+            "the element's own attributes already see the new base"
+        );
+        assert!(ids(&format!(r#"{IMG}<p xml:base="http://e.org/">a</p>"#)).is_empty());
+    }
+
+    /// ACC-009's alternatives are `alttext` and `annotation-xml`, as in
+    /// epubcheck's `OPSHandler30`; a plain `annotation` is not one (measured
+    /// on 5.4.0, 2026-10-14).
+    #[test]
+    fn mathml_alternative_text_is_alttext_or_annotation_xml_only() {
+        let acc009 = |math: &str| {
+            let ch = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body>
+<p>{math}</p></body></html>"#
+            );
+            crate::validate_bytes(epub_with_opf(None, &ch))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::ACC_009)
+                .count()
+        };
+        const M: &str = r#"xmlns="http://www.w3.org/1998/Math/MathML""#;
+        assert_eq!(acc009(&format!("<math {M}><mi>x</mi></math>")), 1);
+        assert_eq!(
+            acc009(&format!(r#"<math {M} alttext="x"><mi>x</mi></math>"#)),
+            0
+        );
+        assert_eq!(
+            acc009(&format!(
+                r#"<math {M}><semantics><mi>x</mi><annotation encoding="application/x-tex">x</annotation></semantics></math>"#
+            )),
+            1,
+            "a plain annotation is not an alternative"
+        );
+        assert_eq!(
+            acc009(&format!(
+                r#"<math {M}><semantics><mi>x</mi><annotation-xml encoding="application/xhtml+xml"><span xmlns="http://www.w3.org/1999/xhtml">x</span></annotation-xml></semantics></math>"#
+            )),
+            0
+        );
     }
 
     /// The two MathML attributes the grammar does not decide alone, each as
