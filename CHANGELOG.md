@@ -28,6 +28,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   twice: once as an unknown name and again by the content-model check. In
   EPUB 2, a lowercased `foreignobject` drew a second finding for its XHTML
   content. epubcheck reports each of these once.
+- **EPUB 2: XHTML inside an inline SVG `title` is now checked as XHTML.**
+  We already reported the misplaced element, such as a `body` or a `p`. Now
+  what is inside it is also checked against XHTML's own definition, as
+  epubcheck does. Examples are a `bogus` attribute, loose text in `body`,
+  and an unknown element. Each is RSC-005 under
+  `opf.content_document.schema_violation`. Valid content adds nothing. A
+  standalone `.svg` is unchanged: epubcheck does not check XHTML there.
 
 - **MathML attributes are now checked by name, as epubcheck checks them.**
   Until now every MathML element accepted any attribute, so a book that

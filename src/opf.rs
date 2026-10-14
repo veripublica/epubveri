@@ -9199,7 +9199,29 @@ fn check_text(
             crate::svg::check_required_attributes(svg_root, &path, is_epub3, report);
             crate::svg::check_content_model(svg_root, &path, is_epub3, report);
             if !is_epub3 {
-                crate::svg::check_epub2_xhtml_children(svg_root, &path, report);
+                let misplaced = crate::svg::check_epub2_xhtml_children(svg_root, &path, report);
+                // Inline, epubcheck's grammar knows the misplaced `body` or
+                // `p`, and Jing goes on to check its content against XHTML's
+                // own definition: `<title><body>loose text</body></title>` is
+                // three RSC-005s there (the `body`, the text, `body`
+                // incomplete). Through the content-document filter, as any
+                // grammar finding here is. Not for an unvalidated EPUB 2
+                // `text/html` document, whose grammar never runs.
+                if schema_validated {
+                    for el in misplaced {
+                        for blame in crate::rng::validate_misplaced_element(&xhtml_grammar, el) {
+                            if content_blame_suppressed(&blame, is_epub3, report, &path) {
+                                continue;
+                            }
+                            push_blame(
+                                report,
+                                &path,
+                                "opf.content_document.schema_violation",
+                                &blame,
+                            );
+                        }
+                    }
+                }
             }
             crate::svg::check_epub_attributes(svg_root, &path, report);
             crate::svg::check_deprecated_xlink_href(svg_root, &path, is_epub3, report);
@@ -22303,6 +22325,44 @@ mod tests {
                 .filter(|m| !m.rule.is_some_and(|r| r.ends_with("schema_violation")))
                 .all(|m| m.violation_kind.is_none()),
             "no rule outside the family may carry a kind"
+        );
+    }
+
+    /// XHTML inside an inline EPUB 2 SVG `title` is reported, and then what is
+    /// inside it is checked against XHTML's own definition, as Jing does after
+    /// a misplaced element. Counts are epubcheck 5.4.0's on the same shapes
+    /// (2026-10-14). Valid content adds nothing.
+    #[test]
+    fn epub2_inline_svg_title_xhtml_content_is_checked_as_xhtml() {
+        let rsc005 = |title: &str| {
+            let ch1 = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>c</title></head><body><div>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1 1"><title>{title}</title><rect width="1" height="1"/></svg>
+</div></body></html>"#
+            );
+            crate::validate_bytes(epub2_with_ch1(&ch1))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        const X: &str = r#"xmlns="http://www.w3.org/1999/xhtml""#;
+        assert_eq!(rsc005(&format!("<body {X}><p>x</p></body>")), 1);
+        assert_eq!(
+            rsc005(&format!(r#"<body {X}><p bogus="1">x</p></body>"#)),
+            2
+        );
+        assert_eq!(rsc005(&format!("<body {X}>loose text</body>")), 3);
+        assert_eq!(
+            rsc005(&format!("<body {X}><notxhtml>x</notxhtml></body>")),
+            3
+        );
+        assert_eq!(rsc005(&format!(r#"<p {X} bogus="1">x</p>"#)), 2);
+        assert_eq!(
+            rsc005("plain text"),
+            0,
+            "the control: text is what title takes"
         );
     }
 

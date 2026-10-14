@@ -2006,6 +2006,33 @@ pub fn validate_node_report<'d, 'i>(
     blames
 }
 
+/// Validate an element that its context has already rejected, against the
+/// grammar's **own** definition of that element - the recovery `child_deriv`
+/// applies to a misplaced element inside the grammar (#69), offered to a
+/// caller whose element sits where the grammar does not reach. The element
+/// itself is not blamed; its attributes and content are. Empty when the
+/// grammar defines no element of that name.
+///
+/// The caller is `svg::check_epub2_xhtml_children`'s, for XHTML inside an
+/// inline EPUB 2 SVG: epubcheck reports the misplaced `body` and then, as Jing
+/// does, checks what is inside it against XHTML's `body`.
+pub fn validate_misplaced_element<'d, 'i>(
+    grammar: &Grammar,
+    node: roxmltree::Node<'d, 'i>,
+) -> Vec<Blame<'d, 'i>> {
+    let env = Env::new(
+        &grammar.defs,
+        grammar.start.clone(),
+        grammar.custom_elements,
+    );
+    let mut blames = Vec::new();
+    let ns = node.tag_name().namespace().unwrap_or("");
+    if let Some(model) = env.element_model(ns, node.tag_name().name()) {
+        let _ = env.child_deriv(&model, node, &mut blames);
+    }
+    blames
+}
+
 /// Validate a root element node against `grammar` (valid iff nothing to blame).
 pub fn validate_node(grammar: &Grammar, root: roxmltree::Node) -> bool {
     validate_node_report(grammar, root).is_empty()

@@ -2297,13 +2297,23 @@ fn epub2_grammar_reaches(n: roxmltree::Node) -> bool {
 /// it. Elements in any other namespace are allowed, which is why RDF in
 /// `metadata` stays clean. Measured on 5.4.0 under `svg`, `g`, `text`,
 /// `desc`, `title`, `metadata`, `a` and `switch`, inline and standalone: one
-/// RSC-005 per element, none for what it contains, and nothing at all at
-/// EPUB 3.
-pub(crate) fn check_epub2_xhtml_children(
-    svg_root: roxmltree::Node,
+/// RSC-005 per element, none for what it contains *when that is valid*, and
+/// nothing at all at EPUB 3. Inline, invalid content draws its own findings
+/// (a `bogus` attribute, text or an unknown element directly in `body`):
+/// measured on 5.4.0, 2026-10-14, and handled by the caller with the list
+/// this returns.
+///
+/// Returns the XHTML elements it reported, so an inline caller can check what
+/// is inside them (`rng::validate_misplaced_element`): in an XHTML document
+/// epubcheck's grammar knows `body` and `p`, and Jing goes on to check their
+/// content against it. A standalone `.svg` has no XHTML in its grammar and
+/// epubcheck says nothing more there, so that caller ignores the list.
+pub(crate) fn check_epub2_xhtml_children<'a, 'input>(
+    svg_root: roxmltree::Node<'a, 'input>,
     path: &str,
     report: &mut Report,
-) {
+) -> Vec<roxmltree::Node<'a, 'input>> {
+    let mut xhtml = Vec::new();
     for parent in svg_root.descendants().filter(|n| {
         n.is_element()
             && n.tag_name().namespace() == Some(SVG_NS)
@@ -2344,8 +2354,12 @@ pub(crate) fn check_epub2_xhtml_children(
                 rule,
                 vec![name.to_string(), parent.tag_name().name().to_string()],
             );
+            if child.tag_name().namespace() == Some(XHTML_NS) {
+                xhtml.push(child);
+            }
         }
     }
+    xhtml
 }
 
 /// EPUB 2's `foreignObject`, which is two different grammars.
