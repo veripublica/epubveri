@@ -443,6 +443,7 @@ head_ "Plugins"
 
 PLUGINS="${PLUGINS_DIR:-$ROOT/../epubveri-plugins}"
 CALIBRE_DEBUG="${CALIBRE_DEBUG:-/Applications/calibre.app/Contents/MacOS/calibre-debug}"
+SIGIL_APP="${SIGIL_APP:-/Applications/Sigil.app/Contents}"
 BIN="$(jq -r .target_directory <<< "$META")/release/epubveri"
 
 # suite <label> <runner...> - a unittest suite must say OK, with no skips.
@@ -472,6 +473,18 @@ else
     check "verify-release --local (what the plugins read, on real books)" \
       "$PLUGINS/scripts/verify-release.py" --local "$BIN"
     suite "Sigil plugin suite" python3 "$PLUGINS/plugins/sigil/tests/test_plugin.py"
+    # The same plugin through Sigil's own launcher.py: the result XML Sigil
+    # parses, container-relative bookpaths, absolute charoffsets. The suite
+    # above calls plugin.run() on a container of its own making and cannot see
+    # any of these. It skips without Sigil, which `suite` reads as a failure,
+    # so a missing Sigil is said here instead (suggested at 0.27.0, added
+    # 2026-10-14).
+    if [ -d "$SIGIL_APP" ]; then
+      SIGIL_APP="$SIGIL_APP" suite "Sigil in-app suite (launcher.py)" \
+        python3 "$PLUGINS/plugins/sigil/tests/test_in_sigil.py"
+    else
+      skip "Sigil not installed ($SIGIL_APP) - the in-app Sigil suite did not run"
+    fi
     if [ -x "$CALIBRE_DEBUG" ]; then
       suite "calibre editor plugin suite" \
         "$CALIBRE_DEBUG" "$PLUGINS/plugins/calibre/tests/test_plugin.py"
