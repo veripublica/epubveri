@@ -10,6 +10,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.27.1] - 2026-10-14
+
 ### Added
 
 - **`envelope::Input::transformed(path, output, summary, items)`**, for a
