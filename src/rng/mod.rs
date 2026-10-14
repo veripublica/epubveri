@@ -1158,6 +1158,82 @@ mod tests {
         }
     }
 
+    /// MathML attribute names are per element, as in epubcheck's grammar;
+    /// values stay free. Every case is one book probed against epubcheck
+    /// 5.4.0 (2026-10-14). Until then each element took any attribute, so a
+    /// lowercased `definitionurl` or `<math xml:lang>` passed here and failed
+    /// there - a book epubcheck rejects could pass.
+    #[test]
+    fn mathml_attribute_names_are_per_element() {
+        const NS: &str = "xmlns=\"http://www.w3.org/1998/Math/MathML\" \
+                          xmlns:epub=\"http://www.idpf.org/2007/ops\" \
+                          xmlns:ssml=\"http://www.w3.org/2001/10/synthesis\" \
+                          xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
+        let ok = |math_attrs: &str, m: &str| {
+            let doc = format!(
+                "<html {XHTML_NS_DECLS}><head><title>t</title></head>\
+                 <body><p><math {NS} {math_attrs}>{m}</math></p></body></html>"
+            );
+            validate_node_report(
+                &xhtml_grammar(),
+                roxmltree::Document::parse(&doc).unwrap().root_element(),
+            )
+            .is_empty()
+        };
+        for (attrs, good) in [
+            (
+                "",
+                "<mi dir=\"rtl\" mathvariant=\"bold\" class=\"c\" other=\"o\">x</mi>",
+            ),
+            (
+                "",
+                "<mi aria-label=\"x\" epub:type=\"glossterm\" ssml:ph=\"x\">x</mi>",
+            ),
+            ("", "<mi xlink:href=\"#a\" xml:base=\"a/\">x</mi>"),
+            ("", "<mo accent=\"true\" stretchy=\"false\">x</mo>"),
+            (
+                "",
+                "<mtable columnlines=\"none\" equalrows=\"true\"><mtr><mtd columnspan=\"2\"><mi>x</mi></mtd></mtr></mtable>",
+            ),
+            (
+                "",
+                "<semantics definitionURL=\"u\" encoding=\"e\" cd=\"c\" name=\"n\"><mi>x</mi></semantics>",
+            ),
+            (
+                "",
+                "<semantics><mi>x</mi><annotation definitionURL=\"u\" src=\"a\">x</annotation></semantics>",
+            ),
+            ("", "<maction actiontype=\"toggle\"><mi>x</mi></maction>"),
+            (
+                "display=\"block\" alttext=\"x\" mode=\"display\" width=\"1em\" dir=\"rtl\"",
+                "<mi>x</mi>",
+            ),
+        ] {
+            assert!(ok(attrs, good), "must be accepted: <math {attrs}>{good}");
+        }
+        for (attrs, bad) in [
+            ("", "<mi title=\"t\">x</mi>"),
+            ("", "<mi role=\"img\">x</mi>"),
+            ("", "<mi xml:lang=\"en\">x</mi>"),
+            ("", "<mi xml:id=\"a\">x</mi>"),
+            ("", "<mi ssml:alphabet=\"ipa\">x</mi>"),
+            ("", "<mi aria-checked=\"true\">x</mi>"),
+            ("", "<mi accent=\"true\">x</mi>"),
+            ("", "<mi definitionURL=\"u\">x</mi>"),
+            ("", "<semantics definitionurl=\"u\"><mi>x</mi></semantics>"),
+            (
+                "",
+                "<semantics><mi>x</mi><annotation-xml encoding=\"application/xhtml+xml\" definitionURL=\"u\"/></semantics>",
+            ),
+            ("", "<maction><mi>x</mi></maction>"),
+            ("xml:lang=\"en\"", "<mi>x</mi>"),
+            ("fontfamily=\"serif\"", "<mi>x</mi>"),
+            ("title=\"t\"", "<mi>x</mi>"),
+        ] {
+            assert!(!ok(attrs, bad), "must be rejected: <math {attrs}>{bad}");
+        }
+    }
+
     /// A missing `<title>` is an RSC-005 *error* in EPUB 2 and an RSC-017
     /// *warning* in EPUB 3, and the difference is in the schemas rather than
     /// in taste: XHTML 1.1's `head.content` is simply `title`, so the grammar

@@ -241,6 +241,14 @@ const ANN: &[Ann] = &[
          restriction (Presentation-only + `semantics`) and the MathML3 \
          presentation **content models** are implemented - the arity of \
          `mfrac`/`msubsup`/`munderover` and the like, and table containment. \
+         **MathML attribute *names* are per element since 2026-10-14**, \
+         extracted from epubcheck's MathML grammar: until then every MathML \
+         element took any attribute, so `<mi title>`, `<math xml:lang>` or a \
+         lowercased `definitionurl` - errors in epubcheck - passed here. \
+         **Still open: Content MathML inside `annotation-xml`** - its \
+         elements and their attributes are not checked (`<csymbol bogus>`, \
+         an unknown element there: RSC-005 in epubcheck, silent here). No \
+         shelf book carries Content MathML. \
          **Attribute *values* are checked for ARIA and left permissive for \
          MathML**, and that split is the measured one rather than a stage of \
          a migration. `role` comes from the closed 111-name vocabulary \

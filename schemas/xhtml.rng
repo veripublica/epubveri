@@ -41,6 +41,7 @@
 <grammar xmlns="http://relaxng.org/ns/structure/1.0"
          xmlns:epub="http://www.idpf.org/2007/ops"
          xmlns:ev="http://www.w3.org/2001/xml-events"
+         xmlns:ssml="http://www.w3.org/2001/10/synthesis"
          ns="http://www.w3.org/1999/xhtml"
          datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 
@@ -2225,6 +2226,14 @@
     <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
   </define>
 
+  <!-- `foreignContent` without the attribute wildcard: the opaque content
+       alone, for an element whose own attributes are listed. `annotation-xml`
+       took `foreignContent` until 2026-10-14, and its wildcard admitted any
+       attribute on `annotation-xml` itself, past its `mlAtt` list. -->
+  <define name="foreignChildren">
+    <mixed><zeroOrMore><ref name="anyForeignElement"/></zeroOrMore></mixed>
+  </define>
+
   <define name="anyForeignElement">
     <element><anyName/><ref name="foreignContent"/></element>
   </define>
@@ -2235,13 +2244,21 @@
 
   <!-- ============ MathML 3 Presentation ============ -->
 
-  <!-- Content models only; **attributes are left free**. epubcheck validates
-       MathML normatively (it is part of its EPUB 3 XHTML schema), and the
-       content models are where the real constraints live - `mfrac` takes
-       exactly two children, `msubsup` exactly three, `mtable` holds only
-       rows. Attribute *values* are a second, independent surface with its own
-       false-positive risk and far less to catch, so they stay permissive,
-       exactly as the XHTML side leaves `role`/`aria-*` values unchecked.
+  <!-- Content models, and attribute **names**; attribute *values* are left
+       free. epubcheck validates MathML normatively (it is part of its EPUB 3
+       XHTML schema), and the content models are where most real constraints
+       live - `mfrac` takes exactly two children, `msubsup` exactly three,
+       `mtable` holds only rows. Attribute *values* are a second, independent
+       surface with its own false-positive risk and far less to catch, so they
+       stay permissive, the same call as `iframe`'s values above.
+
+       Names are a different question, and until 2026-10-14 every element here
+       took `anyAttributes`, which freed the names along with the values: a
+       lowercased `definitionurl`, `<mi title>` or `<math xml:lang>` - each an
+       error in epubcheck 5.4.0 - passed here, so a book epubcheck fails could
+       pass. Each element now takes its `mlAtt.*` list (below), extracted from
+       epubcheck's own grammar rather than transcribed, and the one required
+       attribute, `maction`'s `actiontype`, is required.
 
        Derived from `mod/mathml/mathml3-presentation.rnc`, and measured
        against 257k live MathML elements across two independently-produced
@@ -2254,7 +2271,7 @@
        Content MathML used directly. -->
   <define name="mathEl">
     <element name="math" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="anyAttributes"/>
+      <ref name="mlAtt.math"/>
       <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
     </element>
   </define>
@@ -2271,15 +2288,15 @@
        encoding/name rules `mathml.rs` checks separately. -->
   <define name="mlSemantics">
     <element name="semantics" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="anyAttributes"/>
+      <ref name="mlAtt.semantics"/>
       <zeroOrMore>
         <choice>
           <ref name="mathExpression"/>
           <element name="annotation" ns="http://www.w3.org/1998/Math/MathML">
-            <ref name="anyAttributes"/><text/>
+            <ref name="mlAtt.annotation"/><text/>
           </element>
           <element name="annotation-xml" ns="http://www.w3.org/1998/Math/MathML">
-            <ref name="anyAttributes"/><ref name="foreignContent"/>
+            <ref name="mlAtt.annotation-xml"/><ref name="foreignChildren"/>
           </element>
         </choice>
       </zeroOrMore>
@@ -2300,77 +2317,156 @@
     </choice>
   </define>
 
-  <!-- mi/mn/mo/ms/mtext: text, with `mglyph`/`malignmark` allowed inside. -->
+  <!-- mi/mn/mo/ms/mtext: text, with `mglyph`/`malignmark` allowed inside.
+       One element per name from here on, because each name takes its own
+       attributes; the content each group shares is one define. -->
   <define name="mlToken">
-    <element ns="http://www.w3.org/1998/Math/MathML">
-      <choice>
-        <name>mi</name><name>mn</name><name>mo</name>
-        <name>ms</name><name>mtext</name>
-      </choice>
-      <ref name="anyAttributes"/>
-      <mixed>
-        <zeroOrMore>
-          <element ns="http://www.w3.org/1998/Math/MathML">
-            <choice><name>mglyph</name><name>malignmark</name></choice>
-            <ref name="anyAttributes"/><empty/>
+    <choice>
+      <element name="mi" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mi"/><ref name="mlTokenContent"/>
+      </element>
+      <element name="mn" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mn"/><ref name="mlTokenContent"/>
+      </element>
+      <element name="mo" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mo"/><ref name="mlTokenContent"/>
+      </element>
+      <element name="ms" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.ms"/><ref name="mlTokenContent"/>
+      </element>
+      <element name="mtext" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mtext"/><ref name="mlTokenContent"/>
+      </element>
+    </choice>
+  </define>
+
+  <define name="mlTokenContent">
+    <mixed>
+      <zeroOrMore>
+        <choice>
+          <element name="mglyph" ns="http://www.w3.org/1998/Math/MathML">
+            <ref name="mlAtt.mglyph"/><empty/>
           </element>
-        </zeroOrMore>
-      </mixed>
-    </element>
+          <element name="malignmark" ns="http://www.w3.org/1998/Math/MathML">
+            <ref name="mlAtt.malignmark"/><empty/>
+          </element>
+        </choice>
+      </zeroOrMore>
+    </mixed>
   </define>
 
   <define name="mlEmpty">
-    <element ns="http://www.w3.org/1998/Math/MathML">
-      <choice>
-        <name>mspace</name><name>mglyph</name><name>msline</name>
-        <name>none</name><name>mprescripts</name>
-        <name>maligngroup</name><name>malignmark</name>
-      </choice>
-      <ref name="anyAttributes"/><empty/>
-    </element>
+    <choice>
+      <element name="mspace" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mspace"/><empty/>
+      </element>
+      <element name="mglyph" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mglyph"/><empty/>
+      </element>
+      <element name="msline" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.msline"/><empty/>
+      </element>
+      <element name="none" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.none"/><empty/>
+      </element>
+      <element name="mprescripts" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mprescripts"/><empty/>
+      </element>
+      <element name="maligngroup" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.maligngroup"/><empty/>
+      </element>
+      <element name="malignmark" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.malignmark"/><empty/>
+      </element>
+    </choice>
   </define>
 
   <!-- ImpliedMrow (`MathExpression*`), plus mrow/mfenced which share it. -->
   <define name="mlImpliedMrow">
-    <element ns="http://www.w3.org/1998/Math/MathML">
-      <choice>
-        <name>mrow</name><name>mfenced</name><name>msqrt</name>
-        <name>mstyle</name><name>merror</name><name>mpadded</name>
-        <name>mphantom</name><name>menclose</name>
-      </choice>
-      <ref name="anyAttributes"/>
-      <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
-    </element>
+    <choice>
+      <element name="mrow" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mrow"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+      <element name="mfenced" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mfenced"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+      <element name="msqrt" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.msqrt"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+      <element name="mstyle" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mstyle"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+      <element name="merror" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.merror"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+      <element name="mpadded" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mpadded"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+      <element name="mphantom" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mphantom"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+      <element name="menclose" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.menclose"/>
+        <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
+      </element>
+    </choice>
   </define>
 
   <!-- Exactly two children. -->
   <define name="mlBinary">
-    <element ns="http://www.w3.org/1998/Math/MathML">
-      <choice>
-        <name>mfrac</name><name>mroot</name><name>msub</name>
-        <name>msup</name><name>munder</name><name>mover</name>
-      </choice>
-      <ref name="anyAttributes"/>
-      <ref name="mathExpression"/>
-      <ref name="mathExpression"/>
-    </element>
+    <choice>
+      <element name="mfrac" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mfrac"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+      <element name="mroot" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mroot"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+      <element name="msub" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.msub"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+      <element name="msup" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.msup"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+      <element name="munder" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.munder"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+      <element name="mover" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mover"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+    </choice>
   </define>
 
   <!-- Exactly three. -->
   <define name="mlTernary">
-    <element ns="http://www.w3.org/1998/Math/MathML">
-      <choice><name>msubsup</name><name>munderover</name></choice>
-      <ref name="anyAttributes"/>
-      <ref name="mathExpression"/>
-      <ref name="mathExpression"/>
-      <ref name="mathExpression"/>
-    </element>
+    <choice>
+      <element name="msubsup" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.msubsup"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+      <element name="munderover" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.munderover"/>
+        <ref name="mathExpression"/><ref name="mathExpression"/><ref name="mathExpression"/>
+      </element>
+    </choice>
   </define>
 
   <!-- One or more. -->
   <define name="mlAnyChildren">
     <element name="maction" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="anyAttributes"/>
+      <ref name="mlAtt.maction"/>
       <oneOrMore><ref name="mathExpression"/></oneOrMore>
     </element>
   </define>
@@ -2380,7 +2476,7 @@
        is an error. -->
   <define name="mlTable">
     <element name="mtable" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="anyAttributes"/>
+      <ref name="mlAtt.mtable"/>
       <zeroOrMore><ref name="mlTableRow"/></zeroOrMore>
     </element>
   </define>
@@ -2388,11 +2484,11 @@
   <define name="mlTableRow">
     <choice>
       <element name="mtr" ns="http://www.w3.org/1998/Math/MathML">
-        <ref name="anyAttributes"/>
+        <ref name="mlAtt.mtr"/>
         <zeroOrMore><ref name="mlCell"/></zeroOrMore>
       </element>
       <element name="mlabeledtr" ns="http://www.w3.org/1998/Math/MathML">
-        <ref name="anyAttributes"/>
+        <ref name="mlAtt.mlabeledtr"/>
         <oneOrMore><ref name="mlCell"/></oneOrMore>
       </element>
     </choice>
@@ -2400,7 +2496,7 @@
 
   <define name="mlCell">
     <element name="mtd" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="anyAttributes"/>
+      <ref name="mlAtt.mtd"/>
       <zeroOrMore><ref name="mathExpression"/></zeroOrMore>
     </element>
   </define>
@@ -2409,12 +2505,12 @@
        and more pairs. `none` stands in for an absent script. -->
   <define name="mlScripts">
     <element name="mmultiscripts" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="anyAttributes"/>
+      <ref name="mlAtt.mmultiscripts"/>
       <ref name="mathExpression"/>
       <zeroOrMore><ref name="mlScriptPair"/></zeroOrMore>
       <optional>
         <element name="mprescripts" ns="http://www.w3.org/1998/Math/MathML">
-          <ref name="anyAttributes"/><empty/>
+          <ref name="mlAtt.mprescripts"/><empty/>
         </element>
         <zeroOrMore><ref name="mlScriptPair"/></zeroOrMore>
       </optional>
@@ -2431,7 +2527,7 @@
   <define name="mlScriptSlot">
     <choice>
       <element name="none" ns="http://www.w3.org/1998/Math/MathML">
-        <ref name="anyAttributes"/><empty/>
+        <ref name="mlAtt.none"/><empty/>
       </element>
       <ref name="mathExpression"/>
     </choice>
@@ -2440,13 +2536,16 @@
   <!-- Elementary maths (MathML3 §3.6): long division and column arithmetic. -->
   <define name="mlStack">
     <choice>
-      <element ns="http://www.w3.org/1998/Math/MathML">
-        <choice><name>mstack</name><name>msgroup</name></choice>
-        <ref name="anyAttributes"/>
+      <element name="mstack" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.mstack"/>
+        <zeroOrMore><ref name="mlStackExpression"/></zeroOrMore>
+      </element>
+      <element name="msgroup" ns="http://www.w3.org/1998/Math/MathML">
+        <ref name="mlAtt.msgroup"/>
         <zeroOrMore><ref name="mlStackExpression"/></zeroOrMore>
       </element>
       <element name="mlongdiv" ns="http://www.w3.org/1998/Math/MathML">
-        <ref name="anyAttributes"/>
+        <ref name="mlAtt.mlongdiv"/>
         <ref name="mlStackExpression"/>
         <ref name="mlStackExpression"/>
         <oneOrMore><ref name="mlStackExpression"/></oneOrMore>
@@ -2459,12 +2558,12 @@
       <ref name="mathExpression"/>
       <ref name="mlStackRow"/>
       <element name="mscarries" ns="http://www.w3.org/1998/Math/MathML">
-        <ref name="anyAttributes"/>
+        <ref name="mlAtt.mscarries"/>
         <zeroOrMore>
           <choice>
             <ref name="mlSrowExpression"/>
             <element name="mscarry" ns="http://www.w3.org/1998/Math/MathML">
-              <ref name="anyAttributes"/>
+              <ref name="mlAtt.mscarry"/>
               <zeroOrMore><ref name="mlSrowExpression"/></zeroOrMore>
             </element>
           </choice>
@@ -2475,7 +2574,7 @@
 
   <define name="mlStackRow">
     <element name="msrow" ns="http://www.w3.org/1998/Math/MathML">
-      <ref name="anyAttributes"/>
+      <ref name="mlAtt.msrow"/>
       <zeroOrMore><ref name="mlSrowExpression"/></zeroOrMore>
     </element>
   </define>
@@ -2484,9 +2583,735 @@
     <choice>
       <ref name="mathExpression"/>
       <element name="none" ns="http://www.w3.org/1998/Math/MathML">
-        <ref name="anyAttributes"/><empty/>
+        <ref name="mlAtt.none"/><empty/>
       </element>
     </choice>
+  </define>
+
+  <!-- ============ MathML attribute names ============ -->
+
+  <!-- **Extracted, not transcribed**, from epubcheck 5.4.0's EPUB 3 MathML
+       grammar: `mod/mathml/mathml3-common.rnc` and `-presentation.rnc` as
+       `mod/epub-mathml3-inc.rnc` includes them, which adds `epub:type`,
+       `ssml:ph`, `xml:base` and `aria.global` to `CommonAtt` and narrows
+       `annotation-xml` to EPUB's four variants. For each element, every
+       attribute name its attribute patterns reach, the same way
+       `src/aria_roles.rs` was built. Values are `string` throughout (see the
+       MathML section above). `mlCommonAttrs` is what every element shares.
+       Checked before use against 47 one-book probes of epubcheck (`<mi
+       title>`, `<math xml:lang>`, `<math fontfamily>` rejected; `<math
+       mode>`, `<mi other>`, `<annotation definitionURL>` accepted) and
+       against the 37 element/attribute pairs the shelf's two MathML books
+       use, all of which epubcheck accepts. `data-*` never reaches this
+       grammar on EPUB 3: both tools drop it first.
+
+       Re-extract when epubcheck's MathML grammar changes; do not edit by
+       hand. -->
+
+  <!-- `NonMathMLAtt` as EPUB redefines it: any namespaced attribute except
+       MathML's own, `xml:`, XHTML's, XML Events', SSML's and `epub:`, whose
+       allowed members are listed by name. `xlink:href` passes; `xml:lang`,
+       `xml:id` and `ssml:alphabet` do not (each probed); `epub:prefix` is
+       granted by name in `mlCommonAttrs` and reported elsewhere. -->
+  <define name="mlForeignAttrs">
+    <zeroOrMore>
+      <attribute>
+        <anyName>
+          <except>
+            <nsName ns=""/>
+            <nsName ns="http://www.w3.org/1998/Math/MathML"/>
+            <nsName ns="http://www.w3.org/XML/1998/namespace"/>
+            <nsName ns="http://www.w3.org/1999/xhtml"/>
+            <nsName ns="http://www.w3.org/2001/xml-events"/>
+            <nsName ns="http://www.w3.org/2001/10/synthesis"/>
+            <nsName ns="http://www.idpf.org/2007/ops"/>
+          </except>
+        </anyName>
+      </attribute>
+    </zeroOrMore>
+  </define>
+
+  <define name="mlCommonAttrs">
+    <optional><attribute name="aria-atomic"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-braillelabel"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-brailleroledescription"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-busy"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-controls"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-current"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-describedby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-description"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-details"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-disabled"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-errormessage"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-flowto"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-haspopup"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-hidden"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-invalid"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-keyshortcuts"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-label"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-labelledby"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-live"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-owns"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-relevant"><data type="string"/></attribute></optional>
+    <optional><attribute name="aria-roledescription"><data type="string"/></attribute></optional>
+    <optional><attribute name="class"><data type="string"/></attribute></optional>
+    <optional><attribute name="epub:type"><data type="string"/></attribute></optional>
+    <!-- Not in epubcheck's MathML grammar, and still an error there: it is
+         granted here so the grammar does not report it a second time.
+         `opf.rs`'s `check_prefix_placement` already reports `epub:prefix`
+         on any element but the root, as it does for XHTML's (which takes
+         the same grant in `globalAttrsCore`). -->
+    <optional><attribute name="epub:prefix"><data type="string"/></attribute></optional>
+    <optional><attribute name="href"><data type="string"/></attribute></optional>
+    <optional><attribute name="id"><data type="string"/></attribute></optional>
+    <optional><attribute name="other"><data type="string"/></attribute></optional>
+    <optional><attribute name="ssml:ph"><data type="string"/></attribute></optional>
+    <optional><attribute name="style"><data type="string"/></attribute></optional>
+    <optional><attribute name="xml:base"><data type="string"/></attribute></optional>
+    <optional><attribute name="xref"><data type="string"/></attribute></optional>
+    <ref name="mlForeignAttrs"/>
+  </define>
+
+  <define name="mlAtt.annotation">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="cd"><data type="string"/></attribute></optional>
+    <optional><attribute name="definitionURL"><data type="string"/></attribute></optional>
+    <optional><attribute name="encoding"><data type="string"/></attribute></optional>
+    <optional><attribute name="name"><data type="string"/></attribute></optional>
+    <optional><attribute name="src"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.annotation-xml">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="cd"><data type="string"/></attribute></optional>
+    <optional><attribute name="encoding"><data type="string"/></attribute></optional>
+    <optional><attribute name="name"><data type="string"/></attribute></optional>
+    <optional><attribute name="src"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.maction">
+    <ref name="mlCommonAttrs"/>
+    <attribute name="actiontype"><data type="string"/></attribute>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="selection"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.maligngroup">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="groupalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.malignmark">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="edge"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.math">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="accent"><data type="string"/></attribute></optional>
+    <optional><attribute name="accentunder"><data type="string"/></attribute></optional>
+    <optional><attribute name="align"><data type="string"/></attribute></optional>
+    <optional><attribute name="alignmentscope"><data type="string"/></attribute></optional>
+    <optional><attribute name="altimg"><data type="string"/></attribute></optional>
+    <optional><attribute name="altimg-height"><data type="string"/></attribute></optional>
+    <optional><attribute name="altimg-valign"><data type="string"/></attribute></optional>
+    <optional><attribute name="altimg-width"><data type="string"/></attribute></optional>
+    <optional><attribute name="alttext"><data type="string"/></attribute></optional>
+    <optional><attribute name="bevelled"><data type="string"/></attribute></optional>
+    <optional><attribute name="cdgroup"><data type="string"/></attribute></optional>
+    <optional><attribute name="charalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="charspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="close"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnlines"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnwidth"><data type="string"/></attribute></optional>
+    <optional><attribute name="crossout"><data type="string"/></attribute></optional>
+    <optional><attribute name="decimalpoint"><data type="string"/></attribute></optional>
+    <optional><attribute name="denomalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="depth"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="display"><data type="string"/></attribute></optional>
+    <optional><attribute name="displaystyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="edge"><data type="string"/></attribute></optional>
+    <optional><attribute name="equalcolumns"><data type="string"/></attribute></optional>
+    <optional><attribute name="equalrows"><data type="string"/></attribute></optional>
+    <optional><attribute name="fence"><data type="string"/></attribute></optional>
+    <optional><attribute name="form"><data type="string"/></attribute></optional>
+    <optional><attribute name="frame"><data type="string"/></attribute></optional>
+    <optional><attribute name="framespacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="groupalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="height"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indenttarget"><data type="string"/></attribute></optional>
+    <optional><attribute name="infixlinebreakstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="largeop"><data type="string"/></attribute></optional>
+    <optional><attribute name="leftoverhang"><data type="string"/></attribute></optional>
+    <optional><attribute name="length"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreak"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreakmultchar"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreakstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="lineleading"><data type="string"/></attribute></optional>
+    <optional><attribute name="linethickness"><data type="string"/></attribute></optional>
+    <optional><attribute name="location"><data type="string"/></attribute></optional>
+    <optional><attribute name="longdivstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="lquote"><data type="string"/></attribute></optional>
+    <optional><attribute name="lspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="macros"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+    <optional><attribute name="maxsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="maxwidth"><data type="string"/></attribute></optional>
+    <optional><attribute name="minlabelspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="minsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mode"><data type="string"/></attribute></optional>
+    <optional><attribute name="movablelimits"><data type="string"/></attribute></optional>
+    <optional><attribute name="mslinethickness"><data type="string"/></attribute></optional>
+    <optional><attribute name="notation"><data type="string"/></attribute></optional>
+    <optional><attribute name="numalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="open"><data type="string"/></attribute></optional>
+    <optional><attribute name="overflow"><data type="string"/></attribute></optional>
+    <optional><attribute name="position"><data type="string"/></attribute></optional>
+    <optional><attribute name="rightoverhang"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowlines"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="rquote"><data type="string"/></attribute></optional>
+    <optional><attribute name="rspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="scriptlevel"><data type="string"/></attribute></optional>
+    <optional><attribute name="scriptminsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="scriptsizemultiplier"><data type="string"/></attribute></optional>
+    <optional><attribute name="selection"><data type="string"/></attribute></optional>
+    <optional><attribute name="separator"><data type="string"/></attribute></optional>
+    <optional><attribute name="separators"><data type="string"/></attribute></optional>
+    <optional><attribute name="shift"><data type="string"/></attribute></optional>
+    <optional><attribute name="side"><data type="string"/></attribute></optional>
+    <optional><attribute name="stackalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="stretchy"><data type="string"/></attribute></optional>
+    <optional><attribute name="subscriptshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="superscriptshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="symmetric"><data type="string"/></attribute></optional>
+    <optional><attribute name="valign"><data type="string"/></attribute></optional>
+    <optional><attribute name="width"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.menclose">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="notation"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.merror">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mfenced">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="close"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="open"><data type="string"/></attribute></optional>
+    <optional><attribute name="separators"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mfrac">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="bevelled"><data type="string"/></attribute></optional>
+    <optional><attribute name="denomalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="linethickness"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="numalign"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mglyph">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="alt"><data type="string"/></attribute></optional>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="height"><data type="string"/></attribute></optional>
+    <optional><attribute name="index"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+    <optional><attribute name="src"><data type="string"/></attribute></optional>
+    <optional><attribute name="valign"><data type="string"/></attribute></optional>
+    <optional><attribute name="width"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mi">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mlabeledtr">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="columnalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="groupalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowalign"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mlongdiv">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="longdivstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="position"><data type="string"/></attribute></optional>
+    <optional><attribute name="shift"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mmultiscripts">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="subscriptshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="superscriptshift"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mn">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mo">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="accent"><data type="string"/></attribute></optional>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="fence"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="form"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indenttarget"><data type="string"/></attribute></optional>
+    <optional><attribute name="largeop"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreak"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreakmultchar"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreakstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="lineleading"><data type="string"/></attribute></optional>
+    <optional><attribute name="lspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+    <optional><attribute name="maxsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="minsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="movablelimits"><data type="string"/></attribute></optional>
+    <optional><attribute name="rspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="separator"><data type="string"/></attribute></optional>
+    <optional><attribute name="stretchy"><data type="string"/></attribute></optional>
+    <optional><attribute name="symmetric"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mover">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="accent"><data type="string"/></attribute></optional>
+    <optional><attribute name="align"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mpadded">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="depth"><data type="string"/></attribute></optional>
+    <optional><attribute name="height"><data type="string"/></attribute></optional>
+    <optional><attribute name="lspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="voffset"><data type="string"/></attribute></optional>
+    <optional><attribute name="width"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mphantom">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mprescripts">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mroot">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mrow">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.ms">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="lquote"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+    <optional><attribute name="rquote"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mscarries">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="crossout"><data type="string"/></attribute></optional>
+    <optional><attribute name="location"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="position"><data type="string"/></attribute></optional>
+    <optional><attribute name="scriptsizemultiplier"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mscarry">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="crossout"><data type="string"/></attribute></optional>
+    <optional><attribute name="location"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.msgroup">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="position"><data type="string"/></attribute></optional>
+    <optional><attribute name="shift"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.msline">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="leftoverhang"><data type="string"/></attribute></optional>
+    <optional><attribute name="length"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mslinethickness"><data type="string"/></attribute></optional>
+    <optional><attribute name="position"><data type="string"/></attribute></optional>
+    <optional><attribute name="rightoverhang"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mspace">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="depth"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="height"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indenttarget"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreak"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+    <optional><attribute name="width"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.msqrt">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.msrow">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="position"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mstack">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="align"><data type="string"/></attribute></optional>
+    <optional><attribute name="charalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="charspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="stackalign"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mstyle">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="accent"><data type="string"/></attribute></optional>
+    <optional><attribute name="accentunder"><data type="string"/></attribute></optional>
+    <optional><attribute name="align"><data type="string"/></attribute></optional>
+    <optional><attribute name="alignmentscope"><data type="string"/></attribute></optional>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="bevelled"><data type="string"/></attribute></optional>
+    <optional><attribute name="charalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="charspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="close"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnlines"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnwidth"><data type="string"/></attribute></optional>
+    <optional><attribute name="crossout"><data type="string"/></attribute></optional>
+    <optional><attribute name="decimalpoint"><data type="string"/></attribute></optional>
+    <optional><attribute name="denomalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="depth"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="displaystyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="edge"><data type="string"/></attribute></optional>
+    <optional><attribute name="equalcolumns"><data type="string"/></attribute></optional>
+    <optional><attribute name="equalrows"><data type="string"/></attribute></optional>
+    <optional><attribute name="fence"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="form"><data type="string"/></attribute></optional>
+    <optional><attribute name="frame"><data type="string"/></attribute></optional>
+    <optional><attribute name="framespacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="groupalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="height"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentalignlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftfirst"><data type="string"/></attribute></optional>
+    <optional><attribute name="indentshiftlast"><data type="string"/></attribute></optional>
+    <optional><attribute name="indenttarget"><data type="string"/></attribute></optional>
+    <optional><attribute name="infixlinebreakstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="largeop"><data type="string"/></attribute></optional>
+    <optional><attribute name="leftoverhang"><data type="string"/></attribute></optional>
+    <optional><attribute name="length"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreak"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreakmultchar"><data type="string"/></attribute></optional>
+    <optional><attribute name="linebreakstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="lineleading"><data type="string"/></attribute></optional>
+    <optional><attribute name="linethickness"><data type="string"/></attribute></optional>
+    <optional><attribute name="location"><data type="string"/></attribute></optional>
+    <optional><attribute name="longdivstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="lquote"><data type="string"/></attribute></optional>
+    <optional><attribute name="lspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+    <optional><attribute name="maxsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mediummathspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="minlabelspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="minsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="movablelimits"><data type="string"/></attribute></optional>
+    <optional><attribute name="mslinethickness"><data type="string"/></attribute></optional>
+    <optional><attribute name="notation"><data type="string"/></attribute></optional>
+    <optional><attribute name="numalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="open"><data type="string"/></attribute></optional>
+    <optional><attribute name="position"><data type="string"/></attribute></optional>
+    <optional><attribute name="rightoverhang"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowlines"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="rquote"><data type="string"/></attribute></optional>
+    <optional><attribute name="rspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="scriptlevel"><data type="string"/></attribute></optional>
+    <optional><attribute name="scriptminsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="scriptsizemultiplier"><data type="string"/></attribute></optional>
+    <optional><attribute name="selection"><data type="string"/></attribute></optional>
+    <optional><attribute name="separator"><data type="string"/></attribute></optional>
+    <optional><attribute name="separators"><data type="string"/></attribute></optional>
+    <optional><attribute name="shift"><data type="string"/></attribute></optional>
+    <optional><attribute name="side"><data type="string"/></attribute></optional>
+    <optional><attribute name="stackalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="stretchy"><data type="string"/></attribute></optional>
+    <optional><attribute name="subscriptshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="superscriptshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="symmetric"><data type="string"/></attribute></optional>
+    <optional><attribute name="thickmathspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="thinmathspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="valign"><data type="string"/></attribute></optional>
+    <optional><attribute name="verythickmathspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="verythinmathspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="veryverythickmathspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="veryverythinmathspace"><data type="string"/></attribute></optional>
+    <optional><attribute name="width"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.msub">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="subscriptshift"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.msubsup">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="subscriptshift"><data type="string"/></attribute></optional>
+    <optional><attribute name="superscriptshift"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.msup">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="superscriptshift"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mtable">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="align"><data type="string"/></attribute></optional>
+    <optional><attribute name="alignmentscope"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnlines"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnwidth"><data type="string"/></attribute></optional>
+    <optional><attribute name="displaystyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="equalcolumns"><data type="string"/></attribute></optional>
+    <optional><attribute name="equalrows"><data type="string"/></attribute></optional>
+    <optional><attribute name="frame"><data type="string"/></attribute></optional>
+    <optional><attribute name="framespacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="groupalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="minlabelspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowlines"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowspacing"><data type="string"/></attribute></optional>
+    <optional><attribute name="side"><data type="string"/></attribute></optional>
+    <optional><attribute name="width"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mtd">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="columnalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="columnspan"><data type="string"/></attribute></optional>
+    <optional><attribute name="groupalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowspan"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mtext">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="background"><data type="string"/></attribute></optional>
+    <optional><attribute name="color"><data type="string"/></attribute></optional>
+    <optional><attribute name="dir"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontfamily"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontstyle"><data type="string"/></attribute></optional>
+    <optional><attribute name="fontweight"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathsize"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathvariant"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.mtr">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="columnalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="groupalign"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+    <optional><attribute name="rowalign"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.munder">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="accentunder"><data type="string"/></attribute></optional>
+    <optional><attribute name="align"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.munderover">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="accent"><data type="string"/></attribute></optional>
+    <optional><attribute name="accentunder"><data type="string"/></attribute></optional>
+    <optional><attribute name="align"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.none">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="mathbackground"><data type="string"/></attribute></optional>
+    <optional><attribute name="mathcolor"><data type="string"/></attribute></optional>
+  </define>
+
+  <define name="mlAtt.semantics">
+    <ref name="mlCommonAttrs"/>
+    <optional><attribute name="cd"><data type="string"/></attribute></optional>
+    <optional><attribute name="definitionURL"><data type="string"/></attribute></optional>
+    <optional><attribute name="encoding"><data type="string"/></attribute></optional>
+    <optional><attribute name="name"><data type="string"/></attribute></optional>
   </define>
 
   <!-- ============ epub:trigger ============ -->

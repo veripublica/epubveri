@@ -27799,6 +27799,30 @@ mod tests {
         assert_eq!(texts.len(), 2, "{texts:?}");
     }
 
+    /// The two MathML attributes the grammar does not decide alone, each as
+    /// epubcheck 5.4.0 reports it: `data-*` is dropped before validation, and
+    /// a misplaced `epub:prefix` is one RSC-005 - `check_prefix_placement`'s,
+    /// not that and the grammar's.
+    #[test]
+    fn mathml_data_attributes_pass_and_epub_prefix_is_reported_once() {
+        let rsc005 = |mi_attr: &str| {
+            let ch = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>c</title></head><body>
+<p><math xmlns="http://www.w3.org/1998/Math/MathML" alttext="x"><mi {mi_attr}>x</mi></math></p>
+</body></html>"#
+            );
+            crate::validate_bytes(epub_with_opf(None, &ch))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        assert_eq!(rsc005(r#"data-foo="1""#), 0);
+        assert_eq!(rsc005(r#"epub:prefix="a: http://e.org/""#), 1);
+        assert_eq!(rsc005(r#"title="t""#), 1, "the control: a real fault");
+    }
+
     /// A deprecated reserved prefix re-declared to another URI warns once,
     /// at the declaration: the use resolves to the book's own vocabulary.
     /// Declared with the reserved URI itself, both sites warn. Both shapes
