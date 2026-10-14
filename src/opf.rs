@@ -4253,7 +4253,21 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
                 [0xFF, 0xFE, rest @ ..] => crate::css::decode_utf16(rest, false),
                 [0, 0x3C, ..] => crate::css::decode_utf16(bytes, true),
                 [0x3C, 0, ..] => crate::css::decode_utf16(bytes, false),
-                _ => return Some(String::from_utf8_lossy(bytes).into_owned()),
+                // Xerces reads that declaration and stops at it, as it does
+                // for any UTF-16 name over 8-bit bytes (measured on 5.4.0:
+                // RSC-027, a fatal RSC-016 and OPF-001).
+                _ => {
+                    report.push_at_rule(
+                        RSC_016,
+                        Severity::Fatal,
+                        "unrecognized encoding 'UTF-16' over bytes that are not UTF-16",
+                        opf_path,
+                        "opf.encoding.unrecognized",
+                        vec!["UTF-16".to_owned()],
+                    );
+                    push_version_unreadable_after_decode_failure(opf_path, report);
+                    return None;
+                }
             };
             if let Some(declared) = extract_xml_declared_encoding(&text) {
                 let is_utf16 = declared.eq_ignore_ascii_case("utf-16")
@@ -4294,17 +4308,11 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
             })
         }
         Sniffed::Declared(enc) => {
-            // Not `utf8`: Xerces does not take Java's alias either, and
-            // epubcheck adds the parser's RSC-016 to its RSC-028 (measured on
-            // 5.4.0, one book, 2026-10-14).
-            const KNOWN_NON_UTF8: [&str; 5] = [
-                "iso-8859-1",
-                "iso-8859-15",
-                "us-ascii",
-                "ascii",
-                "windows-1252",
-            ];
-            let is_known = KNOWN_NON_UTF8.iter().any(|k| enc.eq_ignore_ascii_case(k));
+            // Whether the parser takes the name is measured, not listed by
+            // hand: a hand list of five made Shift_JIS, windows-1254 and
+            // 184 other names Xerces accepts a fatal RSC-016 (see
+            // `encoding::PARSER_ACCEPTED`).
+            let is_known = crate::encoding::parser_accepts(bytes);
             report.push_at_rule(
                 RSC_028,
                 Severity::Error,
@@ -8626,6 +8634,16 @@ fn check_text(
         let schema_validated = schema_validated_docs.contains(&nfc(&path));
         if let Some(mt) = content_doc_types.get(path.as_str()) {
             crate::encoding::check(&b, &path, mt, report);
+        }
+        // epubcheck's parser stops at a declaration it cannot take, before
+        // the first element, so nothing in the document is checked or
+        // registered there (its references go unseen: measured on 5.4.0,
+        // a declared `SJIS` chapter draws RSC-028, RSC-016 and the OPF-097
+        // of the image only it referenced). `encoding::check` has reported
+        // the RSC-016; checking the document anyway would report what
+        // epubcheck never reaches.
+        if !crate::encoding::parser_accepts(&b) {
+            continue;
         }
         let t = crate::encoding::decode_xml(&b);
         // The raw scans must see the document exactly as authored, so they

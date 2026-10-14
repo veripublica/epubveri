@@ -18,7 +18,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   and severity that encoding draws: HTM_058 for UTF-16 XHTML, RSC-027 for
   UTF-16 anything else, RSC-028 for the rest. It is a port of epubcheck's
   own sniffer, edges included. It reads the first 256 bytes only, and a
-  declared `utf8` is not UTF-8. A tool that has to grade an encoding the
+  declared `utf8` is not UTF-8. `parser_accepts(&[u8])` says whether
+  epubcheck's XML parser takes the declared encoding or stops with a fatal
+  RSC-016. Its answer comes from `PARSER_ACCEPTED`, the 191 names Xerces
+  2.12.2 was measured to accept. A tool that has to grade an encoding the
   way we do can call it instead of keeping its own copy.
 
 ### Fixed
@@ -29,24 +32,34 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `encryption.xml`, `metadata.xml` and `signatures.xml`. We graded only the
   OPF, so a Latin-1 chapter or a UTF-16 SVG passed here and failed in
   epubcheck. HTM_058 now fires on EPUB 2 as well, and on UTF-16 without a
-  byte order mark. All 20 probe books get the same ids as in epubcheck
-  5.4.0, with two exceptions. epubcheck parses the OPF and `container.xml`
-  twice, so it reports their encoding twice; we report it once. And a
-  content document declaring `utf8` draws only RSC-028 here, while
-  epubcheck adds a fatal RSC-016 from its parser.
+  byte order mark. A content document that declares an encoding the parser
+  does not take (`SJIS`, `cp1252`, `utf8`, `UTF-32`) is a fatal RSC-016
+  and is not checked further, because epubcheck stops at its declaration.
+  On 770 probe books our ids match epubcheck 5.4.0's on every one, with two
+  kinds of exception. epubcheck parses the OPF and `container.xml` twice,
+  so it reports their encoding twice; we report it once. And five EBCDIC
+  Latin-9 names draw a PKG-008 there because the JVM has no such charset.
 - **A UTF-16 XML resource is read as UTF-16.** Reading it as UTF-8 turned a
   decodable file into a fatal RSC-016 and skipped every check after it.
   This happened for a UTF-16 SVG, a UTF-16 NCX and an XHTML file without a
   byte order mark. A UTF-16 `container.xml` gave an RSC-005 that epubcheck
   does not report. Each now reports only the encoding finding, as in
   epubcheck.
+- **A package document declaring Shift_JIS, windows-1254, Big5, KOI8-R or
+  any of 186 other names epubcheck's parser accepts is no longer a fatal
+  RSC-016.** We recognised five names by hand, and called every other one
+  unreadable. The fatal also stopped every check of the package, so the
+  rest of the book went unreported. epubcheck reports RSC-028 alone. Now we
+  do too, and the names come from a measurement of all 341 that its parser
+  knows.
 - **The package document follows the same sniffer.** A declared `utf8` is
   now RSC-028 and a fatal RSC-016, as in epubcheck; before, it passed. A
   UTF-16 OPF without a byte order mark is RSC-027 and is checked; before,
   it was a fatal RSC-016. An OPF with `encoding = "ISO-8859-1"`, with a
   space before the `=`, was RSC-028 here, an error that made the book
   invalid. epubcheck's sniffer does not see a declaration there and
-  reports nothing, and now neither do we.
+  reports nothing, and now neither do we. A declaration of `UTF-16` over
+  8-bit bytes is RSC-027 and a fatal RSC-016, as in epubcheck.
 
 ## [0.26.0] - 2026-10-14
 

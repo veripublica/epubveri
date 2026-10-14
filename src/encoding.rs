@@ -24,7 +24,7 @@
 //! encoding reports it with these codes (kepubverto, 2026-10-14), and a second
 //! copy of the sniffer is a second oracle that drifts.
 
-use crate::ids::{HTM_058, RSC_027, RSC_028};
+use crate::ids::{HTM_058, RSC_016, RSC_027, RSC_028};
 use crate::report::{Position, Report, Severity};
 
 /// What [`sniff`] found. Non-exhaustive: epubcheck's sniffer could grow a
@@ -120,18 +120,261 @@ pub fn sniff(bytes: &[u8]) -> Sniffed {
     if head.starts_with(EBCDIC_MAGIC) {
         return Sniffed::Ebcdic;
     }
-    let ascii_len = head
-        .iter()
-        .position(|&b| b == 0 || b > 0x7F)
-        .unwrap_or(head.len());
-    // All ASCII, so the conversion cannot fail.
-    let header = std::str::from_utf8(&head[..ascii_len]).unwrap_or("");
-    match declared_name(header) {
+    match declared_name(ascii_header(head)) {
         None => Sniffed::Utf8,
         Some(name) if name.eq_ignore_ascii_case("UTF-8") => Sniffed::Utf8,
         Some(name) if name.eq_ignore_ascii_case("UTF-16") => Sniffed::Utf16,
         Some(name) => Sniffed::Declared(name.to_owned()),
     }
+}
+
+/// Whether epubcheck's XML parser (Xerces) takes the encoding a resource
+/// declares, or stops at its declaration with a fatal RSC-016.
+///
+/// It only matters when the sniff is not UTF-8: then epubcheck hands Xerces
+/// the bytes and Xerces reads the declaration itself, while on the UTF-8
+/// branch it hands over decoded characters and the declared name is never
+/// looked up. Xerces takes a name, case-blind, only if it is one of the
+/// [`PARSER_ACCEPTED`] names; anything else is fatal, Java's own aliases
+/// (`SJIS`, `Cp1252`, `UTF8`) and `UTF-32` included, and so is a UTF-16 or
+/// EBCDIC name declared over bytes that are neither.
+///
+/// A UTF-16, UCS-4 or EBCDIC resource found by its byte signature is treated
+/// as accepted here; a declaration that contradicts the signature is a
+/// separate question this does not answer.
+pub fn parser_accepts(bytes: &[u8]) -> bool {
+    match sniff(bytes) {
+        Sniffed::Utf8 | Sniffed::Ucs4 | Sniffed::Ebcdic => true,
+        // Only a declaration over 8-bit bytes reaches the table.
+        Sniffed::Utf16 => {
+            let head = &bytes[..bytes.len().min(SNIFF_LEN)];
+            UTF16_MAGIC.iter().any(|m| head.starts_with(m))
+        }
+        Sniffed::Declared(name) => PARSER_ACCEPTED
+            .binary_search(&name.to_ascii_uppercase().as_str())
+            .is_ok(),
+    }
+}
+
+/// The encoding names Xerces 2.12.2 (the parser in epubcheck 5.4.0) accepts
+/// in a declaration over 8-bit bytes, upper-cased and sorted.
+///
+/// **Measured, not derived.** Each of the 341 names in Xerces'
+/// `EncodingMap.fIANA2JavaMap` was declared in an otherwise valid EPUB 3
+/// package document and run through epubcheck 5.4.0 (2026-10-14): these 191
+/// drew no RSC-016, the other 150 a fatal RSC-016 as well. Five of the 191
+/// (`CCSID00924`, `CP00924`, `EBCDIC-LATIN9--EURO`, `IBM-924`, `IBM00924`)
+/// drew a fatal PKG-008 instead: Xerces takes them and maps them to `CP924`,
+/// which that JVM (OpenJDK 26) does not have. That is the JVM's answer, not
+/// the parser's, so they stay here and draw RSC-028 alone. The 150 are
+/// not a family a rule could name: the UTF-16 names and the EBCDIC code pages
+/// are among them, but so are `437`, `ISO_646.IRV:1991` and the JIS X 0208 /
+/// 0212 names, while `CP437`, `US-ASCII` and `SHIFT_JIS` are accepted. Names
+/// outside the map (`SJIS`, `CP1252`, `UTF8`, `UTF-32`) were fatal in every
+/// probe. Re-measure when epubcheck moves to another Xerces.
+pub const PARSER_ACCEPTED: [&str; 191] = [
+    "ANSI_X3.4-1968",
+    "ANSI_X3.4-1986",
+    "ARABIC",
+    "ASCII",
+    "ASMO-708",
+    "BIG5",
+    "CCSID00858",
+    "CCSID00924",
+    "CP-AR",
+    "CP-GR",
+    "CP-IS",
+    "CP00858",
+    "CP00924",
+    "CP367",
+    "CP437",
+    "CP775",
+    "CP819",
+    "CP850",
+    "CP852",
+    "CP855",
+    "CP857",
+    "CP860",
+    "CP861",
+    "CP862",
+    "CP863",
+    "CP864",
+    "CP865",
+    "CP866",
+    "CP868",
+    "CP869",
+    "CP936",
+    "CSASCII",
+    "CSBIG5",
+    "CSEUCKR",
+    "CSEUCPKDFMTJAPANESE",
+    "CSGB2312",
+    "CSIBM855",
+    "CSIBM857",
+    "CSIBM860",
+    "CSIBM861",
+    "CSIBM863",
+    "CSIBM864",
+    "CSIBM865",
+    "CSIBM866",
+    "CSIBM868",
+    "CSIBM869",
+    "CSISO13JISC6220JP",
+    "CSISO2022JP",
+    "CSISO2022KR",
+    "CSISOLATIN1",
+    "CSISOLATIN2",
+    "CSISOLATIN3",
+    "CSISOLATIN4",
+    "CSISOLATIN5",
+    "CSISOLATINARABIC",
+    "CSISOLATINCYRILLIC",
+    "CSISOLATINGREEK",
+    "CSISOLATINHEBREW",
+    "CSKOI8R",
+    "CSKSC56011987",
+    "CSPC775BALTIC",
+    "CSPC850MULTILINGUAL",
+    "CSPC862LATINHEBREW",
+    "CSPC8CODEPAGE437",
+    "CSPCP852",
+    "CSSHIFTJIS",
+    "CSWINDOWS31J",
+    "CYRILLIC",
+    "EBCDIC-LATIN9--EURO",
+    "ECMA-114",
+    "ECMA-118",
+    "ELOT_928",
+    "EUC-JP",
+    "EUC-KR",
+    "EXTENDED_UNIX_CODE_PACKED_FORMAT_FOR_JAPANESE",
+    "GB18030",
+    "GB2312",
+    "GBK",
+    "GREEK",
+    "GREEK8",
+    "HEBREW",
+    "IBM-367",
+    "IBM-437",
+    "IBM-775",
+    "IBM-819",
+    "IBM-850",
+    "IBM-852",
+    "IBM-855",
+    "IBM-857",
+    "IBM-858",
+    "IBM-860",
+    "IBM-861",
+    "IBM-862",
+    "IBM-863",
+    "IBM-864",
+    "IBM-865",
+    "IBM-866",
+    "IBM-868",
+    "IBM-869",
+    "IBM-924",
+    "IBM00858",
+    "IBM00924",
+    "IBM367",
+    "IBM437",
+    "IBM775",
+    "IBM819",
+    "IBM850",
+    "IBM852",
+    "IBM855",
+    "IBM857",
+    "IBM860",
+    "IBM861",
+    "IBM862",
+    "IBM863",
+    "IBM864",
+    "IBM865",
+    "IBM866",
+    "IBM868",
+    "IBM869",
+    "ISO-2022-CN",
+    "ISO-2022-JP",
+    "ISO-2022-KR",
+    "ISO-8859-1",
+    "ISO-8859-13",
+    "ISO-8859-15",
+    "ISO-8859-2",
+    "ISO-8859-3",
+    "ISO-8859-4",
+    "ISO-8859-5",
+    "ISO-8859-6",
+    "ISO-8859-7",
+    "ISO-8859-8",
+    "ISO-8859-8-I",
+    "ISO-8859-9",
+    "ISO-IR-100",
+    "ISO-IR-101",
+    "ISO-IR-109",
+    "ISO-IR-110",
+    "ISO-IR-126",
+    "ISO-IR-127",
+    "ISO-IR-138",
+    "ISO-IR-144",
+    "ISO-IR-148",
+    "ISO-IR-149",
+    "ISO-IR-6",
+    "ISO646-US",
+    "ISO_8859-1",
+    "ISO_8859-15",
+    "ISO_8859-2",
+    "ISO_8859-3",
+    "ISO_8859-4",
+    "ISO_8859-5",
+    "ISO_8859-6",
+    "ISO_8859-7",
+    "ISO_8859-8",
+    "ISO_8859-9",
+    "KOI8-R",
+    "KOREAN",
+    "KSC_5601",
+    "KS_C_5601-1987",
+    "KS_C_5601-1989",
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+    "LATIN-9",
+    "LATIN1",
+    "LATIN2",
+    "LATIN3",
+    "LATIN4",
+    "LATIN5",
+    "MS936",
+    "MS_KANJI",
+    "SHIFT_JIS",
+    "TIS-620",
+    "US",
+    "US-ASCII",
+    "UTF-8",
+    "WINDOWS-1250",
+    "WINDOWS-1251",
+    "WINDOWS-1252",
+    "WINDOWS-1253",
+    "WINDOWS-1254",
+    "WINDOWS-1255",
+    "WINDOWS-1256",
+    "WINDOWS-1257",
+    "WINDOWS-1258",
+    "WINDOWS-31J",
+    "WINDOWS-936",
+    "X0201",
+];
+
+/// The leading ASCII bytes of `head`, which is where the sniffer looks for a
+/// declaration.
+fn ascii_header(head: &[u8]) -> &str {
+    let ascii_len = head
+        .iter()
+        .position(|&b| b == 0 || b > 0x7F)
+        .unwrap_or(head.len());
+    // All ASCII, so the conversion cannot fail.
+    std::str::from_utf8(&head[..ascii_len]).unwrap_or("")
 }
 
 /// The value after the first `encoding=`, if it is quoted and the closing
@@ -167,8 +410,10 @@ pub(crate) fn decode_xml(bytes: &[u8]) -> String {
 }
 
 /// Report the encoding finding, if any, for one resource checked as
-/// `media_type`. For every XML resource except the package document, whose
-/// decode needs the same answer and reports it itself.
+/// `media_type`, and the fatal RSC-016 when the parser would not take the
+/// declared encoding (see [`parser_accepts`]). For every XML resource except
+/// the package document, whose decode needs the same answer and reports it
+/// itself.
 pub(crate) fn check(bytes: &[u8], path: &str, media_type: &str, report: &mut Report) {
     let sniffed = sniff(bytes);
     let Some((id, severity)) = sniffed.finding(media_type) else {
@@ -205,6 +450,21 @@ pub(crate) fn check(bytes: &[u8], path: &str, media_type: &str, report: &mut Rep
         rule,
         params,
     );
+    if !parser_accepts(bytes) {
+        let declared = match &sniffed {
+            Sniffed::Declared(name) => name.clone(),
+            _ => "UTF-16".to_owned(),
+        };
+        report.push_full(
+            RSC_016,
+            Severity::Fatal,
+            format!("the XML parser does not support the declared encoding '{declared}'"),
+            path,
+            Position { line: 1, column: 1 },
+            "xml.encoding.unsupported",
+            vec![declared],
+        );
+    }
 }
 
 #[cfg(test)]
@@ -290,6 +550,42 @@ mod tests {
             Sniffed::Declared("iso-8859-1".into()).name().as_deref(),
             Some("ISO-8859-1")
         );
+    }
+
+    #[test]
+    fn the_parser_takes_the_measured_names_and_nothing_else() {
+        let decl = |n: &str| format!("<?xml version=\"1.0\" encoding=\"{n}\"?><a/>");
+        for n in [
+            "Shift_JIS",
+            "windows-1254",
+            "latin1",
+            "l1",
+            "csShiftJIS",
+            "us-ascii",
+            "UTF-8",
+        ] {
+            assert!(parser_accepts(decl(n).as_bytes()), "{n}");
+        }
+        for n in [
+            "SJIS", "cp1252", "utf8", "UTF-32", "UTF-16", "UTF-16LE", "IBM037", "437", "UTF-8 ",
+        ] {
+            assert!(!parser_accepts(decl(n).as_bytes()), "{n}");
+        }
+        // UTF-16 found by its bytes is not a declaration question.
+        assert!(parser_accepts(&utf16(&decl("UTF-16"), true, true)));
+        assert!(parser_accepts(&utf16(&decl("UTF-16"), false, false)));
+        // On the UTF-8 branch the name is never looked up.
+        assert!(parser_accepts(
+            b"\xEF\xBB\xBF<?xml version=\"1.0\" encoding=\"SJIS\"?><a/>"
+        ));
+        assert!(parser_accepts(
+            b"<?xml version=\"1.0\" encoding = \"SJIS\"?><a/>"
+        ));
+        assert!(
+            PARSER_ACCEPTED.windows(2).all(|w| w[0] < w[1]),
+            "binary search needs order"
+        );
+        assert!(PARSER_ACCEPTED.iter().all(|n| *n == n.to_ascii_uppercase()));
     }
 
     #[test]
