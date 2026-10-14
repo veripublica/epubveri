@@ -54,7 +54,7 @@ tool on a server. It's a real obstacle if you want to:
 - **embed** a validator inside a native desktop/mobile app without
   bundling an entire Java runtime,
 - run validation as part of a **fast, lightweight command-line tool or
-  CI pipeline** — measured at 23 ms against epubcheck's 1.97 s on a
+  CI pipeline** — measured at 23 ms against epubcheck's 2.00 s on a
   typical book, and the difference is the validation work rather than the
   JVM's launch (see "How fast is it?" below), or
 - just avoid the operational overhead of "make sure a compatible JVM is
@@ -188,7 +188,7 @@ To measure real progress (not just "does it seem to work"), epubveri is
 tested against **epubcheck's own test suite** — hundreds of real,
 official test cases, each one a small EPUB file specifically constructed
 to be valid or to trip exactly one specific rule. Measured with epubveri
-0.21.0 against **epubcheck 5.4.0's** suite:
+0.27.0 against **epubcheck 5.4.0's** suite:
 
 - **100%** of the test suite's "this should be flagged" cases are
   correctly caught, with the *exact same error code* epubcheck itself
@@ -208,7 +208,7 @@ such a fixture into a minimal book. **Four** fixtures are written for that
 loose-file mode in a way the wrap cannot reproduce — they are about a
 badly-named file, and a wrap's container does not hold one — so handed the
 harness's book epubcheck reports nothing either, the question cannot be posed,
-and the scenario is skipped. **One** more is scored against the different code
+and the scenario is skipped. **Two** more are scored against the different code
 epubcheck gives once the file is inside a container.
 
 The count and the reason print on every run.
@@ -220,7 +220,7 @@ compare on a real book.
 
 That is measured separately, by running both tools over a private shelf
 of commercially published EPUBs and diffing them by message ID. On
-**544 books, epubveri 0.21.0 against epubcheck 5.4.0: 494 agree on the
+**562 books, epubveri 0.27.0 against epubcheck 5.4.0: 512 agree on the
 reported message-ID set exactly, and there is no message ID epubveri reports
 that epubcheck does not.**
 
@@ -234,7 +234,7 @@ is a documented, deliberate divergence about entity handling in a file
 epubcheck stops reading.
 
 Where the two tools report the *same* ID a different number of times, epubveri
-is always the lower of the two — 216 such cases, without exception.
+is always the lower of the two — 225 such cases, without exception.
 
 Both halves matter and neither substitutes for the other: the corpus
 says whether the rules are right, the shelf says whether they misfire on
@@ -242,33 +242,33 @@ books people actually bought.
 
 ### How fast is it?
 
-Both tools were timed over the same 544 real books on an idle machine,
+Both tools were timed over the same 562 real books on an idle machine,
 invoked the same way — one run per book, which is how an editor plugin or an
-ingestion pipeline actually calls them. **Measured with epubveri 0.21.0 on
-2026-10-02 and epubcheck 5.4.0 on 2026-09-30, on the same machine and the same
-books.** These numbers move with the machine and the books, so re-measuring is
+ingestion pipeline actually calls them. **Measured with epubveri 0.27.0 and
+epubcheck 5.4.0 on 2026-10-14, on the same machine and the same books.** These
+numbers move with the machine and the books, so re-measuring is
 the only honest way to change them.
 
-| | a typical book (median) | the whole shelf of 544 |
+| | a typical book (median) | the whole shelf of 562 |
 |---|---|---|
-| epubcheck 5.4.0 | 1.97 s | ~18 min |
-| **epubveri 0.21.0** | **0.022 s** | **18 s** |
+| epubcheck 5.4.0 | 2.00 s | ~19 min |
+| **epubveri 0.27.0** | **0.023 s** | **19 s** |
 
-About **62 times faster** over the whole shelf and about 89 times on a typical
-book, faster on every one of the 544 books, and reaching the same verdict on
+About **62 times faster** over the whole shelf and about 88 times on a typical
+book, faster on every one of the 562 books, and reaching the same verdict on
 every book where epubcheck is not itself in error (see "How good is it right
 now?" above).
 
 One number worth stating precisely, because the obvious guess is wrong:
 this is **not** the JVM being slow to start. epubcheck's startup is
-66 ms of those 1.97 s — about 3% — and the rest is the validation itself,
+67 ms of those 2.00 s — about 3% — and the rest is the validation itself,
 most of it fixed setup it repeats for every book. epubveri's own process
-startup is about 2 ms. So the honest claim is that the same work takes a small
+startup is about 3 ms. So the honest claim is that the same work takes a small
 fraction of the time, not that Java is slow to launch.
 
 CPU, memory and install size, with the method to reproduce all of it, are in
 **[`docs/BENCHMARK.md`](./docs/BENCHMARK.md)**: epubcheck keeps nearly four
-cores busy and needs 423 MiB for a typical book, against one core and 9.5 MiB.
+cores busy and needs 424 MiB for a typical book, against one core and 9.6 MiB.
 Times move with the machine, the books and the version; measure your own
 before depending on any of this.
 
@@ -643,4 +643,4 @@ This README is deliberately kept beginner-friendly.
 - **Which of epubcheck's checks are implemented**, generated from its message
   sources — [`docs/COVERAGE.md`](./docs/COVERAGE.md).
 - **What epubveri costs to run** against epubcheck — time, CPU, memory and
-  install size, measured on 544 real books — [`docs/BENCHMARK.md`](./docs/BENCHMARK.md).
+  install size, measured on 562 real books — [`docs/BENCHMARK.md`](./docs/BENCHMARK.md).
