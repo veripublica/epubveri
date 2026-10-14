@@ -10,6 +10,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-10-15
+
+**A book with MathML that epubcheck rejects is now rejected here too.**
+Every MathML element used to accept any attribute, so `<mi title>`,
+`<math xml:lang>` or a lowercased `definitionurl` passed here and failed
+epubcheck. These are now errors, as there. A remote `xml:base` now counts
+on any element, from where it is set. XHTML inside an inline EPUB 2 SVG
+`title` is now checked. A plain MathML `annotation` no longer counts as
+alternative text. A lowercased SVG element name is reported once and now
+carries a rule key a repairer can use. On a shelf of 562 real books
+nothing changes: none of them carries these shapes.
+
 ### Added
 
 - **An SVG element name that SVG does not know now carries a rule key,
@@ -23,6 +35,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **MathML attributes are now checked by name, as epubcheck checks them.**
+  Until now every MathML element accepted any attribute, so a book that
+  epubcheck fails could pass here. Examples are `<mi title>`,
+  `<math xml:lang>`, and a lowercased `definitionurl` left behind by a tool
+  that treated XHTML as HTML. Each of these is now RSC-005, as in epubcheck.
+  Each element's list is taken from epubcheck's own MathML grammar, and
+  `maction` requires its `actiontype`. Attribute values are still not
+  checked. Content MathML inside `annotation-xml` is not checked yet.
 - **A lowercased SVG element name is one finding, as in epubcheck.** Under
   `<text>` or `<filter>`, `textpath` and `fegaussianblur` were reported
   twice: once as an unknown name and again by the content-model check. In
@@ -50,15 +70,6 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   and an unknown element. Each is RSC-005 under
   `opf.content_document.schema_violation`. Valid content adds nothing. A
   standalone `.svg` is unchanged: epubcheck does not check XHTML there.
-
-- **MathML attributes are now checked by name, as epubcheck checks them.**
-  Until now every MathML element accepted any attribute, so a book that
-  epubcheck fails could pass here. Examples are `<mi title>`,
-  `<math xml:lang>`, and a lowercased `definitionurl` left behind by a tool
-  that treated XHTML as HTML. Each of these is now RSC-005, as in epubcheck.
-  Each element's list is taken from epubcheck's own MathML grammar, and
-  `maction` requires its `actiontype`. Attribute values are still not
-  checked. Content MathML inside `annotation-xml` is not checked yet.
 
 ## [0.27.1] - 2026-10-14
 
