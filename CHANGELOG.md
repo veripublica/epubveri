@@ -10,6 +10,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`envelope::Input::transformed(path, output, summary, items)`**, for a
+  transformer's `--format json`. It sets `status` from the items: `problems`
+  if any `finding` is at `error` or above, otherwise `ok`. `fix` and
+  `operation` items do not count, since they report what the tool did. The
+  threshold now lives in one place instead of in each tool.
+
 ## [0.27.0] - 2026-10-14
 
 ### Added

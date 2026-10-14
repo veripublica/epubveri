@@ -143,6 +143,32 @@ pub struct Input<S = Summary, D = Data> {
     pub items: Vec<Item<D>>,
 }
 
+impl<S, D> Input<S, D> {
+    /// A transformer's input whose output was written to `output` (§1.2).
+    /// `status` comes from the items, so the threshold lives here and not in
+    /// each tool: `problems` if any `finding` is at `error` or above, otherwise
+    /// `ok`. Only findings count — a `fix` or `operation` item reports what the
+    /// tool did, not what remains wrong.
+    pub fn transformed(
+        path: String,
+        output: String,
+        summary: Option<S>,
+        items: Vec<Item<D>>,
+    ) -> Self {
+        let problems = items
+            .iter()
+            .any(|i| i.kind == "finding" && matches!(i.severity, "fatal" | "error"));
+        Input {
+            path,
+            status: if problems { "problems" } else { "ok" },
+            error: None,
+            output: Some(output),
+            summary,
+            items,
+        }
+    }
+}
+
 impl Input<Summary, Data> {
     /// An input that produced a verdict: `ok`/`problems` by the error-and-above
     /// threshold, with its findings.
@@ -617,6 +643,39 @@ mod tests {
             v.get("summary").is_none(),
             "an input that produced no report manufactures no counters"
         );
+    }
+
+    #[test]
+    fn a_transformed_input_takes_its_status_from_findings_at_error_or_above() {
+        let item = |kind: &str, sev: &'static str| {
+            let code = "KEPUB-001".to_string();
+            let msg = String::new();
+            match kind {
+                "finding" => Item::<Data>::finding(code, None, sev, None, None, msg, None),
+                _ => Item::operation(Outcome::Applied, code, None, sev, None, None, msg, None),
+            }
+        };
+        let status = |items| {
+            Input::<Summary, Data>::transformed("in".into(), "out".into(), None, items).status
+        };
+        assert_eq!(status(vec![]), "ok");
+        assert_eq!(status(vec![item("finding", "warning")]), "ok");
+        assert_eq!(status(vec![item("finding", "error")]), "problems");
+        assert_eq!(status(vec![item("finding", "fatal")]), "problems");
+        assert_eq!(
+            status(vec![item("operation", "error")]),
+            "ok",
+            "an operation is what the tool did, not what remains wrong"
+        );
+
+        let v = serde_json::to_value(Input::<Summary, Data>::transformed(
+            "in".into(),
+            "out".into(),
+            None,
+            vec![],
+        ))
+        .unwrap();
+        assert_eq!(key_set(&v), ["items", "output", "path", "status"]);
     }
 
     #[test]
