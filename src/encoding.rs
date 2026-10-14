@@ -588,6 +588,402 @@ mod tests {
         assert!(PARSER_ACCEPTED.iter().all(|n| *n == n.to_ascii_uppercase()));
     }
 
+    // --- Measured against epubcheck 5.4.0 (2026-10-14) ----------------------
+    //
+    // Everything below is a recorded epubcheck answer, so `cargo test` keeps
+    // what took a JVM to learn. The books are byte-for-byte the probes that
+    // were run (veripublica/epubveri/scratchpad/enc-probe/make.py); the method
+    // is in docs/DECISIONS.md, "Encoding: one sniffer, and a measured parser
+    // table". Where epubcheck reports the OPF's or container.xml's encoding
+    // twice (it parses them twice), the expectation lists it once.
+
+    const MEASURED_REJECTED: [&str; 150] = [
+        "437",
+        "850",
+        "852",
+        "855",
+        "857",
+        "860",
+        "861",
+        "862",
+        "863",
+        "865",
+        "866",
+        "CCSID01140",
+        "CCSID01141",
+        "CCSID01142",
+        "CCSID01143",
+        "CCSID01144",
+        "CCSID01145",
+        "CCSID01146",
+        "CCSID01147",
+        "CCSID01148",
+        "CCSID01149",
+        "CP01140",
+        "CP01141",
+        "CP01142",
+        "CP01143",
+        "CP01144",
+        "CP01145",
+        "CP01146",
+        "CP01147",
+        "CP01148",
+        "CP01149",
+        "CP037",
+        "CP1026",
+        "CP1047",
+        "CP273",
+        "CP277",
+        "CP278",
+        "CP280",
+        "CP284",
+        "CP285",
+        "CP290",
+        "CP297",
+        "CP420",
+        "CP424",
+        "CP500",
+        "CP870",
+        "CP871",
+        "CP918",
+        "CSIBM037",
+        "CSIBM1026",
+        "CSIBM273",
+        "CSIBM277",
+        "CSIBM278",
+        "CSIBM280",
+        "CSIBM284",
+        "CSIBM285",
+        "CSIBM290",
+        "CSIBM297",
+        "CSIBM420",
+        "CSIBM424",
+        "CSIBM500",
+        "CSIBM870",
+        "CSIBM871",
+        "CSIBM918",
+        "CSISO159JISX02121990",
+        "CSISO87JISX0208",
+        "EBCDIC-CP-AR1",
+        "EBCDIC-CP-AR2",
+        "EBCDIC-CP-BE",
+        "EBCDIC-CP-CA",
+        "EBCDIC-CP-CH",
+        "EBCDIC-CP-DK",
+        "EBCDIC-CP-ES",
+        "EBCDIC-CP-FI",
+        "EBCDIC-CP-FR",
+        "EBCDIC-CP-GB",
+        "EBCDIC-CP-HE",
+        "EBCDIC-CP-IS",
+        "EBCDIC-CP-IT",
+        "EBCDIC-CP-NL",
+        "EBCDIC-CP-NO",
+        "EBCDIC-CP-ROECE",
+        "EBCDIC-CP-SE",
+        "EBCDIC-CP-US",
+        "EBCDIC-CP-WT",
+        "EBCDIC-CP-YU",
+        "EBCDIC-JP-KANA",
+        "IBM-1026",
+        "IBM-1047",
+        "IBM-1140",
+        "IBM-1141",
+        "IBM-1142",
+        "IBM-1143",
+        "IBM-1144",
+        "IBM-1145",
+        "IBM-1146",
+        "IBM-1147",
+        "IBM-1148",
+        "IBM-1149",
+        "IBM-273",
+        "IBM-277",
+        "IBM-278",
+        "IBM-280",
+        "IBM-284",
+        "IBM-285",
+        "IBM-290",
+        "IBM-297",
+        "IBM-37",
+        "IBM-420",
+        "IBM-424",
+        "IBM-500",
+        "IBM-870",
+        "IBM-871",
+        "IBM-918",
+        "IBM01140",
+        "IBM01141",
+        "IBM01142",
+        "IBM01143",
+        "IBM01144",
+        "IBM01145",
+        "IBM01146",
+        "IBM01147",
+        "IBM01148",
+        "IBM01149",
+        "IBM037",
+        "IBM1026",
+        "IBM1047",
+        "IBM273",
+        "IBM277",
+        "IBM278",
+        "IBM280",
+        "IBM284",
+        "IBM285",
+        "IBM290",
+        "IBM297",
+        "IBM420",
+        "IBM424",
+        "IBM500",
+        "IBM870",
+        "IBM871",
+        "IBM918",
+        "ISO-IR-159",
+        "ISO-IR-87",
+        "ISO_646.IRV:1991",
+        "UTF-16",
+        "UTF-16BE",
+        "UTF-16LE",
+        "X0208",
+        "X0208dbiJIS_X0208-1983",
+        "X0212",
+    ];
+
+    #[test]
+    fn the_341_names_split_as_measured() {
+        let decl = |n: &str| format!("<?xml version=\"1.0\" encoding=\"{n}\"?><a/>");
+        assert_eq!(PARSER_ACCEPTED.len() + MEASURED_REJECTED.len(), 341);
+        for n in MEASURED_REJECTED {
+            assert!(!PARSER_ACCEPTED.contains(&n), "{n} is in both lists");
+            assert!(
+                !parser_accepts(decl(n).as_bytes()),
+                "{n} was fatal in epubcheck"
+            );
+            assert!(
+                !parser_accepts(decl(&n.to_ascii_lowercase()).as_bytes()),
+                "{n}, lower-cased"
+            );
+        }
+        for n in PARSER_ACCEPTED {
+            assert!(
+                parser_accepts(decl(n).as_bytes()),
+                "{n} drew no RSC-016 in epubcheck"
+            );
+            assert!(
+                parser_accepts(decl(&n.to_ascii_lowercase()).as_bytes()),
+                "{n}, lower-cased"
+            );
+        }
+    }
+
+    const CONTAINER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<container version=\"1.0\" xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\"><rootfiles><rootfile full-path=\"OEBPS/content.opf\" media-type=\"application/oebps-package+xml\"/></rootfiles></container>\n";
+    const OPF3: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"uid\"><metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:identifier id=\"uid\">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language><meta property=\"dcterms:modified\">2026-01-01T00:00:00Z</meta></metadata>\n<manifest><item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/><item id=\"c1\" href=\"c1.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"img\" href=\"i.svg\" media-type=\"image/svg+xml\"/></manifest><spine><itemref idref=\"c1\"/></spine></package>\n";
+    const NAV: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\"><head><title>N</title></head><body><nav epub:type=\"toc\"><ol><li><a href=\"c1.xhtml\">C</a></li></ol></nav></body></html>\n";
+    const SVG: &str = "<?xml version=\"1.0\" encoding=\"{enc}\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 10\"><rect width=\"5\" height=\"5\"/></svg>\n";
+
+    fn chapter(enc: &str, text: &str) -> String {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"{enc}\"?>\n<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>C</title></head><body><p>{text}</p><img src=\"i.svg\" alt=\"x\"/></body></html>\n"
+        )
+    }
+
+    /// A zip entry: its name and its bytes.
+    type Entry = (&'static str, Vec<u8>);
+
+    /// The probe book, with `over` replacing (or adding) entries.
+    fn probe(over: &[Entry]) -> Vec<u8> {
+        use std::io::Write;
+        let mut files: Vec<Entry> = vec![
+            ("META-INF/container.xml", CONTAINER.into()),
+            ("OEBPS/content.opf", OPF3.into()),
+            ("OEBPS/nav.xhtml", NAV.into()),
+            ("OEBPS/c1.xhtml", chapter("UTF-8", "hi").into_bytes()),
+            ("OEBPS/i.svg", SVG.replace("{enc}", "UTF-8").into_bytes()),
+        ];
+        for (name, data) in over {
+            match files.iter_mut().find(|(n, _)| n == name) {
+                Some(slot) => slot.1 = data.clone(),
+                None => files.push((name, data.clone())),
+            }
+        }
+        let mut buf = Vec::new();
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        z.start_file("mimetype", stored).unwrap();
+        z.write_all(b"application/epub+zip").unwrap();
+        for (name, data) in files {
+            z.start_file(name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            z.write_all(&data).unwrap();
+        }
+        z.finish().unwrap();
+        buf
+    }
+
+    fn ids(book: Vec<u8>) -> Vec<&'static str> {
+        let mut ids: Vec<_> = crate::validate_bytes(book)
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        ids.sort_unstable();
+        ids
+    }
+
+    fn be16(s: &str, bom: bool) -> Vec<u8> {
+        utf16(s, true, bom)
+    }
+
+    #[test]
+    fn probe_books_get_epubcheck_s_ids() {
+        let opf = |enc: &str| {
+            OPF3.replace("encoding=\"UTF-8\"", &format!("encoding=\"{enc}\""))
+                .into_bytes()
+        };
+        let cases: Vec<(&str, Vec<Entry>, Vec<&str>)> = vec![
+            ("clean", vec![], vec![]),
+            (
+                "chapter Latin-1",
+                vec![(
+                    "OEBPS/c1.xhtml",
+                    chapter("ISO-8859-1", "caf\u{e9}")
+                        .chars()
+                        .map(|c| c as u8)
+                        .collect(),
+                )],
+                vec![RSC_028],
+            ),
+            (
+                "chapter UTF-16, BOM",
+                vec![("OEBPS/c1.xhtml", be16(&chapter("UTF-16", "hi"), true))],
+                vec![HTM_058],
+            ),
+            (
+                "chapter UTF-16, no BOM",
+                vec![("OEBPS/c1.xhtml", be16(&chapter("UTF-16", "hi"), false))],
+                vec![HTM_058],
+            ),
+            (
+                "chapter with a stray byte",
+                // A Latin-1 `é` (0xE9) in a document that declares UTF-8.
+                vec![(
+                    "OEBPS/c1.xhtml",
+                    chapter("UTF-8", "h@i")
+                        .replace('@', "\u{e9}")
+                        .chars()
+                        .map(|c| c as u8)
+                        .collect(),
+                )],
+                vec![],
+            ),
+            (
+                "chapter SJIS",
+                vec![("OEBPS/c1.xhtml", chapter("SJIS", "hi").into_bytes())],
+                vec!["OPF-097", RSC_016, RSC_028],
+            ),
+            (
+                "chapter utf8",
+                vec![("OEBPS/c1.xhtml", chapter("utf8", "hi").into_bytes())],
+                vec!["OPF-097", RSC_016, RSC_028],
+            ),
+            (
+                "chapter Shift_JIS",
+                vec![("OEBPS/c1.xhtml", chapter("Shift_JIS", "hi").into_bytes())],
+                vec![RSC_028],
+            ),
+            (
+                "nav UTF-16",
+                vec![(
+                    "OEBPS/nav.xhtml",
+                    be16(&NAV.replace("UTF-8", "UTF-16"), true),
+                )],
+                vec![HTM_058],
+            ),
+            (
+                "SVG UTF-16",
+                vec![("OEBPS/i.svg", be16(&SVG.replace("{enc}", "UTF-16"), true))],
+                vec![RSC_027],
+            ),
+            (
+                "SVG UTF-16, no BOM",
+                vec![("OEBPS/i.svg", be16(&SVG.replace("{enc}", "UTF-16"), false))],
+                vec![RSC_027],
+            ),
+            (
+                "SVG Latin-1",
+                vec![(
+                    "OEBPS/i.svg",
+                    SVG.replace("{enc}", "ISO-8859-1").into_bytes(),
+                )],
+                vec![RSC_028],
+            ),
+            (
+                "container Latin-1",
+                vec![(
+                    "META-INF/container.xml",
+                    CONTAINER.replace("UTF-8", "ISO-8859-1").into_bytes(),
+                )],
+                vec![RSC_028],
+            ),
+            (
+                "container UTF-16",
+                vec![(
+                    "META-INF/container.xml",
+                    be16(&CONTAINER.replace("UTF-8", "UTF-16"), true),
+                )],
+                vec![RSC_027],
+            ),
+            (
+                "OPF Shift_JIS",
+                vec![("OEBPS/content.opf", opf("Shift_JIS"))],
+                vec![RSC_028],
+            ),
+            (
+                "OPF windows-1254",
+                vec![("OEBPS/content.opf", opf("windows-1254"))],
+                vec![RSC_028],
+            ),
+            (
+                "OPF utf8",
+                vec![("OEBPS/content.opf", opf("utf8"))],
+                vec!["OPF-001", RSC_016, RSC_028],
+            ),
+            (
+                "OPF cp1252",
+                vec![("OEBPS/content.opf", opf("cp1252"))],
+                vec!["OPF-001", RSC_016, RSC_028],
+            ),
+            (
+                "OPF UTF-16 over 8-bit bytes",
+                vec![("OEBPS/content.opf", opf("UTF-16"))],
+                vec!["OPF-001", RSC_016, RSC_027],
+            ),
+            (
+                "OPF UTF-16, no BOM",
+                vec![(
+                    "OEBPS/content.opf",
+                    be16(&OPF3.replace("UTF-8", "UTF-16"), false),
+                )],
+                vec![RSC_027],
+            ),
+            (
+                "OPF with a space before =",
+                vec![(
+                    "OEBPS/content.opf",
+                    OPF3.replace("encoding=\"UTF-8\"", "encoding = \"ISO-8859-1\"")
+                        .into_bytes(),
+                )],
+                vec![],
+            ),
+        ];
+        for (name, over, mut want) in cases {
+            want.sort_unstable();
+            assert_eq!(ids(probe(&over)), want, "{name}");
+        }
+    }
+
     #[test]
     fn the_finding_depends_on_the_media_type_only_for_utf16() {
         assert_eq!(Sniffed::Utf8.finding("application/xhtml+xml"), None);
