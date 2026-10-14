@@ -27,7 +27,7 @@ pub(crate) fn check(ocf: &mut Ocf, report: &mut Report) {
     let Some(bytes) = ocf.read(CONTAINER) else {
         return;
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let Ok(doc) = parse_xml(&text) else {
         return;
     };
@@ -53,7 +53,7 @@ fn check_metadata_file(ocf: &mut Ocf, report: &mut Report) {
         );
         return;
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let doc = match parse_xml(&text) {
         Ok(doc) => doc,
         Err(e) => {
@@ -206,7 +206,16 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
     let Some(bytes) = ocf.read(href) else {
         return;
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    // Graded as XHTML (`MappingDocumentChecker` is given
+    // `application/xhtml+xml`), and once: the content-document walk has
+    // already graded it if the mapping document is also in a manifest.
+    if !report.messages.iter().any(|m| {
+        m.location.as_deref() == Some(href)
+            && m.rule.is_some_and(|r| r.starts_with("xml.encoding."))
+    }) {
+        crate::encoding::check(&bytes, href, "application/xhtml+xml", report);
+    }
+    let text = crate::encoding::decode_xml(&bytes);
     let doc = match parse_xml(&text) {
         Ok(doc) => doc,
         Err(e) => {

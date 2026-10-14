@@ -800,7 +800,7 @@ fn elem_text(n: roxmltree::Node) -> String {
 
 fn dc_type_of(ocf: &mut crate::ocf::Ocf, path: &str) -> Option<String> {
     let bytes = ocf.read(path)?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let doc = crate::ocf::parse_xml(&text).ok()?;
     doc.descendants()
         .find(|n| {

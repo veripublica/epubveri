@@ -25,6 +25,7 @@ pub mod cmt;
 pub mod css;
 pub mod dict;
 pub mod edupub;
+pub mod encoding;
 pub mod envelope;
 pub mod filename;
 pub mod foreign;
@@ -64,7 +65,7 @@ use report::Report;
 /// (PKG-013); the real, fully-reporting parse happens in `opf::check`.
 fn peek_opf_version(ocf: &mut ocf::Ocf, opf_path: &str) -> Option<String> {
     let bytes = ocf.read(opf_path)?;
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let doc = ocf::parse_xml(&text).ok()?;
     doc.root_element().attr_no_ns("version").map(String::from)
 }
@@ -76,7 +77,7 @@ fn peek_dc_types(ocf: &mut ocf::Ocf, opf_path: &str) -> Vec<String> {
     let Some(bytes) = ocf.read(opf_path) else {
         return Vec::new();
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let Ok(doc) = ocf::parse_xml(&text) else {
         return Vec::new();
     };
@@ -179,6 +180,7 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     };
     ocf::check_signatures(&mut container, &mut report);
     let opf_paths = ocf::find_rootfiles(&mut container, &mut report);
+    ocf::check_meta_inf_encodings(&mut container, &opf_paths, &mut report);
     // `encryption.xml`'s content model is version-dependent, so the rootfiles
     // have to be found first (issue #88). Measured against epubcheck 5.3.0, one
     // book per shape: an empty `<enc:EncryptedData>` is "missing required

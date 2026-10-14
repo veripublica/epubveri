@@ -866,7 +866,7 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     let Some(bytes) = ocf.read(CONTAINER) else {
         return Vec::new();
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
@@ -978,7 +978,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
     // borrows a document parsed out of these bytes, so `ocf` cannot be
     // mutated while it is alive.
     let mut encrypted: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {
@@ -1332,13 +1332,41 @@ fn check_encrypted_item(item: roxmltree::Node, report: &mut Report, epub3: Optio
 /// If `META-INF/signatures.xml` is present, checks its root element name
 /// (RSC-005 if not "signatures") - its actual signature content isn't
 /// validated, same "presence/shape only" scope as `check_encryption`.
+/// The encoding of each `META-INF` file epubcheck parses, graded as
+/// [`crate::encoding`] grades any XML resource (all of them are checked as
+/// `application/xml`, so UTF-16 is RSC-027 here).
+///
+/// `container.xml` is parsed whenever it is present. `encryption.xml`,
+/// `metadata.xml` and `signatures.xml` are parsed only once the container
+/// file has named package documents that all exist: `OCFChecker.check()`
+/// returns before `checkEncryptionFile` / `checkOtherMetaFiles` otherwise.
+/// `manifest.xml` and `rights.xml` are never parsed, so never graded.
+pub fn check_meta_inf_encodings(ocf: &mut Ocf, opf_paths: &[String], report: &mut Report) {
+    let mut files = vec!["META-INF/container.xml"];
+    if !opf_paths.is_empty() && opf_paths.iter().all(|p| ocf.has(p)) {
+        files.extend([
+            "META-INF/encryption.xml",
+            "META-INF/metadata.xml",
+            "META-INF/signatures.xml",
+        ]);
+    }
+    for name in files {
+        if !ocf.has(name) {
+            continue;
+        }
+        if let Some(head) = ocf.read_head_content(name, crate::encoding::SNIFF_LEN as u64) {
+            crate::encoding::check(&head, name, "application/xml", report);
+        }
+    }
+}
+
 pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
     const SIG: &str = "META-INF/signatures.xml";
     if !ocf.has(SIG) {
         return;
     }
     let Some(bytes) = ocf.read(SIG) else { return };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let doc = match parse_xml(&text) {
         Ok(d) => d,
         Err(e) => {

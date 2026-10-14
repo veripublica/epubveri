@@ -1455,7 +1455,7 @@ fn target_id_kinds_uncached(
     let bytes = ocf.read_content(orig)?;
     // The shift is irrelevant here: this reads an id map out of the DOM and
     // never reports a position.
-    let (text, _) = crate::htm::declare_dtd_entities(crate::css::decode_bytes(&bytes), is_epub3);
+    let (text, _) = crate::htm::declare_dtd_entities(crate::encoding::decode_xml(&bytes), is_epub3);
     let doc = parse_xml(&text).ok()?;
     Some(dom_id_kinds(&doc))
 }
@@ -4217,82 +4217,86 @@ fn check_duplicate_ids(doc: &roxmltree::Document, opf_path: &str, report: &mut R
     }
 }
 
-/// EPUB 3 §3.9 (XML conformance): decodes the OPF's raw bytes into text,
-/// detecting its real encoding from a BOM or (for BOM-less UTF-32, per the
-/// XML spec's own Appendix F autodetection) a `00 00 00 '<'`/`'<' 00 00 00`
-/// byte pattern, and reports:
-/// - **RSC-027** (warning): genuine UTF-16 (BOM-detected) - EPUB requires
-///   UTF-8 but this is still decodable, so checking continues.
-/// - **RSC-028** (error): any other non-UTF-8 encoding (UTF-32, Latin-1,
-///   or any other declared-but-recognized name) - still decodable, so
-///   checking continues.
+/// EPUB 3 §3.9 (XML conformance): decodes the OPF's raw bytes into text and
+/// grades its encoding. The grading is [`crate::encoding::sniff`]'s, the one
+/// every other XML resource gets; only the rule keys and the decode are the
+/// package document's own:
+/// - **RSC-027** (warning): UTF-16, by a BOM, by `<?` in either 16-bit order,
+///   or by a declaration of `UTF-16` - still decodable, so checking continues.
+/// - **RSC-028** (error): any other encoding but UTF-8 (UCS-4, EBCDIC, a
+///   declared Latin-1, even a declared `utf8`, which epubcheck's exact
+///   comparison with `UTF-8` does not accept) - checking continues, unless
+///   RSC-016 below stops it.
 /// - **RSC-016** (fatal, in *addition* to RSC-027/028, returns `None` to
 ///   abort all further checks): the declared encoding doesn't match the
 ///   actual bytes (a UTF-16-BOM'd file declaring `UTF-8`) or names an
 ///   encoding we don't recognize at all - a real, strict XML parser
 ///   can't recover from either, so neither can we.
 fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option<String> {
-    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        return Some(String::from_utf8_lossy(&bytes[3..]).into_owned());
-    }
-    if bytes.len() >= 2
-        && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE))
-    {
-        let big_endian = bytes[0] == 0xFE;
-        let text = crate::css::decode_utf16(&bytes[2..], big_endian);
-        report.push_at(
-            RSC_027,
-            Severity::Warning,
-            "the OPF is UTF-16 encoded; EPUB requires UTF-8",
-            opf_path,
-        );
-        if let Some(declared) = extract_xml_declared_encoding(&text) {
-            let is_utf16 = declared.eq_ignore_ascii_case("utf-16")
-                || declared.eq_ignore_ascii_case("utf-16le")
-                || declared.eq_ignore_ascii_case("utf-16be");
-            if !is_utf16 {
-                report.push_at_rule(
-                    RSC_016,
-                    Severity::Fatal,
-                    format!("declared encoding '{declared}' does not match the file's actual UTF-16 encoding"),
-                    opf_path,
-                    "opf.encoding.mismatched_utf16",
-                    vec![declared.clone()],
-                );
-                push_version_unreadable_after_decode_failure(opf_path, report);
-                return None;
+    use crate::encoding::Sniffed;
+    match crate::encoding::sniff(bytes) {
+        Sniffed::Utf8 => {
+            let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+            Some(String::from_utf8_lossy(body).into_owned())
+        }
+        Sniffed::Utf16 => {
+            report.push_at(
+                RSC_027,
+                Severity::Warning,
+                "the OPF is UTF-16 encoded; EPUB requires UTF-8",
+                opf_path,
+            );
+            // A BOM, or `<?` in 16-bit form; otherwise only the declaration
+            // said UTF-16, over bytes that are not.
+            let text = match bytes {
+                [0xFE, 0xFF, rest @ ..] => crate::css::decode_utf16(rest, true),
+                [0xFF, 0xFE, rest @ ..] => crate::css::decode_utf16(rest, false),
+                [0, 0x3C, ..] => crate::css::decode_utf16(bytes, true),
+                [0x3C, 0, ..] => crate::css::decode_utf16(bytes, false),
+                _ => return Some(String::from_utf8_lossy(bytes).into_owned()),
+            };
+            if let Some(declared) = extract_xml_declared_encoding(&text) {
+                let is_utf16 = declared.eq_ignore_ascii_case("utf-16")
+                    || declared.eq_ignore_ascii_case("utf-16le")
+                    || declared.eq_ignore_ascii_case("utf-16be");
+                if !is_utf16 {
+                    report.push_at_rule(
+                        RSC_016,
+                        Severity::Fatal,
+                        format!("declared encoding '{declared}' does not match the file's actual UTF-16 encoding"),
+                        opf_path,
+                        "opf.encoding.mismatched_utf16",
+                        vec![declared.clone()],
+                    );
+                    push_version_unreadable_after_decode_failure(opf_path, report);
+                    return None;
+                }
             }
+            Some(text)
         }
-        return Some(text);
-    }
-    let is_utf32_be = bytes.len() >= 4
-        && ((bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
-            || (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0x00 && bytes[3] == b'<'));
-    let is_utf32_le = bytes.len() >= 4
-        && ((bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00)
-            || (bytes[0] == b'<' && bytes[1] == 0x00 && bytes[2] == 0x00 && bytes[3] == 0x00));
-    if is_utf32_be || is_utf32_le {
-        let has_real_bom =
-            (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
-                || (bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00);
-        let body = if has_real_bom { &bytes[4..] } else { bytes };
-        report.push_at_rule(
-            RSC_028,
-            Severity::Error,
-            "the OPF uses an encoding other than UTF-8, which is not allowed",
-            opf_path,
-            "opf.encoding.non_utf8_detected",
-            Vec::new(),
-        );
-        return Some(decode_utf32(body, is_utf32_be));
-    }
-    let prelim = String::from_utf8_lossy(bytes).into_owned();
-    match extract_xml_declared_encoding(&prelim) {
-        None => Some(prelim),
-        Some(enc) if enc.eq_ignore_ascii_case("utf-8") || enc.eq_ignore_ascii_case("utf8") => {
-            Some(prelim)
+        sniffed @ (Sniffed::Ucs4 | Sniffed::Ebcdic) => {
+            report.push_at_rule(
+                RSC_028,
+                Severity::Error,
+                "the OPF uses an encoding other than UTF-8, which is not allowed",
+                opf_path,
+                "opf.encoding.non_utf8_detected",
+                Vec::new(),
+            );
+            // The two byte orders decoded here are the ones Appendix F of
+            // the XML specification names; the unusual 2143/3412 orders and
+            // EBCDIC are left to fail the parse.
+            Some(match (sniffed, bytes) {
+                (Sniffed::Ucs4, [0, 0, 0xFE, 0xFF, rest @ ..]) => decode_utf32(rest, true),
+                (Sniffed::Ucs4, [0, 0, 0, 0x3C, ..]) => decode_utf32(bytes, true),
+                (Sniffed::Ucs4, [0x3C, 0, 0, 0, ..]) => decode_utf32(bytes, false),
+                _ => String::from_utf8_lossy(bytes).into_owned(),
+            })
         }
-        Some(enc) => {
+        Sniffed::Declared(enc) => {
+            // Not `utf8`: Xerces does not take Java's alias either, and
+            // epubcheck adds the parser's RSC-016 to its RSC-028 (measured on
+            // 5.4.0, one book, 2026-10-14).
             const KNOWN_NON_UTF8: [&str; 5] = [
                 "iso-8859-1",
                 "iso-8859-15",
@@ -4309,7 +4313,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
                 ),
                 opf_path,
                 "opf.encoding.declared_non_utf8",
-                vec![enc.to_string()],
+                vec![enc.clone()],
             );
             if !is_known {
                 report.push_at_rule(
@@ -4318,7 +4322,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
                     format!("unrecognized encoding '{enc}'"),
                     opf_path,
                     "opf.encoding.unrecognized",
-                    vec![enc.to_string()],
+                    vec![enc],
                 );
                 push_version_unreadable_after_decode_failure(opf_path, report);
                 return None;
@@ -4333,7 +4337,7 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
                 // exercises a codepoint where they'd actually differ).
                 Some(bytes.iter().map(|&b| b as char).collect())
             } else {
-                Some(prelim)
+                Some(String::from_utf8_lossy(bytes).into_owned())
             }
         }
     }
@@ -4555,7 +4559,7 @@ fn container_rootfiles_silently(ocf: &mut Ocf) -> Vec<String> {
     let Some(bytes) = ocf.read("META-INF/container.xml") else {
         return Vec::new();
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let Ok(doc) = crate::ocf::parse_xml(&text) else {
         return Vec::new();
     };
@@ -4587,7 +4591,7 @@ fn container_link_targets_silently(ocf: &mut Ocf) -> HashSet<String> {
     let Some(bytes) = ocf.read("META-INF/container.xml") else {
         return out;
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let Ok(doc) = crate::ocf::parse_xml(&text) else {
         return out;
     };
@@ -4617,7 +4621,7 @@ fn declared_resources_of(ocf: &mut Ocf, package_path: &str) -> HashSet<String> {
     let Some(bytes) = ocf.read(package_path) else {
         return out;
     };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let Ok(doc) = crate::ocf::parse_xml(&text) else {
         return out;
     };
@@ -7922,7 +7926,8 @@ fn check_text(
                                     }
                                     if let Some(orig) = name_index.get(&nfc(fb_path)).cloned()
                                         && let Some(b) = ocf.read_content(&orig)
-                                        && let Ok(fb_doc) = parse_xml(&String::from_utf8_lossy(&b))
+                                        && let Ok(fb_doc) =
+                                            parse_xml(&crate::encoding::decode_xml(&b))
                                     {
                                         if fb_mt == "application/xhtml+xml" {
                                             crate::layout::check_xhtml_viewport(
@@ -7940,7 +7945,7 @@ fn check_text(
                             if let Some(orig) = name_index.get(&nfc(path)).cloned()
                                 && let Some(b) = ocf.read_content(&orig)
                             {
-                                let t = String::from_utf8_lossy(&b).into_owned();
+                                let t = crate::encoding::decode_xml(&b);
                                 if let Ok(d) = parse_xml(&t) {
                                     // The whole viewport family is EPUB 3
                                     // only - HTM-046, HTM-048, HTM-060a and
@@ -8053,7 +8058,7 @@ fn check_text(
                     } else if let Some(orig) = name_index.get(&nfc(ncx_path)).cloned()
                         && let Some(b) = ocf.read_content(&orig)
                     {
-                        let ncx_text = String::from_utf8_lossy(&b).into_owned();
+                        let ncx_text = crate::encoding::decode_xml(&b);
                         // Only NCX-001/NCX-004 need the package identifier —
                         // they compare `dtb:uid` against it — so the absence
                         // of one is passed *into* the check rather than used
@@ -8394,6 +8399,33 @@ fn check_text(
         })
         .map(|(path, _)| path.clone())
         .collect();
+    // Each content document's media type, which decides whether UTF-16 is
+    // HTM-058 or RSC-027 (`XMLParser.process()` asks for XHTML exactly).
+    let content_doc_types: HashMap<&str, &str> = manifest_order
+        .iter()
+        .map(|(path, mt)| (path.as_str(), mt.as_str()))
+        .collect();
+    // The other XML resources epubcheck parses, and so grades the encoding
+    // of (`CheckerFactory.newChecker`, plus the NCX by `isNcx`): SVG and the
+    // NCX in both versions, Media Overlays and search key maps in EPUB 3
+    // only. Only the head is read; nothing else here needs these bytes.
+    // DTBook is parsed too, but is out of scope with the rest of DTBook.
+    for (path, mt) in &manifest_order {
+        let graded = match mt.as_str() {
+            "image/svg+xml" | "application/x-dtbncx+xml" => true,
+            "application/smil+xml" | "application/vnd.epub.search-key-map+xml" => is_epub3,
+            _ => false,
+        };
+        if !graded {
+            continue;
+        }
+        let Some(orig) = name_index.get(&nfc(path)).cloned() else {
+            continue;
+        };
+        if let Some(head) = ocf.read_head_content(&orig, crate::encoding::SNIFF_LEN as u64) {
+            crate::encoding::check(&head, path, mt, report);
+        }
+    }
     // The subset the RELAX NG grammar and the Schematron run over. Measured,
     // not assumed: the identical document draws three RSC-005 from epubcheck
     // when the manifest declares it `application/xhtml+xml` and none at all
@@ -8592,11 +8624,14 @@ fn check_text(
         // report (its `IDUNIQUE_20_SCH` is keyed the same way) and no
         // ID-reference resolution.
         let schema_validated = schema_validated_docs.contains(&nfc(&path));
-        let t = crate::css::decode_bytes(&b);
+        if let Some(mt) = content_doc_types.get(path.as_str()) {
+            crate::encoding::check(&b, &path, mt, report);
+        }
+        let t = crate::encoding::decode_xml(&b);
         // The raw scans must see the document exactly as authored, so they
         // run before the entity declarations below are added to it.
         let before_raw = report.messages.len();
-        crate::htm::check_raw(&b, &t, &path, is_epub3, report);
+        crate::htm::check_raw(&t, &path, is_epub3, report);
         // An EPUB 2 document's DOCTYPE promises the XHTML DTD's named
         // entities; declare them inline so `&nbsp;` doesn't fail the parse
         // and silently skip every check below (issue #23). Line numbers are
@@ -12119,7 +12154,7 @@ fn check_text(
         let Some(b) = ocf.read_content(&orig) else {
             continue;
         };
-        let text = String::from_utf8_lossy(&b).into_owned();
+        let text = crate::encoding::decode_xml(&b);
         let Ok(d) = parse_xml(&text) else { continue };
         let dir = parent_dir(doc_path);
         let (svg_classes, svg_has_css) = collect_svg_class_names(&d, &dir, &name_index, ocf);
@@ -12146,7 +12181,7 @@ fn check_text(
         let Some(b) = ocf.read_content(&orig) else {
             continue;
         };
-        let raw = String::from_utf8_lossy(&b).into_owned();
+        let raw = crate::encoding::decode_xml(&b);
         // **A standalone SVG that is not well-formed** (#141). It used to be
         // skipped without a word, so an empty, truncated or broken SVG passed
         // the book where epubcheck reports RSC-016: the SVG counterpart of
@@ -13102,7 +13137,7 @@ fn check_text(
             };
             // The extractors return remote hrefs unresolved and local ones
             // as container paths, so the two sets are filled from one walk.
-            for r in extract(&String::from_utf8_lossy(&b), &parent_dir(path)) {
+            for r in extract(&crate::encoding::decode_xml(&b), &parent_dir(path)) {
                 if is_remote_url(&r) {
                     remote_resource_refs.insert(r);
                 } else {
@@ -13338,7 +13373,7 @@ fn check_text(
         let Some(b) = ocf.read_content(&orig) else {
             continue;
         };
-        let smil_text = String::from_utf8_lossy(&b).into_owned();
+        let smil_text = crate::encoding::decode_xml(&b);
         let dir = parent_dir(&path);
         let overlay_path = nfc(&path);
         let (targets, textref_targets, text_srcs) = crate::smil::check(
@@ -13648,7 +13683,7 @@ fn check_text(
             let text = name_index
                 .get(&nfc(overlay))
                 .and_then(|orig| ocf.read_content(orig))
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .map(|b| crate::encoding::decode_xml(&b))
                 .unwrap_or_default();
             positions.insert(overlay, crate::smil::text_link_positions(&text, &wanted));
         }
@@ -13946,7 +13981,7 @@ fn check_dictionaries(
         let Some(b) = ocf.read_content(&orig) else {
             continue;
         };
-        let text = String::from_utf8_lossy(&b).into_owned();
+        let text = crate::encoding::decode_xml(&b);
         let Ok(d) = parse_xml(&text) else { continue };
         let skm_dir = parent_dir(path);
         let hrefs = crate::dict::check_skm(&d, path, report);
@@ -15002,7 +15037,7 @@ fn check_font_obfuscation(
 ) {
     const ENC: &str = "META-INF/encryption.xml";
     let Some(bytes) = ocf.read(ENC) else { return };
-    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let text = crate::encoding::decode_xml(&bytes);
     let Ok(doc) = parse_xml(&text) else { return };
 
     for enc_data in doc

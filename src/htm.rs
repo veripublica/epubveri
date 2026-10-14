@@ -37,7 +37,7 @@ fn offset_in(haystack: &str, needle: &str) -> usize {
 /// real false positive found via the corpus, not by inspection: dozens of
 /// EPUB2 fixtures across the corpus reuse exactly this doctype as their
 /// standard template).
-pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, report: &mut Report) {
+pub(crate) fn check_raw(text: &str, path: &str, is_epub3: bool, report: &mut Report) {
     // A finding per entity reference is possible; see `LocationIndex`.
     let _positions = crate::report::LocationIndex::scope(text);
     // Entity well-formedness (RSC-016) is a basic XML concern, not an
@@ -51,16 +51,6 @@ pub(crate) fn check_raw(bytes: &[u8], text: &str, path: &str, is_epub3: bool, re
         check_doctype_epub2(text, path, report);
         return;
     }
-    if crate::css::has_utf16_bom(bytes) {
-        report.push_at_pos(
-            HTM_058,
-            Severity::Error,
-            "content document is not UTF-8 encoded",
-            path,
-            Position::of_offset(text, 0),
-        );
-    }
-
     check_xml_version(text, path, report);
 
     check_doctype(text, path, report);
@@ -1879,7 +1869,7 @@ mod tests {
 
     fn run_raw(text: &str) -> Vec<&'static str> {
         let mut report = Report::new();
-        check_raw(text.as_bytes(), text, "content.xhtml", true, &mut report);
+        check_raw(text, "content.xhtml", true, &mut report);
         report.messages.iter().map(|m| m.id).collect()
     }
 
@@ -2058,7 +2048,7 @@ mod tests {
         };
         let rules = |text: &str| {
             let mut r = Report::new();
-            check_raw(text.as_bytes(), text, "c.xhtml", false, &mut r);
+            check_raw(text, "c.xhtml", false, &mut r);
             r.messages.iter().filter_map(|m| m.rule).collect::<Vec<_>>()
         };
         for id in [
@@ -2097,7 +2087,7 @@ mod tests {
             let mut r = Report::new();
             let text =
                 format!("<html xmlns=\"http://www.w3.org/1999/xhtml\"><body>{body}</body></html>");
-            check_raw(text.as_bytes(), &text, "c.xhtml", true, &mut r);
+            check_raw(&text, "c.xhtml", true, &mut r);
             r.messages.iter().filter_map(|m| m.rule).collect::<Vec<_>>()
         };
         assert!(rules("<p>Tom & Jerry</p>").contains(&"htm.entity.bare_ampersand"));
@@ -2132,16 +2122,6 @@ mod tests {
     }
 
     #[test]
-    fn utf16_bom_errors() {
-        let mut bytes = vec![0xFE, 0xFF];
-        bytes.extend("<html/>".encode_utf16().flat_map(|c| c.to_be_bytes()));
-        let mut report = Report::new();
-        check_raw(&bytes, "<html/>", "content.xhtml", true, &mut report);
-        let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
-        assert_eq!(ids, vec![HTM_058]);
-    }
-
-    #[test]
     fn obsolete_public_doctype_errors() {
         let text = r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html/>"#;
         assert_eq!(run_raw(text), vec![HTM_004]);
@@ -2162,7 +2142,7 @@ mod tests {
         // model.
         let text = r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd"><html/>"#;
         let mut report = Report::new();
-        check_raw(text.as_bytes(), text, "content.xhtml", false, &mut report);
+        check_raw(text, "content.xhtml", false, &mut report);
         assert!(report.messages.is_empty());
     }
 
