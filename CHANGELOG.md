@@ -10,6 +10,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-10-14
+
 ### Added
 
 - **`epubveri::encoding`: the encoding of an XML resource, as the validator
