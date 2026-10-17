@@ -192,6 +192,18 @@ check "wasm32-unknown-unknown build" \
 check "cargo doc (no broken links)" \
   env RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
+# Added 2026-10-17: CI's `audit` job runs on the push to main, so it judged
+# 0.29.0 only after the tag was out, and it was red — three advisories on
+# zip 8.6.0 had entered the database since 0.28.0's run, and the note that
+# kept zip 8 had checked yanked status and never run this. The database
+# changes without our tree changing, so run it every time; a missing
+# cargo-audit is a failure, not a skip.
+if command -v cargo-audit >/dev/null; then
+  check "cargo audit (advisory database fetched now)" cargo audit --file Cargo.lock
+else
+  bad "cargo audit is not installed — cargo install cargo-audit --locked"
+fi
+
 # The published MSRV, checked here as well as in CI — because this is the
 # promise that reaches crates.io, and crates.io is the irreversible step this
 # whole script exists for. CI's `msrv` job runs on the push to main, which

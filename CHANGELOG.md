@@ -10,6 +10,43 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.29.1] - 2026-10-17
+
+**epubveri moves to zip 9.0.4, and reads every book as 0.29.0 did.** zip
+8.6.0, which 0.29.0 kept on purpose, fails `cargo audit`: RUSTSEC-2026-0367,
+-0368 and -0369 cover every zip below 9.0.0. 0.29.0's notes said only that
+8.6.0 is not yanked, which is true, but they missed this. The three
+advisories are in `ZipArchive::extract` and `ZipStreamReader::extract`,
+which write an archive to disk. epubveri never calls them; it reads from
+memory. So no epubveri binary, plugin or npm package was exposed. But any
+project that depends on the crate inherited a failing audit. Nothing
+changes in what epubveri reports. On 1648 books (562 real ones and 1086
+built from epubcheck's fixtures), the JSON, stderr and exit code are byte
+for byte those of 0.29.0.
+
+### Changed
+
+- **zip 8.6.0 → 9.0.4.** The floor is 9.0.4, so the yanked 9.0.0–9.0.2
+  cannot be chosen. On macOS and BSD, zip 9 brings in `nix`, `bitflags`
+  and `cfg_aliases`. `flate2` is now a direct dependency. It uses the same
+  pure-Rust zlib-rs backend zip already used.
+- **Stored and deflated entries are read from their raw bytes and inflated
+  by epubveri.** zip 9 refuses an entry that holds more data than its
+  header declares, and offers no option to turn this off for an archive.
+  epubcheck reads such an entry, and so did zip 8. Under zip 9 alone, a
+  package document like that was FATAL OPF-002, and a chapter like that
+  went unchecked without a word. epubveri now bounds each read by its own
+  limit only, as before. As before, the CRC is not checked. Encrypted
+  entries and other compression methods still go through zip.
+
+### Fixed
+
+- **`docs/ARCHITECTURE.md` and the wasm crate's documentation describe
+  the boundary as it is.** They named `validate_bytes_with_profile` and a
+  `Report`/`Message` pair. The crate calls `validate_bytes_with_options`
+  and returns the machine envelope's `inputs[i]` object. `validate` takes
+  four arguments, not two.
+
 ## [0.29.0] - 2026-10-17
 
 **A file in the book that cannot be read is now reported, as epubcheck

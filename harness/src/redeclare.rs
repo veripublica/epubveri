@@ -73,7 +73,7 @@ pub fn rewrite_book(src: &Path, dst: &Path) -> Result<bool, String> {
         if e.is_dir() {
             continue;
         }
-        let name = e.name().to_string();
+        let name = e.name().unwrap().into_owned();
         let mut buf = Vec::new();
         e.read_to_end(&mut buf).map_err(|e| e.to_string())?;
         if name == opf_name {

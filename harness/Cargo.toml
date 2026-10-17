@@ -76,7 +76,7 @@ path = "src/fuzz.rs"
 
 [dependencies]
 epubveri = { path = ".." }
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
 regex = "1"
 
 # `getrusage(RUSAGE_CHILDREN)` for `speed`: the child's CPU time, which std

@@ -1,6 +1,6 @@
 [package]
 name = "epubveri"
-version = "0.29.0"
+version = "0.29.1"
 edition = "2024"
 rust-version = "1.88"
 description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alternative to epubcheck."
@@ -31,9 +31,14 @@ name = "epubveri"
 path = "src/main.rs"
 
 [dependencies]
-# Pure-Rust only (no C deps): zip's "deflate" feature uses flate2 -> miniz_oxide (Rust),
-# bzip2/zstd (C backends) are left disabled via default-features = false.
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+# Pure-Rust only (no C deps): zip's "deflate" feature uses flate2 -> zlib-rs (Rust),
+# bzip2/zstd (C backends) are left disabled via default-features = false. The floor
+# is 9.0.4: zip < 9.0.0 carries RUSTSEC-2026-0367/0368/0369, and 9.0.0-9.0.2 are
+# yanked.
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
+# Inflates stored and deflated entries from their raw bytes (`Ocf::inflate_index`),
+# on the same pure-Rust backend zip's "deflate" feature selects.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
 roxmltree = "0.21"
 unicode-normalization = "0.1"
 # CSS parsing: the sibling styloria crate (github.com/veripublica/styloria),

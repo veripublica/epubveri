@@ -289,17 +289,19 @@ never touches the corresponding module at all.
 ## The WASM boundary
 
 `epubveri-wasm/src/lib.rs` is deliberately tiny. It does exactly one thing:
-call `epubveri::validate_bytes_with_profile(bytes, profile)` and re-shape the
-resulting `report::Report` into two `#[derive(Serialize, Tsify)]` structs
-(`Report` and `Message`) that cross the JS boundary as a plain object. The
-core `&'static str` message IDs and the `Severity` enum are flattened to
-strings there; nothing else changes.
+call `epubveri::validate_bytes_with_options` with the caller's profile,
+advisory flag and EPUB version, and re-shape the resulting `report::Report`
+into the machine envelope's `inputs[i]` object (`Report`, `Summary`, `Item`,
+`Position`, `Data`, all `#[derive(Serialize, Tsify)]`), minus the CLI-only
+`path` and `error`. A JS caller reads the same object the CLI's
+`--format json` emits per input. The core `&'static str` message IDs and the
+`Severity` enum are flattened to strings there; nothing else changes.
 
 Using `tsify` (the result crosses as `tsify::Ts<Report>`) rather than a bare
 `serde-wasm-bindgen` conversion is what gives JS/TS consumers a **real
-generated `.d.ts`** — `validate(bytes: Uint8Array, profile?: string | null):
-Report` with fully typed `Report`/`Message` interfaces — instead of an
-untyped `any`. `wasm-pack build --target web` emits an ES module plus the
+generated `.d.ts`** — `validate(bytes: Uint8Array, profile?: string | null,
+advisory?: boolean | null, epub_version?: string | null): Report` with fully
+typed interfaces — instead of an untyped `any`. `wasm-pack build --target web` emits an ES module plus the
 wasm binary into `epubveri-wasm/pkg/` (git-ignored); `epubveri-wasm/demo/`
 consumes it directly.
 

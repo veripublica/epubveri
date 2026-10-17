@@ -376,18 +376,7 @@ impl Ocf {
             return None;
         }
         let index = self.archive.index_for_name(name)?;
-        let options = zip::ZipReadOptions::new().ignore_crc32(true);
-        let read = self
-            .archive
-            .by_index_with_options(index, options)
-            .map_err(|e| e.to_string())
-            .and_then(|f| {
-                let mut buf = Vec::new();
-                f.take(limit)
-                    .read_to_end(&mut buf)
-                    .map(|_| buf)
-                    .map_err(|e| e.to_string())
-            });
+        let read = self.inflate_index(index, limit);
         match read {
             Ok(buf) => Some(buf),
             Err(e) => {
@@ -395,6 +384,48 @@ impl Ocf {
                 None
             }
         }
+    }
+
+    /// Stored and deflated entries are read from their raw bytes and
+    /// inflated here, bounded by `limit` alone. zip 9 bounds every archive
+    /// read by the uncompressed size the header declares (zip-rs/zip2#1022)
+    /// and has no option to turn that off, so an entry holding more than its
+    /// header says became a read error, where epubcheck (Java's `ZipFile`)
+    /// and zip 8 read it whole. The CRC is not checked, as in epubcheck.
+    /// Anything else — another method, an encrypted entry — goes through
+    /// zip's own reader, which refuses it as before.
+    fn inflate_index(&mut self, index: usize, limit: u64) -> Result<Vec<u8>, String> {
+        let mut buf = Vec::new();
+        let raw = self
+            .archive
+            .by_index_raw(index)
+            .map_err(|e| e.to_string())?;
+        if !raw.encrypted() {
+            let method = raw.compression();
+            if method == zip::CompressionMethod::Stored {
+                raw.take(limit)
+                    .read_to_end(&mut buf)
+                    .map_err(|e| e.to_string())?;
+                return Ok(buf);
+            }
+            if method == zip::CompressionMethod::Deflated {
+                flate2::read::DeflateDecoder::new(raw)
+                    .take(limit)
+                    .read_to_end(&mut buf)
+                    .map_err(|e| e.to_string())?;
+                return Ok(buf);
+            }
+        }
+        drop(raw);
+        let options = zip::ZipReadOptions::new().ignore_crc32(true);
+        let f = self
+            .archive
+            .by_index_with_options(index, options)
+            .map_err(|e| e.to_string())?;
+        f.take(limit)
+            .read_to_end(&mut buf)
+            .map_err(|e| e.to_string())?;
+        Ok(buf)
     }
 
     /// Whether an entry exists but could not be inflated.
@@ -730,7 +761,12 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                 );
                 return None;
             }
-            let name = f.name().to_string();
+            // zip 9 returns the decoded name as a `Result`; the name was just
+            // checked to be UTF-8, so the fallback is never taken.
+            let name = f
+                .name()
+                .map(|n| n.into_owned())
+                .unwrap_or_else(|_| String::from_utf8_lossy(f.name_raw()).into_owned());
             if i == 0 {
                 first_name = name.clone();
                 first_stored = f.compression() == zip::CompressionMethod::Stored;

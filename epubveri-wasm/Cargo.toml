@@ -1,6 +1,6 @@
 [package]
 name = "epubveri-wasm"
-version = "0.29.0"
+version = "0.29.1"
 edition = "2024"
 description = "WebAssembly bindings for epubveri — a pure-Rust, JVM-free EPUB validator that runs in the browser."
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
@@ -48,4 +48,4 @@ tsify = { version = "0.5", features = ["js"] }
 # building one means building a real EPUB container - the same zip crate the
 # core uses, with the same no-C-dependency features.
 [dev-dependencies]
-zip = { version = "8.6", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.4", default-features = false, features = ["deflate"] }

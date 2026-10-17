@@ -1290,6 +1290,42 @@ mod tests {
         epub
     }
 
+    /// Declare `name` 100 bytes long in both of its headers; the data and
+    /// the CRC stay intact.
+    fn understate_size(mut epub: Vec<u8>, name: &str) -> Vec<u8> {
+        let i = local_header(&epub, name);
+        epub[i + 22..i + 26].copy_from_slice(&100u32.to_le_bytes());
+        let c = (0..epub.len() - 46)
+            .find(|&c| {
+                epub[c..].starts_with(b"PK\x01\x02") && epub[c + 46..].starts_with(name.as_bytes())
+            })
+            .unwrap();
+        epub[c + 24..c + 28].copy_from_slice(&100u32.to_le_bytes());
+        epub
+    }
+
+    /// zip 9 refuses an entry holding more than its header declares
+    /// (zip-rs/zip2#1022); epubcheck and zip 8 read it whole. Under zip 9
+    /// alone the package document was FATAL OPF-002 and the chapter's error
+    /// went unreported.
+    #[test]
+    fn an_entry_longer_than_its_header_says_is_read_whole() {
+        let body = long_body() + "<bogus/>";
+        let clean = crate::validate_bytes(epub3_with(&body));
+        assert!(
+            !clean.messages.is_empty(),
+            "the chapter must carry an error"
+        );
+        for name in ["OEBPS/content.opf", "OEBPS/ch1.xhtml"] {
+            let report = crate::validate_bytes(understate_size(epub3_with(&body), name));
+            assert_eq!(
+                ids_of(&report),
+                ids_of(&clean),
+                "size understated on {name}"
+            );
+        }
+    }
+
     fn ids_of(report: &crate::report::Report) -> Vec<&'static str> {
         report.messages.iter().map(|m| m.id).collect()
     }
@@ -1344,7 +1380,7 @@ mod tests {
             let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
             for i in 0..archive.len() {
                 let f = archive.by_index(i).unwrap();
-                if f.name() == "mimetype" {
+                if f.name_raw() == b"mimetype" {
                     drop(f);
                     let deflated = zip::write::SimpleFileOptions::default()
                         .compression_method(zip::CompressionMethod::Deflated);

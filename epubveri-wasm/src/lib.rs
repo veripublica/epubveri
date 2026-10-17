@@ -2,7 +2,7 @@
 //! browser (or any JS runtime), with no JVM, no server round-trip, no C deps.
 //!
 //! This crate is a thin boundary: it hands raw `.epub` bytes to the core
-//! [`epubveri::validate_bytes_with_profile`] and maps its
+//! [`epubveri::validate_bytes_with_options`] and maps its
 //! [`epubveri::report::Report`] into the veripublica machine envelope's
 //! **`inputs[i]` shape** (FORMATS.md §1.2) — minus the CLI-only `path`/`error`
 //! fields, since a JS caller has neither. A caller therefore reads the *same*
