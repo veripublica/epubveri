@@ -8,6 +8,19 @@ use crate::ids::*;
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
+/// `OBS-001` for an EPUB 3 NCX, which [`check`] reports first and an NCX
+/// that could not be read still draws.
+pub(crate) fn report_outdated(ncx_path: &str, report: &mut Report) {
+    report.push_at_rule(
+        OBS_001,
+        Severity::Usage,
+        "usage of OPF 2 NCX navigation is outdated",
+        ncx_path,
+        "ncx.outdated_navigation",
+        Vec::new(),
+    );
+}
+
 pub(crate) fn check(
     ncx_xml: &str,
     ncx_path: &str,
@@ -30,14 +43,7 @@ pub(crate) fn check(
     // the finding is about the file existing, not about what is in it, and
     // epubcheck reports it ahead of its own RELAX NG pass for that reason.
     if is_epub3 {
-        report.push_at_rule(
-            OBS_001,
-            Severity::Usage,
-            "usage of OPF 2 NCX navigation is outdated",
-            ncx_path,
-            "ncx.outdated_navigation",
-            Vec::new(),
-        );
+        report_outdated(ncx_path, report);
     }
     let d = match crate::ocf::parse_xml(ncx_xml) {
         Ok(d) => d,

@@ -26,7 +26,7 @@ pub const PKG_003: &str = "PKG-003"; // the zip file is empty
 pub const PKG_004: &str = "PKG-004"; // corrupted/unreadable ZIP header (not a usable OCF)
 pub const PKG_005: &str = "PKG-005"; // the mimetype entry's ZIP header has a non-empty extra field
 pub const PKG_006: &str = "PKG-006"; // mimetype entry missing or not first in the archive
-pub const PKG_007: &str = "PKG-007"; // mimetype compressed, or contents != application/epub+zip
+pub const PKG_007: &str = "PKG-007"; // mimetype contents != application/epub+zip (compressed: NEXT-016)
 pub const PKG_008: &str = "PKG-008"; // the ZIP archive could not be opened at all
 pub const PKG_009: &str = "PKG-009"; // a file name contains a forbidden character
 pub const PKG_010: &str = "PKG-010"; // an href contains unencoded spaces
@@ -253,9 +253,9 @@ pub const ADV_015: &str = "ADV-015"; // an unquoted url() CSS reads as a bad-url
 // **Do not encode a spec version in the prefix.** `NEXT-` says "the next
 // epubcheck reports this"; `EPUB34-` would age the moment 3.5 exists and would
 // have to be renamed, which is the thing this split exists to avoid.
-// **THE WHOLE FAMILY GRADUATED ON 2026-09-17 AND NO `NEXT-*` CONSTANT
-// EXISTS TODAY.** epubcheck 5.4.0 shipped every rule the four named, so each
-// now reports under epubcheck's own id, in the default output, unflagged:
+// **THE FIRST FAMILY GRADUATED ON 2026-09-17.** epubcheck 5.4.0 shipped every
+// rule the four named, so each now reports under epubcheck's own id, in the
+// default output, unflagged:
 //
 // | was | now | upstream |
 // |---|---|---|
@@ -269,10 +269,23 @@ pub const ADV_015: &str = "ADV-015"; // an unquoted url() CSS reads as a bad-url
 // reasoning was sound and the estimate was not, which is worth remembering
 // the next time a deferral is priced by how slow a standards body has been.
 //
-// The numbers are not reused: a future spec-ahead check takes `NEXT-009`.
+// The numbers are not reused, and the two families share one number line
+// (see `the_two_advisory_families_never_reuse_a_number`), so the next
+// spec-ahead check after them took the next number free across both: 016.
 // `NEXT-007` left no id behind at all — the rule it asked (are a roll item's
 // ICB dimensions set) is now asked by the fixed-layout viewport family,
 // because 5.4.0 makes a roll spine item fixed-layout.
+//
+// NEXT-016: a `mimetype` entry that is compressed. EPUB 3.3 §4.3.3 says "EPUB
+// creators MUST NOT compress or encrypt the `mimetype` file" (OCF 2.0.1 says
+// the same), but epubcheck 5.4.0 never asks: `OCFZipChecker` reads only the
+// name and the extra field from the local header, and
+// `OCFChecker.checkMimetypeFile` compares the *inflated* contents, so a
+// deflated `mimetype` holding the right string passes there. It was PKG-007,
+// an error, in the default output until 0.29.0: a restrictive check epubcheck
+// lacks, which the direction rule puts behind the flag. The rule key is
+// unchanged.
+pub const NEXT_016: &str = "NEXT-016"; // EPUB 3.3 §4.3.3: the mimetype entry is compressed (usage)
 
 /// What an `ADV-*` finding is grounded in. **Two different claims live in the
 /// advisory family and they justify themselves differently**, which until now
@@ -544,10 +557,9 @@ mod tests {
     #[test]
     fn an_advisory_constants_name_agrees_with_its_id() {
         let consts = advisory_constants();
-        // Six today, all `ADV-*`: the four `NEXT-*` graduated with epubcheck
-        // 5.4.0 and the family is empty for now. The floor is a parser guard,
-        // not a target — it moved 9 → 6 for that reason and moves again when
-        // the next spec-ahead check lands.
+        // The four first `NEXT-*` graduated with epubcheck 5.4.0; NEXT-016 is
+        // the only one today. The floor is a parser guard, not a target — it
+        // moved 9 → 6 for that reason.
         assert!(consts.len() >= 6, "parser broke: {consts:?}");
         for (name, id) in &consts {
             let expected = if name.starts_with("NEXT_") {

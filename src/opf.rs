@@ -5031,6 +5031,18 @@ fn keep_first_undeclared(report: &mut Report, start: usize) {
 fn check_rendition(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, report: &mut Report) {
     let bytes = match ocf.read(opf_path) {
         Some(b) => b,
+        // There but unreadable: PKG-008 comes at the end of the run, and
+        // "not found" would be false. epubcheck's `PackageDocumentPeeker`
+        // cannot read a version from it either, hence OPF-001.
+        None if ocf.is_unreadable(opf_path) => {
+            report.push_at(
+                OPF_001,
+                Severity::Error,
+                "the EPUB version could not be determined: the package document could not be read",
+                opf_path,
+            );
+            return;
+        }
         None => {
             report.push(
                 OPF_002,
@@ -8123,6 +8135,14 @@ fn check_text(
                                 crate::ncx::check_duplicate_targets(&ncx_doc, ncx_path, report);
                             }
                         }
+                    } else if is_epub3
+                        && name_index
+                            .get(&nfc(ncx_path))
+                            .is_some_and(|orig| ocf.is_unreadable(orig))
+                    {
+                        // An NCX that could not be read is still an NCX:
+                        // epubcheck says OBS-001 before it parses one.
+                        crate::ncx::report_outdated(ncx_path, report);
                     }
                 }
             },
@@ -14706,6 +14726,16 @@ fn check_image_signatures(
         // The signature only: every decision below reads the first twelve
         // bytes, and a full read put a 70 MB image over the size limit.
         let Some(bytes) = ocf.read_head_content(&orig, crate::ocf::SIGNATURE_BYTES) else {
+            // epubcheck's `BitmapChecker` reports an image it cannot read as
+            // corrupt, and nothing else does.
+            if ocf.claim_unreadable(&orig) {
+                report.push_at(
+                    PKG_021,
+                    Severity::Error,
+                    format!("image '{path}' is corrupt (it could not be read)"),
+                    path.as_str(),
+                );
+            }
             continue;
         };
         // Mirror epubcheck's `BitmapChecker` branch order (#45):

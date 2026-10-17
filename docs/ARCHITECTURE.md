@@ -295,7 +295,7 @@ resulting `report::Report` into two `#[derive(Serialize, Tsify)]` structs
 core `&'static str` message IDs and the `Severity` enum are flattened to
 strings there; nothing else changes.
 
-Using `tsify-next` (with `#[tsify(into_wasm_abi)]`) rather than a bare
+Using `tsify` (the result crosses as `tsify::Ts<Report>`) rather than a bare
 `serde-wasm-bindgen` conversion is what gives JS/TS consumers a **real
 generated `.d.ts`** — `validate(bytes: Uint8Array, profile?: string | null):
 Report` with fully typed `Report`/`Message` interfaces — instead of an

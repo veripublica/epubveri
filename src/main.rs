@@ -66,11 +66,10 @@ OPTIONS:
                            on, at usage severity, in two families:
                              NEXT-*  a published spec requires it and epubcheck
                                      has not implemented it yet, so it becomes
-                                     a real error once it does. Empty today:
-                                     epubcheck 5.4.0 implemented all four
-                                     EPUB 3.4 rules that were here, and they
-                                     now report under its own ids without
-                                     this flag.
+                                     a real error once it does — a mimetype
+                                     file that is compressed (EPUB 3.3
+                                     forbids it; epubcheck checks only its
+                                     contents).
                              ADV-*   no spec requires it, but the book is
                                      still wrong — unknown CSS property or
                                      descriptor names, a type selector naming
@@ -916,7 +915,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            10,
+            11,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

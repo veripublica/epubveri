@@ -266,6 +266,9 @@ pub struct Ocf {
     /// Entries [`Ocf::read`] refused for exceeding [`MAX_ENTRY_BYTES`],
     /// drained by [`check_resource_limits`] at the end of the run.
     oversized: Vec<String>,
+    /// Entries that exist but could not be inflated, with the decoder's
+    /// error, reported by [`check_resource_limits`] as PKG-008.
+    unreadable: Vec<(String, String)>,
     /// Bytes read so far from distinct entries, against [`MAX_BOOK_BYTES`].
     read_total: u64,
     /// Entries already charged to `read_total`; reading one again is free.
@@ -290,6 +293,9 @@ pub struct Ocf {
     /// that far, and a read there would spend this book's budget on files
     /// nothing else asked for.
     reads_suspended: bool,
+    /// The first entry is `mimetype` and is not stored, for
+    /// [`check_advisories`].
+    mimetype_compressed: bool,
 }
 
 impl Ocf {
@@ -353,10 +359,56 @@ impl Ocf {
         if self.reads_suspended || self.is_encrypted(name) {
             return None;
         }
-        let f = self.archive.by_name(name).ok()?;
-        let mut buf = Vec::new();
-        f.take(n).read_to_end(&mut buf).ok()?;
-        Some(buf)
+        self.inflate(name, n)
+    }
+
+    /// Up to `limit` inflated bytes of an entry, or `None` when there is no
+    /// such entry or it cannot be inflated. An entry that exists and fails
+    /// is recorded in `unreadable`, never passed over: a bare `None` reads
+    /// as "absent" at every call site, so a corrupt chapter went unchecked
+    /// and a book with errors in it reported VALID.
+    ///
+    /// The CRC is not checked. epubcheck reads through Java's `ZipFile`,
+    /// which does not check it either, so a wrong CRC alone draws nothing
+    /// there. Checking it here made a valid book FATAL.
+    fn inflate(&mut self, name: &str, limit: u64) -> Option<Vec<u8>> {
+        if self.is_unreadable(name) {
+            return None;
+        }
+        let index = self.archive.index_for_name(name)?;
+        let options = zip::ZipReadOptions::new().ignore_crc32(true);
+        let read = self
+            .archive
+            .by_index_with_options(index, options)
+            .map_err(|e| e.to_string())
+            .and_then(|f| {
+                let mut buf = Vec::new();
+                f.take(limit)
+                    .read_to_end(&mut buf)
+                    .map(|_| buf)
+                    .map_err(|e| e.to_string())
+            });
+        match read {
+            Ok(buf) => Some(buf),
+            Err(e) => {
+                self.unreadable.push((name.to_string(), e));
+                None
+            }
+        }
+    }
+
+    /// Whether an entry exists but could not be inflated.
+    pub(crate) fn is_unreadable(&self, name: &str) -> bool {
+        self.unreadable.iter().any(|(n, _)| n == name)
+    }
+
+    /// Take an unreadable entry off the PKG-008 list, for a check that
+    /// reports it under its own id: epubcheck's `BitmapChecker` reports an
+    /// image it cannot read as PKG-021, not PKG-008.
+    pub(crate) fn claim_unreadable(&mut self, name: &str) -> bool {
+        let before = self.unreadable.len();
+        self.unreadable.retain(|(n, _)| n != name);
+        self.unreadable.len() != before
     }
 }
 
@@ -438,11 +490,9 @@ impl Ocf {
         if let Some(bytes) = self.read_cache.get(name) {
             return Some(bytes.clone());
         }
-        let f = self.archive.by_name(name).ok()?;
-        let mut buf = Vec::new();
         // One byte past the cap: reading *more* than it is what separates an
         // oversized entry from one that happens to end exactly on it.
-        f.take(MAX_ENTRY_BYTES + 1).read_to_end(&mut buf).ok()?;
+        let buf = self.inflate(name, MAX_ENTRY_BYTES + 1)?;
         if buf.len() as u64 > MAX_ENTRY_BYTES {
             // Never a silent skip. Returning a bare `None` here would be
             // indistinguishable from "resource absent" at all ~25 call
@@ -469,7 +519,35 @@ impl Ocf {
 /// Report every entry [`Ocf::read`] refused for exceeding
 /// [`MAX_ENTRY_BYTES`]. Called once per run, after the checks, so a
 /// resource read from several places is still reported once.
+/// The container's `--advisory` checks; the caller asks only with the flag on.
+pub(crate) fn check_advisories(ocf: &Ocf, report: &mut Report) {
+    if ocf.mimetype_compressed {
+        report.push_at_rule(
+            NEXT_016,
+            Severity::Usage,
+            "the 'mimetype' file is compressed; EPUB 3.3 requires it to be stored uncompressed",
+            "mimetype",
+            "ocf.mimetype.not_stored_uncompressed",
+            Vec::new(),
+        );
+    }
+}
+
 pub(crate) fn check_resource_limits(ocf: &Ocf, report: &mut Report) {
+    // PKG-008, as epubcheck's `XMLParser` reports an `IOException` while
+    // parsing. Its CSS checker puts the exception's message in the slot
+    // where the others put the path; `params` carries the path for every
+    // file here, and the decoder's message goes in the text.
+    for (name, error) in &ocf.unreadable {
+        report.push_at_rule(
+            PKG_008,
+            Severity::Fatal,
+            format!("file '{name}' could not be read: {error}"),
+            name.as_str(),
+            "ocf.entry.unreadable",
+            vec![name.clone()],
+        );
+    }
     for name in &ocf.oversized {
         report.push_at(
             LIM_001,
@@ -783,10 +861,10 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         }
     }
 
-    // mimetype: must be the first entry, stored (uncompressed), exact
-    // contents, and its ZIP header must carry no extra field (needed so
-    // tools can sniff the media type at a fixed byte offset without a
-    // full ZIP parse).
+    // mimetype: must be the first entry, exact contents, and its ZIP header
+    // must carry no extra field (needed so tools can sniff the media type at
+    // a fixed byte offset without a full ZIP parse). That it is stored is
+    // NEXT-016, behind `--advisory` (see `check_advisories`).
     if first_name != "mimetype" {
         report.push_rule(
             PKG_006,
@@ -795,29 +873,19 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             "ocf.mimetype.not_first_entry",
             Vec::new(),
         );
-    } else {
-        if !first_stored {
-            report.push_rule(
-                PKG_007,
-                Severity::Error,
-                "The 'mimetype' file must be stored uncompressed",
-                "ocf.mimetype.not_stored_uncompressed",
-                Vec::new(),
-            );
-        }
-        if first_has_extra {
-            report.push(
-                PKG_005,
-                Severity::Error,
-                "The 'mimetype' entry's ZIP header must not have an extra field",
-            );
-        }
+    } else if first_has_extra {
+        report.push(
+            PKG_005,
+            Severity::Error,
+            "The 'mimetype' entry's ZIP header must not have an extra field",
+        );
     }
 
     let mut ocf = Ocf {
         archive,
         names,
         oversized: Vec::new(),
+        unreadable: Vec::new(),
         read_total: 0,
         charged: std::collections::HashSet::new(),
         over_budget: Vec::new(),
@@ -826,10 +894,17 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         read_cache_bytes: 0,
         encrypted: std::collections::HashSet::new(),
         reads_suspended: false,
+        mimetype_compressed: first_name == "mimetype" && !first_stored,
     };
 
+    // epubcheck's `OCFChecker.checkMimetypeFile` compares the inflated
+    // contents, and ignores an `IOException` from reading them ("missing file
+    // is reported elsewhere"), so a `mimetype` that cannot be read is no
+    // PKG-008 there.
+    let mimetype = ocf.read("mimetype");
+    ocf.claim_unreadable("mimetype");
     if ocf.has("mimetype")
-        && let Some(b) = ocf.read("mimetype")
+        && let Some(b) = mimetype
         && b != b"application/epub+zip"
     {
         report.push_rule(
@@ -864,6 +939,18 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     }
 
     let Some(bytes) = ocf.read(CONTAINER) else {
+        // Unreadable rather than absent (absence was reported above): PKG-008
+        // comes at the end of the run, and epubcheck, having found no
+        // rootfile in what it could not read, adds RSC-003.
+        if ocf.is_unreadable(CONTAINER) {
+            report.push_at(
+                RSC_003,
+                Severity::Error,
+                "container.xml could not be read, so no <rootfile> with media-type \
+                 'application/oebps-package+xml' was found",
+                CONTAINER,
+            );
+        }
         return Vec::new();
     };
     let text = crate::encoding::decode_xml(&bytes);

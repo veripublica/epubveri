@@ -282,6 +282,9 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     // Reported after the checks, not inside `Ocf::read`: a resource read
     // from several call sites is one finding, and `read` has no `Report`.
     ocf::check_resource_limits(&container, &mut report);
+    if options.advisory {
+        ocf::check_advisories(&container, &mut report);
+    }
     // Bound the RNG engine's pattern-interning cache (see
     // `rng::pattern::clear_intern_cache`) to roughly one book's working set,
     // rather than letting it grow for the life of a long-lived embedded
@@ -1251,5 +1254,174 @@ mod tests {
             "expected LIM-001 for the oversized entry; got {:?}",
             report.messages.iter().map(|m| m.id).collect::<Vec<_>>()
         );
+    }
+
+    /// Offset of `name`'s local file header in a built archive.
+    fn local_header(epub: &[u8], name: &str) -> usize {
+        (0..epub.len() - 30)
+            .find(|&i| {
+                epub[i..].starts_with(b"PK\x03\x04") && epub[i + 30..].starts_with(name.as_bytes())
+            })
+            .unwrap_or_else(|| panic!("no local header for {name}"))
+    }
+
+    /// Flip bytes inside `name`'s deflate stream, so inflating it fails.
+    fn corrupt_deflate(mut epub: Vec<u8>, name: &str) -> Vec<u8> {
+        let i = local_header(&epub, name);
+        let n = u16::from_le_bytes([epub[i + 26], epub[i + 27]]) as usize;
+        let m = u16::from_le_bytes([epub[i + 28], epub[i + 29]]) as usize;
+        let data = i + 30 + n + m;
+        for b in &mut epub[data + 2..data + 40] {
+            *b ^= 0x5A;
+        }
+        epub
+    }
+
+    /// Write a wrong CRC into both of `name`'s headers; the data stays intact.
+    fn wrong_crc(mut epub: Vec<u8>, name: &str) -> Vec<u8> {
+        let i = local_header(&epub, name);
+        epub[i + 14..i + 18].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        let c = (0..epub.len() - 46)
+            .find(|&c| {
+                epub[c..].starts_with(b"PK\x01\x02") && epub[c + 46..].starts_with(name.as_bytes())
+            })
+            .unwrap();
+        epub[c + 16..c + 20].copy_from_slice(&0xDEAD_BEEFu32.to_le_bytes());
+        epub
+    }
+
+    fn ids_of(report: &crate::report::Report) -> Vec<&'static str> {
+        report.messages.iter().map(|m| m.id).collect()
+    }
+
+    /// A body long enough that its deflate stream has bytes to corrupt.
+    fn long_body() -> String {
+        (0..60)
+            .map(|i| format!("<p>Line {i} of the chapter.</p>"))
+            .collect()
+    }
+
+    /// A chapter that cannot be inflated used to read as absent: it was not
+    /// checked, nothing said so, and a book with errors in it was VALID.
+    /// epubcheck 5.4.0 reports PKG-008 for it.
+    #[test]
+    fn a_chapter_that_cannot_be_read_is_pkg_008_not_skipped() {
+        let body = long_body() + "<bogus/>";
+        let report = crate::validate_bytes(corrupt_deflate(epub3_with(&body), "OEBPS/ch1.xhtml"));
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == crate::ids::PKG_008)
+            .unwrap_or_else(|| panic!("expected PKG-008; got {:?}", ids_of(&report)));
+        assert_eq!(m.severity, crate::report::Severity::Fatal);
+        assert_eq!(m.location.as_deref(), Some("OEBPS/ch1.xhtml"));
+        assert_eq!(m.params, vec!["OEBPS/ch1.xhtml".to_string()]);
+    }
+
+    /// epubcheck reads through Java's `ZipFile`, which does not check the
+    /// CRC, so a wrong one alone draws nothing. Checking it here made a valid
+    /// book FATAL (its package document "not found").
+    #[test]
+    fn a_wrong_crc_alone_changes_nothing() {
+        let body = long_body() + "<bogus/>";
+        let clean = crate::validate_bytes(epub3_with(&body));
+        for name in [
+            "OEBPS/content.opf",
+            "OEBPS/ch1.xhtml",
+            "META-INF/container.xml",
+        ] {
+            let report = crate::validate_bytes(wrong_crc(epub3_with(&body), name));
+            assert_eq!(ids_of(&report), ids_of(&clean), "wrong CRC on {name}");
+        }
+    }
+
+    /// `bytes` rewritten with its `mimetype` entry deflated, the rest copied
+    /// as they are.
+    fn deflate_mimetype(bytes: Vec<u8>) -> Vec<u8> {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            for i in 0..archive.len() {
+                let f = archive.by_index(i).unwrap();
+                if f.name() == "mimetype" {
+                    drop(f);
+                    let deflated = zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Deflated);
+                    z.start_file("mimetype", deflated).unwrap();
+                    z.write_all(b"application/epub+zip").unwrap();
+                } else {
+                    z.raw_copy_file(f).unwrap();
+                }
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// EPUB 3.3 forbids a compressed `mimetype`, but epubcheck compares only
+    /// its inflated contents, so the book is valid there. Reporting it is
+    /// NEXT-016, behind `--advisory`; it was PKG-007 in the default output.
+    #[test]
+    fn a_compressed_mimetype_is_advisory_only() {
+        let book = deflate_mimetype(epub3_with("<p>x</p>"));
+        let plain = crate::validate_bytes(book.clone());
+        assert!(plain.messages.is_empty(), "{:?}", plain.messages);
+        let advised = crate::validate_bytes_with_options(
+            book,
+            &crate::Options {
+                advisory: true,
+                ..Default::default()
+            },
+        );
+        let found: Vec<_> = advised
+            .messages
+            .iter()
+            .map(|m| (m.id, m.severity, m.rule))
+            .collect();
+        assert_eq!(
+            found,
+            [(
+                crate::ids::NEXT_016,
+                crate::report::Severity::Usage,
+                Some("ocf.mimetype.not_stored_uncompressed")
+            )]
+        );
+        let stored = crate::validate_bytes_with_options(
+            epub3_with("<p>x</p>"),
+            &crate::Options {
+                advisory: true,
+                ..Default::default()
+            },
+        );
+        assert!(stored.messages.is_empty(), "{:?}", stored.messages);
+    }
+
+    /// An unreadable package document exists, so "not found" (OPF-002) was
+    /// false. epubcheck says PKG-008, then OPF-001 for the version it could
+    /// not read.
+    #[test]
+    fn a_package_document_that_cannot_be_read_is_not_reported_missing() {
+        let report = crate::validate_bytes(corrupt_deflate(
+            epub3_with(&long_body()),
+            "OEBPS/content.opf",
+        ));
+        let mut ids = ids_of(&report);
+        ids.sort();
+        assert_eq!(ids, vec![crate::ids::OPF_001, crate::ids::PKG_008]);
+    }
+
+    /// An unreadable container.xml used to end the run with no finding at
+    /// all, so a book nothing had checked was VALID. epubcheck says PKG-008
+    /// and RSC-003.
+    #[test]
+    fn a_container_that_cannot_be_read_is_not_a_valid_book() {
+        let report = crate::validate_bytes(corrupt_deflate(
+            epub3_with(&long_body()),
+            "META-INF/container.xml",
+        ));
+        let mut ids = ids_of(&report);
+        ids.sort();
+        assert_eq!(ids, vec![crate::ids::PKG_008, crate::ids::RSC_003]);
     }
 }

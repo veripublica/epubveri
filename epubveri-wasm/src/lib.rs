@@ -22,7 +22,7 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use tsify::Tsify;
+use tsify::{Ts, Tsify};
 use wasm_bindgen::prelude::*;
 
 /// One EPUB's validation result — the envelope's `inputs[i]` object without
@@ -33,34 +33,10 @@ use wasm_bindgen::prelude::*;
 // on this struct is copied verbatim into the published `.d.ts` and reaches npm
 // consumers in their editor. Internal reasoning does not belong there.
 //
-// **`into_wasm_abi` is deprecated upstream, and `tsify` is held at 0.5.6 in
-// `Cargo.lock` because of it (tsify 0.5.7, its issue #65).** The deprecation is
-// written around a *memory leak*, and
-// that leak is on the **`from_wasm_abi`** side, which this crate does not use:
-// deserializing bad input from JavaScript cannot report failure at the ABI
-// boundary, so it ends in `wasm_bindgen::throw_str`, which skips destructors.
-// Our only input is `&[u8]`, handled by wasm-bindgen itself.
-//
-// The direction we do use fails differently — tsify's own changelog:
-// *"`into_wasm_abi` panics rather than leaks on failure"* — and that panic is
-// unreachable for this type, whose every field is owned `String`/`usize`/
-// `Vec` with no serializer that can fail. Upstream states the attributes still
-// work and plans no removal.
-//
-// The replacement, `Ts<T>`, would leave the generated TypeScript **identical**
-// (`WasmDescribe for Ts<T>` forwards to `T::JsType::describe()`), so this is a
-// Rust-side signature choice, not a consumer-visible one. Revisit it if this
-// crate ever takes a structured value *from* JavaScript — that is the case the
-// wrapper exists for, and the moment the pin should be lifted.
-//
-// The pin is not a muzzle: 0.5.7+ makes the attribute a `deprecated` warning,
-// CI runs `-D warnings`, and an `#[allow(deprecated)]` on this item does
-// **not** reach it — the reference lives in a nested anonymous const the
-// derive generates. A private `mod` with an inner `#![allow(deprecated)]` DOES
-// scope it (measured 2026-09-10), so the pin is a choice rather than the only
-// option — see the Cargo.toml note for what 0.5.8 actually buys and costs.
+// It crosses the ABI as `tsify::Ts<Report>`, not through
+// `#[tsify(into_wasm_abi)]`, which tsify 0.5.7 deprecated (its issue #65).
+// `Ts<T>` describes itself as `T`, so the generated TypeScript is unchanged.
 #[derive(Serialize, Tsify)]
-#[tsify(into_wasm_abi)]
 pub struct Report {
     /// `"ok"` (valid) or `"problems"` (error/fatal findings remain). The
     /// warning/info/usage-only case is `"ok"` — those never fail a book.
@@ -202,6 +178,22 @@ pub struct Data {
 /// entry point only ever sees bytes, never a filename.
 #[wasm_bindgen]
 pub fn validate(
+    bytes: &[u8],
+    profile: Option<String>,
+    advisory: Option<bool>,
+    epub_version: Option<String>,
+) -> Result<Ts<Report>, JsError> {
+    Ok(Ts::from_rust(&report(
+        bytes,
+        profile,
+        advisory,
+        epub_version,
+    ))?)
+}
+
+// The body of `validate`, kept apart so the tests can read the `Report`: a
+// `Ts<Report>` holds a JavaScript value, which a native test cannot build.
+fn report(
     bytes: &[u8],
     profile: Option<String>,
     advisory: Option<bool>,
@@ -355,7 +347,7 @@ mod tests {
     /// a weaker test and would be the same bug.
     #[test]
     fn a_findings_data_carries_everything_the_cli_envelope_carries() {
-        let report = validate(&book(), None, None, None);
+        let report = report(&book(), None, None, None);
         let hit = report
             .items
             .iter()
@@ -383,7 +375,7 @@ mod tests {
     /// gets its own case rather than riding on the finding above.
     #[test]
     fn an_advisory_finding_carries_its_basis() {
-        let report = validate(&book(), None, Some(true), None);
+        let report = report(&book(), None, Some(true), None);
         let advisory = report
             .items
             .iter()
@@ -421,7 +413,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            10,
+            11,
             "the advisory families changed ({declared:?}) — describe the new \
              check in README.md's \"Advisory checks\" section, then update \
              this count"
@@ -448,7 +440,7 @@ mod tests {
     /// usage findings — this is a machine interface.
     #[test]
     fn usage_findings_are_never_hidden_from_the_binding() {
-        let report = validate(&book(), None, None, None);
+        let report = report(&book(), None, None, None);
         assert!(
             report.items.iter().any(|i| i.severity == "usage"),
             "usage findings must reach a browser consumer"

@@ -10,6 +10,80 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-10-17
+
+**A file in the book that cannot be read is now reported, as epubcheck
+reports it.** Before, an entry whose compressed data was damaged read as if
+it were absent. A damaged chapter went unchecked without a word. A
+damaged `container.xml` meant nothing at all was checked, and the book
+was reported VALID. A damaged package document was reported "not found".
+A wrong CRC alone, which epubcheck ignores, made a valid book FATAL. A
+compressed `mimetype` file, which epubcheck accepts, is no longer an
+error; it is the new NEXT-016, behind `--advisory`. On
+562 real books and the 1086 books built from epubcheck's fixtures,
+nothing changes: none of them carries these shapes. The dependencies
+also move to their latest compatible versions. The WebAssembly package
+changes in three ways, listed under *Changed*. Its TypeScript
+signatures stay the same.
+
+**epubveri stays on zip 8.6.0 on purpose.** zip 9.0.4 refuses to read an
+entry that holds more data than its header declares. epubcheck reads such
+an entry, and so does zip 8. With zip 9, a book with such an OPF drew a
+FATAL OPF-002 although it passes epubcheck. A chapter with such a header
+was skipped without a word, so its errors went unreported. zip 9.0.4 has
+no option that turns this off for an archive read. zip 8.6.0 is not
+yanked.
+
+### Changed
+
+- **wasm-bindgen 0.2.128 → 0.2.129** in the npm package.
+- **The npm package's `.wasm` exports one more function,
+  `__externref_table_dealloc`.** Its JavaScript glue uses it to read the
+  value `validate` returns. A hand-written loader that passes
+  `instance.exports` to `__wbg_set_wasm` whole needs no change. A loader
+  that picks exports by name must add this one. The imports and the
+  import-module name (`./epubveri_bg.js`) do not change.
+- **`validate` in the npm package now throws a JavaScript error if its
+  result cannot be converted.** Before, the same failure was a WebAssembly
+  trap. No `Report` can actually fail to convert, so this is about the
+  contract, not a case anyone meets. Underneath, the result now crosses
+  the boundary as tsify's `Ts<Report>`. tsify 0.5.7 deprecated the
+  attribute used before.
+
+### Fixed
+
+- **An entry that cannot be inflated is now PKG-008, FATAL, as in
+  epubcheck.** It has the rule key `ocf.entry.unreadable` and its
+  `params` hold the path. epubcheck's CSS checker puts the decoder's
+  message where the path goes; here the path is in `params` for every
+  file and the decoder's message is in the text. What comes with it
+  matches epubcheck, probed on 5.4.0 with one damaged entry of each
+  kind:
+  - an unreadable `container.xml` also draws RSC-003, since no rootfile
+    could be found in it;
+  - an unreadable package document draws OPF-001 for the version that
+    could not be read, instead of OPF-002 "not found";
+  - an unreadable image is PKG-021 (corrupt image) instead of PKG-008;
+  - an unreadable NCX still draws OBS-001 in EPUB 3.
+- **A compressed `mimetype` file that says `application/epub+zip` is no
+  longer an error.** EPUB 3.3 (§4.3.3) forbids compressing it, but
+  epubcheck does not check this. It compares only the file's inflated
+  contents, so such a book passes there. Here it was PKG-007, an ERROR,
+  and the book was INVALID. It is now **NEXT-016**, at usage severity,
+  and only with `--advisory`: a published specification requires it and
+  epubcheck has not implemented it yet. The rule key stays
+  `ocf.mimetype.not_stored_uncompressed`. Wrong contents are still
+  PKG-007, compressed or not. None of the 1648 books above has a
+  compressed `mimetype`.
+- **A wrong CRC alone is no longer a finding.** epubcheck reads through
+  Java's `ZipFile`, which does not check it. Here the read failed, with
+  the results above, so a valid book could be FATAL.
+- **The doc comments in the npm package's `.d.ts` no longer show
+  backslashes.** tsify 0.5.6 escaped quotes and apostrophes in the
+  comments it copied. An editor's hover text showed `\"fatal\"` and
+  `epubveri\'s` where the source says `"fatal"` and `epubveri's`.
+  tsify 0.5.8 copies them as written. The type declarations do not change.
+
 ## [0.28.0] - 2026-10-15
 
 **A book with MathML that epubcheck rejects is now rejected here too.**

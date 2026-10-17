@@ -449,12 +449,13 @@ can tell them apart without reading the message:
   yet.** These become real errors the day epubcheck catches up, so they are
   worth fixing before somebody downstream runs epubcheck on your book.
 
-  **The family is empty at present, and that is the mechanism working rather
-  than an omission.** It held four EPUB 3.4 rules; epubcheck 5.4.0 implemented
-  all four, so since epubveri 0.15.0 they report under epubcheck's own ids, at
-  its severities, with no flag. The next check we reach before epubcheck does
-  will take the next number free in both families, since the two share one
-  number line.
+  One check lives here today: a `mimetype` file that is compressed, which
+  EPUB 3.3 forbids and epubcheck does not ask about (it compares only what
+  the file says). It was an error in epubveri's default output until 0.29.0.
+  The family first held four EPUB 3.4 rules; epubcheck 5.4.0 implemented all
+  four, so since epubveri 0.15.0 they report under epubcheck's own ids, at its
+  severities, with no flag. That is the mechanism working: a check graduates
+  when epubcheck catches up.
 - **`ADV-*` — no specification requires it, but the book is still wrong.**
   Two table-of-contents entries pointing at the same page, so one of them goes
   nowhere useful. A CSS rule styling an element that does not exist. A

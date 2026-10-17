@@ -33,7 +33,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
 | **All** | **214** | **3** | **1** | **105** | **218** | **217/218** | |
 
-**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 12 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 13 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -46,7 +46,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | PKG-004 | Corrupted EPUB ZIP header. | Y | Y | The other half of the same header check: long enough to fill 58 bytes but not starting with `PK`. epubcheck's test is `header[0] != 'P' && header[1] != 'K'` - an **and**, so `PX…` or `xK…` falls through to PKG-006 instead, measured. This was guarded on an image sniff until 2026-08-18, so 200 random bytes drew the generic PKG-008 alone; the sniff is kept as a second route for a file that is a recognisable other format yet happens to start `PK`. |
 | PKG-005 | The mimetype file has an extra field of length %1$s. The use of the extra field feature... | Y | Y | the mimetype entry's ZIP header has a non-empty extra field |
 | PKG-006 | Mimetype file entry is missing or is not the first file in the archive. | Y | Y | Reported from the parsed zip, and **from the raw 58-byte header when the container will not open**, as epubcheck's `OCFZipChecker` does: a name length other than 8, or a name other than `mimetype`, is PKG-006; an extra field is PKG-005. Until 2026-09-25 we asked only an archive that opened, so a broken container drew PKG-008 alone. Five shapes measured against 5.4.0, including a `PX…` header, which epubcheck's `&&` signature test lets through as if it were `PK`. |
-| PKG-007 | The content of the mimetype file must be the string "application/epub+zip"%1$s | Y | Y | mimetype compressed, or contents != application/epub+zip |
+| PKG-007 | The content of the mimetype file must be the string "application/epub+zip"%1$s | Y | Y | mimetype contents != application/epub+zip (compressed: NEXT-016) |
 | PKG-008 | Unable to read file "%1$s". | Y | Y | the ZIP archive could not be opened at all |
 | PKG-009 | The file name "%1$s" contains characters that are not allowed in OCF file names: %2$s. | Y | Y | a file name contains a forbidden character |
 | PKG-010 | The file name "%1$s" contains spaces, which may create interoperability issues with old... | Y | Y | an href contains unencoded spaces |
@@ -449,3 +449,4 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-015 | an unquoted url() CSS reads as a bad-url token (usage) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
 | LIM-002 | the publication exceeds ocf::MAX_BOOK_BYTES in total; a resource was not checked | — | Y |
+| NEXT-016 | EPUB 3.3 §4.3.3: the mimetype entry is compressed (usage) | — | Y |
