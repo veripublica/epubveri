@@ -222,6 +222,14 @@ pub const ADV_014: &str = "ADV-014"; // cover meta names no manifest item (usage
 // the verdict and the RSC ids follow that reading and this says what CSS says.
 // True wherever it fires: no grammar accepts the token.
 pub const ADV_015: &str = "ADV-015"; // an unquoted url() CSS reads as a bad-url token (usage)
+// ADV-017 is ADV-012's shape for a whole selector: every token is a selector
+// piece, but the shape breaks the Selectors grammar (`#1a`, `[x]p`,
+// `p::before span`, `:nth-child(foo)`), so browsers drop the rule. epubcheck's
+// selector grammar takes simple selectors in any order and leaves the
+// pseudo-element rule as a TODO, so CSS-008 follows it. EPUB defers CSS to the
+// W3C and w3c/publ-cg#69 leans against CSS validation, so this is not expected
+// to graduate. styloria's `InvalidSelectorStructure` (0.13) draws the line.
+pub const ADV_017: &str = "ADV-017"; // a selector whose shape CSS Selectors rejects (usage)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

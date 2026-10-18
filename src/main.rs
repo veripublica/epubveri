@@ -87,7 +87,10 @@ OPTIONS:
                                      meta whose content is not the id of any
                                      manifest item, an unquoted url() CSS
                                      reads as malformed (browsers never load
-                                     it; epubcheck reads it as a URL).
+                                     it; epubcheck reads it as a URL), a
+                                     selector like #1a or p::before span
+                                     whose shape CSS rejects (browsers drop
+                                     the rule; epubcheck accepts it).
                            Off by default; neither ever affects the verdict or
                            the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
@@ -915,7 +918,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            11,
+            12,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

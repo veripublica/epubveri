@@ -33,7 +33,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
 | **All** | **214** | **3** | **1** | **105** | **218** | **217/218** | |
 
-**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 13 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 14 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -447,6 +447,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-012 | a class selector whose name is not a CSS identifier (usage, 2,798-book report) | — | Y |
 | ADV-014 | cover meta names no manifest item (usage, MobileRead 374286 #362/#370) | — | Y |
 | ADV-015 | an unquoted url() CSS reads as a bad-url token (usage) | — | Y |
+| ADV-017 | a selector whose shape CSS Selectors rejects (usage) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
 | LIM-002 | the publication exceeds ocf::MAX_BOOK_BYTES in total; a resource was not checked | — | Y |
 | NEXT-016 | EPUB 3.3 §4.3.3: the mimetype entry is compressed (usage) | — | Y |

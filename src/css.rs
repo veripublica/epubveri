@@ -771,6 +771,7 @@ impl Quiet {
             SyntaxErrorKind::MalformedDeclaration
                 | SyntaxErrorKind::UnexpectedToken
                 | SyntaxErrorKind::InvalidSelector
+                | SyntaxErrorKind::InvalidSelectorStructure
         ) && self
             .0
             .iter()
@@ -893,7 +894,41 @@ fn report_syntax_errors(
             // A top-level `--foo:hover { … }`, which CSS Syntax drops without
             // naming a parse error. epubcheck is silent on it and so were we.
             SyntaxErrorKind::DroppedCustomPropertyRule => continue,
-            _ => {}
+            // styloria 0.13: every token is a selector piece but the shape
+            // breaks Selectors (`#1a`, `[x]p`, `p::before span`,
+            // `:nth-child(foo)`). epubcheck 5.4.0's grammar accepts all of
+            // them, so a CSS-008 here would be ours alone; what CSS says is
+            // ADV-017. Skipped before `claimed`, so `#1a, . b` still reports
+            // the `. b`. styloria drops a bad argument of a forgiving
+            // `:is()`/`:where()` without an error, so every one reported
+            // here does drop the whole rule.
+            SyntaxErrorKind::InvalidSelectorStructure => {
+                if advisory && let Some(token) = css.get(e.span.start..e.span.end) {
+                    let prelude = innermost_rule(&sheet.rules, e.span.start)
+                        .and_then(|r| prelude_source(css, r))
+                        .map(|(_, p)| p);
+                    report.push_full(
+                        ADV_017,
+                        Severity::Usage,
+                        selector_structure_text(token, prelude),
+                        css_path,
+                        origin.position(css, e.span.start),
+                        "css.stylesheet.invalid_selector_structure",
+                        vec![token.to_string()],
+                    );
+                }
+                continue;
+            }
+            // Spelled out rather than `_`, so a kind styloria adds breaks
+            // the build here, where CSS-008 or not is decided.
+            SyntaxErrorKind::BadString
+            | SyntaxErrorKind::UnterminatedRule
+            | SyntaxErrorKind::UnterminatedBlock
+            | SyntaxErrorKind::MalformedDeclaration
+            | SyntaxErrorKind::UnexpectedToken
+            | SyntaxErrorKind::InvalidSelector
+            | SyntaxErrorKind::InvalidUnicodeRange
+            | SyntaxErrorKind::NestingTooDeep => {}
         }
         let owner = (e.kind == SyntaxErrorKind::InvalidSelector)
             .then(|| innermost_rule(&sheet.rules, e.span.start))
@@ -953,7 +988,12 @@ fn epubcheck_only_class_names((start, prelude): (usize, &str)) -> Option<Vec<(us
         return None;
     }
     let (_, errors) = styloria::parse_stylesheet(&format!("{relaxed}{{}}"));
-    errors.is_empty().then(|| {
+    // A structure error left over (`.1a#2b` → `.xa#2b`) is one epubcheck
+    // accepts too, so it does not make the class name a CSS-008.
+    let still_invalid = errors
+        .iter()
+        .any(|e| e.kind != SyntaxErrorKind::InvalidSelectorStructure);
+    (!still_invalid).then(|| {
         found
             .into_iter()
             .map(|(s, e)| (start + s, start + e))
@@ -1055,6 +1095,9 @@ fn syntax_error_slug(kind: SyntaxErrorKind) -> &'static str {
         // is malformed" and "the declarations are malformed" send an
         // author to different places.
         SyntaxErrorKind::InvalidSelector => "css.stylesheet.invalid_selector",
+        // Never a CSS-008: `report_syntax_errors` makes it ADV-017 before
+        // asking, under this same key.
+        SyntaxErrorKind::InvalidSelectorStructure => "css.stylesheet.invalid_selector_structure",
         // Its own slug for the same reason as the selector one: epubcheck
         // reports every CSS parse problem as CSS-008, but "the range is
         // malformed" points somewhere quite different from "the block is".
@@ -1084,7 +1127,7 @@ fn syntax_error_text(css: &str, e: &SyntaxError, selector: Option<&str>) -> Stri
     use SyntaxErrorKind as K;
     let token = quote_css(&css[e.span.start..e.span.end]);
     let detail = match (e.kind, &token) {
-        (K::InvalidSelector, _) => {
+        (K::InvalidSelector | K::InvalidSelectorStructure, _) => {
             // The token alone can be a lone `.` or even a space (`p, {`), so
             // the whole selector is what tells the reader which rule it is.
             let selector = selector.and_then(quote_css);
@@ -1118,6 +1161,19 @@ fn syntax_error_text(css: &str, e: &SyntaxError, selector: Option<&str>) -> Stri
         (_, None) => return "CSS syntax error".to_string(),
     };
     format!("CSS syntax error: {detail}")
+}
+
+/// The text of an ADV-017: the selector, the piece where its shape breaks,
+/// and what that costs. `token` is never blank (styloria spans a piece of
+/// the selector), but the selector can be missing or the piece itself.
+fn selector_structure_text(token: &str, selector: Option<&str>) -> String {
+    let t = quote_css(token).unwrap_or_else(|| token.to_string());
+    let at = match selector.and_then(quote_css) {
+        Some(s) if s != t => format!("'{s}' at '{t}'"),
+        Some(s) => format!("'{s}'"),
+        None => format!("'{t}'"),
+    };
+    format!("selector {at} is not valid under CSS Selectors, so browsers ignore this whole rule")
 }
 
 /// `source` as a message quotes it: whitespace runs folded to one space (a
@@ -2149,6 +2205,83 @@ mod tests {
                 !run_advisory(css).messages.iter().any(|m| m.id == ADV_012),
                 "{css}"
             );
+        }
+    }
+
+    /// ADV-017: a selector whose every token is a selector piece but whose
+    /// shape breaks Selectors. epubcheck 5.4.0 accepts each of these (probed
+    /// 2026-10-18), so they are never CSS-008.
+    #[test]
+    fn a_selector_shape_css_rejects_is_adv_017_not_css_008() {
+        let idx = empty_index();
+        for (css, token) in [
+            ("#1a { color: red }", "#1a"),
+            ("[x]p { color: red }", "p"),
+            (".a* { color: red }", "*"),
+            ("p::before.x { color: red }", ".x"),
+            ("p::before span { color: red }", "::before"),
+            (":nth-child(foo) { color: red }", "nth-child(foo)"),
+            (":not(#1a) { color: red }", "#1a"),
+            ("@media all { #1a { color: red } }", "#1a"),
+        ] {
+            assert!(!run(css, &idx).contains(&CSS_008), "{css}");
+            let r = run_advisory(css);
+            let adv: Vec<_> = r.messages.iter().filter(|m| m.id == ADV_017).collect();
+            assert_eq!(adv.len(), 1, "{css}: {:?}", r.messages);
+            assert_eq!(adv[0].severity, Severity::Usage);
+            assert_eq!(
+                adv[0].rule,
+                Some("css.stylesheet.invalid_selector_structure")
+            );
+            assert_eq!(adv[0].params, vec![token.to_string()], "{css}");
+            assert!(!r.messages.iter().any(|m| m.id == CSS_008), "{css}");
+        }
+        // A token error in another selector of the list is still CSS-008,
+        // beside the advisory for the one that is only misshapen.
+        let r = run_advisory("#1a, . b { color: red }");
+        assert_eq!(r.messages.iter().filter(|m| m.id == CSS_008).count(), 1);
+        assert_eq!(r.messages.iter().filter(|m| m.id == ADV_017).count(), 1);
+        // An empty `:not()` has no token out of place, but epubcheck reports
+        // it, so it is CSS-008 (styloria 0.13 classes it so); `:has()` is not.
+        for css in [":not() { color: red }", ":not( ) { color: red }"] {
+            assert!(run(css, &idx).contains(&CSS_008), "{css}");
+            assert!(!run_advisory(css).messages.iter().any(|m| m.id == ADV_017));
+        }
+        assert!(!run(":has() { color: red }", &idx).contains(&CSS_008));
+        // A forgiving list drops a bad argument and keeps the rule, so there
+        // is nothing to say; valid selectors are untouched.
+        for css in [
+            ":is(#1a, p) { color: red }",
+            ":where(p::before span) { color: red }",
+            "p.x, [a=x i], :nth-child(2n of p) { color: red }",
+        ] {
+            let r = run_advisory(css);
+            assert!(
+                !r.messages
+                    .iter()
+                    .any(|m| m.id == ADV_017 || m.id == CSS_008),
+                "{css}: {:?}",
+                r.messages
+            );
+        }
+        // Inside a nested rule the rule itself is the one finding.
+        let r = run_advisory("p { #1a { color: red } }");
+        assert!(
+            !r.messages.iter().any(|m| m.id == ADV_017),
+            "{:?}",
+            r.messages
+        );
+    }
+
+    /// The ADV-012 re-parse must not let a structure error, which epubcheck
+    /// accepts too, turn a class name it accepts into a CSS-008.
+    #[test]
+    fn a_structure_error_beside_an_epubcheck_only_class_keeps_adv_012() {
+        let idx = empty_index();
+        for css in [".-1a#2b { color: red }", ".-1a::before span { color: red }"] {
+            assert!(!run(css, &idx).contains(&CSS_008), "{css}");
+            let r = run_advisory(css);
+            assert!(r.messages.iter().any(|m| m.id == ADV_012), "{css}");
         }
     }
 

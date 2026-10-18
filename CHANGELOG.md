@@ -10,6 +10,43 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**A selector that CSS rejects for its shape is now reported, behind
+`--advisory`, as ADV-017.** `#1a`, `[x]p` and `p::before span` are made of
+valid selector pieces in an order or form CSS Selectors does not allow, so
+browsers drop the whole rule. epubcheck accepts them, so the verdict does
+not move. Four selectors that epubcheck does report are now CSS-008 here
+too. On 562 real books and the 1086 built from epubcheck's fixtures,
+nothing changes: none of them carries these shapes. The library's API is
+unchanged.
+
+### Changed
+
+- **styloria 0.12.0 → 0.13.0.** Its selector parser now builds a tree and
+  tells a selector whose shape is wrong (`InvalidSelectorStructure`) apart
+  from one holding a token no selector may hold (`InvalidSelector`). On
+  1648 books (562 real ones and 1086 built from epubcheck's fixtures), the
+  JSON, stderr and exit code are byte for byte those of 0.29.1, with and
+  without `--advisory`: none of the shapes below occurs in them.
+
+### Added
+
+- **ADV-017, behind `--advisory`: a selector whose shape CSS rejects.**
+  Every token is a valid selector piece, but the order or form breaks CSS
+  Selectors: an id that is not an identifier (`#1a`), a type or `*` after
+  another simple selector (`[x]p`, `.a*`), anything but a pseudo after a
+  pseudo-element (`p::before.x`), a pseudo-element before the last compound
+  (`p::before span`), an `:nth-*()` argument that is not An+B
+  (`:nth-child(foo)`). Browsers drop the whole rule. epubcheck 5.4.0 accepts
+  all of these, so they never reach CSS-008. A bad argument inside a
+  forgiving `:is()`/`:where()` drops only that argument, and is not
+  reported. Usage severity, never the verdict or the exit code.
+
+### Fixed
+
+- **CSS-008 now reports `[a=x i s]`, `:not(. a)`, `:has(. a)` and an empty
+  `:not()`,** as epubcheck does. styloria 0.12 let a second attribute flag,
+  a stray token inside `:not()`/`:has()` and an empty `:not()` through.
+
 ## [0.29.1] - 2026-10-17
 
 **epubveri moves to zip 9.0.4, and reads every book as 0.29.0 did.** zip
