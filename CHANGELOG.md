@@ -10,6 +10,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-10-18
+
 **A selector that CSS rejects for its shape is now reported, behind
 `--advisory`, as ADV-017.** `#1a`, `[x]p` and `p::before span` are made of
 valid selector pieces in an order or form CSS Selectors does not allow, so
@@ -27,6 +29,12 @@ unchanged.
   1648 books (562 real ones and 1086 built from epubcheck's fixtures), the
   JSON, stderr and exit code are byte for byte those of 0.29.1, with and
   without `--advisory`: none of the shapes below occurs in them.
+- **unicode-normalization 0.1.25 → 0.1.26 (Unicode 18 tables)**, in the
+  lockfile, so in the binaries and the npm package. Output on the same 1648
+  books is byte-identical: Unicode's stability policy keeps NFC fixed for
+  characters already assigned, so only characters new in Unicode 18 can
+  normalize differently. The crate's licence now reads
+  `(MIT OR Apache-2.0) AND Unicode-3.0`.
 
 ### Added
 
