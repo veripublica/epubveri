@@ -10,6 +10,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-10-21
+
+**styloria moves 0.13 → 0.15, and stylesheets now decode as CSS Syntax 3
+says.** A `url()` inside another function follows epubcheck in the default
+output and becomes NEXT-018 under `--advisory`. `url( "…" )` with a space,
+and CSS-029 inside `@media`, now read as epubcheck reads them, and a
+UTF-32BE stylesheet is CSS-004 once. On 1677 books the output is unchanged
+except for one UTF-32BE probe. The library's API is unchanged.
+
 ### Changed
 
 - **styloria 0.13.0 → 0.15.0, which now decodes stylesheets and lists what
@@ -18,12 +27,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   generic half of our CSS code moved there: decoding,
   the `@charset` matcher, and the url and class-name scans. On 1677 books
   (562 real ones, 1086 built from epubcheck's fixtures, its 24 bare CSS test
-  files wrapped in books, and 5 encoding probes), the JSON, stderr and exit
-  code are byte for byte those of 0.30.0, with `--advisory`. The url and
-  class reach is kept as it was. styloria finds more (`src("…")`, the strings
-  in `image-set()`, `url( "…" )` with a space before the string, classes
-  inside `@media` and `:not()`), and each of those is measured against
-  epubcheck before it is taken.
+  files wrapped in books, and 5 encoding probes), the move itself left the
+  JSON, stderr and exit code byte for byte those of 0.30.0, with
+  `--advisory`. styloria finds more urls and class names than our old scans
+  did. Each extra kind was probed against epubcheck before we took it. The
+  ones taken are listed below. `src("…")`, the strings in `image-set()` and
+  classes inside `:not()` or `:is()` stay unread, as in epubcheck.
 - **Stylesheets decode as CSS Syntax 3 says, not as epubcheck does.** A
   byte-exact `@charset` now chooses the decoder: `@charset "iso-8859-1"`
   reads `é` as `é`, where 0.30.0 read U+FFFD and reported a false RSC-020
@@ -35,7 +44,6 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   the file. Every non-UTF-8, non-UTF-16 stylesheet is CSS-004 in both tools,
   so the verdict does not depend on the decoding. A multi-byte legacy
   encoding (Shift_JIS, GBK, Big5) still reads as lossy UTF-8, as before.
-
 - **A CSS `url()` inside another function, as in `image-set(url(a.png)
   1x)`, no longer draws errors that epubcheck does not.** epubcheck reads
   only a declaration's top-level urls, so it never checks one inside
@@ -46,8 +54,9 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   urls now draw nothing. Under `--advisory`, a missing, undeclared, leaking
   or `file:` target is the new **NEXT-018**, with the same rule key the
   top-level finding carries. The url still counts as a use of its resource,
-  so OPF-097 stays silent, which is what the spec says and stricter than
-  nothing. No book on the shelf has the shape.
+  so OPF-097 stays silent, as the spec has it (epubcheck reports OPF-097
+  there). No book on the shelf has the shape. Reported upstream as
+  [w3c/epubcheck#1743](https://github.com/w3c/epubcheck/issues/1743).
 
 ### Fixed
 
@@ -57,7 +66,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   while the CSS-004 it deserves never came. It now decodes as UTF-32BE, so
   its urls are checked like any other stylesheet's. A UTF-32LE mark begins
   with the UTF-16LE one, which wins in both tools (CSS-003), and is unchanged.
-  It is reported upstream with the encoding cases above as
+  That case, a typo in epubcheck's byte order mark table, and the BOM-less
+  `@charset "utf-16be"` above are reported upstream as
   [w3c/epubcheck#1742](https://github.com/w3c/epubcheck/issues/1742).
 - **`url( "img.png" )`, with whitespace before the string, is a url.** It
   was not read. A file used only that way was called unreferenced (OPF-097,
