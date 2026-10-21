@@ -225,11 +225,17 @@ a theoretical one.
 - **`url.rs`** — a small hand-written absolute-URL syntax validator
   (scheme/host/character-set rules), scoped to exactly what the real
   test corpus exercises rather than a full URL-spec implementation.
-- **`css.rs`** — CSS checks, built on the sibling `styloria` crate's
-  tokenizer/parser (which has no selector or property-value grammar
-  yet — everything here works at the token/component-value level:
-  malformed declarations, empty `@font-face` rules, `url()` resource
-  resolution, encoding checks).
+- **`css.rs`** — CSS checks, built on the sibling `styloria` crate:
+  its parser, its decoder (a stylesheet's bytes become text in CSS
+  Syntax 3's order: byte order mark, `@charset`, then UTF-8), its
+  reference scans (every `url()` and every class or type name a
+  selector holds) and its validation of properties and descriptors.
+  epubveri decides what to report: malformed declarations, empty
+  `@font-face` rules, `url()` resource resolution, encoding checks.
+  Where styloria reaches further than epubcheck reads (a `url()` inside
+  another function, a class name inside `:not()`), the default output
+  follows epubcheck; the nested `url()` findings are reported only
+  under `--advisory`, as NEXT-018.
 
 ### Optional extension specifications
 
