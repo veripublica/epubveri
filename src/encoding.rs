@@ -411,6 +411,27 @@ pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
         .collect()
 }
 
+/// UTF-32 code units in either byte order; a value that is no character is
+/// dropped. The package document's decoder and, for a stylesheet with a
+/// UTF-32BE byte order mark, the CSS one.
+pub(crate) fn decode_utf32(bytes: &[u8], big_endian: bool) -> String {
+    // `as_chunks` rather than `chunks_exact(4)` — see the note on
+    // [`decode_utf16`]; same reasoning, same trailing behaviour.
+    bytes
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter_map(|c| {
+            let v = if big_endian {
+                u32::from_be_bytes(*c)
+            } else {
+                u32::from_le_bytes(*c)
+            };
+            char::from_u32(v)
+        })
+        .collect()
+}
+
 /// An XML resource's text, decoded so that the grading above and the parse
 /// below agree on what the bytes are: UTF-16 by its BOM or by `<?` in either
 /// 16-bit order, everything else as UTF-8 (lossily, as before).

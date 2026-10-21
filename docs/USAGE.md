@@ -259,7 +259,7 @@ changes the verdict**:
 | | Default | What it adds |
 |---|---|---|
 | `-u`, `--usage` | **off** | The `USAGE` lines described above. |
-| `--advisory` | **off** | Extra opinions epubcheck does not hold, in two families: `NEXT-*` (a specification requires it and epubcheck hasn't implemented it yet — today a compressed `mimetype` file; epubcheck 5.4.0 implemented the four EPUB 3.4 rules that were here first, and epubveri 0.15.0 moved them to its ids) and `ADV-*` (no specification requires it, but the book is still probably wrong). |
+| `--advisory` | **off** | Extra opinions epubcheck does not hold, in two families: `NEXT-*` (a specification requires it and epubcheck hasn't implemented it yet — today a compressed `mimetype` file, and a CSS `url()` inside another function such as `image-set()` whose target is missing or undeclared; epubcheck 5.4.0 implemented the four EPUB 3.4 rules that were here first, and epubveri 0.15.0 moved them to its ids) and `ADV-*` (no specification requires it, but the book is still probably wrong). |
 
 Everything else you see is a finding epubcheck would report too. **A book that
 passes epubcheck passes epubveri**, with or without either switch — `--advisory`

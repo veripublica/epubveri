@@ -449,9 +449,13 @@ can tell them apart without reading the message:
   yet.** These become real errors the day epubcheck catches up, so they are
   worth fixing before somebody downstream runs epubcheck on your book.
 
-  One check lives here today: a `mimetype` file that is compressed, which
+  Two checks live here today. A `mimetype` file that is compressed, which
   EPUB 3.3 forbids and epubcheck does not ask about (it compares only what
-  the file says). It was an error in epubveri's default output until 0.29.0.
+  the file says); it was an error in epubveri's default output until 0.29.0.
+  And a CSS `url()` inside another function, such as `image-set()`, whose
+  target is missing, undeclared, outside the container or a `file:` URL:
+  epubcheck reads only a declaration's top-level urls, so it never checks
+  these; they were errors in epubveri's default output until 0.31.0.
   The family first held four EPUB 3.4 rules; epubcheck 5.4.0 implemented all
   four, so since epubveri 0.15.0 they report under epubcheck's own ids, at its
   severities, with no flag. That is the mechanism working: a check graduates

@@ -12,8 +12,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Changed
 
-- **styloria 0.13.0 → 0.14.0, which now decodes stylesheets and lists what
-  they reference.** The generic half of our CSS code moved there: decoding,
+- **styloria 0.13.0 → 0.15.0, which now decodes stylesheets and lists what
+  they reference.** (0.15.0 also checks property and descriptor values; those
+  findings are routed nowhere yet, so the output does not change.) The
+  generic half of our CSS code moved there: decoding,
   the `@charset` matcher, and the url and class-name scans. On 1677 books
   (562 real ones, 1086 built from epubcheck's fixtures, its 24 bare CSS test
   files wrapped in books, and 5 encoding probes), the JSON, stderr and exit
@@ -49,6 +51,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **A stylesheet with a UTF-32BE byte order mark is CSS-004, once, as in
+  epubcheck.** Read the spec's way, as UTF-8 (the Encoding Standard has no
+  UTF-32), it was a NUL after every character and a CSS-008 for every rule,
+  while the CSS-004 it deserves never came. It now decodes as UTF-32BE, so
+  its urls are checked like any other stylesheet's. A UTF-32LE mark begins
+  with the UTF-16LE one, which wins in both tools (CSS-003), and is unchanged.
+  It is reported upstream with the encoding cases above as
+  [w3c/epubcheck#1742](https://github.com/w3c/epubcheck/issues/1742).
 - **`url( "img.png" )`, with whitespace before the string, is a url.** It
   was not read. A file used only that way was called unreferenced (OPF-097,
   usage), and a missing one drew no RSC-007. epubcheck reads it, and so does

@@ -4020,24 +4020,6 @@ fn extract_xml_declared_encoding(text: &str) -> Option<String> {
     Some(after_quote[..end].to_string())
 }
 
-fn decode_utf32(bytes: &[u8], big_endian: bool) -> String {
-    // `as_chunks` rather than `chunks_exact(4)` — see the note on
-    // `encoding::decode_utf16`; same reasoning, same trailing behaviour.
-    bytes
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .filter_map(|c| {
-            let v = if big_endian {
-                u32::from_be_bytes(*c)
-            } else {
-                u32::from_le_bytes(*c)
-            };
-            char::from_u32(v)
-        })
-        .collect()
-}
-
 /// `dc:identifier` must not be empty - the one rule that had to leave
 /// `schemas/package.sch` when that file became EPUB 3 only.
 ///
@@ -4306,9 +4288,11 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
             // the XML specification names; the unusual 2143/3412 orders and
             // EBCDIC are left to fail the parse.
             Some(match (sniffed, bytes) {
-                (Sniffed::Ucs4, [0, 0, 0xFE, 0xFF, rest @ ..]) => decode_utf32(rest, true),
-                (Sniffed::Ucs4, [0, 0, 0, 0x3C, ..]) => decode_utf32(bytes, true),
-                (Sniffed::Ucs4, [0x3C, 0, 0, 0, ..]) => decode_utf32(bytes, false),
+                (Sniffed::Ucs4, [0, 0, 0xFE, 0xFF, rest @ ..]) => {
+                    crate::encoding::decode_utf32(rest, true)
+                }
+                (Sniffed::Ucs4, [0, 0, 0, 0x3C, ..]) => crate::encoding::decode_utf32(bytes, true),
+                (Sniffed::Ucs4, [0x3C, 0, 0, 0, ..]) => crate::encoding::decode_utf32(bytes, false),
                 _ => String::from_utf8_lossy(bytes).into_owned(),
             })
         }
@@ -14699,7 +14683,9 @@ fn check_external_identifiers(
         let Some(bytes) = ocf.read_content(&orig) else {
             continue;
         };
-        let text = crate::css::decode_bytes(&bytes);
+        // An XML file, so XML's decoder: the stylesheet one would read a
+        // `@charset` here and drop a UTF-8 byte order mark.
+        let text = crate::encoding::decode_xml(&bytes);
         let Some((public_id, system_id)) = extract_doctype_ids(&text) else {
             continue;
         };

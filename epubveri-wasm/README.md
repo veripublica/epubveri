@@ -87,7 +87,9 @@ epubcheck has no verdict on, in two families, both at `usage` severity:
 
 - **`NEXT-*`** — a published specification requires it and epubcheck has not implemented it
   yet, so it becomes an ordinary error the day it catches up: a `mimetype` file that is
-  compressed (EPUB 3.3 forbids it; epubcheck compares only its contents). The four EPUB 3.4
+  compressed (EPUB 3.3 forbids it; epubcheck compares only its contents), and a CSS `url()`
+  inside another function, such as `image-set()`, whose target is missing, undeclared,
+  outside the container or a `file:` URL (epubcheck does not read urls there). The four EPUB 3.4
   rules that were here first graduated when epubcheck 5.4.0 implemented them, and now report
   under its own ids without this flag.
 - **`ADV-*`** — no specification requires it, but the book is still probably wrong

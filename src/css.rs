@@ -57,6 +57,16 @@ use crate::report::{LocationIndex, Position, Report, Severity};
 /// encodings) falls back to lossy UTF-8, which is what every stylesheet got
 /// before; the spec would decode it, so that is a known gap, not a choice.
 pub(crate) fn decode_bytes(bytes: &[u8]) -> String {
+    // A UTF-32BE byte order mark, which CSS Syntax does not know: the
+    // Encoding Standard has no UTF-32, so the spec reads these bytes as UTF-8
+    // and every character comes with three NULs, a CSS-008 apiece. epubcheck
+    // decodes them as UTF-32BE (Java has the charset) and reports CSS-004
+    // once, so we decode them too and report the same (see `check`). The
+    // little-endian mark starts with the UTF-16LE one, which wins in both
+    // tools: CSS-003, then whatever the misread text holds.
+    if let [0, 0, 0xFE, 0xFF, rest @ ..] = bytes {
+        return crate::encoding::decode_utf32(rest, true);
+    }
     match styloria::decode_stylesheet(bytes, None, None) {
         Ok(decoded) => decoded.text.into_owned(),
         Err(_) => String::from_utf8_lossy(bytes).into_owned(),
@@ -176,6 +186,14 @@ pub(crate) fn check(
     // `CssOrigin::File`, which is why the bytes live there rather than
     // arriving as a separate argument no other origin could ever supply.
     if let CssOrigin::File { bytes: Some(bytes) } = origin {
+        if bytes.starts_with(&[0, 0, 0xFE, 0xFF]) {
+            report.push_at(
+                CSS_004,
+                Severity::Error,
+                "stylesheet is UTF-32BE encoded, which is not utf-8 or utf-16",
+                css_path,
+            );
+        }
         if has_utf16_bom(bytes) {
             report.push_at(
                 CSS_003,
@@ -2486,6 +2504,23 @@ mod tests {
         let mut report = Report::new();
         check_style_attribute("font-style: bold", "doc.xhtml", true, true, &mut report);
         assert!(report.messages.is_empty(), "{:?}", report.messages);
+
+        // A descriptor value too (styloria 0.15): `font-family` in
+        // `@font-face` takes one family, so a fallback list is invalid there.
+        // It changes nothing in the report.
+        let fallback = r#"@font-face { font-family: "Arial", sans-serif; src: url(f.woff) }"#;
+        let (sheet, _) = styloria::parse_stylesheet(fallback);
+        assert!(
+            validate_parsed_stylesheet(&sheet)
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::InvalidValue && d.name == "font-family"),
+            "styloria calls a font-family list in @font-face invalid"
+        );
+        let ids = |css| -> Vec<_> { run_advisory(css).messages.iter().map(|m| m.id).collect() };
+        assert_eq!(
+            ids(fallback),
+            ids(r#"@font-face { font-family: "Arial"; src: url(f.woff) }"#)
+        );
     }
 
     #[test]
@@ -2703,6 +2738,20 @@ mod tests {
             None,
             "not at the start"
         );
+    }
+
+    /// A UTF-32BE byte order mark: CSS-004 once, and the text decoded, as
+    /// epubcheck does. Read as the spec's UTF-8 it would be NULs and a
+    /// CSS-008 per rule (probe `charset-upstream/e-bom-utf32be`).
+    #[test]
+    fn a_utf32be_stylesheet_is_css_004_and_decoded() {
+        let css = "a { color: red }";
+        let mut bytes = vec![0, 0, 0xFE, 0xFF];
+        for c in css.chars() {
+            bytes.extend_from_slice(&u32::from(c).to_be_bytes());
+        }
+        assert_eq!(decode_bytes(&bytes), css);
+        assert_eq!(run_bytes(&bytes), vec![CSS_004]);
     }
 
     #[test]
