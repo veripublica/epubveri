@@ -69,7 +69,11 @@ OPTIONS:
                                      a real error once it does — a mimetype
                                      file that is compressed (EPUB 3.3
                                      forbids it; epubcheck checks only its
-                                     contents).
+                                     contents), and a CSS url() inside
+                                     another function, such as image-set(),
+                                     whose target is missing, undeclared,
+                                     outside the container or a file: URL
+                                     (epubcheck does not read urls there).
                              ADV-*   no spec requires it, but the book is
                                      still wrong — unknown CSS property or
                                      descriptor names, a type selector naming
@@ -918,7 +922,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            12,
+            13,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

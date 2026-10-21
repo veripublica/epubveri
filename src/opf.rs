@@ -3229,7 +3229,7 @@ fn collect_svg_class_names(
                 .collect();
             let sheet = styloria::parse_stylesheet(&css_text).0;
             classes.extend(crate::css::selector_class_names(&sheet));
-            for import_url in crate::css::import_targets(&css_text, &sheet) {
+            for import_url in crate::css::import_targets(&sheet) {
                 classes.extend(read_stylesheet_classes(&import_url, dir, name_index, ocf));
             }
         }
@@ -11681,21 +11681,24 @@ fn check_text(
                 // `@import url(file:example)` in an inline `<style>` draws
                 // RSC-030 **and** RSC-006 there, and drew only RSC-030 here.
                 let imports: std::collections::HashSet<String> =
-                    crate::css::import_targets(&css_text, &sheet)
-                        .into_iter()
-                        .collect();
+                    crate::css::import_targets(&sheet).into_iter().collect();
                 for u in &imports {
                     if is_remote_url(u) || is_file_url(u) {
                         restricted_remote_refs.insert(strip_url_fragment(u));
                     }
                 }
-                for u in crate::css::stylesheet_urls(&css_text, &sheet) {
+                for crate::css::CssUrl { url: u, nested } in crate::css::stylesheet_urls(&sheet) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
                     // OPF-097 below. Inline <style> resolves against this
                     // document's own directory.
                     if !is_external(&u) {
                         resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&u))));
+                    }
+                    // A url inside another function counts as a use and is
+                    // asked nothing more: epubcheck never reads it (NEXT-018).
+                    if nested {
+                        continue;
                     }
                     // **An import is not a remote-resources dependency.**
                     // The property exists for remote resources a reading
@@ -12499,14 +12502,14 @@ fn check_text(
                 report,
             );
             let sheet = styloria::parse_stylesheet(&css_text).0;
-            let imports: HashSet<String> = crate::css::import_targets(&css_text, &sheet)
-                .into_iter()
-                .collect();
+            let imports: HashSet<String> = crate::css::import_targets(&sheet).into_iter().collect();
             let mut uses_remote = false;
-            for u in crate::css::stylesheet_urls(&css_text, &sheet) {
+            for crate::css::CssUrl { url: u, nested } in crate::css::stylesheet_urls(&sheet) {
                 if is_remote_url(&u) {
                     remote_resource_refs.insert(strip_url_fragment(&u));
-                    if !imports.contains(&u) {
+                    // Used, but never a reason for OPF-014: epubcheck does not
+                    // read a url inside another function (NEXT-018).
+                    if !imports.contains(&u) && !nested {
                         uses_remote = true;
                     }
                 } else if !is_external(&u) {
@@ -12676,7 +12679,7 @@ fn check_text(
                     .filter_map(|t| t.text())
                     .collect();
                 let sheet = styloria::parse_stylesheet(&css_text).0;
-                for import_url in crate::css::import_targets(&css_text, &sheet) {
+                for import_url in crate::css::import_targets(&sheet) {
                     if is_remote_url(&import_url) || is_file_url(&import_url) {
                         report.push_node(
                             RSC_006,
@@ -12911,9 +12914,7 @@ fn check_text(
         // control is a remote `@font-face src`, where epubcheck does report
         // OPF-014 and RSC-008 and we already agreed.
         let imports: std::collections::HashSet<String> =
-            crate::css::import_targets(&css_text, &sheet)
-                .into_iter()
-                .collect();
+            crate::css::import_targets(&sheet).into_iter().collect();
         // **A font reference is exempt from the fallback rule**, and reading
         // that rule as "any CSS url()" cost 67 shelf books an invented
         // RSC-032 apiece. `ResourceReferencesChecker::checkFallbacks`:297
@@ -12928,12 +12929,20 @@ fn check_text(
                 .map(|s| s.node)
                 .collect();
         let mut css_has_remote = false;
-        for u in crate::css::stylesheet_urls(&css_text, &sheet) {
+        for crate::css::CssUrl { url: u, nested } in crate::css::stylesheet_urls(&sheet) {
             // Consumed resources, for OPF-097 - a font is "used" if any
             // stylesheet in the manifest asks for it, exactly as epubcheck
             // registers references from every CSS resource it checks.
             if !is_external(&u) {
                 resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&u))));
+            }
+            // A url inside another function counts as a use and is asked
+            // nothing more: epubcheck never reads it, so RSC-020/032/033 and
+            // the remote-resources property would be ours alone. Unlike the
+            // resource checks in `css::check`, these are not reported under
+            // `--advisory` either (NEXT-018 covers the target, not its form).
+            if nested {
+                continue;
             }
             // RSC-020, same reasoning as the guide and the NCX: a `url()` is a
             // registered reference and epubcheck strict-parses every one,
@@ -14960,8 +14969,9 @@ impl LinkedSheet {
             })
             .collect();
         let css_dir = parent_dir(resolved);
-        let refs = crate::css::stylesheet_urls(&css_text, &sheet)
+        let refs = crate::css::stylesheet_urls(&sheet)
             .into_iter()
+            .map(|u| u.url)
             .filter(|u| !is_external(u))
             .map(|u| nfc(&resolve(&css_dir, &strip_url_fragment(&u))))
             .collect();

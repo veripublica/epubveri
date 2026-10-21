@@ -294,6 +294,17 @@ pub const ADV_017: &str = "ADV-017"; // a selector whose shape CSS Selectors rej
 // lacks, which the direction rule puts behind the flag. The rule key is
 // unchanged.
 pub const NEXT_016: &str = "NEXT-016"; // EPUB 3.3 §4.3.3: the mimetype entry is compressed (usage)
+// NEXT-018: a stylesheet url() inside another function — `image-set(url(a.png)
+// 1x)`, `-webkit-image-set(…)`, `cross-fade(…)` — that names a missing,
+// undeclared, leaking or `file:` target. EPUB 3.3 asks the same of every
+// resource a publication uses, and CSS reads the url wherever it stands, but
+// epubcheck 5.4.0 never sees it: `CSSHandler.registerURIs` looks only at a
+// declaration's top-level components. So RSC-007/008/026/030 for such a url
+// were ours alone in the default output until 0.31.0, a restrictive check the
+// direction rule puts behind the flag; each keeps its rule key here. Counting
+// a resource as used (OPF-097) still sees the url. Upstream: probe set
+// 2026-10-21_css-reach, m4.
+pub const NEXT_018: &str = "NEXT-018"; // EPUB 3.3: a url() inside another CSS function names a bad target (usage)
 
 /// What an `ADV-*` finding is grounded in. **Two different claims live in the
 /// advisory family and they justify themselves differently**, which until now

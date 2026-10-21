@@ -34,6 +34,31 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   so the verdict does not depend on the decoding. A multi-byte legacy
   encoding (Shift_JIS, GBK, Big5) still reads as lossy UTF-8, as before.
 
+- **A CSS `url()` inside another function, as in `image-set(url(a.png)
+  1x)`, no longer draws errors that epubcheck does not.** epubcheck reads
+  only a declaration's top-level urls, so it never checks one inside
+  `image-set()`, `-webkit-image-set()` or `cross-fade()`. 0.30.0 checked it
+  like any other url. A book epubcheck passes failed here with RSC-007 or
+  RSC-008 (target missing or undeclared), RSC-026, RSC-030, RSC-020 (a
+  malformed url), or OPF-014 (a remote target). In the default output these
+  urls now draw nothing. Under `--advisory`, a missing, undeclared, leaking
+  or `file:` target is the new **NEXT-018**, with the same rule key the
+  top-level finding carries. The url still counts as a use of its resource,
+  so OPF-097 stays silent, which is what the spec says and stricter than
+  nothing. No book on the shelf has the shape.
+
+### Fixed
+
+- **`url( "img.png" )`, with whitespace before the string, is a url.** It
+  was not read. A file used only that way was called unreferenced (OPF-097,
+  usage), and a missing one drew no RSC-007. epubcheck reads it, and so does
+  CSS Syntax. `src("…")` and the strings in `image-set()` stay unread, as in
+  epubcheck.
+- **CSS-029 sees a media-overlay class inside `@media`,** as epubcheck does.
+  Only top-level rules were read. A class inside `:not()` or `:is()` is still
+  not read, which matches epubcheck. No real book on the shelf has any of these
+  shapes, so the 1677-book run does not move.
+
 ## [0.30.0] - 2026-10-18
 
 **A selector that CSS rejects for its shape is now reported, behind

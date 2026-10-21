@@ -294,22 +294,24 @@ pub(crate) fn check(
     report_syntax_errors(&syntax_errs, &sheet, &quiet, ctx, advisory, report);
     // A top-level `@font-face` block's urls are `check_font_face`'s, which
     // asks its own questions of them.
-    let urls = sheet_urls(css, &sheet)
+    let urls = sheet_urls(&sheet)
         .into_iter()
         .filter(|u| u.under != Under::FontFaceBlock);
     for u in urls {
+        let nested = u.nested;
         let u = u.url;
         let url = u.node;
         let pos = origin.position(css, u.span.start);
+        let mut push = |id, text: String, rule| {
+            push_url_finding(
+                report, nested, advisory, id, text, css_path, pos, rule, &url,
+            )
+        };
         if is_file_url_str(&url) {
-            report.push_full(
+            push(
                 RSC_030,
-                Severity::Error,
                 format!("'{url}' is a file URL, which is not allowed"),
-                css_path,
-                pos,
                 "css.url.file_scheme_not_allowed",
-                vec![url.clone()],
             );
             continue;
         }
@@ -326,14 +328,10 @@ pub(crate) fn check(
         // The shape that found this is a stylesheet at the container *root*
         // asking for `url(../Fonts/x.ttf)`, which real books do carry.
         if crate::opf::href_leaks_container_root(base_dir, &url) {
-            report.push_full(
+            push(
                 RSC_026,
-                Severity::Error,
                 format!("'{url}' leaks outside the container"),
-                css_path,
-                pos,
                 "css.url.leaks_container_root",
-                vec![url.clone()],
             );
         }
         let resolved = nfc(&resolve(base_dir, &url));
@@ -367,25 +365,17 @@ pub(crate) fn check(
                 // manifest cannot see.
             }
             (false, true) => {
-                report.push_full(
+                push(
                     RSC_008,
-                    Severity::Error,
                     format!("resource '{url}' is not declared in the manifest"),
-                    css_path,
-                    pos,
                     "css.url.undeclared_resource",
-                    vec![url.clone()],
                 );
             }
             (false, false) => {
-                report.push_full(
+                push(
                     RSC_007,
-                    Severity::Error,
                     format!("references a missing resource '{url}'"),
-                    css_path,
-                    pos,
                     "css.url.missing_resource",
-                    vec![url.clone()],
                 );
             }
             (true, true) => {}
@@ -437,6 +427,38 @@ pub(crate) fn check(
                 params,
             );
         }
+    }
+}
+
+/// One finding about a stylesheet url, an error. A url inside another
+/// function (`nested`) is one epubcheck never reads, so the finding is ours
+/// alone and goes behind `--advisory` as NEXT-018, keeping its rule key and
+/// params for the tools that dispatch on them.
+#[allow(clippy::too_many_arguments)]
+fn push_url_finding(
+    report: &mut Report,
+    nested: bool,
+    advisory: bool,
+    id: &'static str,
+    text: String,
+    path: &str,
+    pos: Position,
+    rule: &'static str,
+    url: &str,
+) {
+    let params = vec![url.to_string()];
+    if !nested {
+        report.push_full(id, Severity::Error, text, path, pos, rule, params);
+    } else if advisory {
+        report.push_full(
+            NEXT_018,
+            Severity::Usage,
+            format!("{text} (it sits inside another function, where epubcheck does not read urls; {id} once it does)"),
+            path,
+            pos,
+            rule,
+            params,
+        );
     }
 }
 
@@ -1462,7 +1484,7 @@ fn check_font_face(block: &Block, name_span: Span, ctx: Ctx, report: &mut Report
         return;
     }
     for src in font_face_src_declarations(&block.node) {
-        let src_urls = declaration_urls(ctx.css, src);
+        let src_urls = declaration_urls(src);
         // RSC-030 has to be asked here as well as in the generic `urls` pass,
         // because that pass deliberately skips `@font-face` blocks and hands
         // them to this function — so every question it asks about a url has
@@ -1515,10 +1537,10 @@ fn font_face_src_declarations<'b, 'c>(
 }
 
 /// The urls in one declaration (a block item), as [`checked_url`] reads them.
-fn declaration_urls(css: &str, declaration: &BlockItem) -> Vec<Spanned<String>> {
+fn declaration_urls(declaration: &BlockItem) -> Vec<Spanned<String>> {
     styloria::block_url_references(std::slice::from_ref(declaration))
         .iter()
-        .filter_map(|r| checked_url(css, r))
+        .filter_map(|r| checked_url(r))
         .collect()
 }
 
@@ -1545,7 +1567,7 @@ pub(crate) fn font_face_src_urls_spanned(css: &str) -> Vec<Spanned<String>> {
         }
         let Some(block) = &a.block else { continue };
         for src in font_face_src_declarations(&block.node) {
-            out.extend(declaration_urls(css, src));
+            out.extend(declaration_urls(src));
         }
     }
     out.retain(|u| !u.node.is_empty());
@@ -1571,13 +1593,59 @@ struct SheetUrl {
     under: Under,
     /// `@import "a.css"`: the bare-string form.
     bare: bool,
+    /// Inside another function or a block: see [`nesting_spans`].
+    nested: bool,
+}
+
+/// One url a stylesheet references, for the package-level checks in
+/// `opf.rs`.
+pub(crate) struct CssUrl {
+    pub(crate) url: String,
+    /// Inside another function (`image-set(url(a.png) 1x)`), which epubcheck
+    /// never reads: it counts as a use of the resource, and nothing in the
+    /// default output may be asked of it (NEXT-018).
+    pub(crate) nested: bool,
+}
+
+/// The spans of the outermost functions (other than `url()` and `src()`) and
+/// simple blocks in every rule prelude and declaration value, sorted. A url
+/// inside one is one epubcheck never reads: `CSSHandler.registerURIs` looks at
+/// a declaration's top-level components only.
+fn nesting_spans(sheet: &Stylesheet) -> Vec<Span> {
+    fn values(vs: &[Spanned<ComponentValue>], out: &mut Vec<Span>) {
+        for v in vs {
+            match &v.node {
+                ComponentValue::Function { name, .. }
+                    if name.eq_ignore_ascii_case("url") || name.eq_ignore_ascii_case("src") => {}
+                ComponentValue::Function { .. } | ComponentValue::Block(_) => out.push(v.span),
+                _ => {}
+            }
+        }
+    }
+    fn rule(r: &Spanned<Rule>, out: &mut Vec<Span>) {
+        values(r.node.prelude(), out);
+        if let Some(block) = r.node.block() {
+            for item in &block.node {
+                match item {
+                    BlockItem::Declaration(d) => values(&d.node.value, out),
+                    BlockItem::Rule(r) => rule(r, out),
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for r in &sheet.rules {
+        rule(r, &mut out);
+    }
+    out.sort_by_key(|s| s.start);
+    out
 }
 
 /// Every url in a stylesheet the checks read, in source order: styloria's
 /// [`url_references`](styloria::url_references), kept to the reach these
 /// checks have always had (see [`checked_url`]). A bare string counts only as
 /// the target of a top-level `@import`.
-fn sheet_urls(css: &str, sheet: &Stylesheet) -> Vec<SheetUrl> {
+fn sheet_urls(sheet: &Stylesheet) -> Vec<SheetUrl> {
     let tops: Vec<(Span, Under, Option<Span>)> = sheet
         .rules
         .iter()
@@ -1604,6 +1672,12 @@ fn sheet_urls(css: &str, sheet: &Stylesheet) -> Vec<SheetUrl> {
             _ => Under::Other,
         }
     };
+    let nesting = nesting_spans(sheet);
+    let nested = |span: Span| {
+        let i = nesting.partition_point(|n| n.start <= span.start);
+        i.checked_sub(1)
+            .is_some_and(|i| nesting[i].start < span.start && span.end <= nesting[i].end)
+    };
     styloria::url_references(sheet)
         .iter()
         .filter_map(|r| {
@@ -1613,9 +1687,10 @@ fn sheet_urls(css: &str, sheet: &Stylesheet) -> Vec<SheetUrl> {
                 return None;
             }
             Some(SheetUrl {
-                url: checked_url(css, r)?,
+                url: checked_url(r)?,
                 under,
                 bare,
+                nested: nested(r.span),
             })
         })
         .collect()
@@ -1624,23 +1699,21 @@ fn sheet_urls(css: &str, sheet: &Stylesheet) -> Vec<SheetUrl> {
 /// The url a check reads from one of styloria's references, or `None` where
 /// the reference is beyond what the checks have read so far.
 ///
-/// styloria finds more than the token scan it replaced: `src("…")`, the
-/// strings inside `image-set()`, and `url( "…" )` with whitespace before the
-/// string. Each would be a new RSC-007/008 epubcheck may not report, so each
-/// waits for its own measurement. A `<bad-url-token>` is read as epubcheck
+/// styloria finds more than the token scan it replaced. `src("…")` and the
+/// strings inside `image-set()` stay unread: whether they are URLs an EPUB
+/// reading system fetches is unsettled in the spec, and epubcheck reads
+/// neither, so we follow it (probe set 2026-10-21_css-reach, r2/r3). A `<bad-url-token>` is read as epubcheck
 /// reads it ([`bad_url_target`]).
-fn checked_url(css: &str, r: &UrlReference) -> Option<Spanned<String>> {
+fn checked_url(r: &UrlReference) -> Option<Spanned<String>> {
     let url = match r.form {
-        UrlForm::UrlToken | UrlForm::String => r.url.to_string(),
+        // `url( "a.png" )` counts, whitespace and all: epubcheck's scanner
+        // reads `url\({w}{string}{w}\)` as one token, and CSS Syntax makes it a
+        // `url()` function holding the string. Reading only the unspaced form
+        // called a file used that way unreferenced (OPF-097) and missed it
+        // missing (RSC-007), where epubcheck says neither (probe set
+        // 2026-10-21_css-reach, r1/m1).
+        UrlForm::UrlToken | UrlForm::UrlFunction | UrlForm::String => r.url.to_string(),
         UrlForm::BadUrl => bad_url_target(&r.url),
-        // `url(` is four bytes, and the string has to follow it directly.
-        UrlForm::UrlFunction => {
-            let rest = css.get(r.span.start + 4..)?;
-            if !rest.starts_with(['"', '\'']) {
-                return None;
-            }
-            r.url.to_string()
-        }
         UrlForm::SrcFunction => return None,
     };
     Some(Spanned::new(url, r.span))
@@ -1697,8 +1770,8 @@ fn is_css_whitespace(c: char) -> bool {
 /// `opf.rs`'s SVG active-class CSS scan, CSS-029/030, which needs to
 /// merge an `@import`ed sheet's own selector class names, not just note
 /// its existence as a used resource). The bare-string form is not read here.
-pub(crate) fn import_targets(css: &str, sheet: &Stylesheet) -> Vec<String> {
-    sheet_urls(css, sheet)
+pub(crate) fn import_targets(sheet: &Stylesheet) -> Vec<String> {
+    sheet_urls(sheet)
         .into_iter()
         .filter(|u| u.under == Under::Import && !u.bare)
         .map(|u| u.url.node)
@@ -1716,18 +1789,26 @@ pub(crate) fn import_targets(css: &str, sheet: &Stylesheet) -> Vec<String> {
 /// `@namespace xlink url('http://www.w3.org/1999/xlink')`) - it's never a
 /// fetchable resource reference, unlike every other at-rule that can carry a
 /// url().
-pub(crate) fn stylesheet_urls(css: &str, sheet: &Stylesheet) -> Vec<String> {
-    sheet_urls(css, sheet)
+pub(crate) fn stylesheet_urls(sheet: &Stylesheet) -> Vec<CssUrl> {
+    sheet_urls(sheet)
         .into_iter()
         .filter(|u| u.under != Under::Namespace)
-        .map(|u| u.url.node)
+        .map(|u| CssUrl {
+            url: u.url.node,
+            nested: u.nested,
+        })
         .collect()
 }
 
-/// Class names used as selectors in a stylesheet's top-level style rules —
-/// e.g. `.foo, .bar { ... }` yields `{"foo", "bar"}`. Only top-level rules,
-/// and not the arguments of `:not()` and the like (the real media-overlay
-/// class fixtures this supports are flat, unnested CSS).
+/// Class names used as selectors in a stylesheet's style rules — e.g.
+/// `.foo, .bar { ... }` yields `{"foo", "bar"}` — at any depth (inside
+/// `@media` as well), but not in the arguments of `:not()` and the like.
+///
+/// That is epubcheck's reach for CSS-029: its `selectors` callback fires for
+/// every style rule, `@media` ones included, and its class search does not
+/// enter pseudo-class arguments (probe set 2026-10-21_css-reach, c2–c4). The
+/// spec would count the arguments too; reporting there is stricter than
+/// epubcheck, so it would be an advisory.
 pub(crate) fn selector_class_names(sheet: &Stylesheet) -> HashSet<String> {
     class_names(sheet).map(|n| n.node).collect()
 }
@@ -1745,7 +1826,7 @@ pub(crate) fn selector_class_names_spanned(css: &str) -> Vec<Spanned<String>> {
 fn class_names(sheet: &Stylesheet) -> impl Iterator<Item = Spanned<String>> {
     styloria::selector_references(sheet)
         .into_iter()
-        .filter(|r| r.top_level && !r.in_argument)
+        .filter(|r| !r.in_argument)
         .filter_map(|r| match r.selector.node {
             SimpleSelector::Class(name) => Some(Spanned::new(name.into_owned(), r.selector.span)),
             _ => None,
@@ -1994,13 +2075,45 @@ mod tests {
     #[test]
     fn stylesheet_urls_includes_a_bad_url_target() {
         let css = "p { background: url(q'q.png) } @media print { a { b: url(x y.png) } }";
-        let sheet = styloria::parse_stylesheet(css).0;
-        assert_eq!(stylesheet_urls(css, &sheet), vec!["q'q.png", "x y.png"]);
-        let css = "p { background: url(ok.png) }";
+        assert_eq!(url_list(css), vec!["q'q.png", "x y.png"]);
+        assert_eq!(url_list("p { background: url(ok.png) }"), vec!["ok.png"]);
+    }
+
+    /// NEXT-018: a url inside another function, which epubcheck never reads.
+    /// Silent by default, its own finding under `--advisory` with the rule key
+    /// the top-level url gets; still a use of the resource. Probe set
+    /// 2026-10-21_css-reach, m4.
+    #[test]
+    fn a_url_inside_another_function_is_next_018() {
+        let css = "p { background-image: image-set(url(missing.png) 1x) }";
+        assert!(run(css, &empty_index()).is_empty());
+        let report = run_advisory(css);
+        let found: Vec<_> = report
+            .messages
+            .iter()
+            .map(|m| (m.id, m.severity, m.rule))
+            .collect();
         assert_eq!(
-            stylesheet_urls(css, &styloria::parse_stylesheet(css).0),
-            vec!["ok.png"]
+            found,
+            [(NEXT_018, Severity::Usage, Some("css.url.missing_resource"))]
         );
+        // The same url at the top level is the plain error, flag or not.
+        let top = run_advisory("p { background-image: url(missing.png) }");
+        assert_eq!(top.messages.len(), 1);
+        assert_eq!(top.messages[0].id, RSC_007);
+        // Still counted as used, for OPF-097.
+        let urls = stylesheet_urls(&styloria::parse_stylesheet(css).0);
+        assert_eq!(urls.len(), 1);
+        assert_eq!(urls[0].url, "missing.png");
+        assert!(urls[0].nested);
+    }
+
+    /// The urls `stylesheet_urls` lists for `css`, flags dropped.
+    fn url_list(css: &str) -> Vec<String> {
+        stylesheet_urls(&styloria::parse_stylesheet(css).0)
+            .into_iter()
+            .map(|u| u.url)
+            .collect()
     }
 
     #[test]
@@ -2065,6 +2178,28 @@ mod tests {
     fn selector_class_names_no_class() {
         let sheet = styloria::parse_stylesheet("body { color: red; } #id { color: blue; }").0;
         assert!(selector_class_names(&sheet).is_empty());
+    }
+
+    /// epubcheck's CSS-029 reach: a style rule inside `@media` counts, a
+    /// pseudo-class argument does not (probe set 2026-10-21_css-reach).
+    #[test]
+    fn selector_class_names_reach_media_but_not_arguments() {
+        let sheet =
+            styloria::parse_stylesheet("@media screen { .in-media {} } p:not(.in-not) {}").0;
+        assert_eq!(
+            selector_class_names(&sheet),
+            HashSet::from(["in-media".to_string()])
+        );
+    }
+
+    /// `url( "a.png" )` is a url, as epubcheck's scanner and CSS Syntax both
+    /// read it; `src("…")` and an `image-set()` string are not read, as in
+    /// epubcheck (probe set 2026-10-21_css-reach).
+    #[test]
+    fn stylesheet_urls_reach() {
+        let css = r#"a { b: url( "spaced.png" ) } c { d: src("src.png") }
+                     e { f: image-set("set.png" 1x) }"#;
+        assert_eq!(url_list(css), vec!["spaced.png"]);
     }
 
     #[test]
