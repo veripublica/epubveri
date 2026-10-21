@@ -10,6 +10,30 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **styloria 0.13.0 → 0.14.0, which now decodes stylesheets and lists what
+  they reference.** The generic half of our CSS code moved there: decoding,
+  the `@charset` matcher, and the url and class-name scans. On 1677 books
+  (562 real ones, 1086 built from epubcheck's fixtures, its 24 bare CSS test
+  files wrapped in books, and 5 encoding probes), the JSON, stderr and exit
+  code are byte for byte those of 0.30.0, with `--advisory`. The url and
+  class reach is kept as it was. styloria finds more (`src("…")`, the strings
+  in `image-set()`, `url( "…" )` with a space before the string, classes
+  inside `@media` and `:not()`), and each of those is measured against
+  epubcheck before it is taken.
+- **Stylesheets decode as CSS Syntax 3 says, not as epubcheck does.** A
+  byte-exact `@charset` now chooses the decoder: `@charset "iso-8859-1"`
+  reads `é` as `é`, where 0.30.0 read U+FFFD and reported a false RSC-020
+  for a url holding it (epubcheck, which decodes Latin-1 too, reports none).
+  A UTF-8 byte order mark is no longer part of the text, so a finding on the
+  first line of such a stylesheet moves one column left, to where epubcheck
+  puts it. A BOM-less `@charset "utf-16be"` or `"utf-16le"` reads as UTF-8,
+  as the spec requires. epubcheck reads it as UTF-16 and loses the rest of
+  the file. Every non-UTF-8, non-UTF-16 stylesheet is CSS-004 in both tools,
+  so the verdict does not depend on the decoding. A multi-byte legacy
+  encoding (Shift_JIS, GBK, Big5) still reads as lossy UTF-8, as before.
+
 ## [0.30.0] - 2026-10-18
 
 **A selector that CSS rejects for its shape is now reported, behind

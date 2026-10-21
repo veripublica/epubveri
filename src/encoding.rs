@@ -389,6 +389,28 @@ fn declared_name(header: &str) -> Option<&str> {
     Some(&value[..value.find(quote)?])
 }
 
+/// UTF-16 code units in either byte order, unpaired surrogates as U+FFFD.
+/// XML's decoder (see [`decode_xml`]) and the package document's; stylesheets
+/// decode through styloria.
+pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
+    // `as_chunks` rather than `chunks_exact(2)`: it hands back fixed-size
+    // arrays, so the element accesses below are checked at compile time instead
+    // of indexing a slice whose length only the constant argument guarantees.
+    // Same trailing behaviour — a stray odd byte is dropped, which is what a
+    // truncated UTF-16 stream deserves. (clippy::chunks_exact_to_as_chunks,
+    // which arrived with Rust 1.98; `as_chunks` is stable from 1.88, our MSRV.)
+    let units = bytes.as_chunks::<2>().0.iter().map(|c| {
+        if big_endian {
+            u16::from_be_bytes(*c)
+        } else {
+            u16::from_le_bytes(*c)
+        }
+    });
+    char::decode_utf16(units)
+        .map(|r| r.unwrap_or('\u{FFFD}'))
+        .collect()
+}
+
 /// An XML resource's text, decoded so that the grading above and the parse
 /// below agree on what the bytes are: UTF-16 by its BOM or by `<?` in either
 /// 16-bit order, everything else as UTF-8 (lossily, as before).
@@ -399,7 +421,6 @@ fn declared_name(header: &str) -> Option<&str> {
 /// BOM-less UTF-16 XHTML, each RSC-027 / HTM-058 alone there). UCS-4 and
 /// EBCDIC are not decoded here; those are rare enough to leave to the parse.
 pub(crate) fn decode_xml(bytes: &[u8]) -> String {
-    use crate::css::decode_utf16;
     match bytes {
         [0xFE, 0xFF, rest @ ..] => decode_utf16(rest, true),
         [0xFF, 0xFE, rest @ ..] => decode_utf16(rest, false),

@@ -3229,7 +3229,7 @@ fn collect_svg_class_names(
                 .collect();
             let sheet = styloria::parse_stylesheet(&css_text).0;
             classes.extend(crate::css::selector_class_names(&sheet));
-            for import_url in crate::css::import_targets(&sheet) {
+            for import_url in crate::css::import_targets(&css_text, &sheet) {
                 classes.extend(read_stylesheet_classes(&import_url, dir, name_index, ocf));
             }
         }
@@ -4022,7 +4022,7 @@ fn extract_xml_declared_encoding(text: &str) -> Option<String> {
 
 fn decode_utf32(bytes: &[u8], big_endian: bool) -> String {
     // `as_chunks` rather than `chunks_exact(4)` — see the note on
-    // `css::decode_utf16`; same reasoning, same trailing behaviour.
+    // `encoding::decode_utf16`; same reasoning, same trailing behaviour.
     bytes
         .as_chunks::<4>()
         .0
@@ -4254,10 +4254,10 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
             // A BOM, or `<?` in 16-bit form; otherwise only the declaration
             // said UTF-16, over bytes that are not.
             let text = match bytes {
-                [0xFE, 0xFF, rest @ ..] => crate::css::decode_utf16(rest, true),
-                [0xFF, 0xFE, rest @ ..] => crate::css::decode_utf16(rest, false),
-                [0, 0x3C, ..] => crate::css::decode_utf16(bytes, true),
-                [0x3C, 0, ..] => crate::css::decode_utf16(bytes, false),
+                [0xFE, 0xFF, rest @ ..] => crate::encoding::decode_utf16(rest, true),
+                [0xFF, 0xFE, rest @ ..] => crate::encoding::decode_utf16(rest, false),
+                [0, 0x3C, ..] => crate::encoding::decode_utf16(bytes, true),
+                [0x3C, 0, ..] => crate::encoding::decode_utf16(bytes, false),
                 // Xerces reads that declaration and stops at it, as it does
                 // for any UTF-16 name over 8-bit bytes (measured on 5.4.0:
                 // RSC-027, a fatal RSC-016 and OPF-001).
@@ -11681,13 +11681,15 @@ fn check_text(
                 // `@import url(file:example)` in an inline `<style>` draws
                 // RSC-030 **and** RSC-006 there, and drew only RSC-030 here.
                 let imports: std::collections::HashSet<String> =
-                    crate::css::import_targets(&sheet).into_iter().collect();
+                    crate::css::import_targets(&css_text, &sheet)
+                        .into_iter()
+                        .collect();
                 for u in &imports {
                     if is_remote_url(u) || is_file_url(u) {
                         restricted_remote_refs.insert(strip_url_fragment(u));
                     }
                 }
-                for u in crate::css::stylesheet_urls(&sheet) {
+                for u in crate::css::stylesheet_urls(&css_text, &sheet) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
                     // OPF-097 below. Inline <style> resolves against this
@@ -12497,9 +12499,11 @@ fn check_text(
                 report,
             );
             let sheet = styloria::parse_stylesheet(&css_text).0;
-            let imports: HashSet<String> = crate::css::import_targets(&sheet).into_iter().collect();
+            let imports: HashSet<String> = crate::css::import_targets(&css_text, &sheet)
+                .into_iter()
+                .collect();
             let mut uses_remote = false;
-            for u in crate::css::stylesheet_urls(&sheet) {
+            for u in crate::css::stylesheet_urls(&css_text, &sheet) {
                 if is_remote_url(&u) {
                     remote_resource_refs.insert(strip_url_fragment(&u));
                     if !imports.contains(&u) {
@@ -12672,7 +12676,7 @@ fn check_text(
                     .filter_map(|t| t.text())
                     .collect();
                 let sheet = styloria::parse_stylesheet(&css_text).0;
-                for import_url in crate::css::import_targets(&sheet) {
+                for import_url in crate::css::import_targets(&css_text, &sheet) {
                     if is_remote_url(&import_url) || is_file_url(&import_url) {
                         report.push_node(
                             RSC_006,
@@ -12907,7 +12911,9 @@ fn check_text(
         // control is a remote `@font-face src`, where epubcheck does report
         // OPF-014 and RSC-008 and we already agreed.
         let imports: std::collections::HashSet<String> =
-            crate::css::import_targets(&sheet).into_iter().collect();
+            crate::css::import_targets(&css_text, &sheet)
+                .into_iter()
+                .collect();
         // **A font reference is exempt from the fallback rule**, and reading
         // that rule as "any CSS url()" cost 67 shelf books an invented
         // RSC-032 apiece. `ResourceReferencesChecker::checkFallbacks`:297
@@ -12922,7 +12928,7 @@ fn check_text(
                 .map(|s| s.node)
                 .collect();
         let mut css_has_remote = false;
-        for u in crate::css::stylesheet_urls(&sheet) {
+        for u in crate::css::stylesheet_urls(&css_text, &sheet) {
             // Consumed resources, for OPF-097 - a font is "used" if any
             // stylesheet in the manifest asks for it, exactly as epubcheck
             // registers references from every CSS resource it checks.
@@ -14954,7 +14960,7 @@ impl LinkedSheet {
             })
             .collect();
         let css_dir = parent_dir(resolved);
-        let refs = crate::css::stylesheet_urls(&sheet)
+        let refs = crate::css::stylesheet_urls(&css_text, &sheet)
             .into_iter()
             .filter(|u| !is_external(u))
             .map(|u| nfc(&resolve(&css_dir, &strip_url_fragment(&u))))

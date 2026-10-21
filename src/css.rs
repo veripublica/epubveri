@@ -31,87 +31,43 @@
 use std::collections::{HashMap, HashSet};
 
 use styloria::{
-    Block, BlockItem, ComponentValue, Declaration, DiagnosticKind, Rule, Span, Spanned, Stylesheet,
-    SyntaxError, SyntaxErrorKind, Token, validate_parsed_stylesheet,
+    Block, BlockItem, ComponentValue, Declaration, DiagnosticKind, Rule, SimpleSelector, Span,
+    Spanned, Stylesheet, SyntaxError, SyntaxErrorKind, Token, UrlContext, UrlForm, UrlReference,
+    validate_parsed_stylesheet,
 };
 
 use crate::ids::*;
 use crate::opf::{is_external, nfc, resolve};
 use crate::report::{LocationIndex, Position, Report, Severity};
 
-/// Decode raw CSS bytes, honoring a UTF-16 BOM if present. Without this, a
-/// legitimately UTF-16-encoded stylesheet (real, and `@charset`-declarable
-/// per CSS) read as if it were UTF-8 produces garbage (stray NUL bytes and
-/// `U+FFFD`s between every character), which then looks like a syntax error
-/// to every check below — a false positive caused by the wrong encoding,
-/// not by the CSS. Non-UTF-16 input still falls back to lossy UTF-8, same
-/// as before. (Full `@charset`-vs-actual-encoding *mismatch* warnings —
-/// CSS-003/004 — are still out of scope; this is just "don't corrupt valid
-/// UTF-16 input before parsing it.")
+/// A stylesheet's text, decoded as CSS Syntax 3 §3.2 says: a byte order
+/// mark, else a byte-exact `@charset`, else UTF-8. styloria does the decoding;
+/// the BOM is not part of the text, so offsets count from after it.
+///
+/// **This follows the spec, not epubcheck, on purpose.** epubcheck sniffs
+/// `@charset` loosely (any whitespace, either quote), hands the label to
+/// Java's decoder as written, and so reads a BOM-less `@charset "utf-16be"`
+/// file as UTF-16, where the spec says such a declaration is lying and the
+/// file is UTF-8. A stylesheet in anything but UTF-8 or UTF-16 is CSS-004
+/// either way, so the verdict does not hang on how it is decoded.
+///
+/// No protocol and no environment encoding: a container carries no
+/// Content-Type, and a manifest stylesheet is checked once, whichever document
+/// links it. A label styloria does not decode (the multi-byte legacy
+/// encodings) falls back to lossy UTF-8, which is what every stylesheet got
+/// before; the spec would decode it, so that is a known gap, not a choice.
 pub(crate) fn decode_bytes(bytes: &[u8]) -> String {
-    if bytes.len() >= 2 && bytes[0] == 0xFE && bytes[1] == 0xFF {
-        decode_utf16(&bytes[2..], true)
-    } else if bytes.len() >= 2 && bytes[0] == 0xFF && bytes[1] == 0xFE {
-        decode_utf16(&bytes[2..], false)
-    } else {
-        String::from_utf8_lossy(bytes).into_owned()
+    match styloria::decode_stylesheet(bytes, None, None) {
+        Ok(decoded) => decoded.text.into_owned(),
+        Err(_) => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
 
 /// True if `bytes` starts with a UTF-16 byte-order mark (big- or
-/// little-endian). Shared by `decode_bytes` above and by `htm.rs`'s
-/// HTM-058 (non-UTF-8 content document) check.
-pub(crate) fn has_utf16_bom(bytes: &[u8]) -> bool {
+/// little-endian): CSS-003.
+fn has_utf16_bom(bytes: &[u8]) -> bool {
     bytes.len() >= 2
         && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE))
-}
-
-/// A UTF-8 byte order mark. Its presence settles the encoding, so any
-/// `@charset` after it is decoration — CSS Syntax 3 §3.1 gives the BOM
-/// precedence and only falls back to the declaration when none is found.
-pub(crate) fn has_utf8_bom(bytes: &[u8]) -> bool {
-    bytes.starts_with(&[0xEF, 0xBB, 0xBF])
-}
-
-/// The encoding label of a **byte-exact** `@charset` declaration, per CSS
-/// Syntax 3 §3.1: the literal bytes `@charset "`, then the label, then `";`.
-///
-/// Matched against the raw bytes rather than the parsed stylesheet on purpose.
-/// A tokenizer sees `@charset '' ;` as a perfectly good at-rule named
-/// `charset`; the *encoding declaration* it is not, because the spec says
-/// "multiple spaces, comments, or single quotes … will cause the encoding
-/// declaration to not be recognized". Reading it off the parse tree accepts
-/// all three and reports a charset nobody declared.
-///
-/// The pattern must appear at the very start and within the first 1024 bytes,
-/// which the fixed prefix and the label scan below enforce between them.
-pub(crate) fn byte_exact_charset(bytes: &[u8]) -> Option<String> {
-    const PREFIX: &[u8] = b"@charset \"";
-    let rest = bytes.strip_prefix(PREFIX)?;
-    let end = rest.iter().take(1024).position(|&b| b == b'"')?;
-    if rest.get(end + 1) != Some(&b';') {
-        return None;
-    }
-    std::str::from_utf8(&rest[..end]).ok().map(str::to_owned)
-}
-
-pub(crate) fn decode_utf16(bytes: &[u8], big_endian: bool) -> String {
-    // `as_chunks` rather than `chunks_exact(2)`: it hands back fixed-size
-    // arrays, so the element accesses below are checked at compile time instead
-    // of indexing a slice whose length only the constant argument guarantees.
-    // Same trailing behaviour — a stray odd byte is dropped, which is what a
-    // truncated UTF-16 stream deserves. (clippy::chunks_exact_to_as_chunks,
-    // which arrived with Rust 1.98; `as_chunks` is stable from 1.88, our MSRV.)
-    let units = bytes.as_chunks::<2>().0.iter().map(|c| {
-        if big_endian {
-            u16::from_be_bytes(*c)
-        } else {
-            u16::from_le_bytes(*c)
-        }
-    });
-    char::decode_utf16(units)
-        .map(|r| r.unwrap_or('\u{FFFD}'))
-        .collect()
 }
 
 /// Whether an `@charset` value names UTF-8 or UTF-16 — the two encodings a
@@ -249,13 +205,10 @@ pub(crate) fn check(
         // here had ever reached** — the shelf has no such stylesheet and the
         // corpus harness only walks CSS that lives inside a book.
         //
-        // Not styloria's: its tokenizer note says encoding determination
-        // happens before it runs (§3.2) and it merely tolerates a leftover
-        // BOM. Determining the declared encoding from bytes is the caller's
-        // job, which is here.
-        if !has_utf8_bom(bytes)
-            && let Some(charset) = byte_exact_charset(bytes)
-            && !is_utf8_or_utf16(&charset)
+        // styloria's `charset_rule` reads exactly that pattern off the raw
+        // bytes, and a BOM in front of it already stops the match.
+        if let Some(charset) = styloria::charset_rule(bytes)
+            && !is_utf8_or_utf16(charset)
         {
             report.push_at(
                 CSS_004,
@@ -266,9 +219,6 @@ pub(crate) fn check(
         }
     }
 
-    // Each collected item keeps the span of the token that produced it, so
-    // the deferred RSC-00x findings below can report its position.
-    let mut urls: Vec<Spanned<String>> = Vec::new();
     // **A rule whose block never closed does not get its declarations
     // second-guessed.** An unclosed `{` swallows everything after it — the
     // next rule's selector and braces included — so what the parser finds
@@ -308,8 +258,6 @@ pub(crate) fn check(
     for rule in &sheet.rules {
         match &rule.node {
             Rule::Qualified(q) => {
-                collect_urls_spanned(&q.prelude, &mut urls);
-                collect_block_urls(&q.block.node, &mut urls);
                 // A style rule with no selector at all - a stray `{ … }` after
                 // a complete rule. CSS Syntax parses it as a qualified rule
                 // with an empty prelude, and Selectors requires at least one
@@ -330,19 +278,11 @@ pub(crate) fn check(
                 walk_rule_block(rule, &q.block, ctx, &mut quiet, report);
             }
             Rule::At(a) => {
-                collect_urls_spanned(&a.prelude, &mut urls);
                 if let Some(block) = &a.block {
                     if a.name.eq_ignore_ascii_case("font-face") {
                         check_font_face(block, a.name_span, ctx, report);
-                    } else {
-                        collect_block_urls(&block.node, &mut urls);
                     }
                     walk_at_rule_block(&a.name, &block.node, ctx, &mut quiet, report);
-                }
-                if a.name.eq_ignore_ascii_case("import")
-                    && let Some(target) = import_target_spanned(&a.prelude)
-                {
-                    urls.push(target);
                 }
             }
         }
@@ -352,7 +292,13 @@ pub(crate) fn check(
     // recovered from, anywhere in the tree, less the ones a walk above has
     // already answered for (`quiet`).
     report_syntax_errors(&syntax_errs, &sheet, &quiet, ctx, advisory, report);
+    // A top-level `@font-face` block's urls are `check_font_face`'s, which
+    // asks its own questions of them.
+    let urls = sheet_urls(css, &sheet)
+        .into_iter()
+        .filter(|u| u.under != Under::FontFaceBlock);
     for u in urls {
+        let u = u.url;
         let url = u.node;
         let pos = origin.position(css, u.span.start);
         if is_file_url_str(&url) {
@@ -450,11 +396,15 @@ pub(crate) fn check(
     // which epubcheck does not check. Off by default, so the default output is
     // byte-identical. Positions map through `origin` like every CSS finding.
     if advisory {
-        for r in &sheet.rules {
-            let Rule::Qualified(q) = &r.node else {
-                continue;
-            };
-            for name in styloria::type_selector_names(&q.prelude) {
+        let type_names = styloria::selector_references(&sheet)
+            .into_iter()
+            .filter(|r| r.top_level && !r.in_argument)
+            .filter_map(|r| match r.selector.node {
+                SimpleSelector::Type(name) => Some(name.local),
+                _ => None,
+            });
+        {
+            for name in type_names {
                 if is_known_element_name(&name.node) {
                     continue;
                 }
@@ -474,7 +424,9 @@ pub(crate) fn check(
             }
         }
         for d in validate_parsed_stylesheet(&sheet) {
-            let (id, rule, text, params) = advisory_fields(&d);
+            let Some((id, rule, text, params)) = advisory_fields(&d) else {
+                continue;
+            };
             report.push_full(
                 id,
                 Severity::Usage,
@@ -577,8 +529,12 @@ fn is_known_element_name(name: &str) -> bool {
 /// The `(id, rule, text, params)` for one styloria advisory diagnostic. `Usage`
 /// severity and a tool-owned `ADV-*` id, so it is advisory only and never moves
 /// the verdict. Shared by the stylesheet and `style="…"` attribute paths.
-fn advisory_fields(d: &styloria::Diagnostic) -> (&'static str, &'static str, String, Vec<String>) {
-    match d.kind {
+///
+/// `None` for a diagnostic no rule reports yet.
+fn advisory_fields(
+    d: &styloria::Diagnostic,
+) -> Option<(&'static str, &'static str, String, Vec<String>)> {
+    Some(match d.kind {
         DiagnosticKind::UnknownProperty => (
             ADV_001,
             "css.property.unknown",
@@ -591,7 +547,13 @@ fn advisory_fields(d: &styloria::Diagnostic) -> (&'static str, &'static str, Str
             format!("'{}' is not a recognized descriptor for @{at_rule}", d.name),
             vec![d.name.clone(), at_rule.to_string()],
         ),
-    }
+        // **Not a rule yet, so nothing to report.** epubcheck checks no CSS
+        // value, so this can only ever be an `ADV-*`, and an advisory has to
+        // be true every time it fires: every Invalid on the shelf gets read by
+        // hand before one ships. Until then the diagnostic has no id, no
+        // text and no consumer.
+        DiagnosticKind::InvalidValue => return None,
+    })
 }
 
 /// A `style="..."` attribute value: the contents of a block with no braces,
@@ -658,7 +620,9 @@ pub(crate) fn check_style_attribute(
     // finding anchors at the file (path), not a line:column.
     if advisory {
         for d in styloria::validate_parsed_block(&items) {
-            let (id, rule, text, params) = advisory_fields(&d);
+            let Some((id, rule, text, params)) = advisory_fields(&d) else {
+                continue;
+            };
             report.push_at_rule(id, Severity::Usage, text, path, rule, params);
         }
     }
@@ -1498,8 +1462,7 @@ fn check_font_face(block: &Block, name_span: Span, ctx: Ctx, report: &mut Report
         return;
     }
     for src in font_face_src_declarations(&block.node) {
-        let mut src_urls = Vec::new();
-        collect_urls_spanned(&src.value, &mut src_urls);
+        let src_urls = declaration_urls(ctx.css, src);
         // RSC-030 has to be asked here as well as in the generic `urls` pass,
         // because that pass deliberately skips `@font-face` blocks and hands
         // them to this function — so every question it asks about a url has
@@ -1542,19 +1505,26 @@ fn block_is_blank(css: &str, block: &Block) -> bool {
     styloria::Tokenizer::new(inner).all(|t| matches!(t, Token::Whitespace))
 }
 
-/// The `src` declarations of a `@font-face` block.
+/// The `src` declarations of a `@font-face` block, each as its block item.
 fn font_face_src_declarations<'b, 'c>(
     items: &'b [BlockItem<'c>],
-) -> impl Iterator<Item = &'b Declaration<'c>> {
-    items.iter().filter_map(|item| match item {
-        BlockItem::Declaration(d) if d.node.name.eq_ignore_ascii_case("src") => Some(&d.node),
-        _ => None,
-    })
+) -> impl Iterator<Item = &'b BlockItem<'c>> {
+    items.iter().filter(
+        |item| matches!(item, BlockItem::Declaration(d) if d.node.name.eq_ignore_ascii_case("src")),
+    )
+}
+
+/// The urls in one declaration (a block item), as [`checked_url`] reads them.
+fn declaration_urls(css: &str, declaration: &BlockItem) -> Vec<Spanned<String>> {
+    styloria::block_url_references(std::slice::from_ref(declaration))
+        .iter()
+        .filter_map(|r| checked_url(css, r))
+        .collect()
 }
 
 /// The `url()` target of every `@font-face`'s `src` declaration, each with
-/// the span of the token it came from - unlike the generic `collect_urls`
-/// pass (which deliberately skips `@font-face` blocks, handling them via
+/// the span of the token it came from - unlike the generic url pass in
+/// `check` (which deliberately skips `@font-face` blocks, handling them via
 /// `check_font_face` instead), this is used by the CSS-007 non-standard-font
 /// cross-reference in `opf.rs`, which needs each font's own resolved
 /// manifest media-type to decide whether it's a Core Media Type.
@@ -1562,7 +1532,7 @@ fn font_face_src_declarations<'b, 'c>(
 /// Spans are carried so CSS-007 can point at the `src` url that names the
 /// font, rather than at the stylesheet as a whole - "some font in this file
 /// is wrong" leaves the reader to find which, and a stylesheet can declare
-/// many.
+/// many. Top-level `@font-face` rules only, as the checks always read them.
 pub(crate) fn font_face_src_urls_spanned(css: &str) -> Vec<Spanned<String>> {
     let (sheet, _) = styloria::parse_stylesheet(css);
     let mut out = Vec::new();
@@ -1575,55 +1545,105 @@ pub(crate) fn font_face_src_urls_spanned(css: &str) -> Vec<Spanned<String>> {
         }
         let Some(block) = &a.block else { continue };
         for src in font_face_src_declarations(&block.node) {
-            collect_urls_spanned(&src.value, &mut out);
+            out.extend(declaration_urls(css, src));
         }
     }
     out.retain(|u| !u.node.is_empty());
     out
 }
 
-/// Every `url()` in a block, at any depth: its declarations' values, and
-/// the preludes and blocks of the rules nested in it.
-fn collect_block_urls(items: &[BlockItem], out: &mut Vec<Spanned<String>>) {
-    for item in items {
-        match item {
-            BlockItem::Declaration(d) => collect_urls_spanned(&d.node.value, out),
-            BlockItem::Rule(r) => {
-                collect_urls_spanned(r.node.prelude(), out);
-                if let Some(block) = r.node.block() {
-                    collect_block_urls(&block.node, out);
-                }
-            }
-        }
-    }
+/// The top-level rule a url sits in, which is what tells the url passes
+/// apart: `check` hands a `@font-face` block to `check_font_face`,
+/// `stylesheet_urls` leaves `@namespace` out, `import_targets` wants only
+/// `@import`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Under {
+    Import,
+    Namespace,
+    /// The block of a `@font-face`; its prelude counts as [`Under::Other`].
+    FontFaceBlock,
+    Other,
 }
 
-/// Each `url()` target in `values`, with the span of the `url(...)`
-/// token or function it came from, so the deferred RSC-00x resource findings
-/// can report its position. The whole `url(...)` span is used (not just the
-/// inner string) so the caret lands on the construct a reader looks for.
-fn collect_urls_spanned(values: &[Spanned<ComponentValue>], out: &mut Vec<Spanned<String>>) {
-    for v in values {
-        match &v.node {
-            ComponentValue::Token(Token::Url(s)) => out.push(Spanned::new(s.to_string(), v.span)),
-            ComponentValue::Token(Token::BadUrl(raw)) => {
-                out.push(Spanned::new(bad_url_target(raw), v.span))
+/// One url the checks read, and where it sits.
+struct SheetUrl {
+    url: Spanned<String>,
+    under: Under,
+    /// `@import "a.css"`: the bare-string form.
+    bare: bool,
+}
+
+/// Every url in a stylesheet the checks read, in source order: styloria's
+/// [`url_references`](styloria::url_references), kept to the reach these
+/// checks have always had (see [`checked_url`]). A bare string counts only as
+/// the target of a top-level `@import`.
+fn sheet_urls(css: &str, sheet: &Stylesheet) -> Vec<SheetUrl> {
+    let tops: Vec<(Span, Under, Option<Span>)> = sheet
+        .rules
+        .iter()
+        .map(|rule| match &rule.node {
+            Rule::At(a) if a.name.eq_ignore_ascii_case("import") => {
+                (rule.span, Under::Import, None)
             }
-            ComponentValue::Function { name, args } => {
-                if name.eq_ignore_ascii_case("url") {
-                    if let Some(first) = args.first()
-                        && let ComponentValue::Token(Token::String(s)) = &first.node
-                    {
-                        out.push(Spanned::new(s.to_string(), v.span));
-                    }
-                } else {
-                    collect_urls_spanned(args, out);
-                }
+            Rule::At(a) if a.name.eq_ignore_ascii_case("namespace") => {
+                (rule.span, Under::Namespace, None)
             }
-            ComponentValue::Block(b) => collect_urls_spanned(&b.values, out),
-            _ => {}
+            Rule::At(a) if a.name.eq_ignore_ascii_case("font-face") => {
+                (rule.span, Under::Other, a.block.as_ref().map(|b| b.span))
+            }
+            _ => (rule.span, Under::Other, None),
+        })
+        .collect();
+    let under = |at: usize| {
+        let i = tops.partition_point(|(span, ..)| span.start <= at);
+        match i.checked_sub(1).map(|i| tops[i]) {
+            Some((_, _, Some(block))) if block.start <= at && at < block.end => {
+                Under::FontFaceBlock
+            }
+            Some((span, under, _)) if at < span.end => under,
+            _ => Under::Other,
         }
-    }
+    };
+    styloria::url_references(sheet)
+        .iter()
+        .filter_map(|r| {
+            let under = under(r.span.start);
+            let bare = r.form == UrlForm::String;
+            if bare && !(under == Under::Import && r.context == UrlContext::Import) {
+                return None;
+            }
+            Some(SheetUrl {
+                url: checked_url(css, r)?,
+                under,
+                bare,
+            })
+        })
+        .collect()
+}
+
+/// The url a check reads from one of styloria's references, or `None` where
+/// the reference is beyond what the checks have read so far.
+///
+/// styloria finds more than the token scan it replaced: `src("…")`, the
+/// strings inside `image-set()`, and `url( "…" )` with whitespace before the
+/// string. Each would be a new RSC-007/008 epubcheck may not report, so each
+/// waits for its own measurement. A `<bad-url-token>` is read as epubcheck
+/// reads it ([`bad_url_target`]).
+fn checked_url(css: &str, r: &UrlReference) -> Option<Spanned<String>> {
+    let url = match r.form {
+        UrlForm::UrlToken | UrlForm::String => r.url.to_string(),
+        UrlForm::BadUrl => bad_url_target(&r.url),
+        // `url(` is four bytes, and the string has to follow it directly.
+        UrlForm::UrlFunction => {
+            let rest = css.get(r.span.start + 4..)?;
+            if !rest.starts_with(['"', '\'']) {
+                return None;
+            }
+            r.url.to_string()
+        }
+        UrlForm::SrcFunction => return None,
+    };
+    Some(Spanned::new(url, r.span))
 }
 
 /// The target epubcheck reads out of an unquoted `url( … )` that CSS calls a
@@ -1670,32 +1690,19 @@ fn is_css_whitespace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0C')
 }
 
-/// `@import`'s bare-string target (`@import "foo.css";`), with its span. The
-/// `url()` form is already covered by [`collect_urls_spanned`].
-fn import_target_spanned(prelude: &[Spanned<ComponentValue>]) -> Option<Spanned<String>> {
-    prelude.iter().find_map(|v| match &v.node {
-        ComponentValue::Token(Token::String(s)) => Some(Spanned::new(s.to_string(), v.span)),
-        _ => None,
-    })
-}
-
 /// Just the `url()` target(s) of top-level `@import` rules, not every `url()`
 /// in the sheet (unlike `stylesheet_urls` below) - used where callers need
 /// to tell "this points at another stylesheet to also parse" apart from
 /// an ordinary resource reference like `background: url(x.png)` (e.g.
 /// `opf.rs`'s SVG active-class CSS scan, CSS-029/030, which needs to
 /// merge an `@import`ed sheet's own selector class names, not just note
-/// its existence as a used resource).
-pub(crate) fn import_targets(sheet: &Stylesheet) -> Vec<String> {
-    let mut urls = Vec::new();
-    for rule in &sheet.rules {
-        if let Rule::At(a) = &rule.node
-            && a.name.eq_ignore_ascii_case("import")
-        {
-            collect_urls_spanned(&a.prelude, &mut urls);
-        }
-    }
-    urls.into_iter().map(|u| u.node).collect()
+/// its existence as a used resource). The bare-string form is not read here.
+pub(crate) fn import_targets(css: &str, sheet: &Stylesheet) -> Vec<String> {
+    sheet_urls(css, sheet)
+        .into_iter()
+        .filter(|u| u.under == Under::Import && !u.bare)
+        .map(|u| u.url.node)
+        .collect()
 }
 
 /// Every `url()` reference anywhere in a stylesheet (rule preludes,
@@ -1704,73 +1711,43 @@ pub(crate) fn import_targets(sheet: &Stylesheet) -> Vec<String> {
 /// remote-resources content-property scan (OPF-014/018), so a document's
 /// remote references aren't just its raw attribute values but also its
 /// own CSS.
-pub(crate) fn stylesheet_urls(sheet: &Stylesheet) -> Vec<String> {
-    let mut urls = Vec::new();
-    for rule in &sheet.rules {
-        // @namespace's "url(...)" declares an XML namespace URI for
-        // selectors (e.g. `@namespace xlink
-        // url('http://www.w3.org/1999/xlink')`) - it's never a fetchable
-        // resource reference, unlike every other at-rule that can carry a
-        // url().
-        if let Rule::At(a) = &rule.node
-            && a.name.eq_ignore_ascii_case("namespace")
-        {
-            continue;
-        }
-        collect_urls_spanned(rule.node.prelude(), &mut urls);
-        if let Some(block) = rule.node.block() {
-            collect_block_urls(&block.node, &mut urls);
-        }
-        if let Rule::At(a) = &rule.node
-            && a.name.eq_ignore_ascii_case("import")
-            && let Some(target) = import_target_spanned(&a.prelude)
-        {
-            urls.push(target);
-        }
-    }
-    urls.into_iter().map(|u| u.node).collect()
+///
+/// @namespace's "url(...)" declares an XML namespace URI for selectors (e.g.
+/// `@namespace xlink url('http://www.w3.org/1999/xlink')`) - it's never a
+/// fetchable resource reference, unlike every other at-rule that can carry a
+/// url().
+pub(crate) fn stylesheet_urls(css: &str, sheet: &Stylesheet) -> Vec<String> {
+    sheet_urls(css, sheet)
+        .into_iter()
+        .filter(|u| u.under != Under::Namespace)
+        .map(|u| u.url.node)
+        .collect()
 }
 
-/// Class names used as selectors in a stylesheet's top-level qualified
-/// rules — e.g. `.foo, .bar { ... }` yields `{"foo", "bar"}`. Only
-/// top-level rule preludes are scanned, not nested at-rule blocks (the
-/// real media-overlay class fixtures this supports are flat, unnested
-/// CSS); a class selector is a `Token::Delim('.')` immediately followed
-/// by `Token::Ident(name)` in the raw prelude token stream — a token-level
-/// scan, same style as `collect_urls_spanned` above.
+/// Class names used as selectors in a stylesheet's top-level style rules —
+/// e.g. `.foo, .bar { ... }` yields `{"foo", "bar"}`. Only top-level rules,
+/// and not the arguments of `:not()` and the like (the real media-overlay
+/// class fixtures this supports are flat, unnested CSS).
 pub(crate) fn selector_class_names(sheet: &Stylesheet) -> HashSet<String> {
     class_names(sheet).map(|n| n.node).collect()
 }
 
-/// Every class selector in `css`, each with the span of the name token -
-/// the same token-level scan as [`selector_class_names`], keeping where it
-/// was written.
+/// Every class selector in `css`, each with its span - the same reach as
+/// [`selector_class_names`], keeping where it was written.
 ///
 /// CSS-029 needs this: the class name it reports on lives in the
 /// stylesheet, so pointing at the content document that merely links that
 /// stylesheet sends the reader to a file the name does not appear in.
 pub(crate) fn selector_class_names_spanned(css: &str) -> Vec<Spanned<String>> {
-    class_names(&styloria::parse_stylesheet(css).0).collect()
+    class_names(&styloria::parse_stylesheet(css).0).collect::<Vec<_>>()
 }
 
-fn class_names<'s>(sheet: &'s Stylesheet) -> impl Iterator<Item = Spanned<String>> + 's {
-    sheet
-        .rules
-        .iter()
-        .filter_map(|rule| match &rule.node {
-            Rule::Qualified(q) => Some(q.prelude.windows(2)),
-            Rule::At(_) => None,
-        })
-        .flatten()
-        .filter_map(|pair| match pair {
-            [dot, ident] if matches!(&dot.node, ComponentValue::Token(Token::Delim('.'))) => {
-                match &ident.node {
-                    ComponentValue::Token(Token::Ident(name)) => {
-                        Some(Spanned::new(name.to_string(), dot.span))
-                    }
-                    _ => None,
-                }
-            }
+fn class_names(sheet: &Stylesheet) -> impl Iterator<Item = Spanned<String>> {
+    styloria::selector_references(sheet)
+        .into_iter()
+        .filter(|r| r.top_level && !r.in_argument)
+        .filter_map(|r| match r.selector.node {
+            SimpleSelector::Class(name) => Some(Spanned::new(name.into_owned(), r.selector.span)),
             _ => None,
         })
 }
@@ -2018,10 +1995,10 @@ mod tests {
     fn stylesheet_urls_includes_a_bad_url_target() {
         let css = "p { background: url(q'q.png) } @media print { a { b: url(x y.png) } }";
         let sheet = styloria::parse_stylesheet(css).0;
-        assert_eq!(stylesheet_urls(&sheet), vec!["q'q.png", "x y.png"]);
+        assert_eq!(stylesheet_urls(css, &sheet), vec!["q'q.png", "x y.png"]);
         let css = "p { background: url(ok.png) }";
         assert_eq!(
-            stylesheet_urls(&styloria::parse_stylesheet(css).0),
+            stylesheet_urls(css, &styloria::parse_stylesheet(css).0),
             vec!["ok.png"]
         );
     }
@@ -2355,6 +2332,27 @@ mod tests {
         assert_eq!(m.params, vec!["color".to_string(), "font-face".to_string()]);
     }
 
+    /// styloria reports an invalid value, and no rule takes it yet: the
+    /// output stays what it was until one is decided. Both halves are
+    /// asserted, so a styloria that stopped reporting it would show here
+    /// instead of passing silently.
+    #[test]
+    fn an_invalid_value_reports_nothing_yet() {
+        let css = "p { font-style: bold }";
+        let (sheet, _) = styloria::parse_stylesheet(css);
+        assert!(
+            validate_parsed_stylesheet(&sheet)
+                .iter()
+                .any(|d| d.kind == DiagnosticKind::InvalidValue),
+            "styloria calls `font-style: bold` invalid"
+        );
+        let report = run_advisory(css);
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+        let mut report = Report::new();
+        check_style_attribute("font-style: bold", "doc.xhtml", true, true, &mut report);
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+    }
+
     #[test]
     fn advisory_is_silent_on_valid_and_exempt_css() {
         // Known property, vendor-prefixed, and custom property: all clean.
@@ -2547,26 +2545,26 @@ mod tests {
         );
         // The byte-exact matcher itself, at its edges.
         assert_eq!(
-            byte_exact_charset(b"@charset \"utf-8\";").as_deref(),
+            styloria::charset_rule(b"@charset \"utf-8\";"),
             Some("utf-8")
         );
         assert_eq!(
-            byte_exact_charset(b"@charset  \"utf-8\";"),
+            styloria::charset_rule(b"@charset  \"utf-8\";"),
             None,
             "two spaces"
         );
         assert_eq!(
-            byte_exact_charset(b"@charset 'utf-8';"),
+            styloria::charset_rule(b"@charset 'utf-8';"),
             None,
             "single quotes"
         );
         assert_eq!(
-            byte_exact_charset(b"@charset \"utf-8\" ;"),
+            styloria::charset_rule(b"@charset \"utf-8\" ;"),
             None,
             "space before ;"
         );
         assert_eq!(
-            byte_exact_charset(b"\n@charset \"utf-8\";"),
+            styloria::charset_rule(b"\n@charset \"utf-8\";"),
             None,
             "not at the start"
         );
