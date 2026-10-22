@@ -10,6 +10,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`check_style_text(css, label, &options)`**: one stylesheet's text,
+  checked by the rules epubveri applies to an inline `<style>`, with no book
+  around it. For a tool that writes CSS into a book and wants to know
+  beforehand that it adds no finding.
+  - It takes the same `Options` as `validate_bytes_with_options`.
+  - Findings are located at `label` and positioned within `css`.
+  - It leaves out one thing: where a url leads (RSC-007/008/026), which
+    depends on the document the CSS goes into.
+  - A test holds its findings equal to `validate_bytes` on the same CSS in a
+    `<style>`, positions included, with `--advisory` off and on.
+- **`style_text_urls(css)`**: every url the text refers to, at any depth,
+  with its decoded value and position. `@namespace` URIs are left out.
+- A test pins the shape of `css.font_face.missing_target` (id, rule key,
+  location and `params[0]`, decoded), for files and for inline `<style>`.
+  epubsana's repair dispatches on this finding.
+
 ## [0.32.0] - 2026-10-22
 
 **styloria moves 0.15 → 0.16, which adds five advisories under `--advisory`

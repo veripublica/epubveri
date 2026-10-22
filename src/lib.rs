@@ -145,6 +145,70 @@ pub struct Options {
     pub advisory: bool,
 }
 
+/// Check one stylesheet's text by the rules epubveri applies to an inline
+/// `<style>`, with no book around it: what [`validate_bytes`] would report
+/// about this CSS were it the content of a `<style>` element, except for the
+/// urls.
+///
+/// For a tool that writes CSS into a book and wants to know beforehand that
+/// the CSS adds no finding. It checks the text it is given; it does not
+/// validate a book.
+///
+/// - Every finding is located at `label`, the name the caller gives the text
+///   (`"--css"`, say), and positioned by line and column within `css`.
+/// - `options.advisory` adds the `ADV-*` checks, as in [`validate_bytes_with_options`].
+/// - `options.epub_version` picks the rules: `"2"` (or anything starting
+///   with `2`) checks as EPUB 2, and anything else, `None` included, as
+///   EPUB 3. A stylesheet declares no version, and EPUB 3 is the current one.
+/// - `options.profile` has no bearing on a stylesheet and is ignored.
+///
+/// **Where a url leads is not checked.** Whether it names a resource that
+/// exists, is declared, or stays inside the container depends on the
+/// document the CSS sits in, and the same text can go into documents in
+/// different folders. A url wrong on its face is still reported: a `file:`
+/// url (RSC-030), an empty `@font-face` src (CSS-002). [`style_text_urls`]
+/// lists every url, so the caller can decide what to do with them.
+pub fn check_style_text(css: &str, label: &str, options: &Options) -> Report {
+    let is_epub3 = !options
+        .epub_version
+        .as_deref()
+        .is_some_and(|v| v.starts_with('2'));
+    let mut report = Report::new();
+    css::check_without_book(css, label, options.advisory, is_epub3, &mut report);
+    report
+}
+
+/// One url in a stylesheet's text, as [`style_text_urls`] lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StyleTextUrl {
+    /// The url as CSS reads it, escapes decoded and not made absolute: the
+    /// same form a finding's `params[0]` carries for a url. A malformed
+    /// unquoted `url(…)`, which CSS reads no url out of, is given as its
+    /// source text.
+    pub url: String,
+    /// Where the url's construct (`url(…)`, or the string after `@import`)
+    /// starts in the text.
+    pub position: report::Position,
+}
+
+/// Every url a stylesheet's text refers to, at any depth, in source order:
+/// `url(…)` and `src(…)`, `@import` targets, and the url strings of
+/// `image-set()`. A `@namespace` URI is left out; it names a namespace and
+/// nothing is fetched from it.
+///
+/// The companion of [`check_style_text`], which checks no url.
+pub fn style_text_urls(css: &str) -> Vec<StyleTextUrl> {
+    let (sheet, _) = styloria::parse_stylesheet(css);
+    styloria::url_references(&sheet)
+        .into_iter()
+        .filter(|u| !matches!(u.context, styloria::UrlContext::Namespace))
+        .map(|u| StyleTextUrl {
+            url: u.url.into_owned(),
+            position: report::Position::of_offset(css, u.span.start),
+        })
+        .collect()
+}
+
 /// Validate raw EPUB bytes and return a [`Report`].
 pub fn validate_bytes(bytes: Vec<u8>) -> Report {
     validate_bytes_with_options(bytes, &Options::default())
@@ -1459,5 +1523,192 @@ mod tests {
         let mut ids = ids_of(&report);
         ids.sort();
         assert_eq!(ids, vec![crate::ids::PKG_008, crate::ids::RSC_003]);
+    }
+
+    /// `check_style_text` claims to report what `validate_bytes` reports
+    /// about the same CSS in an inline `<style>`, less where its urls lead.
+    /// This holds it to that: one book per sample, the findings in the
+    /// chapter compared field by field, positions included, with
+    /// `--advisory` off and on.
+    ///
+    /// Every sample starts with a line break, and `<style>` ends the first
+    /// line of the chapter, so a line and column in the CSS are the same line
+    /// and column in the document.
+    #[test]
+    fn check_style_text_reports_what_an_inline_style_draws() {
+        // Where a url leads: asked of a book only.
+        const BOOK_ONLY: &[&str] = &[
+            "css.url.leaks_container_root",
+            "css.url.missing_resource",
+            "css.url.undeclared_resource",
+            "css.font_face.leaks_container_root",
+            "css.font_face.missing_target",
+            "css.font_face.undeclared_target",
+            "css.font_face.non_core_media_type",
+        ];
+        let book = |css: &str| {
+            let opf = r#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#;
+            let ch1 = format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>C</title><style>{css}</style>\n\
+                 </head><body><p>x</p></body></html>"
+            );
+            let mut buf = Vec::new();
+            {
+                let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+                z.start_file(
+                    "mimetype",
+                    zip::write::SimpleFileOptions::default()
+                        .compression_method(zip::CompressionMethod::Stored),
+                )
+                .unwrap();
+                z.write_all(b"application/epub+zip").unwrap();
+                let opts = zip::write::SimpleFileOptions::default();
+                for (name, data) in [
+                    (
+                        "META-INF/container.xml",
+                        r#"<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#,
+                    ),
+                    ("OEBPS/content.opf", opf),
+                    (
+                        "OEBPS/nav.xhtml",
+                        r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>T</title></head><body><nav epub:type="toc"><ol><li><a href="ch1.xhtml">C</a></li></ol></nav></body></html>"#,
+                    ),
+                    ("OEBPS/ch1.xhtml", ch1.as_str()),
+                ] {
+                    z.start_file(name, opts).unwrap();
+                    z.write_all(data.as_bytes()).unwrap();
+                }
+                z.finish().unwrap();
+            }
+            buf
+        };
+        let key = |m: &crate::report::Message| {
+            (
+                m.id,
+                m.severity,
+                m.text.clone(),
+                m.position,
+                m.rule,
+                m.params.clone(),
+            )
+        };
+        let samples = [
+            "\np { direction: rtl; unicode-bidi: embed }",
+            "\np { position: fixed }",
+            "\n. a { color: red }\np { color: red; }",
+            "\np { color: red",
+            "\n@font-face { }",
+            "\n@font-face { font-family: X; src: local(X) }",
+            "\n@font-face { font-family: X; src: url(missing.ttf) }",
+            "\n@font-face { font-family: X; src: url() }",
+            "\n@font-face { font-family: X; src: url(file:///f.ttf) }",
+            "\np { background: url(file:///a.png) }",
+            "\np { background: url(missing.png) }\np { background: url(../../up.png) }",
+            "\np { background: url(a b.png) }",
+            "\np { colr: red }\nfoo { color: red }\n#1a { color: red }",
+            "\na:hovr { color: red }\n@medai screen { p { color: red } }",
+            "\n@media (min-widht: 1px) { p { color: red } }",
+            "\n@keyframes k { from { color: red !important } }",
+            "\np { color: red }\n@import \"a.css\";",
+            "\n@media screen { @import \"a.css\"; }",
+            "\np { a { color: red } }",
+            "\np { -epub-hyphens: auto; -webkit-hyphens: auto }",
+            "\nspan.- { color: red }",
+        ];
+        // Counted, so the comparison cannot pass by comparing nothing, and
+        // the list above cannot pass by excluding nothing.
+        let (mut compared, mut excluded) = (0, 0);
+        for advisory in [false, true] {
+            let options = crate::Options {
+                advisory,
+                ..crate::Options::default()
+            };
+            for css in samples {
+                let whole = crate::validate_bytes_with_options(book(css), &options);
+                let mut expected: Vec<_> = whole
+                    .messages
+                    .iter()
+                    .filter(|m| m.location.as_deref() == Some("OEBPS/ch1.xhtml"))
+                    .filter(|m| !m.rule.is_some_and(|r| BOOK_ONLY.contains(&r)))
+                    .map(key)
+                    .collect();
+                compared += expected.len();
+                excluded += whole
+                    .messages
+                    .iter()
+                    .filter(|m| m.rule.is_some_and(|r| BOOK_ONLY.contains(&r)))
+                    .count();
+                let alone = crate::check_style_text(css, "OEBPS/ch1.xhtml", &options);
+                assert!(
+                    alone
+                        .messages
+                        .iter()
+                        .all(|m| m.location.as_deref() == Some("OEBPS/ch1.xhtml")),
+                    "{css:?}: every finding is located at the label"
+                );
+                let mut got: Vec<_> = alone.messages.iter().map(key).collect();
+                expected.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+                got.sort_by(|a, b| format!("{a:?}").cmp(&format!("{b:?}")));
+                assert_eq!(got, expected, "advisory {advisory}, {css:?}");
+            }
+        }
+        assert!(compared >= 30, "only {compared} findings compared");
+        assert!(excluded >= 4, "only {excluded} book-only findings excluded");
+    }
+
+    /// `style_text_urls` lists every url but a `@namespace` URI, with the
+    /// value decoded as CSS reads it and the place its construct starts.
+    #[test]
+    fn style_text_urls_lists_what_the_text_refers_to() {
+        let css = "@import \"a.css\";\n@namespace \"urn:x\";\n\
+                   p { background: url(b\\26 c.png); }\n\
+                   q { background-image: image-set(\"d.png\" 1x) }";
+        let urls = crate::style_text_urls(css);
+        let got: Vec<_> = urls
+            .iter()
+            .map(|u| (u.url.as_str(), u.position.line, u.position.column))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("a.css", 1, 9), ("b&c.png", 3, 17), ("d.png", 4, 33)]
+        );
+        assert!(crate::style_text_urls("p { color: red }").is_empty());
+    }
+
+    /// `epub_version` picks the rules a stylesheet is checked by: `None`
+    /// is EPUB 3, `"2"` is EPUB 2.
+    #[test]
+    fn check_style_text_takes_its_version_from_the_options() {
+        // CSS-001 is EPUB 3 only, as in epubcheck.
+        let css = "p { direction: rtl }";
+        let ids = |v: Option<&str>| -> Vec<&str> {
+            crate::check_style_text(
+                css,
+                "x.css",
+                &crate::Options {
+                    epub_version: v.map(String::from),
+                    ..crate::Options::default()
+                },
+            )
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect()
+        };
+        assert_eq!(ids(None), vec![crate::ids::CSS_001]);
+        assert!(ids(Some("2")).is_empty(), "the version reaches the rules");
+        assert_eq!(ids(None), ids(Some("3.0")));
     }
 }

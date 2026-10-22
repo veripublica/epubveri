@@ -18199,6 +18199,65 @@ mod tests {
         assert!(is_resource_reference_for_test("object", "data"));
     }
 
+    /// **Downstream contract: epubsana's `fix.font_face_missing_target`
+    /// dispatches on this finding.** It reads the rule key, takes the file
+    /// from `location` and the url from `params[0]`, then deletes the one
+    /// `@font-face` rule sourcing that url. A rename, a split into new keys,
+    /// another file in `location` or a different `params[0]` would not break
+    /// epubsana's build. Its fixer would just stop firing, and nobody would be
+    /// told. So the shape is pinned here, through the public entry point it
+    /// calls, for both places a rule can sit: a stylesheet file and an inline
+    /// `<style>`. If this fails, the change needs epubsana's agreement first
+    /// (the styloria → epubveri release gate is where it gives it).
+    ///
+    /// `params[0]` is the url's value as CSS reads it, escapes decoded, which
+    /// is what the last case pins.
+    #[test]
+    fn font_face_missing_target_keeps_the_shape_epubsana_dispatches_on() {
+        use crate::ids::RSC_007;
+        use crate::report::Severity;
+        let one = |book: Vec<u8>| {
+            let report = crate::validate_bytes(book);
+            let found: Vec<_> = report
+                .messages
+                .into_iter()
+                .filter(|m| m.rule == Some("css.font_face.missing_target"))
+                .collect();
+            assert_eq!(found.len(), 1, "{found:?}");
+            found.into_iter().next().unwrap()
+        };
+        // A stylesheet file.
+        let m = one(epub_with_stylesheet(
+            "@font-face { font-family: X; src: url(../Fonts/missing.ttf); }",
+            "font/ttf",
+        ));
+        assert_eq!(m.id, RSC_007);
+        assert_eq!(m.severity, Severity::Error);
+        assert_eq!(m.location.as_deref(), Some("OEBPS/Styles/s.css"));
+        assert_eq!(m.params, vec!["../Fonts/missing.ttf".to_string()]);
+        // An inline `<style>`: the content document is the location.
+        let doc = |css: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title><style>{css}</style></head>\
+                 <body><p>x</p></body></html>"
+            )
+        };
+        let m = one(epub_with_ch1(&doc(
+            "@font-face { font-family: X; src: url(missing.ttf) }",
+        )));
+        assert_eq!(m.id, RSC_007);
+        assert_eq!(m.location.as_deref(), Some("OEBPS/ch1.xhtml"));
+        assert_eq!(m.params, vec!["missing.ttf".to_string()]);
+        // An escaped url: `params[0]` holds the decoded value, not the text.
+        let m = one(epub_with_stylesheet(
+            r"@font-face { font-family: X; src: url(../Fonts/a\26 b.ttf); }",
+            "font/ttf",
+        ));
+        assert_eq!(m.params, vec!["../Fonts/a&b.ttf".to_string()]);
+    }
+
     /// A `@font-face` src naming something the publication does not contain.
     /// Found on MobileRead #150's book: `src: url(fonts/00001.ttf)` with no
     /// such entry drew nothing from us and RSC-007 from epubcheck — the

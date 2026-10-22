@@ -600,6 +600,18 @@ documents come back unchanged, since a named entity there is an error. If you
 also read the raw text, `epubveri::htm::xhtml_entity("rsquo")` gives the
 character a name stands for, from the same table.
 
+**If you write CSS into a book**, check it before you do with
+`epubveri::check_style_text(css, label, &options)`. It reports what
+`validate_bytes` would report about that CSS in an inline `<style>`: the
+same rules, keys and params. Every finding is located at `label` and
+positioned within `css`. `options` is the same `Options` the validator
+takes: `advisory` adds the `ADV-*` checks, and `epub_version` `"2"` checks
+as EPUB 2 (the default is EPUB 3). One thing is left out: where a url leads.
+That depends on the document the CSS goes into, so it is not checked.
+`epubveri::style_text_urls(css)` lists every url with its decoded value and
+position, so you decide what to do with them. A test holds the two answers
+equal, positions included, so the check cannot drift from the validator.
+
 **If you run epubveri in a debug build** — which includes your own `cargo test`
 — add this to your root `Cargo.toml`:
 

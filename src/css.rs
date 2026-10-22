@@ -157,6 +157,15 @@ pub(crate) fn inline_origin<'a>(doc: &'a str, css: &str, style: roxmltree::Node)
     }
 }
 
+/// What a stylesheet's urls resolve against: the directory it sits in, and
+/// what the publication holds and declares.
+#[derive(Clone, Copy)]
+struct Book<'a> {
+    base_dir: &'a str,
+    name_index: &'a HashMap<String, String>,
+    manifest_paths: &'a HashSet<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn check(
     css: &str,
@@ -164,6 +173,58 @@ pub(crate) fn check(
     base_dir: &str,
     name_index: &HashMap<String, String>,
     manifest_paths: &HashSet<String>,
+    origin: CssOrigin,
+    advisory: bool,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    let book = Book {
+        base_dir,
+        name_index,
+        manifest_paths,
+    };
+    check_in(
+        css,
+        css_path,
+        Some(book),
+        origin,
+        advisory,
+        is_epub3,
+        report,
+    );
+}
+
+/// [`check`] for a stylesheet that belongs to no book, positions counted in
+/// `css` and every finding located at `label`: what `crate::check_style_text`
+/// reports.
+///
+/// **Where each url leads is the one thing left out** (missing, undeclared,
+/// leaking: RSC-007/008/026), because only a book can answer it. A url wrong
+/// on its face, a `file:` url or an empty `@font-face` src, is still
+/// reported. Everything else here is a question about the text alone, and it
+/// is the same code asking it.
+pub(crate) fn check_without_book(
+    css: &str,
+    label: &str,
+    advisory: bool,
+    is_epub3: bool,
+    report: &mut Report,
+) {
+    check_in(
+        css,
+        label,
+        None,
+        CssOrigin::File { bytes: None },
+        advisory,
+        is_epub3,
+        report,
+    );
+}
+
+fn check_in(
+    css: &str,
+    css_path: &str,
+    book: Option<Book>,
     origin: CssOrigin,
     advisory: bool,
     is_epub3: bool,
@@ -310,93 +371,107 @@ pub(crate) fn check(
     // recovered from, anywhere in the tree, less the ones a walk above has
     // already answered for (`quiet`).
     report_syntax_errors(&syntax_errs, &sheet, &quiet, ctx, advisory, report);
-    // A top-level `@font-face` block's urls are `check_font_face`'s, which
-    // asks its own questions of them.
-    let urls = sheet_urls(&sheet)
-        .into_iter()
-        .filter(|u| u.under != Under::FontFaceBlock);
-    for u in urls {
-        let nested = u.nested;
-        let u = u.url;
-        let url = u.node;
-        let pos = origin.position(css, u.span.start);
-        let mut push = |id, text: String, rule| {
-            push_url_finding(
-                report, nested, advisory, id, text, css_path, pos, rule, &url,
-            )
-        };
-        if is_file_url_str(&url) {
-            push(
-                RSC_030,
-                format!("'{url}' is a file URL, which is not allowed"),
-                "css.url.file_scheme_not_allowed",
-            );
-            continue;
-        }
-        if is_external(&url) {
-            continue;
-        }
-        // RSC-026: the url() resolves above the container root, or is
-        // path-absolute. epubcheck applies this in `URLChecker`, its single
-        // URL-resolution point, so every CSS url() goes through it too - we
-        // had it on manifest hrefs only. Additive with the RSC-001/007/008
-        // split below: a leaking url is both outside the container and
-        // missing from it, and epubcheck reports both.
-        //
-        // The shape that found this is a stylesheet at the container *root*
-        // asking for `url(../Fonts/x.ttf)`, which real books do carry.
-        if crate::opf::href_leaks_container_root(base_dir, &url) {
-            push(
-                RSC_026,
-                format!("'{url}' leaks outside the container"),
-                "css.url.leaks_container_root",
-            );
-        }
-        let resolved = nfc(&resolve(base_dir, &url));
-        let declared = manifest_paths.contains(&resolved);
-        let present = name_index.contains_key(&resolved);
-        // Real corpus finding, mirrors the same RSC-001/007/008 split
-        // already established for XHTML content-doc references: RSC-001
-        // is only for a manifest-*declared* resource whose file is
-        // missing; an *undeclared* target is RSC-008 if the file still
-        // genuinely exists in the container, or RSC-007 if it doesn't
-        // exist at all - confirmed via three distinctly-named real
-        // fixtures (`content-css-import-not-present-error`,
-        // `content-css-import-not-declared-error`,
-        // `content-css-url-not-present-error`), and applies uniformly to
-        // every CSS url() construct (`@import`, `background`, etc.), not
-        // just `@import`.
-        match (declared, present) {
-            (true, false) => {
-                // **Nothing here: the manifest walk has already said it.**
-                // RSC-001 is per *resource* in epubcheck, not per reference —
-                // its `PublicationResourceChecker` visits each publication
-                // resource once — so a declared-but-absent file named by an
-                // `@import` draws one finding there and drew two here, on
-                // `content-css-import-not-present-error`. Being `declared` is
-                // exactly the condition that guarantees the manifest item was
-                // visited and reported, which the fixture shows directly: the
-                // surviving finding is the manifest one, at `package.opf`.
-                //
-                // The other three arms stay. `RSC_008`/`RSC_007` are about the
-                // *reference*, which is this walk's business and which the
-                // manifest cannot see.
-            }
-            (false, true) => {
+    {
+        // A top-level `@font-face` block's urls are `check_font_face`'s, which
+        // asks its own questions of them.
+        let urls = sheet_urls(&sheet)
+            .into_iter()
+            .filter(|u| u.under != Under::FontFaceBlock);
+        for u in urls {
+            let nested = u.nested;
+            let u = u.url;
+            let url = u.node;
+            let pos = origin.position(css, u.span.start);
+            let mut push = |id, text: String, rule| {
+                push_url_finding(
+                    report, nested, advisory, id, text, css_path, pos, rule, &url,
+                )
+            };
+            if is_file_url_str(&url) {
                 push(
-                    RSC_008,
-                    format!("resource '{url}' is not declared in the manifest"),
-                    "css.url.undeclared_resource",
+                    RSC_030,
+                    format!("'{url}' is a file URL, which is not allowed"),
+                    "css.url.file_scheme_not_allowed",
+                );
+                continue;
+            }
+            if is_external(&url) {
+                continue;
+            }
+            // Where the url leads is a question only a book can answer, so a
+            // stylesheet checked on its own (`check_without_book`) stops
+            // here. A `file:` url, above, is wrong whatever document holds
+            // it, as it is in `check_font_face`.
+            let Some(Book {
+                base_dir,
+                name_index,
+                manifest_paths,
+            }) = book
+            else {
+                continue;
+            };
+            // RSC-026: the url() resolves above the container root, or is
+            // path-absolute. epubcheck applies this in `URLChecker`, its single
+            // URL-resolution point, so every CSS url() goes through it too - we
+            // had it on manifest hrefs only. Additive with the RSC-001/007/008
+            // split below: a leaking url is both outside the container and
+            // missing from it, and epubcheck reports both.
+            //
+            // The shape that found this is a stylesheet at the container *root*
+            // asking for `url(../Fonts/x.ttf)`, which real books do carry.
+            if crate::opf::href_leaks_container_root(base_dir, &url) {
+                push(
+                    RSC_026,
+                    format!("'{url}' leaks outside the container"),
+                    "css.url.leaks_container_root",
                 );
             }
-            (false, false) => {
-                push(
-                    RSC_007,
-                    format!("references a missing resource '{url}'"),
-                    "css.url.missing_resource",
-                );
+            let resolved = nfc(&resolve(base_dir, &url));
+            let declared = manifest_paths.contains(&resolved);
+            let present = name_index.contains_key(&resolved);
+            // Real corpus finding, mirrors the same RSC-001/007/008 split
+            // already established for XHTML content-doc references: RSC-001
+            // is only for a manifest-*declared* resource whose file is
+            // missing; an *undeclared* target is RSC-008 if the file still
+            // genuinely exists in the container, or RSC-007 if it doesn't
+            // exist at all - confirmed via three distinctly-named real
+            // fixtures (`content-css-import-not-present-error`,
+            // `content-css-import-not-declared-error`,
+            // `content-css-url-not-present-error`), and applies uniformly to
+            // every CSS url() construct (`@import`, `background`, etc.), not
+            // just `@import`.
+            match (declared, present) {
+                (true, false) => {
+                    // **Nothing here: the manifest walk has already said it.**
+                    // RSC-001 is per *resource* in epubcheck, not per reference —
+                    // its `PublicationResourceChecker` visits each publication
+                    // resource once — so a declared-but-absent file named by an
+                    // `@import` draws one finding there and drew two here, on
+                    // `content-css-import-not-present-error`. Being `declared` is
+                    // exactly the condition that guarantees the manifest item was
+                    // visited and reported, which the fixture shows directly: the
+                    // surviving finding is the manifest one, at `package.opf`.
+                    //
+                    // The other three arms stay. `RSC_008`/`RSC_007` are about the
+                    // *reference*, which is this walk's business and which the
+                    // manifest cannot see.
+                }
+                (false, true) => {
+                    push(
+                        RSC_008,
+                        format!("resource '{url}' is not declared in the manifest"),
+                        "css.url.undeclared_resource",
+                    );
+                }
+                (false, false) => {
+                    push(
+                        RSC_007,
+                        format!("references a missing resource '{url}'"),
+                        "css.url.missing_resource",
+                    );
+                }
+                (true, true) => {}
             }
-            (true, true) => {}
         }
     }
 
