@@ -10,6 +10,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **styloria 0.16.0 → 0.16.1.** It reads more CSS values as valid:
+  `shape-outside: circle()`, relative colors, `display: math`,
+  `width: stretch` and the legacy aliases. epubveri routes value checks
+  nowhere yet, so the output does not change: 1677 books are
+  byte-identical.
+
 ### Added
 
 - **`check_style_text(css, label, &options)`**: one stylesheet's text,
