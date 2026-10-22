@@ -230,6 +230,21 @@ pub const ADV_015: &str = "ADV-015"; // an unquoted url() CSS reads as a bad-url
 // W3C and w3c/publ-cg#69 leans against CSS validation, so this is not expected
 // to graduate. styloria's `InvalidSelectorStructure` (0.13) draws the line.
 pub const ADV_017: &str = "ADV-017"; // a selector whose shape CSS Selectors rejects (usage)
+// ADV-019..023 are styloria 0.16's spec checks, and the ADV-017 shape again:
+// CSS says a browser drops the construct, epubcheck 5.4.0 accepts it (probed
+// 2026-10-22, scratchpad styloria-016-gate), and EPUB 3.3 §6.3.1.2 lets a
+// style sheet "include any CSS properties" with no validity requirement, so
+// no conformance rule is broken and none of them is a verdict. Vendor-prefixed
+// names are never reported. They take the next numbers free on the line both
+// advisory families share (018 is NEXT-018).
+//
+// ADV-021 is the top-level case only. An `@charset`, `@import` or
+// `@namespace` *inside a block* is CSS-008, because epubcheck reports it.
+pub const ADV_019: &str = "ADV-019"; // a pseudo-class or pseudo-element no CSS specification defines (usage)
+pub const ADV_020: &str = "ADV-020"; // an at-rule no CSS specification defines (usage)
+pub const ADV_021: &str = "ADV-021"; // an @import or @namespace after rules it must precede (usage)
+pub const ADV_022: &str = "ADV-022"; // a media feature no specification defines (usage)
+pub const ADV_023: &str = "ADV-023"; // an !important declaration inside a keyframe (usage)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

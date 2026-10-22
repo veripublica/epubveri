@@ -10,6 +10,41 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **styloria 0.15.0 → 0.16.0.** The advisories below come from its new spec
+  checks. On 1677 books, the build on the published crate gives the same
+  output as the one we gated on its release candidate.
+
+### Fixed
+
+- **An `@charset`, `@import` or `@namespace` inside a block is now CSS-008**,
+  as epubcheck reports it (rule key `css.stylesheet.misplaced_at_rule`). All
+  three are top-level rules, so a browser ignores them inside
+  `@media { … }` or `@supports { … }`. epubveri said nothing there. Every
+  other at-rule inside those blocks stays silent, as it is in epubcheck,
+  unknown ones included.
+
+### Added
+
+- **Five advisories for CSS a browser drops and epubcheck accepts**, from
+  styloria 0.16's spec checks. They are usage severity and appear only with
+  `--advisory`. Vendor-prefixed names are never reported.
+  - **ADV-019**: a pseudo-class or pseudo-element no specification defines
+    in that form, such as `a:hovr`, `p::befor`, `a:hover()` or a bare
+    `p:not`. Inside `:is()` and `:where()` such an argument is dropped
+    silently, as CSS does.
+  - **ADV-020**: an unknown at-rule, such as `@medai` or `@fontface`.
+  - **ADV-021**: an `@import` or `@namespace` at the top level, after a
+    rule it must precede. Rules a browser drops do not count.
+  - **ADV-022**: an unknown media feature, such as `(min-widht: 600px)`.
+  - **ADV-023**: an `!important` declaration inside a keyframe.
+
+  EPUB 3.3 (§6.3.1.2) sets no CSS validity requirement, so none of these
+  breaks a conformance rule or changes the verdict. On 1648 books none of
+  them fires and the output is byte-identical, with and without
+  `--advisory`.
+
 ## [0.31.0] - 2026-10-21
 
 **styloria moves 0.13 → 0.15, and stylesheets now decode as CSS Syntax 3

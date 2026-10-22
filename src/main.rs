@@ -94,7 +94,13 @@ OPTIONS:
                                      it; epubcheck reads it as a URL), a
                                      selector like #1a or p::before span
                                      whose shape CSS rejects (browsers drop
-                                     the rule; epubcheck accepts it).
+                                     the rule; epubcheck accepts it), and
+                                     CSS a browser drops that epubcheck
+                                     accepts: a pseudo-class like :hovr, an
+                                     at-rule like @medai, an @import or
+                                     @namespace after rules it must precede,
+                                     a media feature like min-widht, an
+                                     !important inside a keyframe.
                            Off by default; neither ever affects the verdict or
                            the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
@@ -922,7 +928,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            13,
+            18,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

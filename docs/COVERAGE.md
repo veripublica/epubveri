@@ -33,7 +33,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
 | **All** | **214** | **3** | **1** | **105** | **218** | **217/218** | |
 
-**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 15 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 20 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -448,6 +448,11 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-014 | cover meta names no manifest item (usage, MobileRead 374286 #362/#370) | — | Y |
 | ADV-015 | an unquoted url() CSS reads as a bad-url token (usage) | — | Y |
 | ADV-017 | a selector whose shape CSS Selectors rejects (usage) | — | Y |
+| ADV-019 | a pseudo-class or pseudo-element no CSS specification defines (usage) | — | Y |
+| ADV-020 | an at-rule no CSS specification defines (usage) | — | Y |
+| ADV-021 | an @import or @namespace after rules it must precede (usage) | — | Y |
+| ADV-022 | a media feature no specification defines (usage) | — | Y |
+| ADV-023 | an !important declaration inside a keyframe (usage) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
 | LIM-002 | the publication exceeds ocf::MAX_BOOK_BYTES in total; a resource was not checked | — | Y |
 | NEXT-016 | EPUB 3.3 §4.3.3: the mimetype entry is compressed (usage) | — | Y |

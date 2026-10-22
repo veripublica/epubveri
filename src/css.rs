@@ -432,6 +432,15 @@ pub(crate) fn check(
             }
         }
         for d in validate_parsed_stylesheet(&sheet) {
+            // A misplaced at-rule inside a block is already CSS-008.
+            if d.kind == DiagnosticKind::MisplacedAtRule
+                && !sheet
+                    .rules
+                    .iter()
+                    .any(|r| matches!(&r.node, Rule::At(a) if a.name_span == d.span))
+            {
+                continue;
+            }
             let Some((id, rule, text, params)) = advisory_fields(&d) else {
                 continue;
             };
@@ -593,6 +602,54 @@ fn advisory_fields(
         // hand before one ships. Until then the diagnostic has no id, no
         // text and no consumer.
         DiagnosticKind::InvalidValue => return None,
+        // styloria 0.16's at-rule and keyframe checks. epubcheck 5.4.0 is
+        // silent on every one of them; see the ADV-019..023 note in `ids.rs`.
+        DiagnosticKind::UnknownAtRule => (
+            ADV_020,
+            "css.at_rule.unknown",
+            format!(
+                "'@{}' is not an at-rule any CSS specification defines, so browsers ignore \
+                 the whole rule",
+                d.name
+            ),
+            vec![d.name.clone()],
+        ),
+        // Only ever a top-level one here: `check` drops the ones inside a
+        // block, which `walk_at_rule_block` reports as CSS-008.
+        DiagnosticKind::MisplacedAtRule => (
+            ADV_021,
+            "css.at_rule.misplaced",
+            // Which rules may come first differs between the two and between
+            // specifications (`@layer` statements); the text claims only what
+            // holds whenever styloria reports one.
+            format!(
+                "'@{}' comes after a rule it must precede, so browsers ignore it",
+                d.name
+            ),
+            vec![d.name.clone()],
+        ),
+        DiagnosticKind::UnknownMediaFeature => (
+            ADV_022,
+            "css.media_feature.unknown",
+            // Not "the query never matches": Media Queries 4 is three-valued,
+            // and `(min-widht: 1px) or (color)` still holds on a colour screen.
+            format!(
+                "'{}' is not a media feature any specification defines, so browsers never \
+                 treat this test as true",
+                d.name
+            ),
+            vec![d.name.clone()],
+        ),
+        DiagnosticKind::ImportantInKeyframe => (
+            ADV_023,
+            "css.keyframe.important_ignored",
+            format!(
+                "'{}' is marked !important inside a keyframe, where CSS Animations ignores \
+                 the declaration",
+                d.name
+            ),
+            vec![d.name.clone()],
+        ),
     })
 }
 
@@ -923,6 +980,28 @@ fn report_syntax_errors(
                 }
                 continue;
             }
+            // styloria 0.16: a pseudo-class or pseudo-element no CSS
+            // specification defines (`a:hovr`, `p::befor`, a bare `p:not`).
+            // Selectors 4 makes the selector invalid and browsers drop the
+            // rule, but epubcheck 5.4.0 accepts every one of them, so this is
+            // ADV-019 for the reason ADV-017 is: skipped before `claimed`.
+            SyntaxErrorKind::UnknownPseudo => {
+                if advisory && let Some(token) = css.get(e.span.start..e.span.end) {
+                    let prelude = innermost_rule(&sheet.rules, e.span.start)
+                        .and_then(|r| prelude_source(css, r))
+                        .map(|(_, p)| p);
+                    report.push_full(
+                        ADV_019,
+                        Severity::Usage,
+                        unknown_pseudo_text(token, prelude),
+                        css_path,
+                        origin.position(css, e.span.start),
+                        "css.selector.unknown_pseudo",
+                        vec![token.to_string()],
+                    );
+                }
+                continue;
+            }
             // Spelled out rather than `_`, so a kind styloria adds breaks
             // the build here, where CSS-008 or not is decided.
             SyntaxErrorKind::BadString
@@ -1102,6 +1181,8 @@ fn syntax_error_slug(kind: SyntaxErrorKind) -> &'static str {
         // Never a CSS-008: `report_syntax_errors` makes it ADV-017 before
         // asking, under this same key.
         SyntaxErrorKind::InvalidSelectorStructure => "css.stylesheet.invalid_selector_structure",
+        // Never a CSS-008: `report_syntax_errors` makes it ADV-019 first.
+        SyntaxErrorKind::UnknownPseudo => "css.selector.unknown_pseudo",
         // Its own slug for the same reason as the selector one: epubcheck
         // reports every CSS parse problem as CSS-008, but "the range is
         // malformed" points somewhere quite different from "the block is".
@@ -1156,6 +1237,8 @@ fn syntax_error_text(css: &str, e: &SyntaxError, selector: Option<&str>) -> Stri
             "blocks nested more than {} deep; what they hold was not checked",
             styloria::MAX_NESTING_DEPTH
         ),
+        // Never reported: `report_syntax_errors` makes it ADV-019 first.
+        (K::UnknownPseudo, Some(t)) => format!("'{t}' is not a known pseudo-class"),
         (K::MalformedDeclaration, Some(t)) => format!("'{t}' is not followed by ':'"),
         (K::UnexpectedToken, Some(t)) => format!("'{t}' where a declaration was expected"),
         // Never reported: `report_syntax_errors` skips it before asking.
@@ -1178,6 +1261,20 @@ fn selector_structure_text(token: &str, selector: Option<&str>) -> String {
         None => format!("'{t}'"),
     };
     format!("selector {at} is not valid under CSS Selectors, so browsers ignore this whole rule")
+}
+
+/// The text of an ADV-019: the selector and the pseudo no specification
+/// defines in that form. `token` is the `:name` or `::name(…)` as written.
+fn unknown_pseudo_text(token: &str, selector: Option<&str>) -> String {
+    let t = quote_css(token).unwrap_or_else(|| token.to_string());
+    let in_selector = match selector.and_then(quote_css) {
+        Some(s) if s != t => format!(" in selector '{s}'"),
+        _ => String::new(),
+    };
+    format!(
+        "'{t}'{in_selector} is not a pseudo-class or pseudo-element any CSS specification \
+         defines in this form, so browsers ignore this whole rule"
+    )
 }
 
 /// `source` as a message quotes it: whitespace runs folded to one space (a
@@ -1331,6 +1428,33 @@ fn walk_at_rule_block(
             BlockItem::Rule(r) => match &r.node {
                 Rule::Qualified(q) => walk_rule_block(r, &q.block, ctx, quiet, report),
                 Rule::At(a) => {
+                    // **Three at-rules exist only at the top level**, and
+                    // epubcheck 5.4.0 reports each of them inside an `@media`
+                    // or `@supports` block as CSS-008 ("not allowed here"),
+                    // while accepting every other at-rule there, unknown ones
+                    // included (probed 2026-10-22). CSS agrees: Cascade 5 and
+                    // CSS Namespaces place `@import` and `@namespace` before
+                    // every other rule, and `@charset` is not a rule at all
+                    // but bytes at the start of the file. We were silent.
+                    if ["charset", "import", "namespace"]
+                        .iter()
+                        .any(|n| a.name.eq_ignore_ascii_case(n))
+                    {
+                        let name = &ctx.css[a.name_span.start..a.name_span.end];
+                        report.push_full(
+                            CSS_008,
+                            Severity::Error,
+                            format!(
+                                "CSS syntax error: '{name}' is only allowed at the top level \
+                                 of a stylesheet"
+                            ),
+                            ctx.css_path,
+                            ctx.origin.position(ctx.css, a.name_span.start),
+                            "css.stylesheet.misplaced_at_rule",
+                            Vec::new(),
+                        );
+                        continue;
+                    }
                     let Some(block) = &a.block else { continue };
                     // **`@font-face` is `@font-face` wherever it sits.** The
                     // top-level walk calls this and the nested one did not, so
@@ -2401,6 +2525,149 @@ mod tests {
             "{:?}",
             r.messages
         );
+    }
+
+    /// styloria 0.16's five spec checks. epubcheck 5.4.0 is silent on every
+    /// shape here (probed 2026-10-22), so each is an `ADV-*` under
+    /// `--advisory` and never a CSS-008; vendor-prefixed names and the
+    /// forgiving `:is()` stay silent.
+    #[test]
+    fn styloria_016_spec_checks_are_advisories_not_css_008() {
+        let idx = empty_index();
+        for (css, id, rule, param) in [
+            (
+                "a:hovr { color: red }",
+                ADV_019,
+                "css.selector.unknown_pseudo",
+                ":hovr",
+            ),
+            (
+                "p::befor { color: red }",
+                ADV_019,
+                "css.selector.unknown_pseudo",
+                "::befor",
+            ),
+            (
+                "p:not { color: red }",
+                ADV_019,
+                "css.selector.unknown_pseudo",
+                ":not",
+            ),
+            (
+                "@media all { a:hovr { color: red } }",
+                ADV_019,
+                "css.selector.unknown_pseudo",
+                ":hovr",
+            ),
+            (
+                "@medai screen { p { color: red } }",
+                ADV_020,
+                "css.at_rule.unknown",
+                "medai",
+            ),
+            ("@foo;", ADV_020, "css.at_rule.unknown", "foo"),
+            (
+                "p { color: red }\n@import \"a.css\";",
+                ADV_021,
+                "css.at_rule.misplaced",
+                "import",
+            ),
+            (
+                "p { color: red }\n@namespace \"u\";",
+                ADV_021,
+                "css.at_rule.misplaced",
+                "namespace",
+            ),
+            (
+                "@media (min-widht: 1px) { p { color: red } }",
+                ADV_022,
+                "css.media_feature.unknown",
+                "min-widht",
+            ),
+            (
+                "@keyframes k { from { color: red !important } }",
+                ADV_023,
+                "css.keyframe.important_ignored",
+                "color",
+            ),
+        ] {
+            assert!(!run(css, &idx).contains(&CSS_008), "{css}");
+            let r = run_advisory(css);
+            let adv: Vec<_> = r.messages.iter().filter(|m| m.id == id).collect();
+            assert_eq!(adv.len(), 1, "{css}: {:?}", r.messages);
+            assert_eq!(adv[0].severity, Severity::Usage);
+            assert_eq!(adv[0].rule, Some(rule), "{css}");
+            assert_eq!(adv[0].params, vec![param.to_string()], "{css}");
+            assert!(!r.messages.iter().any(|m| m.id == CSS_008), "{css}");
+        }
+        for css in [
+            "a:hover, p::before, p:first-child, li::marker { color: red }",
+            "a:-webkit-any-link, p::-epub-foo { color: red }",
+            ":is(a:hovr, p) { color: red }",
+            "@page :first { margin: 1em }",
+            "@-moz-document url-prefix() { p { color: red } }",
+            "@media amzn-kf8, (-webkit-min-device-pixel-ratio: 2) { p { color: red } }",
+            "@media (min-width: 600px) and (orientation: portrait) { p { color: red } }",
+            "@keyframes k { from { color: red } }",
+            // In order: an unknown at-rule or a dropped style rule before
+            // `@import` is not a rule it has to follow.
+            "@foo;\n@import \"a.css\";",
+            "a:hovr { color: red }\n@import \"a.css\";",
+            "@charset \"utf-8\";\n@layer a;\n@import \"a.css\";\n@namespace \"u\";\np { color: red }",
+        ] {
+            let r = run_advisory(css);
+            let unexpected: Vec<_> = r
+                .messages
+                .iter()
+                .filter(|m| {
+                    [ADV_021, ADV_022, ADV_023, CSS_008].contains(&m.id)
+                        || (m.id == ADV_019 && !css.contains("hovr"))
+                        || (m.id == ADV_020 && !css.contains("@foo"))
+                })
+                .collect();
+            assert!(unexpected.is_empty(), "{css}: {unexpected:?}");
+        }
+    }
+
+    /// `@charset`, `@import` and `@namespace` inside a block: epubcheck
+    /// 5.4.0 reports each as CSS-008 in `@media` and `@supports`, and
+    /// accepts every other at-rule there (probed 2026-10-22). With
+    /// `--advisory` it is still the one finding, not an ADV-021 beside it.
+    #[test]
+    fn a_top_level_only_at_rule_inside_a_block_is_css_008() {
+        let idx = empty_index();
+        for css in [
+            "@media screen { @import \"a.css\"; }",
+            "@media screen { @namespace \"u\"; }",
+            "@media screen { @charset \"utf-8\"; }",
+            "@supports (display: grid) { @import \"a.css\"; }",
+        ] {
+            let r = run_report(css, &idx);
+            let found: Vec<_> = r.messages.iter().filter(|m| m.id == CSS_008).collect();
+            assert_eq!(found.len(), 1, "{css}: {:?}", r.messages);
+            assert_eq!(found[0].rule, Some("css.stylesheet.misplaced_at_rule"));
+            assert!(
+                found[0].text.contains("only allowed at the top level"),
+                "{css}"
+            );
+            let adv = run_advisory(css);
+            assert_eq!(
+                adv.messages.iter().filter(|m| m.id == CSS_008).count(),
+                1,
+                "{css}"
+            );
+            assert!(!adv.messages.iter().any(|m| m.id == ADV_021), "{css}");
+        }
+        for css in [
+            "@media screen { @media print { p { color: red } } }",
+            "@media screen { @supports (display: grid) { p { color: red } } }",
+            "@media screen { @page { margin: 1em } }",
+            "@media screen { @keyframes k { from { color: red } } }",
+            "@media screen { @layer base { p { color: red } } }",
+            "@media screen { @foo { p { color: red } } }",
+        ] {
+            assert!(!run(css, &idx).contains(&CSS_008), "{css}");
+        }
     }
 
     /// The ADV-012 re-parse must not let a structure error, which epubcheck

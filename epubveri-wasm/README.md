@@ -100,7 +100,9 @@ epubcheck has no verdict on, in two families, both at `usage` severity:
   `.-` whose name is not a CSS identifier, a cover `meta` whose content is not the id of any
   manifest item, an unquoted `url()` that CSS reads as malformed and browsers
   never load, a selector such as `#1a` or `p::before span` whose shape CSS rejects, so
-  browsers drop the rule).
+  browsers drop the rule, and CSS a browser drops that epubcheck accepts: a pseudo-class
+  such as `:hovr`, an at-rule such as `@medai`, an `@import` or `@namespace` after rules it
+  must precede, a media feature such as `min-widht`, an `!important` inside a keyframe).
 
 It is **off by default**: leaving the argument out, or passing `false`/`undefined`,
 produces a byte-identical report, so existing two-argument callers are unaffected. Neither

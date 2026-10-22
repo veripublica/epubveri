@@ -468,6 +468,9 @@ can tell them apart without reading the message:
   not exist. An unquoted `url()` with a space or a quote in it, which browsers
   never load and epubcheck reads as a URL. A selector like `p::before span`
   that CSS rejects, so browsers drop the rule, while epubcheck accepts it.
+  The same goes for a misspelled pseudo-class (`a:hovr`), an at-rule
+  (`@medai`), a media feature (`min-widht`), an `@import` after the rules it
+  must precede, or `!important` inside a keyframe.
   Nobody is late here; these are things a validator
   can notice and nothing obliges it to, and they never become errors.
 

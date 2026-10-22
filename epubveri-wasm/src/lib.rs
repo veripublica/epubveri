@@ -413,7 +413,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            13,
+            18,
             "the advisory families changed ({declared:?}) — describe the new \
              check in README.md's \"Advisory checks\" section, then update \
              this count"
