@@ -10,6 +10,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-10-22
+
+**The library gains `check_style_text` and `style_text_urls`, which check
+one stylesheet without a book, and styloria moves 0.16.0 → 0.16.1.** On
+1677 books the output is byte-identical to 0.32.0. The change is additive
+API only, nothing breaking.
+
 ### Changed
 
 - **styloria 0.16.0 → 0.16.1.** It reads more CSS values as valid:
