@@ -10,6 +10,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-10-22
+
+**styloria moves 0.15 → 0.16, which adds five advisories under `--advisory`
+for CSS that a browser drops and epubcheck accepts.** An `@charset`, `@import`
+or `@namespace` inside `@media` or `@supports` is now CSS-008, as in
+epubcheck. On 1677 books the output is unchanged except for three of epubcheck's
+CSS test files, and those changes are advisory output only. The library's
+API is unchanged.
+
 ### Changed
 
 - **styloria 0.15.0 → 0.16.0.** The advisories below come from its new spec
@@ -41,9 +50,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   - **ADV-023**: an `!important` declaration inside a keyframe.
 
   EPUB 3.3 (§6.3.1.2) sets no CSS validity requirement, so none of these
-  breaks a conformance rule or changes the verdict. On 1648 books none of
-  them fires and the output is byte-identical, with and without
-  `--advisory`.
+  breaks a conformance rule or changes the verdict. None of them fires on
+  the 562 real books or the books built from epubcheck's fixtures. They
+  fire only on three of epubcheck's bare CSS test files (`caja.css`,
+  `samples.css` and `other-rule.css`, wrapped in books), where `:blinky`,
+  `@bogus` and a late `@import` are written on purpose.
 
 ## [0.31.0] - 2026-10-21
 
