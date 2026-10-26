@@ -1,4 +1,4 @@
-/* veripublica family-web — demo.css — template v6
+/* veripublica family-web — demo.css — template v7
  * https://github.com/veripublica/family-web
  *
  * THIS IS A COPY. DO NOT EDIT IT. A change worth making is made in family-web, and
@@ -70,7 +70,9 @@ h1 .demo-tag { color: var(--muted); font-weight: 400; }
 .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
 .drop:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-.status { margin: 1.25rem 0; font-size: .9rem; color: var(--muted); }
+/* pre-line (v7, #18): a status that lists several things — a refusal with its
+ * findings — shows one per line. Single-line text renders as before. */
+.status { margin: 1.25rem 0; font-size: .9rem; color: var(--muted); white-space: pre-line; }
 .counts { color: var(--muted); font-size: .9rem; margin: 1rem 0 .5rem; }
 
 code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
@@ -214,7 +216,42 @@ button, select {
   background: var(--card); color: var(--fg); border-radius: 8px; padding: .45rem .85rem;
 }
 button.primary { background: var(--accent); color: #fff; border-color: transparent; }
-button:disabled, select:disabled { opacity: .45; cursor: default; }
+button:disabled, select:disabled, textarea:disabled { opacity: .45; cursor: default; }
+
+/* Textarea — from kepubverto (#18), the free-text twin of select: the same
+ * background, color and radius, so it changes with the theme like the rest.
+ *
+ * One thing differs on purpose: the border is --muted, not --border. A button is
+ * identified by its label and a select by its value; an empty text field is
+ * identified by nothing but its edge, so the edge falls under WCAG 2.2 SC 1.4.11.
+ * --border is 1.27:1 against --card (light) — an invisible field. --muted is 5.36
+ * at worst. The placeholder is --muted too: the UA's grey fails AA on --card, and
+ * Firefox dims it further unless opacity is reset. measure.mjs holds both.
+ *
+ * Body font by default; add .mono when the content is code. Same stack as <code>. */
+textarea {
+  display: block; width: 100%; min-height: 4.5rem; resize: vertical;
+  font: inherit; border: 1px solid var(--muted);
+  background: var(--card); color: var(--fg); border-radius: 8px; padding: .45rem .6rem;
+}
+textarea::placeholder { color: var(--muted); opacity: 1; }
+textarea.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .85rem; line-height: 1.4;
+}
+
+/* Field — from kepubverto (#18). A labelled control on its own lines: the label
+ * above (styled as .viewopts's), the control, an optional sentence of help below.
+ *
+ *   <div class="field"><label for="css">Extra CSS</label>
+ *     <textarea id="css" class="mono" spellcheck="false"></textarea>
+ *     <p>Added to every converted document.</p></div>
+ *
+ * Use .viewopts when the control sits in a row with others; .field when it needs
+ * the whole width. */
+.field { margin: 0 0 1rem; }
+.field > label { display: block; margin-bottom: .35rem; }
+.field > p { margin: .35rem 0 0; font-size: .8rem; color: var(--muted); }
 
 /* Option row — from epubveri (#15). A checkbox (or radio) with a sentence of
  * explanation beside it: an opt-in a tool offers before it runs. The whole row is
@@ -256,7 +293,7 @@ button:disabled, select:disabled { opacity: .45; cursor: default; }
   display: flex; align-items: center; gap: .5rem;
   flex-wrap: wrap; margin: 0 0 1rem;
 }
-.viewopts label {
+.viewopts label, .field > label {
   font-size: .85rem; color: var(--muted); text-transform: uppercase;
   letter-spacing: .04em;
 }
