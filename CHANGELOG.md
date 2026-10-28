@@ -10,6 +10,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-10-28
+
+**zip moves to 9.1.3 for three zip advisories, and styloria moves to
+0.17.0.** One of the advisories reached epubveri: every book is opened
+with `ZipArchive::new`. Selectors that fail only on a code point the CSS
+Syntax draft may take out of names no longer draw a CSS-008 of ours
+alone. On 1677 books the output is byte for byte that of 0.33.0.
+
 ### Changed
 
 - **styloria 0.16.1 → 0.17.0.** The CSS Syntax 3 draft took some code
