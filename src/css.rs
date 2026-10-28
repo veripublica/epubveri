@@ -56,6 +56,13 @@ use crate::report::{LocationIndex, Position, Report, Severity};
 /// links it. A label styloria does not decode (the multi-byte legacy
 /// encodings) falls back to lossy UTF-8, which is what every stylesheet got
 /// before; the spec would decode it, so that is a known gap, not a choice.
+///
+/// A label naming the `replacement` encoding (`iso-2022-kr`, `hz-gb-2312`,
+/// …) falls back the same way, which *is* a choice. The spec decodes the
+/// whole sheet to one U+FFFD, so it would hold no rules. epubcheck hands the
+/// label to Java, which has no such encoding, reads the bytes as UTF-8 and
+/// checks the rules: CSS-004, then whatever the rules hold (probe
+/// `styloria-017-bfdf163-gate`, e1–e5).
 pub(crate) fn decode_bytes(bytes: &[u8]) -> String {
     // A UTF-32BE byte order mark, which CSS Syntax does not know: the
     // Encoding Standard has no UTF-32, so the spec reads these bytes as UTF-8
@@ -68,8 +75,8 @@ pub(crate) fn decode_bytes(bytes: &[u8]) -> String {
         return crate::encoding::decode_utf32(rest, true);
     }
     match styloria::decode_stylesheet(bytes, None, None) {
-        Ok(decoded) => decoded.text.into_owned(),
-        Err(_) => String::from_utf8_lossy(bytes).into_owned(),
+        Ok(decoded) if decoded.encoding.name() != "replacement" => decoded.text.into_owned(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
     }
 }
 
@@ -481,7 +488,7 @@ fn check_in(
     if advisory {
         let type_names = styloria::selector_references(&sheet)
             .into_iter()
-            .filter(|r| r.top_level && !r.in_argument)
+            .filter(|r| r.top_level && !r.in_argument && !r.narrowed_ident)
             .filter_map(|r| match r.selector.node {
                 SimpleSelector::Type(name) => Some(name.local),
                 _ => None,
@@ -1030,6 +1037,17 @@ fn report_syntax_errors(
             // A top-level `--foo:hover { … }`, which CSS Syntax drops without
             // naming a parse error. epubcheck is silent on it and so were we.
             SyntaxErrorKind::DroppedCustomPropertyRule => continue,
+            // styloria 0.17: the selector fails only because a code point at
+            // or above U+0080 is outside the CSS Syntax CRD's narrowed ident
+            // set (`.‣`, `.a\u{A0}b`), and parses when it is read as a name
+            // code point, as before csswg-drafts#7129. epubcheck 5.4.0's
+            // scanner reads every non-ASCII code point as a name code point
+            // and accepts the rule, the issue is open again, and engines
+            // still read these as names, so no finding of either kind.
+            // Before 0.17 these were `InvalidSelector` and a CSS-008 of ours
+            // alone. Skipped before `claimed`, so `.‣, . b` still reports
+            // the `. b`.
+            SyntaxErrorKind::NarrowedIdent => continue,
             // styloria 0.13: every token is a selector piece but the shape
             // breaks Selectors (`#1a`, `[x]p`, `p::before span`,
             // `:nth-child(foo)`). epubcheck 5.4.0's grammar accepts all of
@@ -1148,9 +1166,13 @@ fn epubcheck_only_class_names((start, prelude): (usize, &str)) -> Option<Vec<(us
     let (_, errors) = styloria::parse_stylesheet(&format!("{relaxed}{{}}"));
     // A structure error left over (`.1a#2b` → `.xa#2b`) is one epubcheck
     // accepts too, so it does not make the class name a CSS-008.
-    let still_invalid = errors
-        .iter()
-        .any(|e| e.kind != SyntaxErrorKind::InvalidSelectorStructure);
+    // A narrowed-ident code point left over is one epubcheck accepts too.
+    let still_invalid = errors.iter().any(|e| {
+        !matches!(
+            e.kind,
+            SyntaxErrorKind::InvalidSelectorStructure | SyntaxErrorKind::NarrowedIdent
+        )
+    });
     (!still_invalid).then(|| {
         found
             .into_iter()
@@ -1271,6 +1293,8 @@ fn syntax_error_slug(kind: SyntaxErrorKind) -> &'static str {
         SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
         // Never reported: `report_syntax_errors` skips it before asking.
         SyntaxErrorKind::DroppedCustomPropertyRule => "css.stylesheet.dropped_rule",
+        // Never reported: `report_syntax_errors` skips it before asking.
+        SyntaxErrorKind::NarrowedIdent => "css.selector.narrowed_ident",
     }
 }
 
@@ -1318,6 +1342,8 @@ fn syntax_error_text(css: &str, e: &SyntaxError, selector: Option<&str>) -> Stri
         (K::UnexpectedToken, Some(t)) => format!("'{t}' where a declaration was expected"),
         // Never reported: `report_syntax_errors` skips it before asking.
         (K::DroppedCustomPropertyRule, Some(t)) => format!("'{t}' is dropped"),
+        // Never reported: `report_syntax_errors` skips it before asking.
+        (K::NarrowedIdent, Some(t)) => format!("'{t}' is not an identifier code point"),
         // Every span above is a token, which is never blank; this is the
         // floor for one that is, not a shape anything is known to produce.
         (_, None) => return "CSS syntax error".to_string(),
@@ -2602,6 +2628,42 @@ mod tests {
         );
     }
 
+    /// A selector that fails only on a code point the CSS Syntax CRD took out
+    /// of the ident set (csswg-drafts#7129) is no finding at all: epubcheck
+    /// 5.4.0 accepts every one of these (probed 2026-10-26), and before
+    /// styloria 0.17 each was a CSS-008 of ours alone. A selector that is
+    /// invalid in both readings keeps its CSS-008.
+    #[test]
+    fn a_narrowed_ident_code_point_is_no_finding() {
+        let idx = empty_index();
+        for css in [
+            ".\u{2023} { color: red }",
+            ".a\u{2023}b { color: red }",
+            "#\u{2023} { color: red }",
+            "\u{2023} { color: red }",
+            ".a\u{a0}b { color: red }",
+            "[title=\u{2023}] { color: red }",
+            ".\u{2023}, p { color: red }",
+            "@media screen { .\u{2023} { color: red } }",
+        ] {
+            assert!(!run(css, &idx).contains(&CSS_008), "{css}");
+            let r = run_advisory(css);
+            assert!(r.messages.is_empty(), "{css}: {:?}", r.messages);
+        }
+        for css in [
+            ".\u{2023}, . b { color: red }",
+            ".\u{2023} . b { color: red }",
+        ] {
+            let r = run_advisory(css);
+            assert_eq!(
+                r.messages.iter().filter(|m| m.id == CSS_008).count(),
+                1,
+                "{css}: {:?}",
+                r.messages
+            );
+        }
+    }
+
     /// styloria 0.16's five spec checks. epubcheck 5.4.0 is silent on every
     /// shape here (probed 2026-10-22), so each is an `ADV-*` under
     /// `--advisory` and never a CSS-008; vendor-prefixed names and the
@@ -3094,6 +3156,21 @@ mod tests {
         }
         assert_eq!(decode_bytes(&bytes), css);
         assert_eq!(run_bytes(&bytes), vec![CSS_004]);
+    }
+
+    /// A `replacement` label keeps its rules: epubcheck reads them as UTF-8,
+    /// where the spec would leave one U+FFFD (probes e1–e5, 2026-10-28).
+    #[test]
+    fn a_replacement_label_keeps_its_rules() {
+        for label in ["iso-2022-kr", "csiso2022kr", "hz-gb-2312", "iso-2022-cn"] {
+            let css = format!("@charset \"{label}\";\n. b {{ color: red }}\n");
+            assert_eq!(decode_bytes(css.as_bytes()), css, "{label}");
+            let findings = run_bytes(css.as_bytes());
+            assert!(
+                findings.contains(&CSS_004) && findings.contains(&CSS_008),
+                "{label}: {findings:?}"
+            );
+        }
     }
 
     #[test]

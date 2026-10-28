@@ -10,6 +10,32 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **styloria 0.16.1 → 0.17.0.** The CSS Syntax 3 draft took some code
+  points out of the set allowed in names, `‣` and U+00A0 among them, and
+  that change is under review (w3c/csswg-drafts#7129). styloria now marks
+  a selector that fails only on such a code point as unsettled, and no
+  longer as invalid. epubveri reports nothing on it until the review is
+  decided, and ADV-003 skips such a name too. A selector that is invalid
+  in both readings keeps its CSS-008. On 1677 books the output is byte
+  for byte that of the build before.
+- **A stylesheet whose `@charset` names the `replacement` encoding**
+  (`iso-2022-kr`, `hz-gb-2312`, `iso-2022-cn`, …) is still read as UTF-8,
+  as epubcheck reads it. styloria 0.17 now decodes such a sheet as the
+  spec says, to a single U+FFFD, and that would have left its rules
+  unchecked. CSS-004 is reported either way.
+
+### Fixed
+
+- **No more CSS-008 on `.‣`, `#‣`, `‣ {}`, `.a<U+00A0>b`, `[title=‣]`
+  and the like, inside `@media` too.** It was an error of ours alone:
+  epubcheck accepts every one. True by the current draft text, but that
+  text is under review and browsers still read such names the old way.
+- **CSS-029 is reported on a rule like
+  `.-epub-media-overlay-active ‣ {}`,** as epubcheck reports it. Before,
+  the rule drew a CSS-008 and its class went unseen.
+
 ### Security
 
 - **zip 9.0.4 → 9.1.3,** for GHSA-m665-v7pm-7grj (CVE-2026-115905: the

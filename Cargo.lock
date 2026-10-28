@@ -365,9 +365,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "styloria"
-version = "0.16.1"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea36bbe5bd655e822e14682b4fb5f39b18ad449657408d2d92639006a88b16ef"
+checksum = "9814e8b6ef237b9cb64991d4ee5ac9e6c1fdacc2ed812a728df488b451fd6686"
 
 [[package]]
 name = "syn"
