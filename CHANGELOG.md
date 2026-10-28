@@ -10,6 +10,35 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A damaged ZIP is read as epubcheck reads it.** epubcheck opens every
+  book with Java's `ZipFile`, and judges the first entry by the file's
+  leading bytes. Four kinds of damage made us read a different container:
+  - **A broken end record appended after the real one** was VALID here.
+    Java takes the last end record, finds it inconsistent and refuses the
+    archive, which epubcheck reports as FATAL PKG-008. zip passed over it
+    to the earlier record (GHSA-wjr6-mhvj-cjvm, still so in zip 9.1.3).
+    epubveri now chooses the end record as Java does, following OpenJDK
+    26's source. Other JDKs were not measured.
+  - **Junk bytes before the first ZIP header** were VALID here. Both
+    readers skip them, but the file does not start with a ZIP header, and
+    epubcheck reports FATAL PKG-004. PKG-004, PKG-006 and PKG-005 are now
+    judged on the leading bytes of every book, not only of one that fails
+    to open.
+  - **An end-record signature inside the archive comment** gives both
+    readers an empty directory. RSC-002 is right, but we also reported
+    PKG-006 on a book whose first bytes are the `mimetype` entry.
+  - **A central-directory offset a few bytes short** leaves every entry
+    listed and none readable. We reported `container.xml` as missing
+    (RSC-002) and added a wrong PKG-006. epubcheck reports it unreadable:
+    PKG-008, then RSC-003.
+
+  On 1677 books, two built from epubcheck's fixtures change only in
+  PKG-008's text. In both the archive has no end record at all, and
+  `params[0]` now carries Java's reason, `zip END header not found`, as
+  epubcheck's message does, instead of zip's.
+
 ## [0.34.0] - 2026-10-28
 
 **zip moves to 9.1.3 for three zip advisories, and styloria moves to

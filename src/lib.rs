@@ -1394,6 +1394,86 @@ mod tests {
         report.messages.iter().map(|m| m.id).collect()
     }
 
+    /// `epub3_minimal` with its end record (the last 22 bytes, no comment)
+    /// changed by `edit`, then `tail` appended.
+    fn with_end_record(edit: impl FnOnce(&mut [u8]), tail: &[u8]) -> Vec<u8> {
+        let mut b = epub3_minimal();
+        let end = b.len() - 22;
+        assert_eq!(&b[end..end + 4], b"PK\x05\x06");
+        edit(&mut b[end..]);
+        b.extend_from_slice(tail);
+        b
+    }
+
+    fn sorted_ids(bytes: Vec<u8>) -> Vec<&'static str> {
+        let mut v = ids_of(&crate::validate_bytes(bytes));
+        v.sort();
+        v
+    }
+
+    /// Four archives where we and epubcheck 5.4.0 read a different container,
+    /// each now read as epubcheck reads it (probe set `zip-divergence`,
+    /// 2026-10-28). Before, the first and third were VALID, and the second
+    /// and fourth drew a PKG-006 on a book whose first bytes are `mimetype`.
+    #[test]
+    fn a_damaged_zip_is_read_as_epubchecks_java_reader_reads_it() {
+        assert!(sorted_ids(epub3_minimal()).is_empty());
+        // A broken end record appended: Java takes it and refuses the
+        // archive; zip passed over it to the good one.
+        let bogus_end = [
+            b"PK\x05\x06".as_slice(),
+            &[0, 0, 0, 0, 9, 0, 9, 0],
+            &999u32.to_le_bytes(),
+            &99_999u32.to_le_bytes(),
+            &[0, 0],
+        ]
+        .concat();
+        assert_eq!(sorted_ids(with_end_record(|_| {}, &bogus_end)), ["PKG-008"]);
+        // An end-record signature inside the comment: both readers take it,
+        // so the directory is empty. `mimetype` is still the first entry.
+        let mut fake = b"xxPK\x05\x06".to_vec();
+        fake.extend([0; 18]);
+        assert_eq!(
+            sorted_ids(with_end_record(
+                |e| e[20..22].copy_from_slice(&24u16.to_le_bytes()),
+                &fake
+            )),
+            ["RSC-002"]
+        );
+        // Bytes before the first header: both readers skip them, but the
+        // file does not start with a ZIP header.
+        let mut junk = b"JUNKJUNKJUNKJUNK".to_vec();
+        junk.extend(epub3_minimal());
+        assert_eq!(sorted_ids(junk), ["PKG-004"]);
+        // A central-directory offset 4 short: both readers list every
+        // entry and read none, so container.xml is unreadable, not missing.
+        assert_eq!(
+            sorted_ids(with_end_record(
+                |e| {
+                    let off = u32::from_le_bytes(e[16..20].try_into().unwrap());
+                    e[16..20].copy_from_slice(&(off - 4).to_le_bytes());
+                },
+                &[]
+            )),
+            ["PKG-008", "RSC-003"]
+        );
+    }
+
+    /// What Java's reader accepts stays accepted: bytes padded after the end
+    /// record (its comment no longer reaches the end, so Java checks the
+    /// signatures instead) and an ordinary comment.
+    #[test]
+    fn an_end_record_java_accepts_is_no_finding() {
+        assert!(sorted_ids(with_end_record(|_| {}, &[0; 100])).is_empty());
+        assert!(
+            sorted_ids(with_end_record(
+                |e| e[20..22].copy_from_slice(&5u16.to_le_bytes()),
+                b"hello"
+            ))
+            .is_empty()
+        );
+    }
+
     /// A body long enough that its deflate stream has bytes to corrupt.
     fn long_body() -> String {
         (0..60)

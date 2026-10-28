@@ -604,6 +604,138 @@ pub(crate) fn check_resource_limits(ocf: &Ocf, report: &mut Report) {
     }
 }
 
+/// What epubcheck's `OCFZipChecker` says about the file's first 58 bytes.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum RawHeader {
+    /// PKG-004: long enough, but does not start with `PK`.
+    BadSignature,
+    /// PKG-006: the first local header does not name `mimetype`.
+    NotFirst,
+    /// PKG-005: the first local header names `mimetype` with an extra field.
+    ExtraField,
+}
+
+/// `OCFZipChecker`'s chain on the raw leading bytes, which epubcheck runs on
+/// every container, before and apart from opening the archive. Same order,
+/// same else-if: the signature, the name length at offset 26, the extra-field
+/// length at 28, the name at 30.
+///
+/// The signature test is `header[0] != 'P' && header[1] != 'K'`, an **and**,
+/// so one matching byte falls through to the name checks (#80). A file
+/// shorter than 58 bytes is PKG-003, reported by the caller, and gets none
+/// of these.
+fn judge_raw_header(bytes: &[u8]) -> Option<RawHeader> {
+    let h = bytes.get(..58)?;
+    if h[0] != b'P' && h[1] != b'K' {
+        return Some(RawHeader::BadSignature);
+    }
+    let name_len = u16::from_le_bytes([h[26], h[27]]);
+    let extra_len = u16::from_le_bytes([h[28], h[29]]);
+    if name_len != 8 {
+        Some(RawHeader::NotFirst)
+    } else if extra_len != 0 {
+        Some(RawHeader::ExtraField)
+    } else if &h[30..38] != b"mimetype" {
+        Some(RawHeader::NotFirst)
+    } else {
+        None
+    }
+}
+
+fn report_raw_header(finding: RawHeader, report: &mut Report) {
+    match finding {
+        RawHeader::BadSignature => report.push(
+            PKG_004,
+            Severity::Fatal,
+            "Not a valid EPUB container (corrupted ZIP header)",
+        ),
+        RawHeader::NotFirst => report.push_rule(
+            PKG_006,
+            Severity::Error,
+            "The 'mimetype' file must be the first entry in the EPUB ZIP",
+            "ocf.mimetype.not_first_entry",
+            Vec::new(),
+        ),
+        RawHeader::ExtraField => report.push(
+            PKG_005,
+            Severity::Error,
+            "The 'mimetype' entry's ZIP header must not have an extra field",
+        ),
+    }
+}
+
+/// Why Java's `ZipFile`, which epubcheck opens every book with, refuses the
+/// archive's end record, or `None` when it accepts it or when the question
+/// is left to zip.
+///
+/// The two readers choose the end record differently. Java takes the last
+/// `PK\5\6` within reach of the end whose comment length ends exactly at the
+/// end of the file, or, failing that, whose central directory and first
+/// local header carry their signatures. It then refuses the archive if that
+/// record is inconsistent. zip passes over such a record to an earlier one
+/// that works (GHSA-wjr6-mhvj-cjvm, still so in 9.1.3), so a book with a
+/// broken end record appended was VALID here and FATAL PKG-008 there.
+///
+/// This follows OpenJDK 26's `ZipFile.Source.findEND` and the end-record
+/// checks at the top of `initCEN`, read from its source; the logic has been
+/// stable for many releases, but other JDKs were not measured. A ZIP64
+/// locator ahead of the record is left to zip, as is any later failure in the
+/// central directory itself.
+fn java_end_header_error(bytes: &[u8]) -> Option<&'static str> {
+    const ENDHDR: usize = 22;
+    const CENHDR: u64 = 46;
+    let sig_at = |pos: u64, sig: &[u8; 4]| {
+        usize::try_from(pos)
+            .ok()
+            .and_then(|p| bytes.get(p..p.checked_add(4)?))
+            .is_some_and(|b| b == sig)
+    };
+    let len = bytes.len();
+    if len < ENDHDR {
+        return None;
+    }
+    let lowest = len.saturating_sub(0xFFFF + ENDHDR);
+    for pos in (lowest..=len - ENDHDR).rev() {
+        let end = &bytes[pos..pos + ENDHDR];
+        if end[..4] != *b"PK\x05\x06" {
+            continue;
+        }
+        let total = u64::from(u16::from_le_bytes([end[10], end[11]]));
+        let cen_len = u64::from(u32::from_le_bytes([end[12], end[13], end[14], end[15]]));
+        let cen_off = u64::from(u32::from_le_bytes([end[16], end[17], end[18], end[19]]));
+        let comment_len = usize::from(u16::from_le_bytes([end[20], end[21]]));
+        let end_pos = pos as u64;
+        if pos + ENDHDR + comment_len != len {
+            // Java's second chance for a record whose comment does not reach
+            // the end: both signatures where the record says.
+            let found = end_pos
+                .checked_sub(cen_len)
+                .and_then(|cen| Some((cen, cen.checked_sub(cen_off)?)))
+                .is_some_and(|(cen, loc)| sig_at(cen, b"PK\x01\x02") && sig_at(loc, b"PK\x03\x04"));
+            if !found {
+                continue;
+            }
+        }
+        if pos >= 20 && bytes[pos - 20..pos - 16] == *b"PK\x06\x07" {
+            return None;
+        }
+        if end_pos == 0 {
+            return None;
+        }
+        if cen_len > end_pos {
+            return Some("invalid END header (bad central directory size)");
+        }
+        if end_pos - cen_len < cen_off {
+            return Some("invalid END header (bad central directory offset)");
+        }
+        if total > cen_len / CENHDR {
+            return Some("invalid END header (total entries count too large)");
+        }
+        return None;
+    }
+    Some("zip END header not found")
+}
+
 /// Open the ZIP and run the OCF `mimetype` checks (PKG-003/005/006/007/008).
 /// Returns `None` only when the bytes are not a usable ZIP at all - a
 /// fatal condition, so nothing else is checked (confirmed via real
@@ -654,71 +786,23 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // `ZipArchive::len()` reporting only 5. Scanned manually here, on the
     // raw bytes, before they're moved into the archive reader.
     let duplicate_entry_name = find_exact_duplicate_entry(&bytes);
-    // PKG-005 reads the **local file header**, not the central directory.
-    // The two carry independent extra fields, and tools routinely put an
-    // NTFS timestamp in the central directory only: one shelf book has 0
-    // bytes local and 36 central, so `extra_data()` (central) made us report
-    // an error epubcheck does not - it reads the file's own leading bytes
-    // (`OCFZipChecker`, a 58-byte header), and so do we now. mimetype must be the first entry,
-    // which is checked separately, so offset 0 is its local header.
-    let first_local_extra_len = if bytes.len() >= 30 && bytes.starts_with(b"PK\x03\x04") {
-        u16::from_le_bytes([bytes[28], bytes[29]])
-    } else {
-        0
+    let raw_header = judge_raw_header(&bytes);
+    // Java's reader is asked first: where it and zip choose different
+    // end records, epubcheck has already refused the archive.
+    let opened = match java_end_header_error(&bytes) {
+        Some(e) => Err(e.to_string()),
+        None => ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string()),
     };
-    // Read before `bytes` is moved into the reader below.
-    let bytes_len = bytes.len();
-    let bytes_first_two = (
-        bytes.first().copied().unwrap_or(0),
-        bytes.get(1).copied().unwrap_or(0),
-    );
-    let raw_header: Option<[u8; 38]> = bytes.get(..38).and_then(|h| h.try_into().ok());
-    let mut archive = match ZipArchive::new(Cursor::new(bytes)) {
+    let mut archive = match opened {
         Ok(a) => a,
         Err(e) => {
-            // PKG-004 is epubcheck's "the header is long enough but does not
-            // start with `PK`" - `header[0] != 'P' && header[1] != 'K'` in
-            // `OCFZipChecker`, an **and**, so one matching byte is enough to
-            // fall through. We guarded it on an image sniff instead, so 200
-            // random bytes drew PKG-008 alone where epubcheck names the
-            // defect (#80). The sniff stays as a second route: a file that
+            // The image sniff is a second route to PKG-004 here: a file that
             // *is* a recognisable other format still gets it even if its
-            // first two bytes happen to be `PK`.
-            let bad_signature =
-                bytes_len >= 58 && bytes_first_two.0 != b'P' && bytes_first_two.1 != b'K';
-            if bad_signature || looks_like_other_format {
-                report.push(
-                    PKG_004,
-                    Severity::Fatal,
-                    "Not a valid EPUB container (corrupted ZIP header)",
-                );
-            } else if bytes_len >= 58
-                && let Some(h) = raw_header
-            {
-                // The rest of `OCFZipChecker`'s chain, which epubcheck runs on
-                // the raw header whether or not the archive then opens. We
-                // asked these questions only of an archive that did, so a
-                // broken container with a wrong first entry drew PKG-008 alone
-                // here and PKG-006 or PKG-005 beside it there (probed
-                // 2026-09-25). Same order, same else-if: the name length at
-                // offset 26, the extra-field length at 28, the name at 30.
-                let name_len = u16::from_le_bytes([h[26], h[27]]);
-                let extra_len = u16::from_le_bytes([h[28], h[29]]);
-                if name_len != 8 || (extra_len == 0 && &h[30..38] != b"mimetype") {
-                    report.push_rule(
-                        PKG_006,
-                        Severity::Error,
-                        "The 'mimetype' file must be the first entry in the EPUB ZIP",
-                        "ocf.mimetype.not_first_entry",
-                        Vec::new(),
-                    );
-                } else if extra_len != 0 {
-                    report.push(
-                        PKG_005,
-                        Severity::Error,
-                        "The 'mimetype' entry's ZIP header must not have an extra field",
-                    );
-                }
+            // first two bytes happen to be `PK` (#80).
+            if looks_like_other_format && raw_header != Some(RawHeader::BadSignature) {
+                report_raw_header(RawHeader::BadSignature, report);
+            } else if let Some(finding) = raw_header {
+                report_raw_header(finding, report);
             }
             report.push_rule(
                 PKG_008,
@@ -746,7 +830,6 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     let mut names = Vec::with_capacity(n);
     let mut first_name = String::new();
     let mut first_stored = false;
-    let mut first_has_extra = false;
     for i in 0..n {
         if let Ok(f) = archive.by_index(i) {
             // EPUB requires every ZIP entry's file name to be UTF-8 - a
@@ -770,7 +853,6 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             if i == 0 {
                 first_name = name.clone();
                 first_stored = f.compression() == zip::CompressionMethod::Stored;
-                first_has_extra = first_local_extra_len != 0;
             }
             // PKG-009/011/012: checked per path *segment* (a directory
             // name is a file name too), on every real entry regardless of
@@ -847,6 +929,14 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                 }
             }
             names.push(name);
+        } else if let Some(Ok(name)) = archive.name_for_index(i) {
+            // Listed in the central directory, but its local header cannot
+            // be read: Java's reader lists it too, and fails on opening it.
+            // So it is named here and its read becomes PKG-008 like any
+            // damaged entry's. Dropped, it read as absent: a container.xml
+            // that cannot be read was "missing", RSC-002, where epubcheck
+            // reports PKG-008 and RSC-003.
+            names.push(name.into_owned());
         }
     }
 
@@ -901,20 +991,16 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // must carry no extra field (needed so tools can sniff the media type at
     // a fixed byte offset without a full ZIP parse). That it is stored is
     // NEXT-016, behind `--advisory` (see `check_advisories`).
-    if first_name != "mimetype" {
-        report.push_rule(
-            PKG_006,
-            Severity::Error,
-            "The 'mimetype' file must be the first entry in the EPUB ZIP",
-            "ocf.mimetype.not_first_entry",
-            Vec::new(),
-        );
-    } else if first_has_extra {
-        report.push(
-            PKG_005,
-            Severity::Error,
-            "The 'mimetype' entry's ZIP header must not have an extra field",
-        );
+    //
+    // "First" is judged on the file's leading bytes, as epubcheck judges it,
+    // not on the central directory's order. The two part when the directory
+    // lists something the bytes do not start with: an end-of-central-
+    // directory signature inside the archive comment gave both readers an
+    // empty directory, and we reported PKG-006 on a book whose first bytes
+    // are the `mimetype` entry. And 16 junk bytes before the first header,
+    // which both readers skip, drew nothing here and FATAL PKG-004 there.
+    if let Some(finding) = raw_header {
+        report_raw_header(finding, report);
     }
 
     let mut ocf = Ocf {
