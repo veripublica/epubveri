@@ -10,6 +10,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Security
+
+- **zip 9.0.4 → 9.1.3,** for GHSA-m665-v7pm-7grj (CVE-2026-115905: the
+  local header and the central directory disagree), GHSA-wjr6-mhvj-cjvm
+  (`ZipArchive::new` falls back to an earlier end-of-central-directory
+  record) and GHSA-gmfj-vffv-32pw (missing footer, shifted offsets).
+  epubveri opens every book with `ZipArchive::new`, so the second one
+  reached it. The floor is now 9.1.3. Nothing changes in what epubveri
+  reports. On 1677 books, with and without `--advisory`, the JSON, stderr
+  and exit code are byte for byte the same. On eleven archives built in
+  the advisories' shapes, the output is the same under both versions.
+  zip 9.1 brings in `getrandom` (not on wasm32), and `windows-sys` on
+  Windows only. The wasm module grows by about 41 KB.
+
 ## [0.33.0] - 2026-10-22
 
 **The library gains `check_style_text` and `style_text_urls`, which check

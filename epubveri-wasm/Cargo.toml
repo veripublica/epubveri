@@ -48,4 +48,4 @@ tsify = { version = "0.5", features = ["js"] }
 # building one means building a real EPUB container - the same zip crate the
 # core uses, with the same no-C-dependency features.
 [dev-dependencies]
-zip = { version = "9.0.4", default-features = false, features = ["deflate"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
