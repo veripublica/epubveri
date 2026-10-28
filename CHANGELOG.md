@@ -10,6 +10,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-10-28
+
+**epubveri now reads a damaged ZIP the way epubcheck reads it.** On four
+kinds of damaged archive, epubveri read a different container than
+epubcheck does. Two of them were reported VALID where epubcheck reports
+FATAL, so a book could pass here and fail there. Real books are not
+affected: on 1677 books, the only change is the text of one PKG-008 on two
+built from epubcheck's fixtures.
+
 ### Fixed
 
 - **A damaged ZIP is read as epubcheck reads it.** epubcheck opens every
