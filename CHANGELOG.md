@@ -10,77 +10,66 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
-**An `https:` URL without its two slashes now gets epubcheck's findings.**
-`https:x` and `https:/x` are invalid, and to epubcheck they also name a path
-inside the container, because its container root is an `https:` URL. So
-`https:/x` draws RSC-026 and, if nothing is there, RSC-007; `https:x` draws
-RSC-007. Here they drew RSC-020 alone, or nothing at some reference sites.
+## [0.36.0] - 2026-11-02
+
+**More books get epubcheck's verdict, on malformed URLs and damaged ZIPs.** A book
+with `http:/x` only in its NCX or a package `<link>`, or a ZIP with an encrypted
+entry or a comment that is not UTF-8, was VALID here and is INVALID in epubcheck. It
+is INVALID here now too. Real books are not affected: on 1677 books no finding is
+added or removed except on one of epubcheck's own fixtures, which now reports what
+epubcheck reports. On 28 real books the text of CSS-007 changes and nothing else, and
+on two more fixtures the text of PKG-027.
 
 ### Fixed
 
-- **`https:x` and `https:/x` are read as references inside the container**,
-  whatever the letter case and at every reference site, so they no longer draw
-  RSC-006, RSC-008 or OPF-014 as if they were remote.
-- **A special scheme without `//` is RSC-020 at every reference site.** That
-  now includes `ftp:`, `ws:` and `wss:`, and the NCX, the package `<link>`, the
-  manifest, `<img>`, `<link>` and inline `<style>`. **A book with such a URL only
-  in its NCX or a package `<link>` was VALID here and is now INVALID, as in
-  epubcheck.** A leading space no longer hides the error.
+- **`https:x` and `https:/x` get epubcheck's findings.** They are invalid, and to
+  epubcheck they also name a path inside the container, because its container root
+  is an `https:` URL. So `https:/x` draws RSC-026 and, if nothing is there, RSC-007;
+  `https:x` draws RSC-007. They no longer draw RSC-006, RSC-008 or OPF-014 as if they
+  were remote.
+- **A special scheme without `//` is RSC-020 at every reference site.** That now
+  includes `ftp:`, `ws:` and `wss:`, and the NCX, the package `<link>`, the manifest,
+  `<img>`, `<link>` and inline `<style>`. A leading space no longer hides the error.
+  `check_style_text` reports it too.
 - **RSC-026 is reported on an NCX `<content src>` and a package `<link>`.**
-- `check_style_text` reports RSC-020 for a url that does not parse.
-
-New `rule` keys: `opf.link.malformed_url`, `opf.link.leaks_container_root`,
-`opf.ncx.content_src_leaks_container_root`.
-
-**The other URL differences a probe of every reference site found are closed
-too**, all at the ids epubcheck gives:
-
-- **A remote `url()` outside `@font-face` is RSC-006**, unless the manifest
-  declares it audio, video or a font. It was RSC-008, with RSC-031 on `http:`.
+- **A remote `url()` outside `@font-face` is RSC-006**, unless the manifest declares
+  it audio, video or a font. It was RSC-008, with RSC-031 on `http:`.
 - **RSC-033 is reported on `img`, `link`, inline `<style>` and the NCX.**
-- **A missing or undeclared target draws no RSC-009 or RSC-013**: the check stops
-  at RSC-007 or RSC-008 first. An `@import` with a fragment draws RSC-013.
+- **A missing or undeclared target draws no RSC-009 or RSC-013**: the check stops at
+  RSC-007 or RSC-008 first. An `@import` with a fragment draws RSC-013.
 - **CSS-002 is reported for any empty `url()`**, not only a font's, and an empty
   `<link href>` is RSC-005.
-- **CSS-007 asks epubcheck's list of font types**, and not for a url with a
-  fragment. Its message now says "font Core Media Type".
-- **A manifest `href` with a fragment names no file**: RSC-001, and no longer
-  OPF-074 or a check of the file it would otherwise name.
-- **A `file:` URL** also draws RSC-006 where it is not audio, video or a font,
-  RSC-008 on an undeclared font, RSC-030 in the NCX and NAV-010 in the nav.
+- **CSS-007 asks epubcheck's list of font types**, and not for a url with a fragment.
+  Its message now says "font Core Media Type".
+- **A manifest `href` with a fragment names no file**: RSC-001, and no longer OPF-074.
+- **A `file:` URL** also draws RSC-006 where it is not audio, video or a font, RSC-008
+  on an undeclared font, RSC-030 in the NCX and NAV-010 in the nav.
+- **A central directory is judged as epubcheck's Java reader judges it.** PKG-027 is
+  reported for every `invalid CEN header`: a bad signature, an encrypted entry, a
+  compression method other than stored or deflate, a wrong header size, or a name or
+  comment that is not UTF-8. These were PKG-008 here, or no finding at all. A malformed
+  ZIP64 extra field is PKG-008. This follows OpenJDK 26's source and was measured on
+  27; epubcheck on another JDK may refuse less.
 
-New `rule` keys: `opf.content_document.reference_query_string`,
-`opf.content_document.link_href_empty`, `opf.ncx.content_src_query_string`,
-`opf.ncx.content_src_file_url`, `opf.manifest_item.file_url_restricted_context`,
-`css.url.query_string`, `css.url.empty`, `css.import.fragment_identifier`.
-
-**A central directory is now judged as epubcheck's Java reader judges it.** A book
-with an encrypted entry or an entry comment that is not UTF-8, among other damage,
-was VALID here and FATAL there.
-
-- **PKG-027 is reported for every `invalid CEN header`**: a bad signature, an
-  encrypted entry, a compression method other than stored or deflate, a wrong
-  header size, or a name or comment that is not UTF-8. These were PKG-008 here, or
-  no finding at all. Its `rule` is `ocf.container.invalid_central_directory`.
-- **A malformed ZIP64 extra field is PKG-008**, as in epubcheck.
-- This follows OpenJDK 26's source and was measured on 27. epubcheck on another JDK
-  may refuse less.
-
-On 1677 books no finding is added or removed except on one of epubcheck's own
-fixtures, which now reports exactly what epubcheck reports. On 28 real books the
-text of CSS-007 changes and nothing else, and on two more of epubcheck's fixtures
-the text of PKG-027.
+New `rule` keys: `opf.link.malformed_url`, `opf.link.leaks_container_root`,
+`opf.ncx.content_src_leaks_container_root`, `opf.ncx.content_src_query_string`,
+`opf.ncx.content_src_file_url`, `opf.content_document.reference_query_string`,
+`opf.content_document.link_href_empty`, `opf.manifest_item.file_url_restricted_context`,
+`css.url.query_string`, `css.url.empty`, `css.import.fragment_identifier`,
+`ocf.container.invalid_central_directory`.
 
 ### Added
 
-- **`LICENSE-THIRD-PARTY.txt` ships in every release archive and in the npm
-  package**, with the licence of each crate compiled into them. The release
-  pre-flight fails if it falls behind `Cargo.lock`.
+- **`LICENSE-THIRD-PARTY.txt` ships in every release archive and in the npm package**,
+  with the licence of each crate compiled into them. The release pre-flight fails if
+  it falls behind `Cargo.lock`.
+- **`AGENTS.md`** holds the detail for code agents and maintainers.
 
 ### Changed
 
 - **styloria 0.17.0 → 0.18.0.** New API only, none of it called here. Output is
   byte-identical on 1677 books.
+- **The demo page moves to family-web template v8.**
 
 ## [0.35.0] - 2026-10-28
 
