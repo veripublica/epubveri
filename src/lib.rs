@@ -1626,6 +1626,9 @@ mod tests {
             "css.font_face.missing_target",
             "css.font_face.undeclared_target",
             "css.font_face.non_core_media_type",
+            // A `file:` url draws these only from the document that holds it.
+            "opf.content_document.remote_resource_restricted_context",
+            "opf.content_document.property_used_undeclared",
         ];
         let book = |css: &str| {
             let opf = r#"<?xml version="1.0"?>

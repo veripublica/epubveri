@@ -415,8 +415,24 @@ fn check_in(
                     "css.url.malformed_relative_url",
                 );
             }
+            // CSSHandler.resolveAndRegister: an empty url is CSS-002, whatever
+            // holds it. `check_font_face` asks this of a font's.
+            if url.trim().is_empty() && !nested {
+                push(CSS_002, "url() is empty".to_string(), "css.url.empty");
+            }
             if is_external(&url) {
                 continue;
+            }
+            // RSC-033, on the same terms as the RSC-020 above.
+            if (book.is_none() || !matches!(origin, CssOrigin::File { .. }))
+                && !nested
+                && url.split('#').next().unwrap_or(&url).contains('?')
+            {
+                push(
+                    RSC_033,
+                    format!("URL '{url}' must not have a query string"),
+                    "css.url.query_string",
+                );
             }
             // Where the url leads is a question only a book can answer, so a
             // stylesheet checked on its own (`check_without_book`) stops

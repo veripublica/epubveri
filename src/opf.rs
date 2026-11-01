@@ -764,6 +764,16 @@ pub(crate) fn is_remote_url(href: &str) -> bool {
     is_scheme_relative(href) || crate::url::scheme(href).is_some()
 }
 
+/// Whether two `file:` URLs parse to one URL: `file:/x` is `file:///x`.
+fn same_file_url(a: &str, b: &str) -> bool {
+    let path = |u: &str| {
+        crate::url::trim_url(u)
+            .strip_prefix("file:")
+            .map(|p| p.trim_start_matches('/').to_string())
+    };
+    path(a).is_some() && path(a) == path(b)
+}
+
 /// A `file:` URL, which EPUB never allows (RSC-030). epubcheck's rule is
 /// exactly `startsWith("file:")` on the raw reference string; matched
 /// case-sensitively for parity (a `FILE:` URL is valid per RFC but rare,
@@ -3798,6 +3808,20 @@ fn check_ncx_content_fragments(
         // A fragment-only `src="#x"` keeps the old behaviour: it is non-empty,
         // so `is_external` still stops it here.
         if !src.trim_matches(crate::url::is_url_edge_space).is_empty() && is_external(src) {
+            if is_file_url(src)
+                && let Some(src_attr) = attr_no_ns_node(n, "src")
+            {
+                report.push_node_attr(
+                    RSC_030,
+                    Severity::Error,
+                    format!("NCX content src '{src}' is a file URL, which is not allowed"),
+                    ncx_path,
+                    n,
+                    src_attr,
+                    "opf.ncx.content_src_file_url",
+                    vec![src.to_string()],
+                );
+            }
             // Remote or not, epubcheck strict-parses every reference.
             if let Some(err) = crate::url::unit_error(src)
                 && let Some(src_attr) = attr_no_ns_node(n, "src")
@@ -3882,6 +3906,20 @@ fn check_ncx_content_fragments(
                 n,
                 src_attr,
                 "opf.ncx.content_src_leaks_container_root",
+                vec![src.to_string()],
+            );
+        }
+        if target.contains('?')
+            && let Some(src_attr) = attr_no_ns_node(n, "src")
+        {
+            report.push_node_attr(
+                RSC_033,
+                Severity::Error,
+                format!("NCX content src '{src}' must not have a query string"),
+                ncx_path,
+                n,
+                src_attr,
+                "opf.ncx.content_src_query_string",
                 vec![src.to_string()],
             );
         }
@@ -6563,6 +6601,19 @@ fn check_text(
                     "opf.manifest_item.file_url_href",
                     vec![id.to_string()],
                 );
+                // `checkRemoteReference` allows these three types to be remote.
+                if !crate::cmt::is_audio_video_or_font(mt) {
+                    report.push_node_attr(
+                        RSC_006,
+                        Severity::Error,
+                        format!("manifest item '{id}' href is not allowed in this context"),
+                        opf_path,
+                        item,
+                        href_attr,
+                        "opf.manifest_item.file_url_restricted_context",
+                        vec![id.to_string()],
+                    );
+                }
             }
             // "Core Media Types" (and their preferred/non-preferred split) are
             // an EPUB 3 concept; EPUB 2 has no such preference, so OPF-090 is
@@ -6708,7 +6759,13 @@ fn check_text(
             } else if is_external(href) {
                 href.to_string()
             } else {
-                resolve(&base_dir, href)
+                // A fragment is part of the item's URL (OPF-091), so the item
+                // names no file: to epubcheck the file `x` does not satisfy
+                // `x#a` (RSC-001), and `x#a` does not duplicate `x`.
+                match crate::url::trim_url(href).split_once('#') {
+                    Some((_, frag)) => format!("{}#{frag}", resolve(&base_dir, href)),
+                    None => resolve(&base_dir, href),
+                }
             };
             let resolved_nfc = nfc(&resolved);
             if !is_external(href) {
@@ -9497,6 +9554,28 @@ fn check_text(
             }
         }
 
+        // A `<link href>` must not be empty: epubcheck's XHTML schemas give it a
+        // minimum length. Only the empty string, measured; `img` below is wider.
+        for n in d
+            .descendants()
+            .filter(|n| n.is_element() && n.tag_name().name() == "link")
+        {
+            if let Some(href) = attr_no_ns_node(n, "href")
+                && href.value().is_empty()
+            {
+                report.push_node_attr(
+                    RSC_005,
+                    Severity::Error,
+                    "\"link\" element's \"href\" attribute must not be empty",
+                    path.clone(),
+                    n,
+                    href,
+                    "opf.content_document.link_href_empty",
+                    Vec::new(),
+                );
+            }
+        }
+
         // <img src> must not be empty/whitespace-only.
         for n in d
             .descendants()
@@ -10428,9 +10507,12 @@ fn check_text(
                 && n.attr_no_ns("rel")
                     .is_some_and(|r| r.xml_tokens().any(|t| t.eq_ignore_ascii_case("stylesheet")))
         }) {
+            // After `checkUndeclaredReference`, which stops at an undeclared
+            // target: a missing file draws RSC-007 and this is never asked.
             if let Some(href) = n.attr_no_ns("href")
                 && !is_external(href)
                 && href.contains('#')
+                && items_by_path.contains_key(nfc(&resolve(&dir, href)).as_str())
             {
                 report.push_at_pos(
                     RSC_013,
@@ -10564,7 +10646,9 @@ fn check_text(
                     || items
                         .values()
                         .any(|(ip, mt)| nfc(ip) == resolved && mt == "image/svg+xml");
-                if !is_svg {
+                // An undeclared target stops at RSC-007 or RSC-008 first.
+                let declared = items.values().any(|(ip, _)| nfc(ip) == resolved);
+                if !is_svg && declared {
                     report.push_at_pos(
                         RSC_009,
                         Severity::Warning,
@@ -10635,7 +10719,7 @@ fn check_text(
                         // normal same-page link, not "external" - a real
                         // false positive found via a real `nav-landmarks-
                         // valid` fixture using exactly that shape).
-                        if is_remote_url(href) {
+                        if is_remote_url(href) || is_file_url(href) {
                             report.push_at_pos(
                                 NAV_010,
                                 Severity::Error,
@@ -11450,6 +11534,19 @@ fn check_text(
                     {
                         continue;
                     }
+                    // RSC-033: `URLChecker` asks this of every local reference.
+                    // An anchor's is asked in the anchor walk.
+                    if !(tag == "a" && attr == "href") && strip_url_fragment(v).contains('?') {
+                        report.push_node(
+                            RSC_033,
+                            Severity::Error,
+                            format!("URL '{v}' must not have a query string"),
+                            path.clone(),
+                            node,
+                            "opf.content_document.reference_query_string",
+                            vec![v.to_string()],
+                        );
+                    }
                     let resolved = nfc(&resolve_ref(&dir, &path, v));
                     // The matrix and its reasoning live in
                     // `classify_resource_ref`; only the anchoring is here.
@@ -11729,9 +11826,9 @@ fn check_text(
                     .or_default()
                     .extend(inline_classes);
                 docs_with_css.insert(path.clone());
-                // Unlike a remote font/background image referenced via
-                // CSS (allowed, `resources-remote-font-in-css-valid`), a
-                // remote `@import` fetches another *stylesheet* - always
+                // Unlike a remote font referenced via CSS (allowed,
+                // `resources-remote-font-in-css-valid`), a remote `@import`
+                // fetches another *stylesheet* - always
                 // restricted, same as a `<link rel="stylesheet">` (RSC-006
                 // instead of RSC-008), confirmed via the real
                 // `resources-remote-stylesheet-svg-import-error` fixture.
@@ -11749,13 +11846,33 @@ fn check_text(
                         restricted_remote_refs.insert(strip_url_fragment(u));
                     }
                 }
+                let inline_font_srcs: std::collections::HashSet<String> =
+                    crate::css::font_face_src_urls_spanned(&css_text)
+                        .into_iter()
+                        .map(|s| s.node)
+                        .collect();
                 for crate::css::CssUrl { url: u, nested } in crate::css::stylesheet_urls(&sheet) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
                     // OPF-097 below. Inline <style> resolves against this
                     // document's own directory.
                     if !is_external(&u) {
-                        resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&u))));
+                        let target = nfc(&resolve(&dir, &strip_url_fragment(&u)));
+                        if imports.contains(&u)
+                            && u.contains('#')
+                            && items_by_path.contains_key(target.as_str())
+                        {
+                            report.push_at_pos(
+                                RSC_013,
+                                Severity::Usage,
+                                format!(
+                                    "stylesheet reference '{u}' must not have a fragment identifier"
+                                ),
+                                path.clone(),
+                                Position::of(node),
+                            );
+                        }
+                        resource_refs.insert(target);
                     }
                     // A url inside another function counts as a use and is
                     // asked nothing more: epubcheck never reads it (NEXT-018).
@@ -11774,6 +11891,23 @@ fn check_text(
                     if is_remote_url(&u) && !imports.contains(&u) {
                         has_remote.get_or_insert(node);
                         remote_refs.insert(strip_url_fragment(&u));
+                    }
+                    // Outside `@font-face` a `url()` is a GENERIC reference: see
+                    // the linked-stylesheet walk.
+                    if !imports.contains(&u) && !inline_font_srcs.contains(&u) {
+                        let bare = strip_url_fragment(&u);
+                        if is_file_url(&u) {
+                            has_remote.get_or_insert(node);
+                            if !items.values().any(|(ip, _)| same_file_url(ip, &u)) {
+                                restricted_remote_refs.insert(bare);
+                            }
+                        } else if is_remote_url(&u)
+                            && !remote_manifest
+                                .get(&bare)
+                                .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt))
+                        {
+                            restricted_remote_refs.insert(bare);
+                        }
                     }
                 }
             }
@@ -13060,6 +13194,19 @@ fn check_text(
                     );
                 }
                 let target = nfc(&resolve(&dir, &bare));
+                if imports.contains(&u)
+                    && u.contains('#')
+                    && items_by_path.contains_key(target.as_str())
+                {
+                    report.push_at_rule(
+                        RSC_013,
+                        Severity::Usage,
+                        format!("stylesheet reference '{u}' must not have a fragment identifier"),
+                        path.clone(),
+                        "css.import.fragment_identifier",
+                        vec![u.clone()],
+                    );
+                }
                 // **RSC-008 is NOT asked here**, and adding it was a mistake
                 // the 981-book `compare` caught the same day: `css.rs`'s own
                 // RSC-001/007/008 walk already owns it, with a position and
@@ -13106,8 +13253,29 @@ fn check_text(
                 continue;
             }
             css_has_remote |= is_remote_url(&u) || is_file_url(&u);
+            // A `url()` outside `@font-face` is a GENERIC reference to
+            // epubcheck (`CSSHandler.registerURIs`), so `checkRemoteReference`
+            // lets it be remote only when the manifest declares audio, video
+            // or a font. Anything else is RSC-006, and the check stops there.
+            let is_font_src = font_srcs.contains(&u);
+            // A declared `file:` item is the manifest walk's to report.
+            let declared_file = items.values().any(|(ip, _)| same_file_url(ip, &u));
+            if is_file_url(&u) && !is_font_src && !declared_file {
+                report.push_at_rule(
+                    RSC_006,
+                    Severity::Error,
+                    format!("remote resource '{u}' is not allowed in this context"),
+                    path.clone(),
+                    "opf.content_document.remote_resource_restricted_context",
+                    vec![u.clone()],
+                );
+            }
             if is_remote_url(&u) {
                 let u = strip_url_fragment(&u);
+                let restricted = !is_font_src
+                    && !remote_manifest
+                        .get(&u)
+                        .is_some_and(|mt| crate::cmt::is_audio_video_or_font(mt));
                 // A stylesheet asking for a remote font *is* a reference to
                 // it, and RSC-006/RSC-006b turn on whether one exists
                 // anywhere. Without this, three corpus fixtures whose only
@@ -13118,7 +13286,7 @@ fn check_text(
                 // manifest question never arises - the same rule the
                 // content-document path applies through
                 // `restricted_remote_refs`. See the comment there.
-                if !is_epub3 {
+                if !is_epub3 || restricted {
                     report.push_at_rule(
                         RSC_006,
                         Severity::Error,
@@ -13149,7 +13317,7 @@ fn check_text(
                 // the per-document site above already documents - telling
                 // someone to switch to https points at the wrong half of
                 // their problem. Probed both versions against 5.3.0.
-                if is_epub3 && crate::url::is_insecure_remote(&u) {
+                if is_epub3 && !restricted && crate::url::is_insecure_remote(&u) {
                     report.push_at_rule(
                         RSC_031,
                         Severity::Warning,
@@ -14994,6 +15162,25 @@ const OBFUSCATION_ALGORITHM: &str = "http://www.idpf.org/2008/embedding";
 /// note from us and nothing from epubcheck — found by the differ, 2026-08-04.
 /// Info severity, so it never changed a verdict, but it was still us reporting
 /// on markup that is fine for its version.
+fn blessed_font_type(mt: &str, is_epub3: bool) -> bool {
+    if is_epub3 {
+        // `OPFChecker30.isBlessedFontType`
+        matches!(
+            mt,
+            "font/otf"
+                | "font/ttf"
+                | "font/woff"
+                | "font/woff2"
+                | "application/font-sfnt"
+                | "application/font-woff"
+                | "application/vnd.ms-opentype"
+                | "application/x-font-ttf"
+        )
+    } else {
+        blessed_font_type_epub2(mt)
+    }
+}
+
 fn blessed_font_type_epub2(mt: &str) -> bool {
     mt.starts_with("font/")
         || mt.starts_with("application/font")
@@ -15080,15 +15267,30 @@ fn check_exempt_font_usage(
             // is not "missing from the publication". The manifest entry is
             // matched on the href exactly as written, since a remote item has
             // no resolved path to compare.
-            if let Some((_, mt)) = items.values().find(|(ip, _)| ip.trim() == u.node.trim())
-                && !crate::cmt::is_core_media_type(mt)
-                && (is_epub3 || !blessed_font_type_epub2(mt))
+            let declared_as = items
+                .values()
+                .find(|(ip, _)| ip.trim() == u.node.trim() || same_file_url(ip, &u.node));
+            // A `file:` font is not remote to `is_remote_url`, so nothing else
+            // asks: undeclared, `checkUndeclaredReference` reports RSC-008.
+            if is_file_url(&u.node) && declared_as.is_none() {
+                report.push_full(
+                    RSC_008,
+                    Severity::Error,
+                    format!("resource '{}' is not declared in the manifest", u.node),
+                    path,
+                    origin.position(css, u.span.start),
+                    "css.font_face.undeclared_target",
+                    vec![u.node.clone()],
+                );
+            }
+            if let Some((_, mt)) = declared_as
+                && !blessed_font_type(mt, is_epub3)
             {
                 report.push_full(
                     CSS_007,
                     Severity::Info,
                     format!(
-                        "font '{}' has media type '{mt}', which is not a Core Media Type; \
+                        "font '{}' has media type '{mt}', which is not a font Core Media Type; \
                          fonts need no fallback, but reading systems need not support it",
                         u.node
                     ),
@@ -15157,15 +15359,17 @@ fn check_exempt_font_usage(
             );
             continue;
         }
-        if let Some((_, mt)) = res.items_by_path.get(&resolved)
-            && !crate::cmt::is_core_media_type(mt)
-            && (is_epub3 || !blessed_font_type_epub2(mt))
+        // epubcheck looks the type up by the whole URL, so `font.svg#f` finds
+        // no item and draws no CSS-007 (`resources-cmt-font-svg-valid`).
+        if !u.node.contains('#')
+            && let Some((_, mt)) = res.items_by_path.get(&resolved)
+            && !blessed_font_type(mt, is_epub3)
         {
             report.push_full(
                 CSS_007,
                 Severity::Info,
                 format!(
-                    "font '{}' has media type '{mt}', which is not a Core Media Type; \
+                    "font '{}' has media type '{mt}', which is not a font Core Media Type; \
                      fonts need no fallback, but reading systems need not support it",
                     u.node
                 ),
@@ -29461,6 +29665,135 @@ mod tests {
         assert_eq!(ids("https:/x.example"), ["RSC-007", "RSC-020", "RSC-026"]);
         assert_eq!(ids("/ch1.xhtml"), ["RSC-007", "RSC-026"]);
         assert_eq!(ids("ch1.xhtml"), Vec::<&str>::new());
+    }
+
+    /// A `url()` outside `@font-face` is a GENERIC reference to epubcheck: remote
+    /// only if the manifest declares audio, video or a font, else RSC-006, and
+    /// never RSC-008 or RSC-031. It was RSC-008 here, in both kinds of sheet.
+    #[test]
+    fn a_remote_url_in_css_is_restricted_unless_declared_audio_video_or_font() {
+        let u = "https://x.example/a";
+        let found = |css: String, media_type: &str| -> Vec<&'static str> {
+            let mut got: Vec<&'static str> =
+                crate::validate_bytes(epub_with_stylesheet(&css, media_type))
+                    .messages
+                    .iter()
+                    .map(|m| m.id)
+                    .filter(|i| matches!(*i, "RSC-006" | "RSC-008" | "RSC-031"))
+                    .collect();
+            got.sort();
+            got
+        };
+        assert_eq!(
+            found(format!("p{{background:url({u})}}"), "font/ttf"),
+            ["RSC-006"]
+        );
+        assert_eq!(
+            found(
+                "p{background:url(http://x.example/a)}".to_string(),
+                "font/ttf"
+            ),
+            ["RSC-006"]
+        );
+        // Inside `@font-face` it is a FONT reference, allowed remote.
+        assert_eq!(
+            found(
+                format!("@font-face{{font-family:a;src:url({u})}}"),
+                "font/ttf"
+            ),
+            ["RSC-008"]
+        );
+    }
+
+    /// `URLChecker` asks about the query of every local reference, and a missing
+    /// or undeclared target stops before anything asks about its fragment.
+    #[test]
+    fn a_reference_query_is_rsc_033_and_a_missing_target_has_no_fragment_question() {
+        let ids = |body: &str| -> Vec<&'static str> {
+            let ch1 = format!(
+                "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            let mut got: Vec<&'static str> = crate::validate_bytes(epub_with_ch1(&ch1))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|i| matches!(*i, "RSC-007" | "RSC-009" | "RSC-033"))
+                .collect();
+            got.sort();
+            got
+        };
+        assert_eq!(
+            ids("<p><img src=\"x.png?q=1\" alt=\"\"/></p>"),
+            ["RSC-007", "RSC-033"]
+        );
+        assert_eq!(ids("<p><img src=\"x.png#f\" alt=\"\"/></p>"), ["RSC-007"]);
+    }
+
+    /// A fragment is part of a manifest item's URL, so `ch1.xhtml#a` names no
+    /// file: RSC-001, and no duplicate of the item that names `ch1.xhtml`.
+    #[test]
+    fn a_manifest_item_with_a_fragment_names_no_file() {
+        let opf = r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="i"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="i">x</dc:identifier><dc:title>t</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta></metadata><manifest><item id="n" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c" href="ch1.xhtml" media-type="application/xhtml+xml"/><item id="z" href="ch1.xhtml#a" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#;
+        let ch1 = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>p</p></body></html>";
+        let got: Vec<&'static str> = crate::validate_bytes(epub_with_opf(Some(opf), ch1))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert!(got.contains(&"RSC-001"), "{got:?}");
+        assert!(!got.contains(&"OPF-074"), "{got:?}");
+    }
+
+    /// `CSSHandler.resolveAndRegister` answers an empty url with CSS-002 wherever
+    /// it stands, and `checkReferenceType` asks a stylesheet reference about its
+    /// fragment, so an `@import` with one is RSC-013 once its target is declared.
+    #[test]
+    fn an_empty_css_url_and_an_import_fragment_are_reported() {
+        let count = |css: &str, id: &str| {
+            crate::validate_bytes(epub_with_stylesheet(css, "font/ttf"))
+                .messages
+                .iter()
+                .filter(|m| m.id == id)
+                .count()
+        };
+        assert_eq!(count("p{background:url(\"\")}", "CSS-002"), 1);
+        assert_eq!(count("p{background:url(\"#x\")}", "CSS-002"), 0);
+        assert_eq!(count("@import url(\"missing.css#a\");", "RSC-013"), 0);
+    }
+
+    /// CSS-007 asks epubcheck's list of font types, not the Core Media Types: an
+    /// XHTML file named as a font is one and not the other. The type is looked up
+    /// by the whole URL, so a fragment finds no item
+    /// (`resources-cmt-font-svg-valid`).
+    #[test]
+    fn css_007_asks_the_font_types_by_the_whole_url() {
+        assert!(crate::opf::blessed_font_type("font/ttf", true));
+        assert!(crate::opf::blessed_font_type(
+            "application/x-font-ttf",
+            true
+        ));
+        assert!(!crate::opf::blessed_font_type(
+            "application/xhtml+xml",
+            true
+        ));
+        assert!(!crate::opf::blessed_font_type("image/svg+xml", true));
+        assert!(crate::opf::blessed_font_type(
+            "application/font-anything",
+            false
+        ));
+    }
+
+    /// `file:/x` and `file:///x` parse to one URL, as
+    /// `file-url-in-css-error`'s manifest and stylesheet rely on.
+    #[test]
+    fn two_spellings_of_a_file_url_are_one_url() {
+        assert!(crate::opf::same_file_url(
+            "file:///font.woff",
+            "file:/font.woff"
+        ));
+        assert!(!crate::opf::same_file_url("file:/a", "file:/b"));
+        assert!(!crate::opf::same_file_url("a", "a"));
     }
 
     /// A package `<link>` is strict-parsed and leak-checked like any reference.

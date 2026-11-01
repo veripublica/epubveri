@@ -32,8 +32,31 @@ RSC-007. Here they drew RSC-020 alone, or nothing at some reference sites.
 New `rule` keys: `opf.link.malformed_url`, `opf.link.leaks_container_root`,
 `opf.ncx.content_src_leaks_container_root`.
 
-On 1677 books the only change is one of epubcheck's own fixtures, which now
-reports exactly what epubcheck reports.
+**The other URL differences a probe of every reference site found are closed
+too**, all at the ids epubcheck gives:
+
+- **A remote `url()` outside `@font-face` is RSC-006**, unless the manifest
+  declares it audio, video or a font. It was RSC-008, with RSC-031 on `http:`.
+- **RSC-033 is reported on `img`, `link`, inline `<style>` and the NCX.**
+- **A missing or undeclared target draws no RSC-009 or RSC-013**: the check stops
+  at RSC-007 or RSC-008 first. An `@import` with a fragment draws RSC-013.
+- **CSS-002 is reported for any empty `url()`**, not only a font's, and an empty
+  `<link href>` is RSC-005.
+- **CSS-007 asks epubcheck's list of font types**, and not for a url with a
+  fragment. Its message now says "font Core Media Type".
+- **A manifest `href` with a fragment names no file**: RSC-001, and no longer
+  OPF-074 or a check of the file it would otherwise name.
+- **A `file:` URL** also draws RSC-006 where it is not audio, video or a font,
+  RSC-008 on an undeclared font, RSC-030 in the NCX and NAV-010 in the nav.
+
+New `rule` keys: `opf.content_document.reference_query_string`,
+`opf.content_document.link_href_empty`, `opf.ncx.content_src_query_string`,
+`opf.ncx.content_src_file_url`, `opf.manifest_item.file_url_restricted_context`,
+`css.url.query_string`, `css.url.empty`, `css.import.fragment_identifier`.
+
+On 1677 books no finding is added or removed except on one of epubcheck's own
+fixtures, which now reports exactly what epubcheck reports. On 28 real books the
+text of CSS-007 changes and nothing else.
 
 ### Changed
 
