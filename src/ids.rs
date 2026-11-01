@@ -43,7 +43,7 @@ pub const PKG_023: &str = "PKG-023"; // a validation profile was requested for a
 pub const PKG_024: &str = "PKG-024"; // uncommon file extension on an EPUB 3 book (usage)
 pub const PKG_025: &str = "PKG-025"; // a publication resource is stored inside META-INF
 pub const PKG_026: &str = "PKG-026"; // font-obfuscated resource isn't a font Core Media Type
-pub const PKG_027: &str = "PKG-027"; // a ZIP entry's file name isn't valid UTF-8
+pub const PKG_027: &str = "PKG-027"; // Java's ZipFile refuses the central directory ("invalid CEN header")
 
 // --- Resources / generic ---
 pub const RSC_001: &str = "RSC-001"; // a referenced file could not be found

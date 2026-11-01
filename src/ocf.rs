@@ -679,9 +679,9 @@ fn report_raw_header(finding: RawHeader, report: &mut Report) {
 /// This follows OpenJDK 26's `ZipFile.Source.findEND` and the end-record
 /// checks at the top of `initCEN`, read from its source; the logic has been
 /// stable for many releases, but other JDKs were not measured. A ZIP64
-/// locator ahead of the record is left to zip, as is any later failure in the
-/// central directory itself.
-fn java_end_header_error(bytes: &[u8]) -> Option<&'static str> {
+/// locator ahead of the record is left to zip. The central directory itself
+/// goes to [`java_central_directory_error`].
+fn java_end_header_error(bytes: &[u8]) -> Option<String> {
     const ENDHDR: usize = 22;
     const CENHDR: u64 = 46;
     let sig_at = |pos: u64, sig: &[u8; 4]| {
@@ -723,17 +723,124 @@ fn java_end_header_error(bytes: &[u8]) -> Option<&'static str> {
             return None;
         }
         if cen_len > end_pos {
-            return Some("invalid END header (bad central directory size)");
+            return Some("invalid END header (bad central directory size)".to_string());
         }
         if end_pos - cen_len < cen_off {
-            return Some("invalid END header (bad central directory offset)");
+            return Some("invalid END header (bad central directory offset)".to_string());
         }
         if total > cen_len / CENHDR {
-            return Some("invalid END header (total entries count too large)");
+            return Some("invalid END header (total entries count too large)".to_string());
         }
-        return None;
+        let cen = (end_pos - cen_len) as usize..end_pos as usize;
+        return java_central_directory_error(&bytes[cen]);
     }
-    Some("zip END header not found")
+    Some("zip END header not found".to_string())
+}
+
+/// What Java's `ZipFile` says about a central directory, if it refuses it, in
+/// its own words: `OCFChecker` tells PKG-027 from PKG-008 by the message, and
+/// only `invalid CEN header`, in lower case, is PKG-027.
+///
+/// zip reads an encrypted entry, a comment that is not UTF-8 and more besides,
+/// and refuses others for its own reasons, so a book could be VALID here and
+/// FATAL there. This follows `Source.initCEN`, `checkAndAddEntry` and
+/// `checkExtraFields` in OpenJDK 26, read from the source and measured on 27.
+/// Older JDKs may check less, and were not measured. epubcheck opens the
+/// archive as UTF-8 (`OCFZipResources`), so names and comments are UTF-8
+/// whatever the entry's flag says.
+fn java_central_directory_error(cen: &[u8]) -> Option<String> {
+    const CENHDR: usize = 46;
+    const ZIP64_MAGIC: u32 = 0xFFFF_FFFF;
+    const ZIP64_MAGIC_COUNT: u16 = 0xFFFF;
+    let u16_at = |p: usize| u16::from_le_bytes([cen[p], cen[p + 1]]);
+    let u32_at = |p: usize| u32::from_le_bytes([cen[p], cen[p + 1], cen[p + 2], cen[p + 3]]);
+    let mut pos = 0;
+    while pos + CENHDR <= cen.len() {
+        if cen[pos..pos + 4] != *b"PK\x01\x02" {
+            return Some("invalid CEN header (bad signature)".to_string());
+        }
+        if u16_at(pos + 8) & 1 != 0 {
+            return Some("invalid CEN header (encrypted entry)".to_string());
+        }
+        let method = u16_at(pos + 10);
+        if method != 0 && method != 8 {
+            return Some(format!(
+                "invalid CEN header (bad compression method: {method})"
+            ));
+        }
+        let (name_len, extra_len, comment_len) = (
+            usize::from(u16_at(pos + 28)),
+            usize::from(u16_at(pos + 30)),
+            usize::from(u16_at(pos + 32)),
+        );
+        let header_size = CENHDR + name_len + extra_len + comment_len;
+        if header_size > 0xFFFF || pos + header_size > cen.len() {
+            return Some("invalid CEN header (bad header size)".to_string());
+        }
+        let (csize, size, disk, offset) = (
+            u32_at(pos + 20),
+            u32_at(pos + 24),
+            u16_at(pos + 34),
+            u32_at(pos + 42),
+        );
+        let needs_zip64 = csize == ZIP64_MAGIC
+            || size == ZIP64_MAGIC
+            || offset == ZIP64_MAGIC
+            || disk == ZIP64_MAGIC_COUNT;
+        let name_at = pos + CENHDR;
+        let extra_at = name_at + name_len;
+        if extra_len == 0 && needs_zip64 {
+            return Some("Invalid CEN header (invalid zip64 extra len size)".to_string());
+        }
+        let extra_end = extra_at + extra_len;
+        let mut at = extra_at;
+        while at + 4 <= extra_end {
+            let (tag, block) = (u16_at(at), usize::from(u16_at(at + 2)));
+            at += 4;
+            if at + block > extra_end {
+                return Some(format!(
+                    "Invalid CEN header (invalid extra data field size for tag: 0x{tag:04x} at {pos})"
+                ));
+            }
+            if tag == 1 {
+                let expected = usize::from(csize == ZIP64_MAGIC) * 8
+                    + usize::from(size == ZIP64_MAGIC) * 8
+                    + usize::from(offset == ZIP64_MAGIC) * 8
+                    + usize::from(disk == ZIP64_MAGIC_COUNT) * 4;
+                if (block == 0 && needs_zip64) || (block != 0 && block != expected) {
+                    return Some(
+                        "Invalid CEN header (invalid zip64 extra data field size)".to_string(),
+                    );
+                }
+                // Only the sign is left to judge, and the size was just proved
+                // to cover each field that is present.
+                if block != 0 {
+                    let mut value = at;
+                    for (field, label) in [
+                        (size, "size"),
+                        (csize, "compressed size"),
+                        (offset, "LOC OFFSET"),
+                    ] {
+                        if field == ZIP64_MAGIC {
+                            if cen[value + 7] & 0x80 != 0 {
+                                return Some(format!("Invalid zip64 extra block {label} value"));
+                            }
+                            value += 8;
+                        }
+                    }
+                }
+            }
+            at += block;
+        }
+        let comment_at = extra_end;
+        if std::str::from_utf8(&cen[name_at..extra_at]).is_err()
+            || std::str::from_utf8(&cen[comment_at..comment_at + comment_len]).is_err()
+        {
+            return Some("invalid CEN header (bad entry name or comment)".to_string());
+        }
+        pos += header_size;
+    }
+    (pos != cen.len()).then(|| "invalid CEN header (bad header size)".to_string())
 }
 
 /// Open the ZIP and run the OCF `mimetype` checks (PKG-003/005/006/007/008).
@@ -790,7 +897,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // Java's reader is asked first: where it and zip choose different
     // end records, epubcheck has already refused the archive.
     let opened = match java_end_header_error(&bytes) {
-        Some(e) => Err(e.to_string()),
+        Some(e) => Err(e),
         None => ZipArchive::new(Cursor::new(bytes)).map_err(|e| e.to_string()),
     };
     let mut archive = match opened {
@@ -803,6 +910,18 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
                 report_raw_header(RawHeader::BadSignature, report);
             } else if let Some(finding) = raw_header {
                 report_raw_header(finding, report);
+            }
+            // `OCFChecker.checkContainerStructure` tells the two apart by the
+            // exception's message.
+            if e.starts_with("invalid CEN header") {
+                report.push_rule(
+                    PKG_027,
+                    Severity::Fatal,
+                    format!("could not read the ZIP central directory: {e}"),
+                    "ocf.container.invalid_central_directory",
+                    vec![e.clone()],
+                );
+                return None;
             }
             report.push_rule(
                 PKG_008,
@@ -1974,6 +2093,83 @@ mod unreadable_header_tests {
         assert_eq!(
             ids(broken(b"PX\x03\x04", b"mimetypeX", b"")),
             ["PKG-006", "PKG-008"]
+        );
+    }
+
+    /// A two-entry book, with `patch` applied to its second central-directory
+    /// header. What Java says is recorded from OpenJDK 27 through epubcheck 5.4.0.
+    fn java_says(patch: impl Fn(&mut Vec<u8>, usize)) -> Option<String> {
+        use std::io::Write;
+        use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+        let mut w = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        let deflated = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        w.start_file("mimetype", stored).unwrap();
+        w.write_all(b"application/epub+zip").unwrap();
+        w.start_file("a.xhtml", deflated).unwrap();
+        w.write_all(b"<a/>").unwrap();
+        let mut d = w.finish().unwrap().into_inner();
+        let second = d.windows(4).rposition(|b| b == b"PK\x01\x02").unwrap();
+        patch(&mut d, second);
+        crate::ocf::java_end_header_error(&d)
+    }
+
+    /// Grow the central directory by `data`, placed after the entry's name.
+    fn insert_after_name(d: &mut Vec<u8>, entry: usize, data: &[u8]) {
+        let name = usize::from(u16::from_le_bytes([d[entry + 28], d[entry + 29]]));
+        let at = entry + 46 + name;
+        d.splice(at..at, data.iter().copied());
+        let end = d.windows(4).rposition(|b| b == b"PK\x05\x06").unwrap();
+        let size = u32::from_le_bytes([d[end + 12], d[end + 13], d[end + 14], d[end + 15]]);
+        d[end + 12..end + 16].copy_from_slice(&(size + data.len() as u32).to_le_bytes());
+    }
+
+    #[test]
+    fn the_central_directory_is_judged_as_java_judges_it() {
+        assert_eq!(java_says(|_, _| {}), None);
+        let says = |patch: fn(&mut Vec<u8>, usize), want: &str| {
+            assert_eq!(java_says(patch).as_deref(), Some(want));
+        };
+        says(|d, e| d[e + 3] = 9, "invalid CEN header (bad signature)");
+        says(|d, e| d[e + 8] |= 1, "invalid CEN header (encrypted entry)");
+        says(
+            |d, e| d[e + 10] = 99,
+            "invalid CEN header (bad compression method: 99)",
+        );
+        says(
+            |d, e| d[e + 29] = 0xEE,
+            "invalid CEN header (bad header size)",
+        );
+        says(
+            |d, e| d[e + 46] = 0xE9,
+            "invalid CEN header (bad entry name or comment)",
+        );
+        says(
+            |d, e| {
+                d[e + 32] = 1;
+                insert_after_name(d, e, &[0xE9]);
+            },
+            "invalid CEN header (bad entry name or comment)",
+        );
+        // Capitalised, so PKG-008 and not PKG-027.
+        says(
+            |d, e| d[e + 24..e + 28].copy_from_slice(&[0xFF; 4]),
+            "Invalid CEN header (invalid zip64 extra len size)",
+        );
+        says(
+            |d, e| {
+                d[e + 30] = 9;
+                insert_after_name(d, e, &[1, 0, 5, 0, 0, 0, 0, 0, 0]);
+            },
+            "Invalid CEN header (invalid zip64 extra data field size)",
+        );
+        // A short trailing extra is ignored.
+        assert_eq!(
+            java_says(|d, e| {
+                d[e + 30] = 3;
+                insert_after_name(d, e, &[1, 2, 3]);
+            }),
+            None
         );
     }
 }

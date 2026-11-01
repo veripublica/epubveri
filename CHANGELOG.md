@@ -54,9 +54,22 @@ New `rule` keys: `opf.content_document.reference_query_string`,
 `opf.ncx.content_src_file_url`, `opf.manifest_item.file_url_restricted_context`,
 `css.url.query_string`, `css.url.empty`, `css.import.fragment_identifier`.
 
+**A central directory is now judged as epubcheck's Java reader judges it.** A book
+with an encrypted entry or an entry comment that is not UTF-8, among other damage,
+was VALID here and FATAL there.
+
+- **PKG-027 is reported for every `invalid CEN header`**: a bad signature, an
+  encrypted entry, a compression method other than stored or deflate, a wrong
+  header size, or a name or comment that is not UTF-8. These were PKG-008 here, or
+  no finding at all. Its `rule` is `ocf.container.invalid_central_directory`.
+- **A malformed ZIP64 extra field is PKG-008**, as in epubcheck.
+- This follows OpenJDK 26's source and was measured on 27. epubcheck on another JDK
+  may refuse less.
+
 On 1677 books no finding is added or removed except on one of epubcheck's own
 fixtures, which now reports exactly what epubcheck reports. On 28 real books the
-text of CSS-007 changes and nothing else.
+text of CSS-007 changes and nothing else, and on two more of epubcheck's fixtures
+the text of PKG-027.
 
 ### Changed
 

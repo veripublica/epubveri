@@ -65,7 +65,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | PKG-024 | Uncommon EPUB file extension. | Y | Y | uncommon file extension on an EPUB 3 book (usage) |
 | PKG-025 | Publication resource must not be located in the META-INF directory | Y | Y | a publication resource is stored inside META-INF |
 | PKG-026 | Obfuscated resource must be a Font Core Media Type (was declared as "%1$s" in "%2$s"). | Y | Y | font-obfuscated resource isn't a font Core Media Type |
-| PKG-027 | Could not extract EPUB ZIP content, probably due to file names not encoded in UTF-8. | Y | Y | a ZIP entry's file name isn't valid UTF-8 |
+| PKG-027 | Could not extract EPUB ZIP content, probably due to file names not encoded in UTF-8. | Y | Y | Java's ZipFile refuses the central directory ("invalid CEN header") |
 
 ### OPF  _(reviewed)_
 
