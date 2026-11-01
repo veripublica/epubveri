@@ -225,8 +225,7 @@ pub(crate) fn check(
 /// a text link normally targets a spine document, and `item.isInSpine()`
 /// exempts those before the reference question is asked at all.
 ///
-/// This is the per-source shape `CLAUDE.md` records for fragment resolution,
-/// recurring: references are collected one *source* at a time here and per
+/// This is the per-source shape fragment resolution has too: references are collected one *source* at a time here and per
 /// *reference* in epubcheck, so each new source has to be added by hand and
 /// nothing fails loudly when it is forgotten. Before adding a reference
 /// kind, ask which per-source lists it must join — and which of them it must

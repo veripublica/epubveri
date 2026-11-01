@@ -344,8 +344,8 @@ pub enum AdvisoryBasis {
     /// nothing says anything, or a specification only recommends the form the
     /// book departs from and epubcheck's verdict is the lenient one (ADV-011).
     /// These never graduate; they are ours permanently. The bolder of the two claims
-    /// — nobody is late, we are looking where no one looks — so the bar in
-    /// `CLAUDE.md` applies to them most strictly: the finding must be true
+    /// — nobody is late, we are looking where no one looks — so the bar for an
+    /// advisory applies to them most strictly: the finding must be true
     /// every time it fires, and worded as an observation rather than a verdict.
     SpecSilent,
 }

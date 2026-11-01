@@ -5,7 +5,7 @@
   Authored from scratch for epubveri (copyright the project owner; ships
   under the project's dual AGPL/commercial license). NOT derived from
   epubcheck's real Schematron files, which were read only for understanding
-  during this increment's design (see CLAUDE.md's dated notes) — same
+  during this increment's design — same
   clean-room stance as schemas/package.rng and schemas/xhtml.rng.
 
   Evaluated with epubveri's own XPath 1.0 *core* subset engine (src/xpath/) —

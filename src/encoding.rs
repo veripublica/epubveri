@@ -634,9 +634,7 @@ mod tests {
     //
     // Everything below is a recorded epubcheck answer, so `cargo test` keeps
     // what took a JVM to learn. The books are byte-for-byte the probes that
-    // were run (veripublica/epubveri/scratchpad/enc-probe/make.py); the method
-    // is in docs/DECISIONS.md, "Encoding: one sniffer, and a measured parser
-    // table". Where epubcheck reports the OPF's or container.xml's encoding
+    // were run. Where epubcheck reports the OPF's or container.xml's encoding
     // twice (it parses them twice), the expectation lists it once.
 
     const MEASURED_REJECTED: [&str; 150] = [

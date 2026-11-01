@@ -1810,12 +1810,10 @@ impl<'d, 'i> Blame<'d, 'i> {
                         // epubcheck says `elements from namespace "" are not
                         // allowed`, which is the same fact from the other end.
                         //
-                        // **Appended, never substituted.** epubsana's fixer at
-                        // `fixers.rs:1706` selects on the prefix `element `,
-                        // and rewording would silence it quietly rather than
-                        // break it loudly — the same reason the
-                        // incomplete-content branch below appends. See the
-                        // schema-violation-wording note in CLAUDE.md.
+                        // Appended, so the sentence reads the same with or
+                        // without the collision, as in the incomplete-content
+                        // branch below. A consumer dispatches on
+                        // `violation_kind`, not on this wording.
                         if collides {
                             t.push_str(&match n.tag_name().namespace() {
                                 None => " (same name, different namespace: this element is in no namespace)".to_string(),
@@ -1866,12 +1864,9 @@ impl<'d, 'i> Blame<'d, 'i> {
                         // where every content model is a short required
                         // sequence.
                         //
-                        // Appending keeps the old wording a prefix of the new
-                        // one, which matters downstream: epubsana's fixer at
-                        // `fixers.rs:1734` selects on `contains "has
-                        // incomplete content"`. Rewording would silence it
-                        // quietly rather than break it loudly — see the
-                        // schema-violation-wording note in CLAUDE.md.
+                        // Appending keeps the short wording a prefix of the
+                        // longer one. A consumer dispatches on
+                        // `violation_kind`, not on this wording.
                         //
                         // Two forms, because epubcheck has two: a model
                         // demanding one particular element next names it, and

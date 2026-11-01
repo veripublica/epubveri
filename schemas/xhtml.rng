@@ -6,7 +6,7 @@
   the project's dual AGPL/commercial license). NOT derived from epubcheck's or
   W3C's XHTML/HTML5 RELAX NG schemas.
 
-  Design (see CLAUDE.md's schema-engine notes for the fuller rationale):
+  Design:
     - STRICT on element vocabulary: only elements defined here are legal, so
       obsolete/removed HTML elements (keygen, applet, marquee, frame(set),
       isindex, basefont, center, font, acronym, tt, big, strike, ...) are

@@ -12889,8 +12889,9 @@ fn check_text(
         // stylesheet is *always* restricted, so a remote one is RSC-006 and
         // neither RSC-008 nor the `remote-resources` property applies. The
         // inline `<style>` path had this rule and this one did not, which is
-        // the per-source enumeration gap `CLAUDE.md` warns about - the same
-        // fact stated in one place and not its neighbour.
+        // a per-source enumeration gap: references are collected one source
+        // at a time, so the same fact was stated in one place and not its
+        // neighbour.
         //
         // Measured, one book each: a remote `@import` in a standalone sheet
         // draws **RSC-006 alone** from epubcheck, where we drew RSC-008 *and*

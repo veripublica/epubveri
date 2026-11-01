@@ -10,8 +10,7 @@
 //! `namespaces` table on `EvalCtx` — never against the instance document's
 //! own namespace bindings.
 //!
-//! Deliberately excluded (see this project's `CLAUDE.md` / the plan this
-//! increment shipped under): `matches()`/`tokenize()` (regex),
+//! Deliberately excluded: `matches()`/`tokenize()` (regex),
 //! `resolve-uri()`. Calling an unknown function evaluates to an empty
 //! node-set/false rather than erroring — consistent with this project's
 //! "never hard-fail" posture for schema-shaped checks.

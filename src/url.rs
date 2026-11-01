@@ -633,7 +633,8 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     // nobody who has them): a non-numeric port after `:`, and an unmatched
     // `[`/`]`, both of which epubcheck reports. Closing them means modelling
     // galimatias's port and IPv6 parsing, which is the inference this module
-    // already refuses to make — see the RSC-020 note in CLAUDE.md.
+    // already refuses to make: galimatias is not vendored, so its exact
+    // strictness can only be measured, not read.
     if host.chars().any(|c| matches!(c, '\\' | '@' | ' ')) {
         return true;
     }
