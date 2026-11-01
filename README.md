@@ -400,7 +400,7 @@ programmatically.
 crates.io (`cargo add epubveri`, or in your `Cargo.toml`):
 
 ```toml
-epubveri = "0.15"
+epubveri = "0.35"
 ```
 
 Then:
@@ -501,7 +501,7 @@ crate and publish to npm as **`@veripublica/epubveri-wasm`**. Once installed
 ```js
 import { validate } from "@veripublica/epubveri-wasm";
 const report = validate(new Uint8Array(await file.arrayBuffer()), undefined);
-console.log(report.valid, report.messages); // fully typed (.d.ts ships in the package)
+console.log(report.status, report.items); // fully typed (.d.ts ships in the package)
 ```
 
 Build it yourself with [`wasm-pack`](https://rustwasm.github.io/wasm-pack/):

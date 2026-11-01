@@ -146,9 +146,9 @@ is the residue: no code, no verdict, `items` empty, and the reason in
 
 **`summary`'s keys are the severity words themselves**, so
 `summary[item.severity]` is a direct lookup rather than something needing a
-mapping table. `error` and `warning` are always present; `fatal`, `info` and
-`usage` are omitted when zero. The counts describe what the output contains, so
-without `-u` the usage count is `0`.
+mapping table. All five are always present, including zero. The counts describe
+what the output contains, so without `-u` and without `--advisory` the usage
+count is `0`.
 
 **Absent means absent.** Every optional field is omitted rather than sent as
 `null`, so test for presence, not for a null value.
@@ -563,7 +563,7 @@ If your tool is Rust, skip the process boundary:
 
 ```toml
 [dependencies]
-epubveri = "0.17"
+epubveri = "0.35"
 ```
 
 ```rust

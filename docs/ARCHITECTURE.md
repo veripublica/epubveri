@@ -7,12 +7,9 @@ how to test and measure the project. If you just want to *use* epubveri,
 see the main [`README.md`](../README.md) instead — this document assumes
 you've read that first.
 
-If you're looking for the *reasoning* behind a specific decision (why a
-check is scoped the way it is, what real test fixture proved a rule,
-what was tried and abandoned) rather than the current shape of the code,
-[`CLAUDE.md`](../CLAUDE.md) is the place — it's a dated, increment-by-
-increment engineering log of the entire project. This document is a
-map of *what exists*; `CLAUDE.md` is the story of *why*.
+Options, API, limits and measurements are in [`AGENTS.md`](../AGENTS.md).
+This document is a map of *what exists*. For what changed between releases,
+and why, see [`CHANGELOG.md`](../CHANGELOG.md).
 
 ## The validation pipeline, in order
 
@@ -53,8 +50,8 @@ outright:
 
 Every finding, from every layer, accumulates into one flat
 [`Report`](../src/report.rs) — a list of `Message`s, each with an
-epubcheck-compatible ID (e.g. `RSC-005`), a severity (`Error` / `Warning`
-/ `Info`), a human-readable message, and an optional location. There's
+epubcheck-compatible ID (e.g. `RSC-005`), a severity (`Fatal` / `Error` /
+`Warning` / `Info` / `Usage`), a human-readable message, and an optional location. There's
 no early-exit-on-first-error; a single validation run collects
 everything it can find.
 
@@ -64,11 +61,11 @@ This repository is a **Cargo workspace** with three members:
 
 - **`epubveri`** (root `Cargo.toml`, `src/`) — the actual product: the
   library (`lib.rs`, used as a dependency by other Rust projects) and
-  the thin CLI binary (`main.rs`). This is the crate that will
-  eventually be published to crates.io, so its own dependency list is
-  kept deliberately minimal (only what the validator itself needs at
-  runtime: `zip`, `roxmltree`, `unicode-normalization`, and the sibling
-  `styloria` CSS-parser crate).
+  the thin CLI binary (`main.rs`). This is the crate published to
+  crates.io, so its own dependency list is kept deliberately minimal (only
+  what the validator itself needs at runtime: `zip`, `flate2`, `roxmltree`,
+  `unicode-normalization`, `serde`, `serde_json`, and the sibling `styloria`
+  CSS-parser crate).
 - **`harness/`** (`epubveri-harness` crate) — a development-only tool
   that measures epubveri's real-world accuracy against epubcheck's own
   test suite (see "Testing and measurement" below). It depends on
@@ -83,7 +80,7 @@ This repository is a **Cargo workspace** with three members:
   profile)` function over `epubveri`'s existing public API, so the whole
   validator runs in the browser with no JVM and no server. It's a separate
   member for the same reason `harness/` is — to keep its JS-boundary
-  dependencies (`wasm-bindgen`, `serde`, `tsify-next`) out of the core
+  dependencies (`wasm-bindgen`, `tsify`) out of the core
   crate's manifest. It adds no validation logic of its own. See "The
   WASM boundary" below.
 
@@ -196,7 +193,7 @@ has a real, active dependency relationship with epubveri. `schemora`
 didn't: epubveri never actually switched to depending on it, so it sat
 as an orphaned fork with no real user, and was archived; the XPath/
 Schematron code you see in `xpath/`/`schematron/` here is the one true
-canonical copy going forward. The lesson (recorded in `CLAUDE.md`): only
+canonical copy going forward. The lesson: only
 split code into its own repo for a *real, concrete* second consumer, not
 a theoretical one.
 
@@ -430,8 +427,7 @@ release.
 ### A worked example: adding a new check
 
 If you want to see how a check actually gets built in this project, the
-pattern (repeated dozens of times across `CLAUDE.md`'s dated history) is
-always the same:
+pattern is always the same:
 
 1. **Find the real rule.** Read the relevant section of the EPUB
    specification, and — critically — find the corresponding real test

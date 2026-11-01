@@ -16,7 +16,7 @@
 //! const report = validate(new Uint8Array(epubArrayBuffer), undefined, undefined);
 //! // pass `true` as the third argument to also run the opt-in advisory checks.
 //! // report.status === "ok" | "problems"
-//! // report.summary.errors, report.items[i].code, report.items[i].severity, ...
+//! // report.summary.error, report.items[i].code, report.items[i].severity, ...
 //! ```
 
 use std::collections::BTreeMap;

@@ -45,7 +45,7 @@ instead (`wasm-pack build . --target web`), which exposes an async `init()` you
 ```ts
 interface Report {
   status: string;        // "ok" (valid) | "problems" (error/fatal findings remain)
-  summary: { fatal?: number; error: number; warning: number; info?: number; usage?: number };
+  summary: { fatal: number; error: number; warning: number; info: number; usage: number };
   items: Item[];
 }
 interface Item {
