@@ -17,7 +17,7 @@ alternative to the official `epubcheck`.
 | Just check one book, right now | [In your browser](#option-1-in-your-browser-nothing-to-install) | None |
 | Edit books in **Sigil** or **calibre** | [A plugin for your editor](#option-2-inside-sigil-or-calibre-a-plugin-does-it-for-you) | The plugin — it fetches the rest |
 | Check books regularly on your computer | [A downloaded program](#option-3-download-the-ready-to-run-program) | None (just download) |
-| Use it inside your own code | [INTEGRATING.md](INTEGRATING.md) and the [README](../README.md) | Rust |
+| Use it inside your own code | [INTEGRATING.md](INTEGRATING.md) and [AGENTS.md](../AGENTS.md) | Rust |
 
 ---
 
@@ -362,4 +362,4 @@ letter apart because epubcheck's flag is `-v`.
   are how the tool improves.
 
 For developers who want to embed epubveri or build it from source, see the
-[README](../README.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).
+[AGENTS.md](../AGENTS.md) and [ARCHITECTURE.md](./ARCHITECTURE.md).

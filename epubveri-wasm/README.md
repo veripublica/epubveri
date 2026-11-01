@@ -167,7 +167,8 @@ Dual-licensed: **AGPL-3.0-only OR a commercial license** (`LicenseRef-veripublic
 Open-source use is free under the AGPL; closed/commercial embedders should contact the
 author for a commercial license. Both texts ship inside the npm package —
 `LICENSE` (the AGPL) and `LICENSE.COMMERCIAL.md` (what the `LicenseRef-` above
-means, and who to ask).
+means, and who to ask). `LICENSE-THIRD-PARTY.txt` holds the licences of the crates
+compiled into the package.
 
 > **The `.` in `LICENSE.COMMERCIAL.md` is load-bearing — do not rename it to a
 > hyphen.** These two files are copies of the repository root's `LICENSE` and

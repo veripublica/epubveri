@@ -179,13 +179,13 @@ unrelated conditions in one bucket. `rule` splits them —
 stable. It exists because a repair tool asked for it.
 
 **Codes are not all punctuated the same way, and that is deliberate.** Most
-are `RSC-005`, but seventeen use an underscore: `HTM_054`, `HTM_055`,
-`HTM_056`, `HTM_057`, `HTM_058`, `HTM_059`, `HTM_061`, `MED_007`, and
+are `RSC-005`, but twenty-one use an underscore: `HTM_054` through `HTM_059`,
+`HTM_060a`, `HTM_060b`, `HTM_061`, `HTM_062`, `HTM_063`, `MED_007`, and
 `MED_010` through `MED_018`. That is a typo on nobody's side — epubcheck's own
 `MessageId` declares them that way and prints `ERROR(HTM_061)`, and we mirror
 it exactly so that a toolchain grepping either tool's output finds the same
-string. **A consumer routing on a pattern therefore needs `[A-Z]+[-_][0-9]+`**;
-matching only on `-` drops those seventeen silently. Comparing the whole string
+string. **A consumer routing on a pattern therefore needs `[A-Z]+[-_][0-9]+[a-z]?`**;
+matching only on `-` drops those twenty-one silently. Comparing the whole string
 literally is always safe.
 
 **Why `element_path` matters more than `position`.** A position is a place in a
@@ -563,7 +563,7 @@ If your tool is Rust, skip the process boundary:
 
 ```toml
 [dependencies]
-epubveri = "0.35"
+epubveri = "0.36"
 ```
 
 ```rust

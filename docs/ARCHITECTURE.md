@@ -4,8 +4,7 @@ This document is for people who want to understand (or work on) the
 codebase itself: how validation actually flows through the code, what
 each module is responsible for, how the custom schema engines work, and
 how to test and measure the project. If you just want to *use* epubveri,
-see the main [`README.md`](../README.md) instead — this document assumes
-you've read that first.
+see the main [`README.md`](../README.md) instead.
 
 Options, API, limits and measurements are in [`AGENTS.md`](../AGENTS.md).
 This document is a map of *what exists*. For what changed between releases,
@@ -313,8 +312,8 @@ file *extension* should be lowercase) is filename-based and lives in
 `lib.rs::validate_path`, not `validate_bytes` — the WASM entry point only
 ever sees bytes, never a filename. Everything else is identical to the
 native library, verified by cross-checking `validate()` against the CLI:
-**474 of 474 real books produce identical message IDs and verdicts**
-(2026-09-23, 0.17.4, PKG-016 excluded on both sides).
+**every real book on the shelf produced identical message IDs and verdicts**
+when this was last run (PKG-016 excluded on both sides).
 
 The check is worth re-running after anything that touches the WASM boundary
 — the serialization types, the `Report`/`Item` shapes, or the entry point's
@@ -339,7 +338,7 @@ compared **54,514 findings across the 364 books that produced at least one**.
 scratch for this project** — not derived from, or copied out of,
 epubcheck's or W3C's own schema files. This is a deliberate provenance
 decision: it keeps the entire codebase's copyright clean for the dual
-AGPL/commercial licensing model (see the main README's license section),
+AGPL/commercial licensing model (see [`LICENSING.md`](../LICENSING.md)),
 and it also means these schemas are *not* a mechanical translation of
 epubcheck's — they were built and tuned directly against real corpus
 test fixtures (see "Testing and measurement" below), which is also why
@@ -351,7 +350,7 @@ even slightly unusual").
 
 There are three distinct layers, answering three different questions:
 
-1. **`cargo test`** (over 700 as of 0.17.4) — ordinary Rust unit
+1. **`cargo test`** — ordinary Rust unit
    tests scattered across the modules above, each testing one specific
    function or rule in isolation with a small hand-built input. Answers
    "does this one piece of logic do what I think it does."
@@ -377,8 +376,8 @@ There are three distinct layers, answering three different questions:
    clean (no false alarms), and — for the scenarios that expect an error
    *and* assert "no other errors or warnings" — what fraction we
    over-reported on. All broken down by message-ID family (`RSC-`,
-   `OPF-`, `HTM-`, ...). The first is the headline number quoted in the
-   main README.
+   `OPF-`, `HTM-`, ...). The first is the headline number quoted in
+   [`AGENTS.md`](../AGENTS.md).
 
    **Know what these numbers cannot see** (issue #26; four rules were
    found wrong in one week without any of them moving). Recall asks
