@@ -10,6 +10,31 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+**An `https:` URL without its two slashes now gets epubcheck's findings.**
+`https:x` and `https:/x` are invalid, and to epubcheck they also name a path
+inside the container, because its container root is an `https:` URL. So
+`https:/x` draws RSC-026 and, if nothing is there, RSC-007; `https:x` draws
+RSC-007. Here they drew RSC-020 alone, or nothing at some reference sites.
+
+### Fixed
+
+- **`https:x` and `https:/x` are read as references inside the container**,
+  whatever the letter case and at every reference site, so they no longer draw
+  RSC-006, RSC-008 or OPF-014 as if they were remote.
+- **A special scheme without `//` is RSC-020 at every reference site.** That
+  now includes `ftp:`, `ws:` and `wss:`, and the NCX, the package `<link>`, the
+  manifest, `<img>`, `<link>` and inline `<style>`. **A book with such a URL only
+  in its NCX or a package `<link>` was VALID here and is now INVALID, as in
+  epubcheck.** A leading space no longer hides the error.
+- **RSC-026 is reported on an NCX `<content src>` and a package `<link>`.**
+- `check_style_text` reports RSC-020 for a url that does not parse.
+
+New `rule` keys: `opf.link.malformed_url`, `opf.link.leaks_container_root`,
+`opf.ncx.content_src_leaks_container_root`.
+
+On 1677 books the only change is one of epubcheck's own fixtures, which now
+reports exactly what epubcheck reports.
+
 ## [0.35.0] - 2026-10-28
 
 **epubveri now reads a damaged ZIP the way epubcheck reads it.** On four

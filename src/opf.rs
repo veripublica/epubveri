@@ -442,6 +442,9 @@ pub fn resolve(base_dir: &str, href: &str) -> String {
     // trimmed first - and callers must not trim with `str::trim`, which also
     // strips a no-break space the parser keeps. Only the ends of the whole
     // reference: a space before a `#` is inside the path, there and here.
+    if let Some(relative) = crate::url::https_relative(href) {
+        return resolve(base_dir, &relative);
+    }
     let href = crate::url::trim_url(href);
     let href = href.split('#').next().unwrap_or(href);
     let href = href.split('?').next().unwrap_or(href);
@@ -475,6 +478,9 @@ pub fn resolve(base_dir: &str, href: &str) -> String {
 /// "intended" real path) - this is the separate, stricter check that
 /// actually flags the leak.
 pub(crate) fn href_leaks_container_root(base_dir: &str, href: &str) -> bool {
+    if let Some(relative) = crate::url::https_relative(href) {
+        return href_leaks_container_root(base_dir, &relative);
+    }
     if href.starts_with('/') {
         return true;
     }
@@ -669,6 +675,9 @@ pub(crate) fn data_url_media_type(href: &str) -> &str {
 /// `res:///` slipping between two predicates. Read that note as history: both
 /// now ask the same question of the scheme.
 pub(crate) fn is_external(href: &str) -> bool {
+    if let Some(relative) = crate::url::https_relative(href) {
+        return relative.is_empty() || relative.starts_with('#');
+    }
     let href = href.trim_matches(crate::url::is_url_edge_space);
     href.is_empty()
         || href.starts_with('#')
@@ -715,6 +724,9 @@ pub(crate) fn is_scheme_relative(href: &str) -> bool {
 /// `filter: url(#id)` or an `<a href="mailto:...">` isn't "using a
 /// remote resource" just because it isn't locally resolvable.
 pub(crate) fn is_remote_url(href: &str) -> bool {
+    if crate::url::https_relative(href).is_some() {
+        return false;
+    }
     let href = href.trim_matches(crate::url::is_url_edge_space);
     // epubcheck's rule, from `OCFContainer.isRemote`: a `data:` URL is never
     // remote, anything inside the container is not remote, and everything
@@ -3786,6 +3798,24 @@ fn check_ncx_content_fragments(
         // A fragment-only `src="#x"` keeps the old behaviour: it is non-empty,
         // so `is_external` still stops it here.
         if !src.trim_matches(crate::url::is_url_edge_space).is_empty() && is_external(src) {
+            // Remote or not, epubcheck strict-parses every reference.
+            if let Some(err) = crate::url::unit_error(src)
+                && let Some(src_attr) = attr_no_ns_node(n, "src")
+            {
+                report.push_node_attr(
+                    RSC_020,
+                    Severity::Error,
+                    format!(
+                        "NCX content src '{src}' is not a valid URL: {}",
+                        err.describe()
+                    ),
+                    ncx_path,
+                    n,
+                    src_attr,
+                    "opf.ncx.content_src_malformed_url",
+                    vec![src.to_string()],
+                );
+            }
             continue;
         }
         // RSC-020: an unencoded space in the reference itself. epubcheck
@@ -3841,6 +3871,20 @@ fn check_ncx_content_fragments(
             Some((p, f)) => (p, Some(f)),
             None => (src, None),
         };
+        if href_leaks_container_root(&dir, crate::url::trim_url(target))
+            && let Some(src_attr) = attr_no_ns_node(n, "src")
+        {
+            report.push_node_attr(
+                RSC_026,
+                Severity::Error,
+                format!("NCX content src '{src}' leaks outside the container"),
+                ncx_path,
+                n,
+                src_attr,
+                "opf.ncx.content_src_leaks_container_root",
+                vec![src.to_string()],
+            );
+        }
         let resolved = if target
             .trim_matches(crate::url::is_url_edge_space)
             .is_empty()
@@ -7440,6 +7484,34 @@ fn check_text(
             );
             continue;
         }
+        // epubcheck strict-parses a package link like any other reference.
+        if let Some(err) = crate::url::unit_error(href) {
+            report.push_node_attr(
+                RSC_020,
+                Severity::Error,
+                format!(
+                    "package link href '{href}' is not a valid URL: {}",
+                    err.describe()
+                ),
+                opf_path,
+                link,
+                href_attr,
+                "opf.link.malformed_url",
+                vec![href.to_string()],
+            );
+        }
+        if !is_external(href) && href_leaks_container_root(&base_dir, href) {
+            report.push_node_attr(
+                RSC_026,
+                Severity::Error,
+                format!("package link href '{href}' leaks outside the container"),
+                opf_path,
+                link,
+                href_attr,
+                "opf.link.leaks_container_root",
+                vec![href.to_string()],
+            );
+        }
         if is_external(href) {
             if media_type_always_required && media_type.is_none() {
                 report.push_at_pos(
@@ -10875,8 +10947,11 @@ fn check_text(
                     // SVG reaches this site instead of that one, so a
                     // `<image xlink:href="../Images/bes sevgi dili.jpg">` -
                     // a real book - drew the manifest-side RSC-020 and not
-                    // the reference-side one epubcheck also reports.
-                    if let Some(err) = crate::url::unit_error(v) {
+                    // the reference-side one epubcheck also reports. An anchor's
+                    // absolute URL is the anchor walk's, which reports once.
+                    if !(node.tag_name().name() == "a" && crate::url::is_absolute(v))
+                        && let Some(err) = crate::url::unit_error(v)
+                    {
                         report.push_node(
                             RSC_020,
                             Severity::Error,
@@ -11331,8 +11406,11 @@ fn check_text(
                     // between them; measured against 5.3.0 per book.
                     // Interior space only - leading/trailing is stripped by
                     // the URL parser and valid (`content-model-a-with-
-                    // leading-trailing-spaces-valid` in the corpus).
-                    if let Some(err) = crate::url::unit_error(v) {
+                    // leading-trailing-spaces-valid` in the corpus). An anchor's
+                    // absolute URL is the anchor walk's, which reports once.
+                    if !(tag == "a" && attr == "href" && crate::url::is_absolute(v))
+                        && let Some(err) = crate::url::unit_error(v)
+                    {
                         report.push_node(
                             RSC_020,
                             Severity::Error,
@@ -24909,6 +24987,11 @@ mod tests {
     /// play-order family in play, which is the second thing the unresolved
     /// identifier used to switch off.
     fn epub2_with_ncx(uid_present: bool, frag: &str, play_order: &str) -> Vec<u8> {
+        epub2_with_ncx_src(uid_present, &format!("ch1.xhtml{frag}"), play_order)
+    }
+
+    /// The same, with the navPoint's whole `content/@src` spelled out.
+    fn epub2_with_ncx_src(uid_present: bool, src: &str, play_order: &str) -> Vec<u8> {
         use std::io::Write;
         use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -24937,7 +25020,7 @@ mod tests {
              version=\"2005-1\"><head><meta name=\"dtb:uid\" \
              content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
              <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"{play_order}\">\
-             <navLabel><text>T</text></navLabel><content src=\"ch1.xhtml{frag}\"/></navPoint>\
+             <navLabel><text>T</text></navLabel><content src=\"{src}\"/></navPoint>\
              </navMap></ncx>"
         );
         const CH1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
@@ -29314,6 +29397,93 @@ mod tests {
             "the package document is not a manifest item"
         );
         assert_eq!(ids(&r, crate::ids::RSC_007), 0);
+    }
+
+    /// `https:x` and `https:/x` name paths inside the container, as they do
+    /// to epubcheck 5.4.0 (see `url::https_relative`): invalid, and also missing
+    /// or leaking where the path is. Probed on every reference site; the same
+    /// URL under `http:` stays remote.
+    #[test]
+    fn https_without_slashes_is_a_reference_inside_the_container() {
+        let doc = |body: &str, head: &str| {
+            format!(
+                "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title>{head}</head><body>{body}</body></html>"
+            )
+        };
+        let ids = |ch1: String| -> Vec<&'static str> {
+            let mut got: Vec<&'static str> = crate::validate_bytes(epub_with_ch1(&ch1))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|i| i.starts_with("RSC-") || *i == "OPF-014")
+                .collect();
+            got.sort();
+            got
+        };
+        let a = |h: &str| doc(&format!("<p><a href=\"{h}\">l</a></p>"), "");
+        assert_eq!(
+            ids(a("https:/x.example")),
+            ["RSC-007", "RSC-020", "RSC-026"]
+        );
+        assert_eq!(ids(a("https:x.example")), ["RSC-007", "RSC-020"]);
+        assert_eq!(ids(a("http:/x.example")), ["RSC-020"]);
+        assert_eq!(ids(a("https://x.example/")), Vec::<&str>::new());
+
+        let img = |h: &str| doc(&format!("<p><img src=\"{h}\" alt=\"\"/></p>"), "");
+        assert_eq!(ids(img("https:x.png")), ["RSC-007", "RSC-020"]);
+        assert_eq!(ids(img("https:/x.png")), ["RSC-007", "RSC-020", "RSC-026"]);
+
+        let style = doc(
+            "<p>p</p>",
+            "<style>p{background:url(\"https:x.png\")}</style>",
+        );
+        assert_eq!(ids(style), ["RSC-007", "RSC-020"]);
+    }
+
+    /// An NCX `<content src>` is strict-parsed and leak-checked too. Remote
+    /// ones used to skip the parse, so `http:/x` passed here alone.
+    #[test]
+    fn an_ncx_src_is_strict_parsed_and_leak_checked() {
+        let ids = |src: &str| -> Vec<&'static str> {
+            let mut got: Vec<&'static str> =
+                crate::validate_bytes(epub2_with_ncx_src(true, src, "1"))
+                    .messages
+                    .iter()
+                    .map(|m| m.id)
+                    .filter(|i| matches!(*i, "RSC-007" | "RSC-020" | "RSC-026"))
+                    .collect();
+            got.sort();
+            got
+        };
+        assert_eq!(ids("http:/x.example"), ["RSC-020"]);
+        assert_eq!(ids("https:x.example"), ["RSC-007", "RSC-020"]);
+        assert_eq!(ids("https:/x.example"), ["RSC-007", "RSC-020", "RSC-026"]);
+        assert_eq!(ids("/ch1.xhtml"), ["RSC-007", "RSC-026"]);
+        assert_eq!(ids("ch1.xhtml"), Vec::<&str>::new());
+    }
+
+    /// A package `<link>` is strict-parsed and leak-checked like any reference.
+    /// It reported neither, so `http:/x` passed here and failed in epubcheck.
+    #[test]
+    fn a_package_link_is_strict_parsed_and_leak_checked() {
+        let ids = |href: &str| -> Vec<&'static str> {
+            let opf = format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="i"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="i">x</dc:identifier><dc:title>t</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2026-01-01T00:00:00Z</meta><link rel="record" href="{href}" media-type="application/xml"/></metadata><manifest><item id="n" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c"/></spine></package>"#
+            );
+            let ch1 = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>p</p></body></html>";
+            let mut got: Vec<&'static str> = crate::validate_bytes(epub_with_opf(Some(&opf), ch1))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|i| matches!(*i, "RSC-020" | "RSC-026" | "RSC-007w"))
+                .collect();
+            got.sort();
+            got
+        };
+        assert_eq!(ids("http:/x.example"), ["RSC-020"]);
+        assert_eq!(ids("https:/x.example"), ["RSC-007w", "RSC-020", "RSC-026"]);
+        assert_eq!(ids("https://x.example/"), Vec::<&str>::new());
     }
 
     /// `is_remote_url` is epubcheck's predicate, not a list of known

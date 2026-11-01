@@ -539,16 +539,47 @@ pub(crate) fn trim_url(href: &str) -> &str {
     href.trim_matches(is_url_edge_space)
 }
 
+/// The relative reference an `https:` URL without its two slashes stands for,
+/// or `None` if `href` is not one.
+///
+/// The WHATWG URL parser reads a special scheme without `//` as relative when
+/// the base has the same scheme (its "special relative or authority state"),
+/// so `https:x` is `x` and `https:/x` is `/x`. EPUB leaves the container root
+/// URL to the implementation, and epubcheck's is an `https:` URL, as are the
+/// roots of EPUB 3.3's leak test (§4.2.5). So to epubcheck these name a path
+/// inside the container, not another host. Under a root of any other scheme
+/// they would be remote, which is why only `https` is read this way.
+///
+/// The string is still invalid (RSC-020); this says where it leads. A slash or
+/// backslash in both of the first two places makes an authority, so
+/// `https:/\x` and `https:///x` are absolute.
+pub(crate) fn https_relative(href: &str) -> Option<std::borrow::Cow<'_, str>> {
+    let href = trim_url(href);
+    let rest = href
+        .get(..6)?
+        .eq_ignore_ascii_case("https:")
+        .then(|| &href[6..])?;
+    let mut chars = rest.chars();
+    let (first, second) = (chars.next(), chars.next());
+    let is_slash = |c: Option<char>| matches!(c, Some('/' | '\\'));
+    if is_slash(first) && is_slash(second) {
+        return None;
+    }
+    Some(match rest.strip_prefix('\\') {
+        Some(after) => format!("/{after}").into(),
+        None => rest.into(),
+    })
+}
+
 /// Only meaningful on absolute URLs (a scheme followed by `:`) - relative
 /// and fragment-only hrefs are untouched by both checks.
 pub(crate) fn is_absolute(href: &str) -> bool {
-    scheme(href).is_some()
+    scheme(trim_url(href)).is_some()
 }
 
 /// RSC-020: the URL doesn't conform to basic URL syntax. The "must have
-/// `//` after the scheme" and "host must be sane" rules are scoped to
-/// http/https specifically (both real corpus fixtures only ever exercise
-/// those two schemes) - other schemes (`mailto:`, `data:`, `tel:`, `urn:`)
+/// `//` after the scheme" rule covers the special schemes, and the "host must
+/// be sane" rules http/https only (the ones measured) - other schemes (`mailto:`, `data:`, `tel:`, `urn:`)
 /// are legitimately non-hierarchical and never have `//` at all, so
 /// applying that rule to them uniformly would be a real false positive
 /// (confirmed via `a-href-valid.xhtml`'s `mailto:` link).
@@ -576,6 +607,15 @@ pub(crate) fn has_syntax_error(href: &str) -> bool {
     let Some((scheme, rest)) = href.split_once(':') else {
         return false;
     };
+    // The other special schemes owe the two slashes too (measured against
+    // 5.4.0, `ftp:/x` and `wss:x` are RSC-020). The host rules below were only
+    // ever measured on http and https, so they stay there.
+    if ["ftp", "ws", "wss"]
+        .iter()
+        .any(|s| scheme.eq_ignore_ascii_case(s))
+    {
+        return !rest.starts_with("//");
+    }
     if !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https") {
         return false;
     }
@@ -821,7 +861,7 @@ pub(crate) fn unit_error(href: &str) -> Option<UnitError> {
             return bad;
         }
     }
-    None
+    (is_absolute(t) && has_syntax_error(t)).then_some(UnitError::Authority)
 }
 
 fn is_noncharacter(c: char) -> bool {
@@ -839,6 +879,9 @@ pub(crate) enum UnitError {
     Control(char),
     /// A character galimatias does not allow in a URL.
     Illegal(char),
+    /// A special scheme without its two slashes, or a host the strict parse
+    /// rejects ([`has_syntax_error`]).
+    Authority,
 }
 
 impl UnitError {
@@ -846,6 +889,7 @@ impl UnitError {
     pub(crate) fn describe(self) -> String {
         match self {
             UnitError::Space => "it contains an unencoded space".to_string(),
+            UnitError::Authority => "its scheme or host is malformed".to_string(),
             UnitError::Backslash => "it contains a backslash".to_string(),
             UnitError::BadPercent => {
                 "a \"%\" is not followed by two hexadecimal digits".to_string()
@@ -864,6 +908,54 @@ impl UnitError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// epubcheck's container root is an `https:` URL, so the WHATWG parser reads
+    /// `https:` without its two slashes as relative to it. Results compared with
+    /// Node's URL parser and epubcheck 5.4.0.
+    #[test]
+    fn https_without_slashes_is_a_relative_reference() {
+        let read = |h: &str| https_relative(h).map(|c| c.into_owned());
+        assert_eq!(read("https:x.html").as_deref(), Some("x.html"));
+        assert_eq!(read("HTTPS:/x.html").as_deref(), Some("/x.html"));
+        assert_eq!(read(" https:/x.html ").as_deref(), Some("/x.html"));
+        assert_eq!(read("https:\\x.html").as_deref(), Some("/x.html"));
+        assert_eq!(read("https:").as_deref(), Some(""));
+        // Two slashes of either kind make an authority.
+        for absolute in ["https://x", "https:///x", "https:/\\x", "https:\\\\x"] {
+            assert_eq!(read(absolute), None, "{absolute}");
+        }
+        // Another scheme differs from the root's, so it stays remote.
+        for other in ["http:/x", "ftp:x", "x.html", "/x.html", "mailto:a@b"] {
+            assert_eq!(read(other), None, "{other}");
+        }
+    }
+
+    /// Every special scheme owes its two slashes, and `unit_error` is what the
+    /// reference sites ask.
+    #[test]
+    fn a_special_scheme_without_slashes_is_a_unit_error() {
+        for bad in [
+            "https:x",
+            "https:/x",
+            "http:/x",
+            "ftp:x",
+            "ws:/x",
+            "wss:x",
+            " https:/x",
+        ] {
+            assert_eq!(unit_error(bad), Some(UnitError::Authority), "{bad}");
+        }
+        for fine in [
+            "https://x.org/",
+            "ftp://x.org/a",
+            "mailto:a@b",
+            "tel:1",
+            "urn:a:b",
+            "x.html",
+        ] {
+            assert_eq!(unit_error(fine), None, "{fine}");
+        }
+    }
 
     /// RFC 3986 §3.1's ABNF, and the two readings that are not it.
     ///

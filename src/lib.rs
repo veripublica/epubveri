@@ -166,7 +166,8 @@ pub struct Options {
 /// exists, is declared, or stays inside the container depends on the
 /// document the CSS sits in, and the same text can go into documents in
 /// different folders. A url wrong on its face is still reported: a `file:`
-/// url (RSC-030), an empty `@font-face` src (CSS-002). [`style_text_urls`]
+/// url (RSC-030), an empty `@font-face` src (CSS-002), a url that does not
+/// parse (RSC-020). [`style_text_urls`]
 /// lists every url, so the caller can decide what to do with them.
 pub fn check_style_text(css: &str, label: &str, options: &Options) -> Report {
     let is_epub3 = !options

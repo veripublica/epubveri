@@ -402,6 +402,19 @@ fn check_in(
                 );
                 continue;
             }
+            // RSC-020: epubcheck strict-parses every url(). A linked sheet is
+            // asked in `opf.rs`, where the reference is registered; an inline
+            // `<style>`, or a sheet with no book around it, is asked here.
+            if (book.is_none() || !matches!(origin, CssOrigin::File { .. }))
+                && !nested
+                && let Some(err) = crate::url::unit_error(&url)
+            {
+                push(
+                    RSC_020,
+                    format!("URL '{url}' is not conforming: {}", err.describe()),
+                    "css.url.malformed_relative_url",
+                );
+            }
             if is_external(&url) {
                 continue;
             }
