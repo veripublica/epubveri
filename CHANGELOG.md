@@ -35,6 +35,11 @@ New `rule` keys: `opf.link.malformed_url`, `opf.link.leaks_container_root`,
 On 1677 books the only change is one of epubcheck's own fixtures, which now
 reports exactly what epubcheck reports.
 
+### Changed
+
+- **styloria 0.17.0 → 0.18.0.** New API only, none of it called here. Output is
+  byte-identical on 1677 books.
+
 ## [0.35.0] - 2026-10-28
 
 **epubveri now reads a damaged ZIP the way epubcheck reads it.** On four
