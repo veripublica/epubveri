@@ -71,6 +71,12 @@ fixtures, which now reports exactly what epubcheck reports. On 28 real books the
 text of CSS-007 changes and nothing else, and on two more of epubcheck's fixtures
 the text of PKG-027.
 
+### Added
+
+- **`LICENSE-THIRD-PARTY.txt` ships in every release archive and in the npm
+  package**, with the licence of each crate compiled into them. The release
+  pre-flight fails if it falls behind `Cargo.lock`.
+
 ### Changed
 
 - **styloria 0.17.0 → 0.18.0.** New API only, none of it called here. Output is

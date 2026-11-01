@@ -8,6 +8,11 @@ publish = false
 name = "corpus"
 path = "src/corpus.rs"
 
+# LICENSE-THIRD-PARTY.txt, generated from what the shipped packages link.
+[[bin]]
+name = "notices"
+path = "src/notices.rs"
+
 # Adversarial-input generator and runner. Separate binary because it shares
 # nothing with the corpus measurement: different inputs, different question.
 [[bin]]
@@ -78,6 +83,7 @@ path = "src/fuzz.rs"
 epubveri = { path = ".." }
 zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 regex = "1"
+serde_json = "1"
 
 # `getrusage(RUSAGE_CHILDREN)` for `speed`: the child's CPU time, which std
 # does not expose. Harness only; nothing shipped links it.

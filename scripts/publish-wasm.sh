@@ -55,6 +55,10 @@ echo "==> Building epubveri-wasm (bundler, @veripublica scope)"
 rm -rf epubveri-wasm/pkg
 wasm-pack build epubveri-wasm --target bundler --scope veripublica --out-name epubveri
 
+# wasm-pack writes `files` before it copies the licences, so npm would drop this.
+jq '.files += ["LICENSE-THIRD-PARTY.txt"]' epubveri-wasm/pkg/package.json > epubveri-wasm/pkg/package.json.new
+mv epubveri-wasm/pkg/package.json.new epubveri-wasm/pkg/package.json
+
 STAGE="${TMPDIR:-/tmp}/epubveri-wasm-pkg"
 rm -rf "$STAGE"
 cp -R epubveri-wasm/pkg "$STAGE"

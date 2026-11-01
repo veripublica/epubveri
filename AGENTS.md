@@ -313,6 +313,7 @@ answers a different question, so do not read one as a general result.
 | `fuzz` | Does a mutated valid book panic? | nothing |
 | `speed` | Per book, is this build slower than the previous release? | the release binary |
 | `spike` | A quick self-contained sanity check. | nothing |
+| `notices` | Regenerates `LICENSE-THIRD-PARTY.txt` from what the packages link. `--check` compares. | nothing |
 
 ```sh
 git clone --branch v5.4.0 --depth 1 https://github.com/w3c/epubcheck corpus/epubcheck
@@ -338,7 +339,10 @@ contributor agreement that would allow it does not exist yet. Issues are welcome
 and a false positive is the report the project most wants.
 
 `AGPL-3.0-only OR LicenseRef-veripublica-Commercial` (`LICENSE`,
-`LICENSE-COMMERCIAL.md`, `LICENSING.md`).
+`LICENSE-COMMERCIAL.md`, `LICENSING.md`). `LICENSE-THIRD-PARTY.txt` holds the
+licences of the crates compiled into the binaries and the npm package. After any
+dependency change, regenerate it with `--bin notices`; the pre-flight fails if it
+is stale.
 
 "epubcheck" is W3C's name. Do not reuse or imitate it in a product name, label or
 caption, and write our own message wording.

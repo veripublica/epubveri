@@ -423,6 +423,11 @@ else
   check "severities match epubcheck's DefaultSeverities" \
     cargo run --release -q -p epubveri-harness --bin severities
 
+  # Every archive and the npm package carry these. A stale list is a dependency
+  # whose licence text we ship without.
+  check "LICENSE-THIRD-PARTY.txt matches what the packages link" \
+    cargo run --release -q -p epubveri-harness --bin notices -- --check
+
   # docs/COVERAGE.md is generated; a stale one is a published document that
   # disagrees with the code.
   cargo run --release -q -p epubveri-harness --bin coverage >/dev/null 2>&1

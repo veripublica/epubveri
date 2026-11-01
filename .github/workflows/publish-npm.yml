@@ -110,6 +110,23 @@ jobs:
         if: steps.check.outputs.skip == 'false'
         run: wasm-pack build epubveri-wasm --target bundler --scope veripublica --out-name epubveri
 
+      # wasm-pack writes `files` before it copies the licences, and npm packs only
+      # what `files` names. So the third-party licences would be dropped silently;
+      # add them, then ask npm what it would really pack. Paths are read by walking
+      # the output because `npm pack --json` changed shape between npm 11 and 12.
+      - name: Add the third-party licences and check the packed list
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          pkg=epubveri-wasm/pkg
+          jq '.files += ["LICENSE-THIRD-PARTY.txt"]' "$pkg/package.json" > "$pkg/package.json.new"
+          mv "$pkg/package.json.new" "$pkg/package.json"
+          packed=$(npm pack "./$pkg" --dry-run --json)
+          for f in LICENSE LICENSE.COMMERCIAL.md LICENSE-THIRD-PARTY.txt; do
+            jq -e --arg f "$f" '[.. | objects | select(has("path")) | .path] | index($f)' <<< "$packed" > /dev/null \
+              || { echo "::error::$f is not in the packed file list"; exit 1; }
+          done
+
       # Confirm the built package is what we think it is before publishing:
       # right name and version, and no stray files. (The iCloud conflict-copy
       # check the local script needs is moot here, but a surprise in the file
