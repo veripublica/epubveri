@@ -190,7 +190,7 @@ pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has 
 // verdict. **No specification requires these; the book is still wrong.** They
 // never graduate: there is nobody to hand them to. See the module note.
 pub const ADV_001: &str = "ADV-001"; // a declaration uses a property CSS does not define (usage)
-pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not define (usage)
+pub const ADV_002: &str = "ADV-002"; // an at-rule uses a descriptor it does not define, or one EPUB 2 tells authors not to use (usage)
 // ADV-003 is reserved for the unknown-type-selector advisory (#28), deferred.
 pub const ADV_003: &str = "ADV-003"; // a CSS type selector names an element no vocabulary defines (usage, #28)
 pub const ADV_004: &str = "ADV-004"; // an EPUB 2 package document is written in EPUB 3 (usage, #62)

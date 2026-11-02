@@ -438,7 +438,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ID | Checks | epubcheck | epubveri |
 |---|---|:---:|:---:|
 | ADV-001 | a declaration uses a property CSS does not define (usage) | — | Y |
-| ADV-002 | an at-rule uses a descriptor it does not define (usage) | — | Y |
+| ADV-002 | an at-rule uses a descriptor it does not define, or one EPUB 2 tells authors not to use (usage) | — | Y |
 | ADV-003 | a CSS type selector names an element no vocabulary defines (usage, #28) | — | Y |
 | ADV-004 | an EPUB 2 package document is written in EPUB 3 (usage, #62) | — | Y |
 | ADV-009 | two sibling nav entries land on one document, no fragment (usage, MobileRead #195) | — | Y |

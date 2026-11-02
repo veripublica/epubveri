@@ -18,6 +18,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `page-margin-safety` (ADV-002). On 1677 books and 1086 test fixtures the
   output does not change.
 
+### Fixed
+
+- **`--advisory` no longer calls a CSS2 name unknown on a book that is not EPUB 3.**
+  EPUB 2 cites CSS2. `@font-face { font-variant: small-caps }`, which OPS 2.0.1 §3.4
+  says must be supported, draws no ADV-002, and a property CSS2 had, such as
+  `marker-offset: 1px`, draws no ADV-001. Another descriptor CSS2 defines, such as
+  `panose-1`, is still ADV-002, now saying that §3.4 tells authors not to use it. EPUB 3
+  books are not affected. On 1677 books and 1086 test fixtures, one book changes: the
+  text of its four `panose-1` findings.
+
 ## [0.36.0] - 2026-11-02
 
 **More books get epubcheck's verdict, on malformed URLs and damaged ZIPs.** A book

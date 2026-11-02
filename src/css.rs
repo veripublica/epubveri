@@ -33,7 +33,7 @@ use std::collections::{HashMap, HashSet};
 use styloria::{
     Block, BlockItem, ComponentValue, Declaration, DiagnosticKind, Rule, SimpleSelector, Span,
     Spanned, Stylesheet, SyntaxError, SyntaxErrorKind, Token, UrlContext, UrlForm, UrlReference,
-    validate_parsed_stylesheet,
+    ValidUnder, validate_parsed_stylesheet,
 };
 
 use crate::ids::*;
@@ -552,7 +552,7 @@ fn check_in(
             {
                 continue;
             }
-            let Some((id, rule, text, params)) = advisory_fields(&d) else {
+            let Some((id, rule, text, params)) = advisory_fields(&d, is_epub3) else {
                 continue;
             };
             report.push_full(
@@ -686,15 +686,57 @@ fn is_known_element_name(name: &str) -> bool {
     set.contains(&lower)
 }
 
+/// The `@font-face` descriptors OPS 2.0.1 §3.4 says must be supported.
+const OPS_FONT_DESCRIPTORS: [&str; 6] = [
+    "font-family",
+    "font-style",
+    "font-variant",
+    "font-weight",
+    "font-size",
+    "src",
+];
+
 /// The `(id, rule, text, params)` for one styloria advisory diagnostic. `Usage`
 /// severity and a tool-owned `ADV-*` id, so it is advisory only and never moves
 /// the verdict. Shared by the stylesheet and `style="…"` attribute paths.
 ///
-/// `None` for a diagnostic no rule reports yet.
+/// `None` for a diagnostic no rule reports yet, or for a name "unknown" would be
+/// false about.
+///
+/// **A book that is not EPUB 3 is read against CSS2,** which EPUB 2 cites. So a
+/// name CSS2 had, with a value its grammar takes, is not unknown there. That
+/// alone does not clear it: OPS 2.0.1 §3.4 lists the `@font-face` descriptors a
+/// reading system must support, and tells authors not to use any other. The text
+/// states what EPUB 2 says, so it stays true on an older book taking this path.
 fn advisory_fields(
     d: &styloria::Diagnostic,
+    is_epub3: bool,
 ) -> Option<(&'static str, &'static str, String, Vec<String>)> {
     Some(match d.kind {
+        DiagnosticKind::UnknownProperty {
+            valid_under: Some(ValidUnder::Css2),
+        } if !is_epub3 => return None,
+        DiagnosticKind::UnknownDescriptor {
+            at_rule: at_rule @ "font-face",
+            valid_under: Some(ValidUnder::Css2),
+        } if !is_epub3 => {
+            if OPS_FONT_DESCRIPTORS
+                .iter()
+                .any(|n| n.eq_ignore_ascii_case(&d.name))
+            {
+                return None;
+            }
+            (
+                ADV_002,
+                "css.descriptor.unknown",
+                format!(
+                    "'{}' is a CSS2 descriptor, but EPUB 2 (OPS 2.0.1 §3.4) tells authors not \
+                     to use it in @{at_rule}",
+                    d.name
+                ),
+                vec![d.name.clone(), at_rule.to_string()],
+            )
+        }
         DiagnosticKind::UnknownProperty { .. } => (
             ADV_001,
             "css.property.unknown",
@@ -828,7 +870,7 @@ pub(crate) fn check_style_attribute(
     // finding anchors at the file (path), not a line:column.
     if advisory {
         for d in styloria::validate_parsed_block(&items) {
-            let Some((id, rule, text, params)) = advisory_fields(&d) else {
+            let Some((id, rule, text, params)) = advisory_fields(&d, is_epub3) else {
                 continue;
             };
             report.push_at_rule(id, Severity::Usage, text, path, rule, params);
@@ -2916,6 +2958,123 @@ mod tests {
         assert_eq!(m.severity, Severity::Usage);
         assert_eq!(m.rule, Some("css.descriptor.unknown"));
         assert_eq!(m.params, vec!["color".to_string(), "font-face".to_string()]);
+    }
+
+    /// Run `check` with the advisory pass enabled, as a book that is not EPUB 3.
+    fn run_advisory_epub2(css: &str) -> Report {
+        let mut report = Report::new();
+        check(
+            css,
+            "style.css",
+            "OEBPS",
+            &empty_index(),
+            &HashSet::new(),
+            CssOrigin::File { bytes: None },
+            true,
+            false,
+            &mut report,
+        );
+        report
+    }
+
+    fn count(report: &Report, id: &str) -> usize {
+        report.messages.iter().filter(|m| m.id == id).count()
+    }
+
+    /// OPS 2.0.1 §3.4 says this descriptor must be supported, so "not recognized"
+    /// is false on an EPUB 2 book. The name is matched case-insensitively, as CSS
+    /// reads it, and the rule counts inside `@media` too.
+    #[test]
+    fn a_descriptor_ops_requires_is_not_unknown_in_epub2() {
+        for css in [
+            "@font-face { font-family: F; font-variant: small-caps }",
+            "@font-face { font-family: F; FONT-VARIANT: small-caps }",
+            "@media print { @font-face { font-family: F; font-variant: small-caps } }",
+        ] {
+            let report = run_advisory_epub2(css);
+            assert_eq!(count(&report, ADV_002), 0, "{css}: {:?}", report.messages);
+            assert_eq!(count(&run_advisory(css), ADV_002), 1, "EPUB 3: {css}");
+        }
+    }
+
+    /// CSS2 defines it and OPS 2.0.1 §3.4 tells authors not to use it, so the
+    /// finding stays with a reason that is true. Only the text differs: epubsana
+    /// reads the key and the params.
+    #[test]
+    fn a_css2_descriptor_ops_forbids_says_so_in_epub2() {
+        let css = "@font-face { font-family: F; panose-1: 1 2 3 4 5 6 7 8 9 0 }";
+        let report = run_advisory_epub2(css);
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == ADV_002)
+            .expect("ADV-002");
+        assert_eq!(m.severity, Severity::Usage);
+        assert_eq!(m.rule, Some("css.descriptor.unknown"));
+        let params = vec!["panose-1".to_string(), "font-face".to_string()];
+        assert_eq!(m.params, params);
+        assert!(m.text.contains("OPS 2.0.1"), "{}", m.text);
+        assert!(!m.text.contains("not a recognized"), "{}", m.text);
+
+        let report = run_advisory(css);
+        let m = report
+            .messages
+            .iter()
+            .find(|m| m.id == ADV_002)
+            .expect("ADV-002");
+        assert_eq!(m.rule, Some("css.descriptor.unknown"));
+        assert_eq!(m.params, params);
+        assert!(m.text.contains("not a recognized"), "EPUB 3: {}", m.text);
+    }
+
+    /// A property CSS2 had: OPS 2.0.1 §1.3.5 lets a reading system support it and
+    /// does not forbid it, so it is not unknown in EPUB 2, on either path.
+    #[test]
+    fn a_css2_property_is_not_unknown_in_epub2() {
+        let css = "p { marker-offset: 1px }";
+        assert_eq!(count(&run_advisory_epub2(css), ADV_001), 0);
+        assert_eq!(count(&run_advisory(css), ADV_001), 1);
+        let attribute = |is_epub3| {
+            let mut report = Report::new();
+            check_style_attribute(
+                "marker-offset: 1px",
+                "doc.xhtml",
+                true,
+                is_epub3,
+                &mut report,
+            );
+            count(&report, ADV_001)
+        };
+        assert_eq!(attribute(false), 0);
+        assert_eq!(attribute(true), 1);
+    }
+
+    /// CSS2 gives no reason to clear these, so they report in EPUB 2 as they do in
+    /// EPUB 3: the name is unknown, its value does not fit CSS2, or the at-rule
+    /// is not the one OPS 2.0.1 §3.4 is about.
+    #[test]
+    fn the_rest_stays_unknown_in_epub2() {
+        for (css, id) in [
+            ("p { bogus: 1 }", ADV_001),
+            ("p { marker-offset: banana }", ADV_001),
+            ("@font-face { font-family: F; nonsense: 1 }", ADV_002),
+            (
+                "@font-face { font-family: F; font-variant: banana }",
+                ADV_002,
+            ),
+            ("@page { marker-offset: 1px }", ADV_002),
+        ] {
+            let report = run_advisory_epub2(css);
+            assert_eq!(count(&report, id), 1, "{css}: {:?}", report.messages);
+            assert!(
+                report
+                    .messages
+                    .iter()
+                    .any(|m| m.text.contains("not a recognized")),
+                "{css}: {:?}",
+                report.messages
+            );
+        }
     }
 
     /// styloria 0.19 knows names the specifications define that it used to call
