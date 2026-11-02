@@ -695,13 +695,13 @@ fn advisory_fields(
     d: &styloria::Diagnostic,
 ) -> Option<(&'static str, &'static str, String, Vec<String>)> {
     Some(match d.kind {
-        DiagnosticKind::UnknownProperty => (
+        DiagnosticKind::UnknownProperty { .. } => (
             ADV_001,
             "css.property.unknown",
             format!("'{}' is not a recognized CSS property", d.name),
             vec![d.name.clone()],
         ),
-        DiagnosticKind::UnknownDescriptor { at_rule } => (
+        DiagnosticKind::UnknownDescriptor { at_rule, .. } => (
             ADV_002,
             "css.descriptor.unknown",
             format!("'{}' is not a recognized descriptor for @{at_rule}", d.name),
@@ -712,7 +712,7 @@ fn advisory_fields(
         // be true every time it fires: every Invalid on the shelf gets read by
         // hand before one ships. Until then the diagnostic has no id, no
         // text and no consumer.
-        DiagnosticKind::InvalidValue => return None,
+        DiagnosticKind::InvalidValue { .. } => return None,
         // styloria 0.16's at-rule and keyframe checks. epubcheck 5.4.0 is
         // silent on every one of them; see the ADV-019..023 note in `ids.rs`.
         DiagnosticKind::UnknownAtRule => (
@@ -2918,6 +2918,46 @@ mod tests {
         assert_eq!(m.params, vec!["color".to_string(), "font-face".to_string()]);
     }
 
+    /// styloria 0.19 knows names the specifications define that it used to call
+    /// unknown, so these stop being ADV-001 and ADV-002. Permissive, and no book
+    /// we measure shows it, so nothing else here would notice a change.
+    #[test]
+    fn names_the_specifications_define_are_not_called_unknown() {
+        for css in [
+            "p { size: 10px 2em }",
+            "p { min-size: 1px }",
+            // Known with a value that does not fit is InvalidValue, which no rule
+            // takes, so this one is silent too.
+            "p { size: landscape }",
+            "@font-face { font-family: F; font-size: 12 }",
+            "@font-face { font-family: F; font-width: condensed }",
+            "@page { page-margin-safety: none }",
+        ] {
+            let report = run_advisory(css);
+            assert!(
+                !report
+                    .messages
+                    .iter()
+                    .any(|m| m.id == ADV_001 || m.id == ADV_002),
+                "{css}: {:?}",
+                report.messages
+            );
+        }
+        let mut report = Report::new();
+        check_style_attribute("size: 10px 2em", "doc.xhtml", true, true, &mut report);
+        assert!(!report.messages.iter().any(|m| m.id == ADV_001));
+    }
+
+    /// The other half: the names no specification defines still report, so a
+    /// styloria that stopped reporting them would show here.
+    #[test]
+    fn names_nothing_defines_are_still_called_unknown() {
+        let report = run_advisory("p { bogus: 1 }");
+        assert!(report.messages.iter().any(|m| m.id == ADV_001));
+        let report = run_advisory("@font-face { font-family: F; nonsense: 1 }");
+        assert!(report.messages.iter().any(|m| m.id == ADV_002));
+    }
+
     /// styloria reports an invalid value, and no rule takes it yet: the
     /// output stays what it was until one is decided. Both halves are
     /// asserted, so a styloria that stopped reporting it would show here
@@ -2929,7 +2969,7 @@ mod tests {
         assert!(
             validate_parsed_stylesheet(&sheet)
                 .iter()
-                .any(|d| d.kind == DiagnosticKind::InvalidValue),
+                .any(|d| matches!(d.kind, DiagnosticKind::InvalidValue { .. })),
             "styloria calls `font-style: bold` invalid"
         );
         let report = run_advisory(css);
@@ -2946,7 +2986,8 @@ mod tests {
         assert!(
             validate_parsed_stylesheet(&sheet)
                 .iter()
-                .any(|d| d.kind == DiagnosticKind::InvalidValue && d.name == "font-family"),
+                .any(|d| matches!(d.kind, DiagnosticKind::InvalidValue { .. })
+                    && d.name == "font-family"),
             "styloria calls a font-family list in @font-face invalid"
         );
         let ids = |css| -> Vec<_> { run_advisory(css).messages.iter().map(|m| m.id).collect() };

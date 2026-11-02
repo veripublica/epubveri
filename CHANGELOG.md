@@ -10,6 +10,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **styloria 0.19.** Under `--advisory`, names the CSS specifications define are no
+  longer called unknown: 21 properties such as `size` (ADV-001), and `@font-face`
+  descriptors such as `font-size` and `font-width` and `@page`'s
+  `page-margin-safety` (ADV-002). On 1677 books and 1086 test fixtures the
+  output does not change.
+
 ## [0.36.0] - 2026-11-02
 
 **More books get epubcheck's verdict, on malformed URLs and damaged ZIPs.** A book
