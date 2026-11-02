@@ -552,7 +552,7 @@ fn check_in(
             {
                 continue;
             }
-            let Some((id, rule, text, params)) = advisory_fields(&d, is_epub3) else {
+            let Some((id, rule, text, params)) = advisory_fields(&d, css, is_epub3) else {
                 continue;
             };
             report.push_full(
@@ -710,6 +710,7 @@ const OPS_FONT_DESCRIPTORS: [&str; 6] = [
 /// states what EPUB 2 says, so it stays true on an older book taking this path.
 fn advisory_fields(
     d: &styloria::Diagnostic,
+    source: &str,
     is_epub3: bool,
 ) -> Option<(&'static str, &'static str, String, Vec<String>)> {
     Some(match d.kind {
@@ -749,12 +750,45 @@ fn advisory_fields(
             format!("'{}' is not a recognized descriptor for @{at_rule}", d.name),
             vec![d.name.clone(), at_rule.to_string()],
         ),
-        // **Not a rule yet, so nothing to report.** epubcheck checks no CSS
-        // value, so this can only ever be an `ADV-*`, and an advisory has to
-        // be true every time it fires: every Invalid on the shelf gets read by
-        // hand before one ships. Until then the diagnostic has no id, no
-        // text and no consumer.
-        DiagnosticKind::InvalidValue { .. } => return None,
+        // epubcheck checks no CSS value, so this can only be an `ADV-*`. The
+        // sentence has to be true of the book it is said about, hence one per
+        // reading: see the ADV-024 note in `ids.rs`.
+        DiagnosticKind::InvalidValue {
+            at_rule,
+            valid_under,
+        } => {
+            let value = source.get(d.span.start..d.span.end)?;
+            let shown = quote_css(value).unwrap_or_else(|| value.to_string());
+            let name = &d.name;
+            let place = at_rule.map_or(String::new(), |a| format!(" in @{a}"));
+            let (rule, text) = match valid_under {
+                Some(ValidUnder::Css2) if !is_epub3 => (
+                    "css.value.only_in_css2",
+                    format!(
+                        "'{shown}' is valid for '{name}'{place} in CSS2, which EPUB 2 cites, but \
+                         not in current CSS, which says to ignore the declaration"
+                    ),
+                ),
+                Some(ValidUnder::QuirksMode) => (
+                    "css.value.unitless_number",
+                    format!(
+                        "'{shown}' is not a valid value for '{name}'{place}: only quirks mode \
+                         reads a bare number as pixels, and an EPUB content document is XML, so \
+                         CSS says to ignore the declaration"
+                    ),
+                ),
+                _ => (
+                    "css.value.invalid",
+                    format!(
+                        "'{shown}' is not a valid value for '{name}'{place}, so CSS says to \
+                         ignore the declaration"
+                    ),
+                ),
+            };
+            let mut params = vec![name.clone(), value.to_string()];
+            params.extend(at_rule.map(str::to_string));
+            (ADV_024, rule, text, params)
+        }
         // styloria 0.16's at-rule and keyframe checks. epubcheck 5.4.0 is
         // silent on every one of them; see the ADV-019..023 note in `ids.rs`.
         DiagnosticKind::UnknownAtRule => (
@@ -870,7 +904,7 @@ pub(crate) fn check_style_attribute(
     // finding anchors at the file (path), not a line:column.
     if advisory {
         for d in styloria::validate_parsed_block(&items) {
-            let Some((id, rule, text, params)) = advisory_fields(&d, is_epub3) else {
+            let Some((id, rule, text, params)) = advisory_fields(&d, value, is_epub3) else {
                 continue;
             };
             report.push_at_rule(id, Severity::Usage, text, path, rule, params);
@@ -3117,43 +3151,146 @@ mod tests {
         assert!(report.messages.iter().any(|m| m.id == ADV_002));
     }
 
-    /// styloria reports an invalid value, and no rule takes it yet: the
-    /// output stays what it was until one is decided. Both halves are
-    /// asserted, so a styloria that stopped reporting it would show here
-    /// instead of passing silently.
-    #[test]
-    fn an_invalid_value_reports_nothing_yet() {
-        let css = "p { font-style: bold }";
-        let (sheet, _) = styloria::parse_stylesheet(css);
-        assert!(
-            validate_parsed_stylesheet(&sheet)
-                .iter()
-                .any(|d| matches!(d.kind, DiagnosticKind::InvalidValue { .. })),
-            "styloria calls `font-style: bold` invalid"
-        );
-        let report = run_advisory(css);
-        assert!(report.messages.is_empty(), "{:?}", report.messages);
-        let mut report = Report::new();
-        check_style_attribute("font-style: bold", "doc.xhtml", true, true, &mut report);
-        assert!(report.messages.is_empty(), "{:?}", report.messages);
+    /// The one finding of `css` under `id`.
+    fn only<'a>(report: &'a Report, id: &str) -> &'a crate::report::Message {
+        let found: Vec<_> = report.messages.iter().filter(|m| m.id == id).collect();
+        assert_eq!(found.len(), 1, "{:?}", report.messages);
+        found[0]
+    }
 
-        // A descriptor value too (styloria 0.15): `font-family` in
-        // `@font-face` takes one family, so a fallback list is invalid there.
-        // It changes nothing in the report.
-        let fallback = r#"@font-face { font-family: "Arial", sans-serif; src: url(f.woff) }"#;
-        let (sheet, _) = styloria::parse_stylesheet(fallback);
-        assert!(
-            validate_parsed_stylesheet(&sheet)
-                .iter()
-                .any(|d| matches!(d.kind, DiagnosticKind::InvalidValue { .. })
-                    && d.name == "font-family"),
-            "styloria calls a font-family list in @font-face invalid"
-        );
-        let ids = |css| -> Vec<_> { run_advisory(css).messages.iter().map(|m| m.id).collect() };
+    /// A value that fits no reading, in either kind of book: the plain sentence,
+    /// the name and the value as written, and no at-rule param.
+    #[test]
+    fn an_invalid_value_is_adv024() {
+        for report in [
+            run_advisory("p { font-style: bold }"),
+            run_advisory_epub2("p { font-style: bold }"),
+        ] {
+            let m = only(&report, ADV_024);
+            assert_eq!(m.severity, Severity::Usage);
+            assert_eq!(m.rule, Some("css.value.invalid"));
+            assert_eq!(m.params, vec!["font-style", "bold"]);
+            assert!(m.text.contains("is not a valid value"), "{}", m.text);
+            assert!(m.position.is_some());
+        }
+    }
+
+    /// Off by default, like every `ADV-*`: it can never reach the verdict.
+    #[test]
+    fn adv024_is_opt_in() {
+        let findings = run("p { font-style: bold }", &empty_index());
+        assert!(!findings.iter().any(|id| id.starts_with("ADV-")));
+        let mut report = Report::new();
+        check_style_attribute("font-style: bold", "doc.xhtml", false, true, &mut report);
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+    }
+
+    /// `params[1]` is the file's bytes while the text folds and cuts them.
+    #[test]
+    fn adv024_params_carry_what_the_file_holds() {
+        let long = "x".repeat(70);
+        let css = format!("p {{ font-style: {long} }}");
+        let report = run_advisory(&css);
+        let m = only(&report, ADV_024);
+        assert_eq!(m.params[1], long);
+        assert!(m.text.contains('…'), "{}", m.text);
+        // The value without `!important`, as styloria's span gives it.
+        let report = run_advisory("p { font-style:\n  bold  !important }");
+        assert_eq!(only(&report, ADV_024).params[1], "bold");
+    }
+
+    /// epubsana has to tell a descriptor from a property without parsing: an
+    /// at-rule's name is `params[2]`, and only there is there a third.
+    #[test]
+    fn adv024_says_which_at_rule() {
+        let css = r#"@font-face { font-family: "Arial", sans-serif; src: url(f.woff) }"#;
+        let report = run_advisory(css);
+        let m = only(&report, ADV_024);
+        assert_eq!(m.rule, Some("css.value.invalid"));
         assert_eq!(
-            ids(fallback),
-            ids(r#"@font-face { font-family: "Arial"; src: url(f.woff) }"#)
+            m.params,
+            vec!["font-family", r#""Arial", sans-serif"#, "font-face"]
         );
+        assert!(m.text.contains("in @font-face"), "{}", m.text);
+
+        let report = run_advisory("@media print { p { font-style: bold } }");
+        assert_eq!(only(&report, ADV_024).params.len(), 2);
+    }
+
+    /// CSS2 takes it and EPUB 2 cites CSS2, so "not valid" would be false on an
+    /// EPUB 2 book, and is true on an EPUB 3 one.
+    #[test]
+    fn a_value_only_css2_takes_says_so_in_epub2() {
+        let css = r#"@font-face { font-family: "Arial", sans-serif; src: url(f.woff) }"#;
+        let report = run_advisory_epub2(css);
+        let m = only(&report, ADV_024);
+        assert_eq!(m.rule, Some("css.value.only_in_css2"));
+        assert_eq!(
+            m.params,
+            vec!["font-family", r#""Arial", sans-serif"#, "font-face"]
+        );
+        assert!(m.text.contains("is valid for"), "{}", m.text);
+        assert!(!m.text.contains("not a valid value"), "{}", m.text);
+
+        let report = run_advisory_epub2("p { display: compact }");
+        assert_eq!(only(&report, ADV_024).rule, Some("css.value.only_in_css2"));
+        let report = run_advisory("p { display: compact }");
+        assert_eq!(only(&report, ADV_024).rule, Some("css.value.invalid"));
+    }
+
+    /// No CSS level takes it outside quirks mode, so the book's version does not
+    /// matter, and both paths say why it is not simply a typo.
+    #[test]
+    fn a_unitless_number_names_quirks_mode() {
+        for report in [
+            run_advisory("p { width: 150 }"),
+            run_advisory_epub2("p { width: 150 }"),
+        ] {
+            let m = only(&report, ADV_024);
+            assert_eq!(m.rule, Some("css.value.unitless_number"));
+            assert_eq!(m.params, vec!["width", "150"]);
+            assert!(m.text.contains("quirks mode"), "{}", m.text);
+        }
+        // On no quirk's list, so plainly invalid.
+        let report = run_advisory("p { border-collapse: 0 }");
+        assert_eq!(only(&report, ADV_024).rule, Some("css.value.invalid"));
+        // Zero needs no unit.
+        assert_eq!(count(&run_advisory("p { width: 0 }"), ADV_024), 0);
+    }
+
+    /// The `style` attribute path reads the value out of the attribute, and
+    /// anchors at the file like the rest of that path.
+    #[test]
+    fn adv024_reads_a_style_attribute() {
+        let mut report = Report::new();
+        check_style_attribute(
+            "color: red; width: 150",
+            "doc.xhtml",
+            true,
+            true,
+            &mut report,
+        );
+        let m = only(&report, ADV_024);
+        assert_eq!(m.rule, Some("css.value.unitless_number"));
+        assert_eq!(m.params, vec!["width", "150"]);
+    }
+
+    /// What must stay silent: a value styloria cannot judge is Unknown, never
+    /// Invalid, and a vendor's or a custom property's value is not ours to read.
+    #[test]
+    fn adv024_stays_silent_on_what_it_cannot_judge() {
+        for css in [
+            "p { font-style: italic }",
+            "p { width: var(--w) }",
+            "p { width: calc(1px + 2%) }",
+            "p { --x: bold 150 nonsense }",
+            "p { -webkit-hyphens: nonsense }",
+            "p { color: inherit; width: initial; height: unset }",
+            "p { display: -webkit-box }",
+            "@supports (width: 150) { p { color: red } }",
+        ] {
+            assert_eq!(count(&run_advisory(css), ADV_024), 0, "{css}");
+        }
     }
 
     #[test]

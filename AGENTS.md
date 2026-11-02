@@ -131,7 +131,7 @@ Both are `usage` severity and never affect the verdict or the exit code.
 - **`ADV-*` (`spec-silent`):** no specification requires it, but the book is
   probably wrong. These never graduate.
   - ADV-001 to ADV-004, ADV-009 to ADV-012, ADV-014, ADV-015, ADV-017,
-    ADV-019 to ADV-023.
+    ADV-019 to ADV-024.
 
 `src/ids.rs` has what each one means.
 

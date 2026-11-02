@@ -10,7 +10,26 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`--advisory` now checks CSS values (ADV-024).** A declaration whose value its
+  property or descriptor cannot take, such as `font-style: bold`, is reported, in
+  stylesheets, `<style>` and `style` attributes. It is advisory only and never touches
+  the verdict: epubcheck checks no CSS value, and EPUB asks nothing of one. A value
+  styloria cannot judge is never reported.
+  - Three rule keys, because one sentence would be false on some books.
+    `css.value.only_in_css2` is a value CSS2 takes and current CSS does not, on a book
+    that is not EPUB 3, such as a family list in `@font-face`: EPUB 2 cites CSS2.
+    `css.value.unitless_number` is a bare number such as `width: 150`, which only quirks
+    mode reads. `css.value.invalid` is the rest.
+  - `params` is the name and the value as written, plus the at-rule's name in one.
+  - On 1677 books and 1086 test fixtures it reports 3550 findings in 116 books, 2542 of
+    them in one book. Firefox 158 and WebKit reject all 283 distinct values. Without
+    `--advisory`, the output does not change.
+
 ### Changed
+
+- The release archives now include `LICENSING.md`.
 
 - **styloria 0.19.** Under `--advisory`, names the CSS specifications define are no
   longer called unknown: 21 properties such as `size` (ADV-001), and `@font-face`

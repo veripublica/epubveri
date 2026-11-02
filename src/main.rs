@@ -100,7 +100,9 @@ OPTIONS:
                                      at-rule like @medai, an @import or
                                      @namespace after rules it must precede,
                                      a media feature like min-widht, an
-                                     !important inside a keyframe.
+                                     !important inside a keyframe, a value a
+                                     property cannot take like font-style:
+                                     bold.
                            Off by default; neither ever affects the verdict or
                            the exit code.
     -V, --version          Print epubveri <version> to stdout and exit 0.
@@ -928,7 +930,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            18,
+            19,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

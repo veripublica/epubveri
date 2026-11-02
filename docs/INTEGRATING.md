@@ -403,7 +403,8 @@ epubveri-aarch64-unknown-linux-musl.tar.gz  epubveri-aarch64-pc-windows-msvc.zip
 it will be added alongside these, not substituted for one of them. Each archive
 contains a single directory of the same name, holding the executable
 (`epubveri`, or `epubveri.exe` on Windows) plus `LICENSE`,
-`LICENSE-COMMERCIAL.md`, `LICENSE-THIRD-PARTY.txt` and `README.md`.
+`LICENSE-COMMERCIAL.md`, `LICENSE-THIRD-PARTY.txt`, `LICENSING.md` and
+`README.md`.
 
 **If you are choosing one archive per platform automatically, choose `musl`
 on Linux.** The `musl` builds are static: they run on any distribution, with no

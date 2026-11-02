@@ -245,6 +245,16 @@ pub const ADV_020: &str = "ADV-020"; // an at-rule no CSS specification defines 
 pub const ADV_021: &str = "ADV-021"; // an @import or @namespace after rules it must precede (usage)
 pub const ADV_022: &str = "ADV-022"; // a media feature no specification defines (usage)
 pub const ADV_023: &str = "ADV-023"; // an !important declaration inside a keyframe (usage)
+// ADV-024 is the same shape for a value: CSS says to ignore a declaration whose
+// value fits no grammar, epubcheck checks no value, and EPUB 3.3 asks nothing of
+// one, so no verdict can hang on it. Owner's decision 2026-11-02, and it is the
+// whole of styloria's grammar, not a keyword slice. styloria reports only a
+// certain Invalid, never an Unknown. Its one id has three rule keys, because
+// "not valid" is false on an EPUB 2 book for a value CSS2 takes, and EPUB 2 cites
+// CSS2: `css.value.only_in_css2` says that, `css.value.unitless_number` names
+// quirks mode, `css.value.invalid` is the rest. `params` is `[name, value]`, plus
+// the at-rule's name when in one. See docs/DECISIONS.md.
+pub const ADV_024: &str = "ADV-024"; // a declaration value its property or descriptor cannot take (usage)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

@@ -33,7 +33,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
 | **All** | **214** | **3** | **1** | **105** | **218** | **217/218** | |
 
-**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 20 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 21 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -453,6 +453,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-021 | an @import or @namespace after rules it must precede (usage) | — | Y |
 | ADV-022 | a media feature no specification defines (usage) | — | Y |
 | ADV-023 | an !important declaration inside a keyframe (usage) | — | Y |
+| ADV-024 | a declaration value its property or descriptor cannot take (usage) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
 | LIM-002 | the publication exceeds ocf::MAX_BOOK_BYTES in total; a resource was not checked | — | Y |
 | NEXT-016 | EPUB 3.3 §4.3.3: the mimetype entry is compressed (usage) | — | Y |

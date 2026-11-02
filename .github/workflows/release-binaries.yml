@@ -86,7 +86,7 @@ jobs:
           stage="epubveri-${{ matrix.target }}"
           mkdir "$stage"
           cp "target/${{ matrix.target }}/release/epubveri" "$stage/"
-          cp LICENSE LICENSE-COMMERCIAL.md LICENSE-THIRD-PARTY.txt README.md "$stage/"
+          cp LICENSE LICENSE-COMMERCIAL.md LICENSE-THIRD-PARTY.txt LICENSING.md README.md "$stage/"
           tar czf "$stage.tar.gz" "$stage"
 
       - name: Package (Windows)
@@ -96,7 +96,7 @@ jobs:
           $stage = "epubveri-${{ matrix.target }}"
           New-Item -ItemType Directory -Path $stage | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/epubveri.exe" $stage/
-          Copy-Item LICENSE, LICENSE-COMMERCIAL.md, LICENSE-THIRD-PARTY.txt, README.md $stage/
+          Copy-Item LICENSE, LICENSE-COMMERCIAL.md, LICENSE-THIRD-PARTY.txt, LICENSING.md, README.md $stage/
           Compress-Archive -Path $stage -DestinationPath "$stage.zip"
 
       - name: Upload artifact
