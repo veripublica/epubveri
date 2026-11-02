@@ -10,6 +10,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-02
+
+**`--advisory` now checks CSS values.** `font-style: bold`, `width: 150` and the like are
+reported as ADV-024, with a sentence that is true of the book's version: a family list in
+`@font-face` is valid in the CSS2 that EPUB 2 cites, so on such a book it says that. Nothing
+changes without `--advisory`, and no verdict changes with it. The Sigil and calibre plugins
+always pass `--advisory`, so their users will see these findings as advisory ones.
+
 ### Added
 
 - **`--advisory` now checks CSS values (ADV-024).** A declaration whose value its
