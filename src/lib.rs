@@ -1225,7 +1225,7 @@ mod tests {
 
     /// The headline regression: before the guard this aborted the whole
     /// process with `fatal runtime error: stack overflow` from a ~1 KB
-    /// file, inside roxmltree's mutually-recursive tokenizer. A Rust stack
+    /// file, inside what was then roxmltree's recursive tokenizer. A Rust stack
     /// overflow is `SIGABRT`, so an embedder could not catch it - the test
     /// passing at all *is* the assertion (a regression kills the runner,
     /// it does not fail an assert).
@@ -1259,12 +1259,11 @@ mod tests {
     }
 
     /// The deepest document the guard accepts must also *validate* on the
-    /// stack a test thread gets. In a debug build roxmltree's recursion costs
-    /// ~20x more stack, and a 2 MiB thread aborted at 125 levels (found by
+    /// stack a test thread gets. In a debug build roxmltree 0.21.1's recursion
+    /// cost ~20x more stack, and a 2 MiB thread aborted at 125 levels (found by
     /// epubsana, 2026-09-23): under the limit, and invisible here because no
-    /// test parsed anything that deep. It passes because the workspace
-    /// manifest sets `[profile.dev.package.roxmltree] opt-level = 1`; an
-    /// abort here means that line is gone.
+    /// test parsed anything that deep. An abort here means a walk of the tree
+    /// has grown to cost more than this thread has.
     #[test]
     fn the_deepest_accepted_document_validates_on_a_test_thread() {
         // html > body > divs > p is `depth + 3` levels: exactly the limit.

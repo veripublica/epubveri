@@ -10,6 +10,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **zip 9.3.0, with the floor raised to it.** It carries security merges that no advisory
+  lists yet. On our read path the verdict and every finding are unchanged: compared with the
+  previous build, byte for byte, on 562 real books and on crafted ZIP and XML files.
+- **roxmltree 0.21.2, with the floor raised to it.** Element content is now parsed without
+  recursing per level. The 256-element nesting limit stays, because the rest of validation
+  still walks the tree. A debug build no longer needs `[profile.dev.package.roxmltree]
+  opt-level = 1`: a 256-level document validates on a 2 MiB test thread without it, so a
+  consumer can drop those two lines.
+- wasm-bindgen 0.2.130 and its js-sys and web-sys, crc32fast 1.5.4 and log 0.4.35 in the lock.
+
 ## [0.37.0] - 2026-11-02
 
 **`--advisory` now checks CSS values.** `font-style: bold`, `width: 150` and the like are

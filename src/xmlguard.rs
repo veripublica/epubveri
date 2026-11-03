@@ -29,14 +29,15 @@ use std::ops::Range;
 
 /// The deepest element nesting [`check`] accepts.
 ///
-/// roxmltree's tokenizer is mutually recursive (`parse_element` ↔
-/// `parse_content`), so nesting costs stack in proportion to depth and a
-/// deeply-nested document aborts the process. In Rust a stack overflow is
-/// `SIGABRT`, **not** a catchable panic - `catch_unwind` cannot save an
-/// embedder, so this has to be refused before the parser sees it.
+/// Nesting costs stack in proportion to depth in everything that walks the
+/// tree, and a deeply-nested document aborts the process. In Rust a stack
+/// overflow is `SIGABRT`, **not** a catchable panic - `catch_unwind` cannot save
+/// an embedder, so this has to be refused before the tree exists. roxmltree's
+/// own tokenizer was recursive up to 0.21.1 and has not been since 0.21.2.
 ///
 /// Where the whole validation (parse, RELAX NG, Schematron) first fails,
-/// measured 2026-09-23 on a build with this limit lifted, nested `<div>` and
+/// measured 2026-09-23 with roxmltree 0.21.1 on a build with this limit lifted,
+/// nested `<div>` and
 /// nested tables alike: the 8 MiB main thread survives 8,000 and aborts at
 /// 12,000; a 2 MiB thread (what an embedder's worker runs) survives 2,000
 /// and aborts at 3,000; the WASM package under node's default stack
@@ -51,15 +52,12 @@ use std::ops::Range;
 /// exactly 256. It bounds our own recursion and roxmltree's; a caller that
 /// walks the parsed tree recursively on a smaller stack needs its own margin.
 ///
-/// **All of that is for an optimised build.** Unoptimised, roxmltree spends
-/// roughly twenty times the stack per level: a debug build on a 2 MiB thread,
-/// which is what `cargo test` gives each test, survives 124 levels and aborts
-/// at 125 (found by epubsana, measured here 2026-09-23). Optimising that one
-/// crate is enough — with `[profile.dev.package.roxmltree] opt-level = 1` in
-/// the root manifest, a 256-level document validates fully on the same thread.
-/// Cargo ignores a dependency's profile settings, so a consumer running
-/// epubveri in a debug build has to add those two lines itself; this
-/// workspace has them, and a test fails loudly without them.
+/// **All of that is for an optimised build.** Unoptimised, roxmltree 0.21.1
+/// spent roughly twenty times the stack per level: a debug build on a 2 MiB
+/// thread, which is what `cargo test` gives each test, survived 124 levels and
+/// aborted at 125 (found by epubsana, measured here 2026-09-23). With 0.21.2 a
+/// 256-level document validates fully on the same thread with no profile
+/// override (measured 2026-11-04), and a test holds that.
 pub const MAX_XML_DEPTH: usize = 256;
 
 /// How many bytes of text [`check`] lets entity references add to a

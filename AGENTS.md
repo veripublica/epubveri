@@ -168,14 +168,6 @@ their meaning without telling the consumers:
 The `rule`, `location`, `params` and `violation_kind` fields are part of the
 same contract. Positions and wording are not.
 
-A consumer running a debug build, `cargo test` included, needs this in its root
-manifest. Without it a 256-level document overflows the 2 MiB test thread:
-
-```toml
-[profile.dev.package.roxmltree]
-opt-level = 1
-```
-
 ## WebAssembly
 
 `epubveri-wasm/` holds the bindings and publishes `@veripublica/epubveri-wasm`.

@@ -32,14 +32,15 @@ path = "src/main.rs"
 
 [dependencies]
 # Pure-Rust only (no C deps): zip's "deflate" feature uses flate2 -> zlib-rs (Rust),
-# bzip2/zstd (C backends) are left disabled via default-features = false. The floor
-# is 9.0.4: zip < 9.0.0 carries RUSTSEC-2026-0367/0368/0369, and 9.0.0-9.0.2 are
-# yanked.
-zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
+# bzip2/zstd (C backends) are left disabled via default-features = false. zip < 9.0.0
+# carries RUSTSEC-2026-0367/0368/0369, and 9.0.0-9.0.2 are yanked. The floor is 9.3.0
+# for the security merges in 9.2.x, which no advisory lists yet (2026-11-03).
+zip = { version = "9.3.0", default-features = false, features = ["deflate"] }
 # Inflates stored and deflated entries from their raw bytes (`Ocf::inflate_index`),
 # on the same pure-Rust backend zip's "deflate" feature selects.
 flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
-roxmltree = "0.21"
+# 0.21.2 is the first that parses element content without recursing per level.
+roxmltree = "0.21.2"
 unicode-normalization = "0.1"
 # CSS parsing: the sibling styloria crate (github.com/veripublica/styloria),
 # consumed from crates.io like any external user (dogfooding). For local
@@ -59,13 +60,3 @@ serde_json = "1"
 # shrink the binary from 3.1 MB to 2.5 MB; that is the only case for it.
 [profile.release]
 opt-level = 2
-
-# roxmltree parses recursively, and unoptimised each level costs ~20x the
-# stack: on the 2 MiB thread `cargo test` gives every test, a debug build
-# aborted at 125 levels, under `xmlguard::MAX_XML_DEPTH` (256). opt-level 1 for
-# this one crate is enough for a 256-level document to validate there
-# (measured 2026-09-23; found by epubsana). It applies to this workspace only:
-# Cargo ignores a dependency's profile settings, so a consumer that runs
-# epubveri in a debug build needs the same two lines in its own manifest.
-[profile.dev.package.roxmltree]
-opt-level = 1

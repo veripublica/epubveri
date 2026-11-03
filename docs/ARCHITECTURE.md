@@ -267,7 +267,7 @@ never touches the corresponding module at all.
   consumes it. `docs/INTEGRATING.md` documents it field by field.
 - **`xmlguard.rs`** — the limits a text must meet before it is handed to
   `roxmltree`, checked by a scan of the raw bytes: nesting depth (the
-  parser recurses, and a stack overflow aborts the process), entity
+  tree walks recurse, and a stack overflow aborts the process), entity
   expansion, attributes on one element (the parser's duplicate check is
   quadratic) and elements in one document (memory is spent per element).
   Public, because a program that parses EPUB content itself needs the
