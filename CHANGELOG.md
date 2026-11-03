@@ -10,6 +10,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.37.1] - 2026-11-04
+
+**Dependency updates, with no change to any report.** zip moves to 9.3.0, which carries
+security merges no advisory lists yet, though the checks they add are in parts of zip we do
+not call. A consumer can drop `[profile.dev.package.roxmltree]` from its manifest.
+
 ### Changed
 
 - **zip 9.3.0, with the floor raised to it.** It carries security merges that no advisory
