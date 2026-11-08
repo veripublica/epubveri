@@ -36,6 +36,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
 
 [[package]]
+name = "constant_time_eq"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9eb6feb175df65d0a3ccd3e73484e940d0ac664e8034f0519fd49a93db3071d9"
+dependencies = [
+ "rustversion",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -87,9 +96,9 @@ checksum = "00d174d5400e5e8fd687ad1049e2f578285fa914201b1af7e8b112a4546bd826"
 
 [[package]]
 name = "flate2"
-version = "1.1.10"
+version = "1.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e634e2e0ebac1ee034020da1ca582e17ffe4e0f5e985823721e168928136dcb"
+checksum = "626d4928326b646e70f65ed36fc7cf9f206bdb68a0019ee7c6b4709da4e084c4"
 dependencies = [
  "zlib-rs",
 ]
@@ -509,11 +518,32 @@ dependencies = [
 ]
 
 [[package]]
-name = "zip"
-version = "9.3.0"
+name = "zeroize"
+version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eaeb7f16d2605b49aef586996ded29e65642fab7259a3077e537351df6d80426"
+checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
 dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "zip"
+version = "9.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df3845f734baabdd02de353a20580e30ceccd03897def44a4eb8e9654992e294"
+dependencies = [
+ "constant_time_eq",
  "crc32fast",
  "flate2",
  "getrandom",
@@ -523,6 +553,7 @@ dependencies = [
  "nix",
  "typed-path",
  "windows-sys",
+ "zeroize",
  "zopfli",
 ]
 

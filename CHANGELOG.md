@@ -40,6 +40,11 @@ epubcheck".
   because epubcheck 5.4.0 does not read urls there.
 - **`--advisory` now holds only `ADV-*`.** The `NEXT-*` family is closed, and
   `advisory_basis` is only ever `spec-silent`.
+- **zip 9.4.2 and flate2 1.1.11 in the lockfile.** zip now always links
+  `zeroize` and `constant_time_eq`, which it uses only for encrypted entries;
+  epubveri opens none. The floor stays at zip 9.3.0. Measured on 801 books (the
+  shelf, W3C's conformance publications, epub-test-books): identical output
+  before and after.
 
 ### Added
 

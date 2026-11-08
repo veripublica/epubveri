@@ -413,7 +413,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            19,
+            17,
             "the advisory families changed ({declared:?}) — describe the new \
              check in README.md's \"Advisory checks\" section, then update \
              this count"
@@ -425,8 +425,8 @@ mod tests {
             .nth(1)
             .expect("README documents the advisory checks");
         assert!(
-            section.contains("`NEXT-*`") && section.contains("`ADV-*`") && section.len() > 200,
-            "the advisory section should still describe both families"
+            section.contains("`ADV-*`") && section.len() > 200,
+            "the advisory section should still describe the ADV-* family"
         );
         // ...and the signature block has to keep every parameter the binding
         // takes. `epub_version` was absent from it for four releases.
