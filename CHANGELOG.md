@@ -10,6 +10,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-08
+
+**Where the specification and epubcheck disagree, epubveri now follows the
+specification, so a book that passes epubcheck can fail here.** That happens
+in four listed cases: a compressed `mimetype`, a bad `url()` inside another
+CSS function, a file that must never be encrypted, and the reverse, other
+namespaces in `container.xml`, which epubcheck rejects and the specification
+allows. `container.xml` is also validated against its schema for the first
+time. Each difference is listed in AGENTS.md, "Known differences from
+epubcheck".
+
 ### Changed
 
 - **A book that passes epubcheck can now fail epubveri.** The verdict follows
