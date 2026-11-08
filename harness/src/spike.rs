@@ -211,8 +211,8 @@ fn fixtures() -> Vec<Fixture> {
     fx.push(("valid.epub", None, base_entries()));
 
     // OCF / mimetype
-    // Valid by default: a compressed mimetype is NEXT-016, behind --advisory.
-    fx.push(("mimetype_compressed.epub", None, {
+    // EPUB 3.3 §4.3.3: a compressed mimetype is PKG-007 (epubcheck misses it).
+    fx.push(("mimetype_compressed.epub", Some("PKG-007"), {
         let mut e = base_entries();
         e[0].2 = CompressionMethod::Deflated;
         e

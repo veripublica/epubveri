@@ -259,11 +259,18 @@ changes the verdict**:
 | | Default | What it adds |
 |---|---|---|
 | `-u`, `--usage` | **off** | The `USAGE` lines described above. |
-| `--advisory` | **off** | Extra opinions epubcheck does not hold, in two families: `NEXT-*` (a specification requires it and epubcheck hasn't implemented it yet — today a compressed `mimetype` file, and a CSS `url()` inside another function such as `image-set()` whose target is missing or undeclared; epubcheck 5.4.0 implemented the four EPUB 3.4 rules that were here first, and epubveri 0.15.0 moved them to its ids) and `ADV-*` (no specification requires it, but the book is still probably wrong). |
+| `--advisory` | **off** | `ADV-*` findings: no specification requires it, but the book is still probably wrong. |
 
-Everything else you see is a finding epubcheck would report too. **A book that
-passes epubcheck passes epubveri**, with or without either switch — `--advisory`
-findings never affect `VALID`/`INVALID` or the exit code, by permanent design.
+`--advisory` findings never affect `VALID`/`INVALID` or the exit code, by
+permanent design.
+
+**The verdict follows the specification, not epubcheck.** Almost always the two
+agree. Where they do not, epubveri does what the specification says, in both
+directions: it accepts what the specification allows even if epubcheck rejects
+it, and it reports what the specification forbids even if epubcheck does not.
+So a book can pass epubcheck and fail epubveri. Every such case is listed, with
+its clause and the upstream issue, in
+[AGENTS.md](../AGENTS.md#known-differences-from-epubcheck).
 
 ### The order the findings come in
 

@@ -13,7 +13,7 @@ pub mod pattern;
 
 pub use derive::{
     AttributeFault, Blame, ElementFault, Grammar, validate_misplaced_element, validate_node,
-    validate_node_report, validate_xml,
+    validate_node_report, validate_node_report_in_namespaces, validate_xml,
 };
 pub use load::{load, load_from_define};
 pub use pattern::*;

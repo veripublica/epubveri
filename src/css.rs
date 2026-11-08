@@ -390,9 +390,7 @@ fn check_in(
             let url = u.node;
             let pos = origin.position(css, u.span.start);
             let mut push = |id, text: String, rule| {
-                push_url_finding(
-                    report, nested, advisory, id, text, css_path, pos, rule, &url,
-                )
+                push_url_finding(report, id, text, css_path, pos, rule, &url)
             };
             if is_file_url_str(&url) {
                 push(
@@ -569,14 +567,13 @@ fn check_in(
 }
 
 /// One finding about a stylesheet url, an error. A url inside another
-/// function (`nested`) is one epubcheck never reads, so the finding is ours
-/// alone and goes behind `--advisory` as NEXT-018, keeping its rule key and
-/// params for the tools that dispatch on them.
-#[allow(clippy::too_many_arguments)]
+/// function, such as `image-set(url(a.png) 1x)`, is one epubcheck 5.4.0 never
+/// reads (`CSSHandler.registerURIs` looks only at a declaration's top-level
+/// components), but CSS reads it and EPUB 3.3 asks the same of every resource
+/// a publication uses, so it gets the same id. It was NEXT-018 behind
+/// `--advisory` from 0.31.0 until the spec-decides rule (2026-11-08).
 fn push_url_finding(
     report: &mut Report,
-    nested: bool,
-    advisory: bool,
     id: &'static str,
     text: String,
     path: &str,
@@ -585,19 +582,7 @@ fn push_url_finding(
     url: &str,
 ) {
     let params = vec![url.to_string()];
-    if !nested {
-        report.push_full(id, Severity::Error, text, path, pos, rule, params);
-    } else if advisory {
-        report.push_full(
-            NEXT_018,
-            Severity::Usage,
-            format!("{text} (it sits inside another function, where epubcheck does not read urls; {id} once it does)"),
-            path,
-            pos,
-            rule,
-            params,
-        );
-    }
+    report.push_full(id, Severity::Error, text, path, pos, rule, params);
 }
 
 /// Is this a name a type selector could legitimately match?
@@ -1950,8 +1935,9 @@ struct SheetUrl {
 pub(crate) struct CssUrl {
     pub(crate) url: String,
     /// Inside another function (`image-set(url(a.png) 1x)`), which epubcheck
-    /// never reads: it counts as a use of the resource, and nothing in the
-    /// default output may be asked of it (NEXT-018).
+    /// never reads. It counts as a use of the resource, and `css::check` asks
+    /// of its target as of any url; `opf.rs` does not yet ask of its form
+    /// (RSC-020/032/033, OPF-014), which is still epubcheck's reading.
     pub(crate) nested: bool,
 }
 
@@ -2427,24 +2413,24 @@ mod tests {
         assert_eq!(url_list("p { background: url(ok.png) }"), vec!["ok.png"]);
     }
 
-    /// NEXT-018: a url inside another function, which epubcheck never reads.
-    /// Silent by default, its own finding under `--advisory` with the rule key
-    /// the top-level url gets; still a use of the resource. Probe set
-    /// 2026-10-21_css-reach, m4.
+    /// A url inside another function, which epubcheck 5.4.0 never reads, is
+    /// the same RSC-007 as at the top level, flag or not; still a use of the
+    /// resource. Probe set 2026-10-21_css-reach, m4. (NEXT-018 until
+    /// 2026-11-08.)
     #[test]
-    fn a_url_inside_another_function_is_next_018() {
+    fn a_url_inside_another_function_is_checked_like_any_other() {
         let css = "p { background-image: image-set(url(missing.png) 1x) }";
-        assert!(run(css, &empty_index()).is_empty());
-        let report = run_advisory(css);
-        let found: Vec<_> = report
-            .messages
-            .iter()
-            .map(|m| (m.id, m.severity, m.rule))
-            .collect();
-        assert_eq!(
-            found,
-            [(NEXT_018, Severity::Usage, Some("css.url.missing_resource"))]
-        );
+        for report in [run_report(css, &empty_index()), run_advisory(css)] {
+            let found: Vec<_> = report
+                .messages
+                .iter()
+                .map(|m| (m.id, m.severity, m.rule))
+                .collect();
+            assert_eq!(
+                found,
+                [(RSC_007, Severity::Error, Some("css.url.missing_resource"))]
+            );
+        }
         // The same url at the top level is the plain error, flag or not.
         let top = run_advisory("p { background-image: url(missing.png) }");
         assert_eq!(top.messages.len(), 1);

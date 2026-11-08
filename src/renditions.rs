@@ -15,7 +15,7 @@ use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 use crate::xmlext::XmlTokens;
 
-const RENDITION_NS: &str = "http://www.idpf.org/2013/rendition";
+pub(crate) const RENDITION_NS: &str = "http://www.idpf.org/2013/rendition";
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
 const CONTAINER: &str = "META-INF/container.xml";
 const METADATA: &str = "META-INF/metadata.xml";
@@ -116,11 +116,7 @@ fn check_metadata_file(ocf: &mut Ocf, report: &mut Report) {
 /// `rootfiles` drew a warning epubcheck does not give, and a single-rendition
 /// book drew none of the four.
 pub(crate) fn check_container_rules(doc: &roxmltree::Document, report: &mut Report) {
-    let in_container = |n: &roxmltree::Node, name: &str| {
-        n.is_element()
-            && n.tag_name().name() == name
-            && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
-    };
+    let in_container = crate::ocf::is_container_element;
     for rf in doc.descendants().filter(|n| in_container(n, "rootfile")) {
         if let Some(modes) = rf.attribute((RENDITION_NS, "accessMode")) {
             // `count(tokenize(@a, $mode)) = 3`: the mode occurs exactly twice.
@@ -207,9 +203,7 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
     // such links are `check_container_rules`'; a mapping document of the
     // wrong media type is not graded as XHTML, as before.
     let Some(link) = container_doc.descendants().find(|n| {
-        n.is_element()
-            && n.tag_name().name() == "link"
-            && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
+        crate::ocf::is_container_element(n, "link")
             && is_mapping_rel(n)
             && n.attr_no_ns("href").is_some_and(|h| !h.trim().is_empty())
     }) else {

@@ -286,6 +286,10 @@ pub struct Ocf {
     /// Container paths named by a `<CipherReference>` in
     /// `META-INF/encryption.xml`, filled in by [`check_encryption`].
     encrypted: std::collections::HashSet<String>,
+    /// The subset of `encrypted` that no file may be: reported once as
+    /// SPEC-001 by [`check_encryption`], so the PKG-026 check in `opf.rs`
+    /// does not report the same `CipherReference` a second time.
+    pub(crate) encrypted_forbidden: std::collections::HashSet<String>,
     /// While set, every read answers `None` without touching the archive or
     /// the budget. Set for the package-only pass over a malformed package
     /// document's well-formed prefix (`opf::check`), which must ask what the
@@ -294,7 +298,7 @@ pub struct Ocf {
     /// nothing else asked for.
     reads_suspended: bool,
     /// The first entry is `mimetype` and is not stored, for
-    /// [`check_advisories`].
+    /// [`check_mimetype_stored`].
     mimetype_compressed: bool,
 }
 
@@ -550,13 +554,18 @@ impl Ocf {
 /// Report every entry [`Ocf::read`] refused for exceeding
 /// [`MAX_ENTRY_BYTES`]. Called once per run, after the checks, so a
 /// resource read from several places is still reported once.
-/// The container's `--advisory` checks; the caller asks only with the flag on.
-pub(crate) fn check_advisories(ocf: &Ocf, report: &mut Report) {
+/// PKG-007 for a compressed `mimetype`. EPUB 3.3 § 4.3.3: "EPUB creators MUST
+/// NOT compress or encrypt the `mimetype` file" (OCF 2.0.1 says the same).
+/// epubcheck 5.4.0 never asks: it compares the inflated contents only. This
+/// was NEXT-016 behind `--advisory` from 0.29.0; the spec decides the verdict
+/// since 2026-11-08, so it is an error again, under the id whose own message
+/// names the fault. The rule key is unchanged.
+pub(crate) fn check_mimetype_stored(ocf: &Ocf, report: &mut Report) {
     if ocf.mimetype_compressed {
         report.push_at_rule(
-            NEXT_016,
-            Severity::Usage,
-            "the 'mimetype' file is compressed; EPUB 3.3 requires it to be stored uncompressed",
+            PKG_007,
+            Severity::Error,
+            "the 'mimetype' file is compressed; it must be stored uncompressed",
             "mimetype",
             "ocf.mimetype.not_stored_uncompressed",
             Vec::new(),
@@ -1109,7 +1118,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // mimetype: must be the first entry, exact contents, and its ZIP header
     // must carry no extra field (needed so tools can sniff the media type at
     // a fixed byte offset without a full ZIP parse). That it is stored is
-    // NEXT-016, behind `--advisory` (see `check_advisories`).
+    // asked by `check_mimetype_stored`.
     //
     // "First" is judged on the file's leading bytes, as epubcheck judges it,
     // not on the central directory's order. The two part when the directory
@@ -1134,6 +1143,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         read_cache: HashMap::new(),
         read_cache_bytes: 0,
         encrypted: std::collections::HashSet::new(),
+        encrypted_forbidden: std::collections::HashSet::new(),
         reads_suspended: false,
         mimetype_compressed: first_name == "mimetype" && !first_stored,
     };
@@ -1280,10 +1290,16 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     paths
 }
 
-fn is_container_element(n: &roxmltree::Node, name: &str) -> bool {
+/// A container-namespace element named `name` that survives the removal both
+/// specifications apply first: an element from another namespace goes with
+/// its whole content (EPUB 3.3 § 4.2.6.3.1, OCF 2.0.1 § 3.5.1), so a
+/// `rootfile` or `link` inside one is not there.
+pub(crate) fn is_container_element(n: &roxmltree::Node, name: &str) -> bool {
     n.is_element()
         && n.tag_name().name() == name
-        && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
+        && n.ancestors()
+            .filter(|a| a.is_element())
+            .all(|a| a.tag_name().namespace() == Some(crate::rng::CONTAINER_NS))
 }
 
 /// RSC-005: `META-INF/container.xml` against `schemas/container.rng`, entered
@@ -1319,8 +1335,21 @@ pub fn check_container_schema(
     let Ok(doc) = parse_xml(&text) else {
         return;
     };
+    // Both specifications validate the file only after removing elements and
+    // attributes from other namespaces (EPUB 3.3 § 4.2.6.3.1, OCF 2.0.1
+    // § 3.5.1). epubcheck 5.4.0 validates them as written and reports RSC-005
+    // (w3c/epubcheck#1754); we follow the specifications. At EPUB 3 the
+    // rendition namespace is part of the definition, since Multiple-Rendition
+    // Publications extends the container with it; at EPUB 2 it is another
+    // namespace like any other.
     let grammar = crate::rng::container_grammar(epub3);
-    for blame in crate::rng::validate_node_report(&grammar, doc.root_element()) {
+    let keep: &[&str] = if epub3 {
+        &[crate::rng::CONTAINER_NS, crate::renditions::RENDITION_NS]
+    } else {
+        &[crate::rng::CONTAINER_NS]
+    };
+    for blame in crate::rng::validate_node_report_in_namespaces(&grammar, doc.root_element(), keep)
+    {
         crate::opf::push_blame(report, CONTAINER, "ocf.container.schema_violation", &blame);
     }
     if epub3 {
@@ -1332,7 +1361,26 @@ pub fn check_container_schema(
 /// RSC-004 (INFO) — its content is not validated. Also checks the file's
 /// own content model: root element name, `Id`-attribute uniqueness, and
 /// (IDPF compression extension) `Compression` attribute validity.
-pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>) {
+/// The files no publication may encrypt, besides its package documents:
+/// EPUB 3.3 § 4.2.6.3.2.1 ("EPUB creators MUST NOT encrypt the following
+/// files") and OCF 2.0.1 § 3.5.2 ("The following files MUST never be
+/// encrypted") give the same list.
+const NEVER_ENCRYPTED: [&str; 7] = [
+    "mimetype",
+    "META-INF/container.xml",
+    "META-INF/encryption.xml",
+    "META-INF/manifest.xml",
+    "META-INF/metadata.xml",
+    "META-INF/rights.xml",
+    "META-INF/signatures.xml",
+];
+
+pub fn check_encryption(
+    ocf: &mut Ocf,
+    opf_paths: &[String],
+    report: &mut Report,
+    epub3: Option<bool>,
+) {
     const ENC: &str = "META-INF/encryption.xml";
     if !ocf.has(ENC) {
         return;
@@ -1342,6 +1390,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
     // borrows a document parsed out of these bytes, so `ocf` cannot be
     // mutated while it is alive.
     let mut encrypted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut forbidden: std::collections::HashSet<String> = std::collections::HashSet::new();
     let text = crate::encoding::decode_xml(&bytes);
     let doc = match parse_xml(&text) {
         Ok(d) => d,
@@ -1360,7 +1409,14 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
         }
     };
 
-    if doc.root_element().tag_name().name() != "encryption" {
+    // A wrong root is one schema error, and the schema reads no further. But
+    // it does not stop epubcheck reading the entries: `OCFEncryptionFileHandler`
+    // looks for `CipherReference` under `EncryptedData` whatever the root is
+    // called, so the files stay encrypted (RSC-004, RSC-007, OBS-001 as
+    // usual). Returning here left them unregistered, and their content was
+    // parsed as if plain.
+    let root_ok = doc.root_element().tag_name().name() == "encryption";
+    if !root_ok {
         report.push_node(
             RSC_005,
             Severity::Error,
@@ -1370,10 +1426,9 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
             "ocf.encryption.wrong_root_element",
             Vec::new(),
         );
-        return;
+    } else {
+        check_encryption_children(doc.root_element(), report, epub3);
     }
-
-    check_encryption_children(doc.root_element(), report, epub3);
 
     // Every `Id` attribute (on any element - EncryptedKey/EncryptedData/...)
     // must be unique across the whole document; a value shared by more
@@ -1406,7 +1461,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
     // OriginalLength="<non-negative integer>"/>.
     for n in doc
         .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "Compression")
+        .filter(|n| root_ok && n.is_element() && n.tag_name().name() == "Compression")
     {
         if let Some(method) = n.attr_no_ns("Method")
             && !matches!(method, "0" | "8")
@@ -1494,6 +1549,23 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
             // has to decline these entries during every pass, and one of the
             // renditions of a multi-rendition book may not declare a file the
             // other does.
+            // SPEC-001: a file the specifications say no publication may
+            // encrypt. epubcheck 5.4.0 has no check for this list; its PKG-026
+            // asks only of manifest items, and none of these is one.
+            if NEVER_ENCRYPTED.contains(&resolved.as_str())
+                || opf_paths.iter().any(|p| crate::opf::nfc(p) == resolved)
+            {
+                report.push_node(
+                    crate::ids::SPEC_001,
+                    Severity::Error,
+                    format!("'{uri}' is declared encrypted, and this file must never be encrypted"),
+                    ENC,
+                    n,
+                    "ocf.encryption.forbidden_file",
+                    vec![uri.to_string()],
+                );
+                forbidden.insert(resolved.clone());
+            }
             encrypted.insert(resolved.clone());
         }
     }
@@ -1502,6 +1574,7 @@ pub fn check_encryption(ocf: &mut Ocf, report: &mut Report, epub3: Option<bool>)
     // `<CipherReference>` was read, so there is nothing to lose on those
     // paths.
     ocf.encrypted = encrypted;
+    ocf.encrypted_forbidden = forbidden;
 }
 
 /// The content model of `<encryption>`: one or more `EncryptedData` or
@@ -2347,6 +2420,111 @@ mod container_document_tests {
             &format!("<rootfiles>{bad_layout}</rootfiles>"),
         );
         assert_eq!(ids("3.0", &x, &[]), ["RSC-005"]);
+    }
+
+    /// EPUB 3.3 § 4.2.6.3.1 and OCF 2.0.1 § 3.5.1: valid "after removing all
+    /// elements and attributes from other namespaces". epubcheck 5.4.0
+    /// reports these as RSC-005 (w3c/epubcheck#1754); we follow the
+    /// specifications. An unqualified unknown attribute is still an error, a
+    /// foreign element's content goes with it, and at EPUB 2 the rendition
+    /// namespace is just another namespace.
+    #[test]
+    fn elements_and_attributes_from_other_namespaces_are_removed_first() {
+        const EXT: &str = "xmlns:ext=\"https://example.org/ns\"";
+        let rf_ext = RF.replace("/>", " ext:note=\"x\" xml:lang=\"en\"/>");
+        for body in [
+            format!("<rootfiles>{RF}</rootfiles><ext:note>hi<rootfile/></ext:note>"),
+            format!("<ext:note/><rootfiles ext:note=\"x\">{RF}<ext:n/></rootfiles>"),
+            format!("<rootfiles>{rf_ext}</rootfiles>"),
+            format!(
+                "<rootfiles>{RF}</rootfiles><links><ext:x/>\
+                     <link href=\"x.xml\" rel=\"r\" ext:a=\"1\"/></links>"
+            ),
+        ] {
+            let x = c(&format!("version=\"1.0\" ext:v=\"1\" {EXT}"), &body);
+            assert_eq!(ids("3.0", &x, &[]), Vec::<&str>::new(), "{body}");
+            if !body.contains("<links>") {
+                assert_eq!(ids("2.0", &x, &[]), Vec::<&str>::new(), "{body}");
+            }
+        }
+        let x = c(
+            &format!("version=\"1.0\" {EXT}"),
+            &format!(
+                "<rootfiles><ext:n/>{}</rootfiles>",
+                RF.replace("/>", " foo=\"x\"/>")
+            ),
+        );
+        assert_eq!(ids("3.0", &x, &[]), ["RSC-005"]);
+        let bad_layout = RF.replace("/>", " rendition:layout=\"bogus\"/>");
+        let x = c(
+            "version=\"1.0\"",
+            &format!("<rootfiles>{bad_layout}</rootfiles>"),
+        );
+        assert_eq!(ids("2.0", &x, &[]), Vec::<&str>::new());
+        // Removing the only rootfile leaves nothing to validate: the package
+        // document is never found.
+        let x = c(
+            &format!("version=\"1.0\" {EXT}"),
+            "<rootfiles><ext:rootfile full-path=\"OEBPS/p.opf\" \
+             media-type=\"application/oebps-package+xml\"/></rootfiles>",
+        );
+        assert_eq!(ids("3.0", &x, &[]), ["RSC-003"]);
+    }
+
+    /// SPEC-001: EPUB 3.3 § 4.2.6.3.2.1 and OCF 2.0.1 § 3.5.2 forbid
+    /// encrypting `mimetype`, the six `META-INF` files and the package
+    /// document; epubcheck 5.4.0 checks none of them. One finding per entry:
+    /// an obfuscated package document is SPEC-001, not PKG-026 as well. A
+    /// missing target stays RSC-007 alone.
+    #[test]
+    fn a_file_that_must_never_be_encrypted_is_spec_001() {
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        let enc = |uri: &str, alg: &str| {
+            format!(
+                "<?xml version=\"1.0\"?><encryption \
+                 xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\" \
+                 xmlns:enc=\"http://www.w3.org/2001/04/xmlenc#\">\
+                 <enc:EncryptedData><enc:EncryptionMethod Algorithm=\"{alg}\"/>\
+                 <enc:CipherData><enc:CipherReference URI=\"{uri}\"/></enc:CipherData>\
+                 </enc:EncryptedData></encryption>"
+            )
+        };
+        const OBF: &str = "http://www.idpf.org/2008/embedding";
+        const AES: &str = "http://www.w3.org/2001/04/xmlenc#aes256-cbc";
+        for version in ["3.0", "2.0"] {
+            for uri in ["OEBPS/p.opf", "META-INF/container.xml", "mimetype"] {
+                let e = enc(uri, AES);
+                let got = ids(version, &x, &[("META-INF/encryption.xml", &e)]);
+                assert_eq!(got, ["SPEC-001"], "{version} {uri}");
+            }
+            let e = enc("OEBPS/p.opf", OBF);
+            let got = ids(version, &x, &[("META-INF/encryption.xml", &e)]);
+            assert!(got.contains(&"SPEC-001"), "{version} {got:?}");
+            assert!(!got.contains(&"PKG-026"), "{version} {got:?}");
+            let e = enc("META-INF/rights.xml", AES);
+            let got = ids(version, &x, &[("META-INF/encryption.xml", &e)]);
+            assert_eq!(got, ["RSC-007"], "{version}");
+        }
+    }
+
+    /// A wrong root is one RSC-005, and the entries are still read, as
+    /// epubcheck's handler does: the font stays encrypted (RSC-004) and is not
+    /// parsed.
+    #[test]
+    fn a_wrong_encryption_root_still_registers_its_entries() {
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        let e = "<?xml version=\"1.0\"?><encryptions \
+                 xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\" \
+                 xmlns:enc=\"http://www.w3.org/2001/04/xmlenc#\">\
+                 <enc:EncryptedData><enc:EncryptionMethod \
+                 Algorithm=\"http://www.w3.org/2001/04/xmlenc#aes256-cbc\"/>\
+                 <enc:CipherData><enc:CipherReference URI=\"OEBPS/c.xhtml\"/>\
+                 </enc:CipherData></enc:EncryptedData></encryptions>";
+        let book = book("3.0", &x, &[("META-INF/encryption.xml", e)]);
+        let r = crate::validate_bytes(book);
+        let mut got: Vec<_> = r.messages.iter().map(|m| m.id).collect();
+        got.sort();
+        assert_eq!(got, ["RSC-004", "RSC-005"], "{:?}", r.messages);
     }
 
     /// The handler reads only container-namespace rootfiles, so a document in

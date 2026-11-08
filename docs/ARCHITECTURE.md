@@ -229,9 +229,9 @@ a theoretical one.
   epubveri decides what to report: malformed declarations, empty
   `@font-face` rules, `url()` resource resolution, encoding checks.
   Where styloria reaches further than epubcheck reads (a `url()` inside
-  another function, a class name inside `:not()`), the default output
-  follows epubcheck; the nested `url()` findings are reported only
-  under `--advisory`, as NEXT-018.
+  another function, a class name inside `:not()`), what a specification
+  requires is reported anyway: a nested `url()`'s target is checked
+  like any other.
 
 ### Optional extension specifications
 

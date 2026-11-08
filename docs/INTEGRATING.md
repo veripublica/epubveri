@@ -115,7 +115,7 @@ counter?*, so treat it as a completeness marker rather than a "something is
 hidden" flag, and note two consequences:
 
 - **A named severity may be partly present.** With `--advisory` and without
-  `-u`, epubveri emits its `ADV-*`/`NEXT-*` findings (usage-severity, exempt by
+  `-u`, epubveri emits its `ADV-*` findings (usage-severity, exempt by
   ID) while withholding every other usage finding — so `"usage": 1` and
   `"suppressed": ["usage"]` appear together and both are true.
 - **It is not a counter.** Never sum a summary's values.
@@ -170,7 +170,7 @@ away from it.
 | `data.params` | **yes** | The values interpolated into `message`, so you can re-render it. |
 | `data.element_path` | **yes** | XPath-style path to the offending node, with `data.namespaces` giving the prefix bindings needed to resolve it. This is the robust way to find the thing a finding is about. |
 | `data.violation_kind` | **yes** | On schema violations: which of six kinds of fault this is, without parsing the message. |
-| `data.advisory_basis` | **yes** | On `ADV-*`/`NEXT-*` findings only: `spec-ahead` or `spec-silent`. See the note on `--advisory` below. |
+| `data.advisory_basis` | **yes** | On `ADV-*` findings only: `spec-silent`. (`spec-ahead`, the old `NEXT-*` family, is no longer emitted.) See the note on `--advisory` below. |
 
 **Why `rule` matters.** `RSC-005` is epubcheck's catch-all for "the document
 does not match its schema", so keying behaviour on `code` alone puts a hundred
@@ -233,15 +233,22 @@ words meant for a person.
 permanent design, so you can offer it as a display option without worrying that
 it will start failing your users' books. See [USAGE.md](USAGE.md#the-two-switches-and-what-is-on-by-default).
 
-**Two families arrive under that flag and they make different claims**, so
-separate them if you surface them at all. `NEXT-*` is *spec-ahead*: a published
-specification requires it and epubcheck has not implemented it yet, so it
-becomes an ordinary error the day epubcheck catches up — worth showing to
-someone preparing a book to last. `ADV-*` is *spec-silent*: no specification
-requires it (at most one recommends it), but the book is still likely wrong,
-and these never become errors. Key on the prefix, or read `data.advisory_basis`, which carries
-`spec-ahead` or `spec-silent` so you need not know our prefix convention at
-all.
+**One family arrives under that flag:** `ADV-*`, *spec-silent*. No
+specification requires it (at most one recommends it), but the book is still
+likely wrong, and these never become errors. Key on the prefix, or on
+`data.advisory_basis`. There used to be a second family, `NEXT-*`
+(*spec-ahead*): rules a specification requires that epubcheck had not
+implemented. Since the verdict follows the specification, those are reported
+without the flag, under epubcheck's ids where it has one and under `SPEC-*`
+where it does not, so `NEXT-*` and `spec-ahead` are no longer emitted. A host
+that still lists them keeps working.
+
+**`SPEC-*` is not an advisory.** It is an ordinary finding for a rule a
+specification states with MUST or MUST NOT, which epubcheck does not check and
+has no id for. It arrives without any flag, at the severity the keyword gives
+(an error for MUST), counts toward the verdict and the exit code, and carries
+no `advisory_basis`. Treat it like any other id. Each one is listed, with its
+clause, in [AGENTS.md](../AGENTS.md#known-differences-from-epubcheck).
 
 ## Showing findings to a person
 

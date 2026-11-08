@@ -60,7 +60,7 @@ interface Item {
     params: string[];            // the values interpolated into `message`
     element_path?: string;       // XPath-style path to the offending node
     namespaces: Map<string, string>;  // bindings that resolve element_path — a Map, see below
-    advisory_basis?: string;     // "spec-ahead" | "spec-silent", on ADV-*/NEXT-* only
+    advisory_basis?: string;     // "spec-silent", on ADV-* only
     violation_kind?: string;     // which of six kinds a schema violation is
   };
 }
@@ -83,15 +83,8 @@ function version(): string;
 ### Advisory checks
 
 `advisory` mirrors the CLI `--advisory` flag: pass `true` to also emit the opt-in findings
-epubcheck has no verdict on, in two families, both at `usage` severity:
+no specification requires, at `usage` severity:
 
-- **`NEXT-*`** — a published specification requires it and epubcheck has not implemented it
-  yet, so it becomes an ordinary error the day it catches up: a `mimetype` file that is
-  compressed (EPUB 3.3 forbids it; epubcheck compares only its contents), and a CSS `url()`
-  inside another function, such as `image-set()`, whose target is missing, undeclared,
-  outside the container or a `file:` URL (epubcheck does not read urls there). The four EPUB 3.4
-  rules that were here first graduated when epubcheck 5.4.0 implemented them, and now report
-  under its own ids without this flag.
 - **`ADV-*`** — no specification requires it, but the book is still probably wrong
   (unknown CSS property and descriptor names, a type selector naming no known element, an
   EPUB 2 package written in EPUB 3, two navigation entries landing on one document, an
@@ -106,9 +99,13 @@ epubcheck has no verdict on, in two families, both at `usage` severity:
   value its property cannot take such as `font-style: bold`).
 
 It is **off by default**: leaving the argument out, or passing `false`/`undefined`,
-produces a byte-identical report, so existing two-argument callers are unaffected. Neither
-family ever affects `status` — a book that passes epubcheck passes epubveri, with or
-without the flag.
+produces a byte-identical report, so existing two-argument callers are unaffected. It never
+affects `status`.
+
+The verdict follows the specification, not epubcheck, so in a few listed cases a book that
+passes epubcheck does not pass epubveri (a compressed `mimetype`, for one). The list, with
+each clause, is in
+[AGENTS.md](https://github.com/veripublica/epubveri/blob/main/AGENTS.md#known-differences-from-epubcheck).
 
 ### Forcing a version
 

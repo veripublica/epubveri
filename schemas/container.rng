@@ -19,11 +19,12 @@
   - `container-epub2`: OCF 2.0.1 fixes neither the value of `version` nor the
     value of `media-type` in its schema, and has no `links`.
 
-  Elements and attributes from other namespaces are NOT allowed: epubcheck
-  attaches them to the container section and rejects them (RSC-005), and we
-  match it (measured on 5.4.0; whether EPUB 3.3's "after removing all
-  elements and attributes from other namespaces" should change that is a
-  question for upstream, not one this file settles alone).
+  Elements and attributes from other namespaces do not appear here because
+  they never reach the grammar: EPUB 3.3 § 4.2.6.3.1 and OCF 2.0.1 § 3.5.1
+  validate the file "after removing all elements and attributes from other
+  namespaces", and `rng::validate_node_report_in_namespaces` skips them (the
+  rendition namespace is kept at EPUB 3). epubcheck 5.4.0 validates them as
+  written and reports RSC-005 (w3c/epubcheck#1754).
 
   SCOPE. Structure only. Which rootfiles count as package documents (namespace
   and trimmed media type), RSC-003, OPF-016/017 and the Multiple-Rendition

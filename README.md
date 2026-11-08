@@ -20,7 +20,7 @@ ERROR RSC-007: reference to a resource missing from the publication: 'cover.jpg'
 
 It's also a Rust crate, and an npm package called `@veripublica/epubveri-wasm`.
 
-epubveri never changes your book. Its sibling [epubsana](https://github.com/veripublica/epubsana) repairs the problems that have one right answer. If a retailer asks for epubcheck by name, run epubcheck as well: I work to match its verdicts, but passing epubveri isn't the same as passing epubcheck.
+epubveri never changes your book. Its sibling [epubsana](https://github.com/veripublica/epubsana) repairs the problems that have one right answer. If a retailer asks for epubcheck by name, run epubcheck as well: epubveri follows the specification where the two disagree, so passing one isn't the same as passing the other. The differences are listed in [AGENTS.md](AGENTS.md#known-differences-from-epubcheck).
 
 If epubveri reports an error on a book you believe is fine, please [open an issue](https://github.com/veripublica/epubveri/issues). That's the report I most want.
 

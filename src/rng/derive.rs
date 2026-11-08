@@ -163,6 +163,11 @@ struct Env<'a> {
     deriv_memo: PatMemo<(usize, u32, u64), Pat>,
     /// [`Env::start_tag_open`]'s results by `(pattern, element name id)`.
     open_top_memo: PatMemo<(usize, u32), Pat>,
+    /// When set, the namespaces the document is validated in: an element in
+    /// any other namespace is skipped with its whole content, and a
+    /// namespaced attribute in any other namespace is skipped, as if neither
+    /// were written. See [`validate_node_report_in_namespaces`].
+    keep_ns: Option<&'a [&'a str]>,
 }
 
 impl<'a> Env<'a> {
@@ -191,7 +196,16 @@ impl<'a> Env<'a> {
             contents_cut: std::cell::Cell::new(false),
             deriv_memo: RefCell::new(HashMap::default()),
             open_top_memo: RefCell::new(HashMap::default()),
+            keep_ns: None,
         }
+    }
+
+    /// Whether `ns` is removed before validation (only with `keep_ns`).
+    /// No namespace is never removed: it is the host vocabulary's own for
+    /// attributes and is not "another namespace" for either.
+    fn is_removed_ns(&self, ns: &str) -> bool {
+        self.keep_ns
+            .is_some_and(|keep| !ns.is_empty() && !keep.contains(&ns))
     }
 
     fn attr_id(&self, ns: &str, local: &str) -> u32 {
@@ -1120,6 +1134,9 @@ impl<'a> Env<'a> {
     ) -> Pat {
         let mut cur = p.clone();
         for n in parent.children() {
+            if n.is_element() && self.is_removed_ns(n.tag_name().namespace().unwrap_or("")) {
+                continue;
+            }
             if n.is_element() {
                 let ns = n.tag_name().namespace().unwrap_or("");
                 let local = n.tag_name().name();
@@ -1324,6 +1341,9 @@ impl<'a> Env<'a> {
     ) {
         for n in parent.children().filter(|n| n.is_element()) {
             let ns = n.tag_name().namespace().unwrap_or("");
+            if self.is_removed_ns(ns) {
+                continue;
+            }
             let local = n.tag_name().name();
             match self.element_model(ns, local) {
                 Some(model) => {
@@ -1376,6 +1396,9 @@ impl<'a> Env<'a> {
         let mut value_rejected = false;
         for att in node.attributes() {
             let ans = att.namespace().unwrap_or("");
+            if self.is_removed_ns(ans) {
+                continue;
+            }
             let prev = cur.clone();
             cur = self.att_deriv(&cur, ans, att.name(), att.value());
             if is_not_allowed(&cur) {
@@ -1989,6 +2012,38 @@ pub fn validate_node_report<'d, 'i>(
     // finding errors. The nullability check here is only a defensive net — if a
     // pattern somehow ends non-nullable with nothing recorded, still surface the
     // document as invalid rather than silently pass it.
+    if !env.nullable(&p) && blames.is_empty() {
+        blames.push(Blame::Element(
+            root,
+            ElementFault::IncompleteContent {
+                missing: None,
+                expected: Vec::new(),
+            },
+        ));
+    }
+    blames
+}
+
+/// [`validate_node_report`] after removing every element (with its content)
+/// and every attribute from a namespace not in `keep`, the reading OCF gives
+/// `META-INF/container.xml`: EPUB 3.3 § 4.2.6.3.1 "MUST be valid to the
+/// definition in this section after removing all elements and attributes from
+/// other namespaces (including all attributes and contents of such
+/// elements)", and OCF 2.0.1 § 3.5.1 says the same. Attributes with no
+/// namespace are always kept. Nothing is copied: the walk skips those nodes.
+pub fn validate_node_report_in_namespaces<'d, 'i>(
+    grammar: &Grammar,
+    root: roxmltree::Node<'d, 'i>,
+    keep: &[&str],
+) -> Vec<Blame<'d, 'i>> {
+    let mut env = Env::new(
+        &grammar.defs,
+        grammar.start.clone(),
+        grammar.custom_elements,
+    );
+    env.keep_ns = Some(keep);
+    let mut blames = Vec::new();
+    let p = env.child_deriv(&grammar.start, root, &mut blames);
     if !env.nullable(&p) && blames.is_empty() {
         blames.push(Blame::Element(
             root,

@@ -262,7 +262,7 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
         .first()
         .and_then(|p| peek_opf_version(&mut container, p))
         .map(|v| v.starts_with('3'));
-    ocf::check_encryption(&mut container, &mut report, epub3);
+    ocf::check_encryption(&mut container, &opf_paths, &mut report, epub3);
     // OPF-064: at EPUB 3, a `dc:type` of the first package document selects
     // the profile, overriding the one asked for, and epubcheck says so once.
     // The override is real, not only a message: `--profile edupub` on a
@@ -350,9 +350,7 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     // Reported after the checks, not inside `Ocf::read`: a resource read
     // from several call sites is one finding, and `read` has no `Report`.
     ocf::check_resource_limits(&container, &mut report);
-    if options.advisory {
-        ocf::check_advisories(&container, &mut report);
-    }
+    ocf::check_mimetype_stored(&container, &mut report);
     // Bound the RNG engine's pattern-interning cache (see
     // `rng::pattern::clear_intern_cache`) to roughly one book's working set,
     // rather than letting it grow for the life of a long-lived embedded
@@ -1542,34 +1540,34 @@ mod tests {
         buf
     }
 
-    /// EPUB 3.3 forbids a compressed `mimetype`, but epubcheck compares only
-    /// its inflated contents, so the book is valid there. Reporting it is
-    /// NEXT-016, behind `--advisory`; it was PKG-007 in the default output.
+    /// EPUB 3.3 § 4.3.3 forbids a compressed `mimetype`. epubcheck compares
+    /// only its inflated contents, so the book is valid there; here it is
+    /// PKG-007, an error, with or without `--advisory` (the spec decides).
     #[test]
-    fn a_compressed_mimetype_is_advisory_only() {
+    fn a_compressed_mimetype_is_pkg_007() {
         let book = deflate_mimetype(epub3_with("<p>x</p>"));
-        let plain = crate::validate_bytes(book.clone());
-        assert!(plain.messages.is_empty(), "{:?}", plain.messages);
-        let advised = crate::validate_bytes_with_options(
-            book,
-            &crate::Options {
-                advisory: true,
-                ..Default::default()
-            },
-        );
-        let found: Vec<_> = advised
-            .messages
-            .iter()
-            .map(|m| (m.id, m.severity, m.rule))
-            .collect();
-        assert_eq!(
-            found,
-            [(
-                crate::ids::NEXT_016,
-                crate::report::Severity::Usage,
-                Some("ocf.mimetype.not_stored_uncompressed")
-            )]
-        );
+        for advisory in [false, true] {
+            let r = crate::validate_bytes_with_options(
+                book.clone(),
+                &crate::Options {
+                    advisory,
+                    ..Default::default()
+                },
+            );
+            let found: Vec<_> = r
+                .messages
+                .iter()
+                .map(|m| (m.id, m.severity, m.rule))
+                .collect();
+            assert_eq!(
+                found,
+                [(
+                    crate::ids::PKG_007,
+                    crate::report::Severity::Error,
+                    Some("ocf.mimetype.not_stored_uncompressed")
+                )]
+            );
+        }
         let stored = crate::validate_bytes_with_options(
             epub3_with("<p>x</p>"),
             &crate::Options {

@@ -24,12 +24,17 @@ Rules the code follows:
 - **It reports the same message IDs as epubcheck, in its own wording.**
   Wording, line order and columns can change between releases. IDs and `rule`
   keys are stable.
-- **It matches epubcheck's verdict.** A book that passes epubcheck passes
-  epubveri. Where the two disagree, the specification decides: if epubveri is
-  wrong it gets fixed, and if epubcheck is wrong an issue goes upstream.
-- **A check epubcheck does not make goes behind `--advisory`.** An extra
-  finding on a book epubcheck passes looks like a false positive to anyone
-  comparing the tools. Accepting what used to be rejected needs no flag.
+- **The specification decides the verdict, not epubcheck.** A broken MUST or
+  MUST NOT is an error and a broken SHOULD a warning, including where
+  epubcheck says nothing; what the specification allows passes, including
+  where epubcheck rejects it. Each such finding cites its clause and must be
+  true every time it fires.
+- **Every departure from epubcheck is listed** under
+  [Known differences from epubcheck](#known-differences-from-epubcheck), with
+  the clause and the upstream issue. Where the specification is silent,
+  epubveri follows epubcheck.
+- **`--advisory` holds only what no specification requires.** Those findings
+  never change the verdict or the exit code.
 - **An advisory must be true every time it fires,** and is worded as an
   observation, not a verdict.
 - **The library never filters.** `validate_bytes` returns every finding at
@@ -38,6 +43,32 @@ Rules the code follows:
 - **It parses independently.** It shares no parser with the tools it judges.
 - **It has no C dependencies and no JVM.** The code must also build for
   `wasm32-unknown-unknown`.
+
+## Known differences from epubcheck
+
+Each line is a place where epubveri follows the specification and epubcheck
+5.4.0 does not, with the clause and the upstream issue.
+
+- **A `nav` element with `aria-label` or `aria-labelledby` passes.** EPUB 3.3
+  allows ARIA naming on `nav`; epubcheck 5.4.0 rejects it
+  ([w3c/epubcheck#1726](https://github.com/w3c/epubcheck/issues/1726)).
+- **Elements and attributes from other namespaces in `container.xml` are
+  ignored.** EPUB 3.3 § 4.2.6.3.1 and OCF 2.0.1 § 3.5.1 validate the file
+  after removing them; epubcheck 5.4.0 reports them as RSC-005
+  ([w3c/epubcheck#1754](https://github.com/w3c/epubcheck/issues/1754)).
+- **A compressed `mimetype` is PKG-007, an error.** EPUB 3.3 § 4.3.3: "EPUB
+  creators MUST NOT compress or encrypt the `mimetype` file". epubcheck 5.4.0
+  compares only the inflated contents.
+- **A bad `url()` inside another CSS function is reported** (RSC-007, RSC-008,
+  RSC-026 or RSC-030, as at the top level), such as `image-set(url(a.png)
+  1x)` naming a missing file. CSS reads the url, and EPUB 3.3 asks the same of
+  every resource a publication uses. epubcheck 5.4.0 reads only a
+  declaration's top-level components.
+- **SPEC-001 (error): `encryption.xml` declares encrypted a file that must
+  never be.** That is `mimetype`, the six `META-INF` files, or a package
+  document: EPUB 3.3 § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2. epubcheck 5.4.0 does
+  not check the list. `SPEC-*` is epubveri's family for a specification rule
+  epubcheck has no id for; it is an ordinary finding, not an advisory.
 
 ## What it declines to do
 
@@ -75,7 +106,7 @@ Positional paths are not accepted.
 | `-v`, `--epub-version 2\|2.0\|3\|3.0` | Validate as this version. On a disagreement PKG-001 reports it and the requested version wins, as in epubcheck. |
 | `--sort severity\|document` | Order of the human report only; `severity` is the default. Machine formats are always in document order. |
 | `-u`, `--usage` | Include usage-severity findings. Decides what every format contains, and the JSON `summary` describes the output. |
-| `--advisory` | Also emit `NEXT-*` and `ADV-*`. They print with or without `-u`. |
+| `--advisory` | Also emit `ADV-*`. They print with or without `-u`. |
 | `-V`, `--version` | Print the version and exit 0. |
 | `-h`, `--help` | Print help and exit 0. |
 
@@ -107,7 +138,7 @@ Each item has `type`, `code`, `severity`, `message`, and when known `rule`,
 | `params` | The values interpolated into `message`, unabbreviated. |
 | `element_path`, `namespaces` | An XPath-style path to the node, and its prefix bindings. |
 | `violation_kind` | On schema violations, one of six kinds (`report::ViolationKind`). |
-| `advisory_basis` | On advisories, `spec-ahead` or `spec-silent`. |
+| `advisory_basis` | On advisories, `spec-silent`. (`spec-ahead` is no longer emitted.) |
 
 Severities are `fatal`, `error`, `warning`, `info` and `usage`. Only `fatal` and
 `error` make a book invalid. A fatal stops reading the unit it occurs in, so
@@ -120,18 +151,18 @@ epubveri mirrors that. A pattern must accept both, and a trailing letter
 `rule` keys come from two places: the code, and the pattern ids of the
 Schematron files in `schemas/`. Searching `src/` alone misses the second.
 
-### Advisory families
+### Advisory family
 
-Both are `usage` severity and never affect the verdict or the exit code.
+`usage` severity, and it never affects the verdict or the exit code.
 
-- **`NEXT-*` (`spec-ahead`):** a published specification requires it and
-  epubcheck has not implemented it yet. The ID moves to epubcheck's own when
-  epubcheck ships the rule.
-  - NEXT-016, NEXT-018.
 - **`ADV-*` (`spec-silent`):** no specification requires it, but the book is
   probably wrong. These never graduate.
   - ADV-001 to ADV-004, ADV-009 to ADV-012, ADV-014, ADV-015, ADV-017,
     ADV-019 to ADV-024.
+
+`NEXT-*` (`spec-ahead`) is closed. Its rules are required by a specification,
+so since the verdict follows the specification they report without the flag:
+NEXT-016 as PKG-007 and NEXT-018 as RSC-007, RSC-008, RSC-026 or RSC-030.
 
 `src/ids.rs` has what each one means.
 

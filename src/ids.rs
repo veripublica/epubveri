@@ -26,7 +26,7 @@ pub const PKG_003: &str = "PKG-003"; // the zip file is empty
 pub const PKG_004: &str = "PKG-004"; // corrupted/unreadable ZIP header (not a usable OCF)
 pub const PKG_005: &str = "PKG-005"; // the mimetype entry's ZIP header has a non-empty extra field
 pub const PKG_006: &str = "PKG-006"; // mimetype entry missing or not first in the archive
-pub const PKG_007: &str = "PKG-007"; // mimetype contents != application/epub+zip (compressed: NEXT-016)
+pub const PKG_007: &str = "PKG-007"; // mimetype contents != application/epub+zip, or the entry is compressed (EPUB 3.3 §4.3.3)
 pub const PKG_008: &str = "PKG-008"; // the ZIP archive could not be opened at all
 pub const PKG_009: &str = "PKG-009"; // a file name contains a forbidden character
 pub const PKG_010: &str = "PKG-010"; // an href contains unencoded spaces
@@ -309,27 +309,23 @@ pub const ADV_024: &str = "ADV-024"; // a declaration value its property or desc
 // ICB dimensions set) is now asked by the fixed-layout viewport family,
 // because 5.4.0 makes a roll spine item fixed-layout.
 //
-// NEXT-016: a `mimetype` entry that is compressed. EPUB 3.3 §4.3.3 says "EPUB
-// creators MUST NOT compress or encrypt the `mimetype` file" (OCF 2.0.1 says
-// the same), but epubcheck 5.4.0 never asks: `OCFZipChecker` reads only the
-// name and the extra field from the local header, and
-// `OCFChecker.checkMimetypeFile` compares the *inflated* contents, so a
-// deflated `mimetype` holding the right string passes there. It was PKG-007,
-// an error, in the default output until 0.29.0: a restrictive check epubcheck
-// lacks, which the direction rule puts behind the flag. The rule key is
-// unchanged.
-pub const NEXT_016: &str = "NEXT-016"; // EPUB 3.3 §4.3.3: the mimetype entry is compressed (usage)
-// NEXT-018: a stylesheet url() inside another function — `image-set(url(a.png)
-// 1x)`, `-webkit-image-set(…)`, `cross-fade(…)` — that names a missing,
-// undeclared, leaking or `file:` target. EPUB 3.3 asks the same of every
-// resource a publication uses, and CSS reads the url wherever it stands, but
-// epubcheck 5.4.0 never sees it: `CSSHandler.registerURIs` looks only at a
-// declaration's top-level components. So RSC-007/008/026/030 for such a url
-// were ours alone in the default output until 0.31.0, a restrictive check the
-// direction rule puts behind the flag; each keeps its rule key here. Counting
-// a resource as used (OPF-097) still sees the url. Upstream: probe set
-// 2026-10-21_css-reach, m4.
-pub const NEXT_018: &str = "NEXT-018"; // EPUB 3.3: a url() inside another CSS function names a bad target (usage)
+// **THE SECOND GRADUATION, 2026-11-08, and the family is closed.** Baris:
+// the specification decides the verdict, in both directions (DECISIONS,
+// "Spec decides"). A rule a specification requires is no longer held behind
+// `--advisory` until epubcheck catches up, so `NEXT-*` has nothing left to
+// hold. Both members returned to the epubcheck id whose message names the
+// fault, at the severity the spec gives, in the default output; each is in
+// AGENTS.md, "Known differences from epubcheck":
+//
+// | was | now | why |
+// |---|---|---|
+// | `NEXT-016` compressed `mimetype` | `PKG-007` (error) | EPUB 3.3 §4.3.3 MUST NOT compress; epubcheck compares only the inflated contents |
+// | `NEXT-018` bad url() inside another CSS function | `RSC-007`/`008`/`026`/`030` (error) | `CSSHandler.registerURIs` reads only top-level components |
+//
+// A spec rule with no epubcheck id at all is `SPEC-*`, below, not `NEXT-*`:
+// consumers read `NEXT-*` as an advisory. The `spec-ahead` token stays in
+// the envelope's vocabulary, unused, so a consumer that lists it keeps
+// working. No number is reused.
 
 /// What an `ADV-*` finding is grounded in. **Two different claims live in the
 /// advisory family and they justify themselves differently**, which until now
@@ -386,6 +382,26 @@ pub fn advisory_basis(id: &str) -> Option<AdvisoryBasis> {
         None
     }
 }
+
+// --- SPEC-*: the specification requires it, and epubcheck has no id for it --
+//
+// Owner's call, 2026-11-08: the specification decides the verdict, in both
+// directions (docs/DECISIONS.md, "Spec decides"). A rule a specification
+// states with MUST / MUST NOT that epubcheck does not check, and for which
+// epubcheck defines no message id, reports under `SPEC-*`: an **ordinary
+// finding** at the severity the keyword gives, in the default output, with
+// no `advisory_basis`. That is why it is not `NEXT-*`: consumers (our Sigil
+// and calibre plugins among them) read `NEXT-*` as an advisory at usage
+// severity, and an error filed there would be shown as one.
+//
+// Each comment cites its clause, and each finding is listed in AGENTS.md,
+// "Known differences from epubcheck". If epubcheck later ships the rule, the
+// finding moves to epubcheck's id, as `NEXT-*` did. Numbers are never reused.
+//
+// SPEC-001: `encryption.xml` declares encrypted a file that may never be:
+// `mimetype`, the six `META-INF` files, or a package document. EPUB 3.3
+// § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2. epubcheck 5.4.0 has no check for the list.
+pub const SPEC_001: &str = "SPEC-001"; // EPUB 3.3 §4.2.6.3.2.1: a file that must never be encrypted is declared encrypted (error)
 
 // --- Resource limits (epubveri-owned; see the module note) ---
 //
@@ -601,8 +617,8 @@ mod tests {
     #[test]
     fn an_advisory_constants_name_agrees_with_its_id() {
         let consts = advisory_constants();
-        // The four first `NEXT-*` graduated with epubcheck 5.4.0; NEXT-016 is
-        // the only one today. The floor is a parser guard, not a target — it
+        // Both `NEXT-*` generations have graduated (5.4.0, then the
+        // spec-decides rule); only `ADV-*` is left. The floor is a parser guard, not a target — it
         // moved 9 → 6 for that reason.
         assert!(consts.len() >= 6, "parser broke: {consts:?}");
         for (name, id) in &consts {

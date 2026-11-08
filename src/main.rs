@@ -62,18 +62,10 @@ OPTIONS:
                            json summary counts describe the output - as
                            epubcheck's -u does. The library API is never
                            filtered.
-        --advisory         Also emit opt-in findings epubcheck has no verdict
-                           on, at usage severity, in two families:
-                             NEXT-*  a published spec requires it and epubcheck
-                                     has not implemented it yet, so it becomes
-                                     a real error once it does — a mimetype
-                                     file that is compressed (EPUB 3.3
-                                     forbids it; epubcheck checks only its
-                                     contents), and a CSS url() inside
-                                     another function, such as image-set(),
-                                     whose target is missing, undeclared,
-                                     outside the container or a file: URL
-                                     (epubcheck does not read urls there).
+        --advisory         Also emit opt-in findings no specification
+                           requires, at usage severity. What a specification
+                           requires is reported without this flag, even where
+                           epubcheck does not report it.
                              ADV-*   no spec requires it, but the book is
                                      still wrong — unknown CSS property or
                                      descriptor names, a type selector naming
@@ -930,7 +922,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            19,
+            17,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );
@@ -947,10 +939,8 @@ mod tests {
             .nth(1)
             .expect("HELP documents the --advisory option entry");
         assert!(
-            advisory_help.contains("ADV-*")
-                && advisory_help.contains("NEXT-*")
-                && advisory_help.len() > 200,
-            "the --advisory paragraph should still describe both families"
+            advisory_help.contains("ADV-*") && advisory_help.len() > 200,
+            "the --advisory paragraph should still describe the ADV-* family"
         );
     }
 

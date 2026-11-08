@@ -4692,10 +4692,7 @@ fn container_link_targets_silently(ocf: &mut Ocf) -> HashSet<String> {
     // registers that one and no other (`rel="mapping foo"` leaves its target
     // undeclared, OPF-003 - measured on 5.4.0).
     for n in doc.descendants().filter(|n| {
-        n.is_element()
-            && n.tag_name().name() == "link"
-            && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
-            && crate::renditions::is_mapping_rel(n)
+        crate::ocf::is_container_element(n, "link") && crate::renditions::is_mapping_rel(n)
     }) {
         if let Some(href) = n.attr_no_ns("href") {
             let href =
@@ -11901,7 +11898,8 @@ fn check_text(
                         resource_refs.insert(target);
                     }
                     // A url inside another function counts as a use and is
-                    // asked nothing more: epubcheck never reads it (NEXT-018).
+                    // asked nothing more here: epubcheck never reads it, and
+                    // its target is `css::check`'s (`push_url_finding`).
                     if nested {
                         continue;
                     }
@@ -12730,7 +12728,7 @@ fn check_text(
                 if is_remote_url(&u) {
                     remote_resource_refs.insert(strip_url_fragment(&u));
                     // Used, but never a reason for OPF-014: epubcheck does not
-                    // read a url inside another function (NEXT-018).
+                    // read a url inside another function.
                     if !imports.contains(&u) && !nested {
                         uses_remote = true;
                     }
@@ -13163,7 +13161,7 @@ fn check_text(
             // nothing more: epubcheck never reads it, so RSC-020/032/033 and
             // the remote-resources property would be ours alone. Unlike the
             // resource checks in `css::check`, these are not reported under
-            // `--advisory` either (NEXT-018 covers the target, not its form).
+            // `--advisory` either (`css::check` asks of the target, not its form).
             if nested {
                 continue;
             }
@@ -15481,19 +15479,6 @@ fn check_font_obfuscation(
         if algorithm != Some(OBFUSCATION_ALGORITHM) {
             continue;
         }
-        // `OBS-001`: EPUB 3.4 marks font obfuscation outdated (epubcheck
-        // 5.4.0, `OCFEncryptionFileHandler`). The IDPF algorithm only — the
-        // Adobe one is a different branch there and draws nothing — and at
-        // both versions, since that handler carries no version gate.
-        report.push_full(
-            OBS_001,
-            Severity::Usage,
-            "usage of font obfuscation is outdated",
-            ENC,
-            Position::of(enc_data),
-            "ocf.encryption.outdated_font_obfuscation",
-            Vec::new(),
-        );
         let Some(uri) = enc_data
             .descendants()
             .find(|n| n.is_element() && n.tag_name().name() == "CipherReference")
@@ -15514,6 +15499,26 @@ fn check_font_obfuscation(
             // RSC-001 for it. `ocf::check_encryption` reports RSC-007, as
             // epubcheck does. Asking a resource's media type when the resource
             // is absent would add a second, worse-worded finding for one fact.
+            continue;
+        }
+        // `OBS-001`: EPUB 3.4 marks font obfuscation outdated (epubcheck
+        // 5.4.0, `OCFEncryptionFileHandler`). The IDPF algorithm only — the
+        // Adobe one is a different branch there and draws nothing — and at
+        // both versions, since that handler carries no version gate. Only for
+        // a target in the container: for any other, epubcheck reports RSC-007
+        // and returns before it (`startElement`), so it used to be ours alone.
+        report.push_full(
+            OBS_001,
+            Severity::Usage,
+            "usage of font obfuscation is outdated",
+            ENC,
+            Position::of(enc_data),
+            "ocf.encryption.outdated_font_obfuscation",
+            Vec::new(),
+        );
+        // Already SPEC-001 (`ocf::check_encryption`): a package document or
+        // a file in the never-encrypt list. One finding for one entry.
+        if ocf.encrypted_forbidden.contains(&resolved) {
             continue;
         }
         let media_type = items
@@ -18877,12 +18882,12 @@ mod tests {
             ]
         );
 
+        // No OBS-001 either: `OCFEncryptionFileHandler.startElement` reports
+        // RSC-007 and returns before the algorithm switch that emits it
+        // (epub-test-books, 2026-11-08).
         assert_eq!(
             rules(MISSING),
-            vec![
-                "ocf.encryption.outdated_font_obfuscation",
-                "ocf.encryption.missing_resource"
-            ],
+            vec!["ocf.encryption.missing_resource"],
             "a missing target is reported instead of the encrypted note, not alongside it"
         );
     }

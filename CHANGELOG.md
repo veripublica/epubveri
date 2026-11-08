@@ -10,6 +10,39 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **A book that passes epubcheck can now fail epubveri.** The verdict follows
+  the specification, not epubcheck: what a specification forbids with MUST
+  NOT is an error even where epubcheck says nothing, and what it allows passes
+  even where epubcheck rejects it. Each such case is listed, with its clause
+  and the upstream issue, in AGENTS.md, "Known differences from epubcheck".
+  In this release that is a compressed `mimetype`, a bad `url()` inside
+  another CSS function, a file that must never be encrypted (SPEC-001, below),
+  and other namespaces in `container.xml` (under Fixed).
+- **A compressed `mimetype` is PKG-007, an error, again.** EPUB 3.3 § 4.3.3
+  forbids it. It was NEXT-016 under `--advisory` from 0.29.0, because epubcheck
+  5.4.0 does not check it.
+- **A missing, undeclared, leaking or `file:` `url()` inside another CSS
+  function** (`image-set(url(a.png) 1x)`) is RSC-007, RSC-008, RSC-026 or
+  RSC-030, as at the top level. It was NEXT-018 under `--advisory` from 0.31.0,
+  because epubcheck 5.4.0 does not read urls there.
+- **`--advisory` now holds only `ADV-*`.** The `NEXT-*` family is closed, and
+  `advisory_basis` is only ever `spec-silent`.
+
+### Added
+
+- **SPEC-001: a file that must never be encrypted.** `encryption.xml` may not
+  name `mimetype`, `META-INF/container.xml`, `encryption.xml`, `manifest.xml`,
+  `metadata.xml`, `rights.xml`, `signatures.xml` or a package document (EPUB
+  3.3 § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2). It is an error. epubcheck 5.4.0 does
+  not check this, so such a book passes there and fails here. An obfuscated
+  package document used to be PKG-026; it is SPEC-001 now, and not both.
+- **A new id family, `SPEC-*`,** for a rule a specification requires that
+  epubcheck has no id for. It is an ordinary finding at the severity the
+  specification gives, in the default output, not an advisory. Each one is
+  listed in AGENTS.md, "Known differences from epubcheck".
+
 ### Fixed
 
 - **`META-INF/container.xml` is validated against its schema.** Nothing checked
@@ -19,6 +52,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   RSC-005, as in epubcheck, against the EPUB 3 or the EPUB 2 schema according to
   the version validated as. The check runs only once a package document has
   been found, so it never adds to RSC-003 or OPF-002.
+- **Elements and attributes from other namespaces in `container.xml` are
+  ignored, as the specifications say.** EPUB 3.3 (§ 4.2.6.3.1) and OCF 2.0.1
+  (§ 3.5.1) validate the file "after removing all elements and attributes from
+  other namespaces", contents included. An extension element used to be
+  RSC-005, and is not any more; a `rootfile` or `link` inside one is not
+  read. epubcheck 5.4.0 reports both as RSC-005
+  ([w3c/epubcheck#1754](https://github.com/w3c/epubcheck/issues/1754)). The
+  rendition namespace counts as part of the container at EPUB 3 only. An
+  unknown attribute with no namespace is still RSC-005.
 - **A `container.xml` in the wrong namespace declares no package document.**
   It is RSC-003. Rootfiles used to be matched by local name, so such a book
   was validated as usual. A rootfile `media-type` with spaces around it now
@@ -36,6 +78,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   or into `META-INF` is RSC-008 when the file exists and RSC-007 when it does
   not. A hyperlink to the package document is RSC-010, unless its fragment is
   an EPUB CFI. All three were exempt before, and epubcheck reports each.
+- **An `encryption.xml` with the wrong root element still declares its
+  files encrypted.** It is one RSC-005, as before, but the files it lists are
+  now INFO RSC-004 and are not read as plain content, as in epubcheck.
+- **An obfuscation entry for a file that is not in the container is RSC-007
+  alone.** It also drew USAGE OBS-001, which epubcheck does not give there.
 
 ## [0.37.1] - 2026-11-04
 
