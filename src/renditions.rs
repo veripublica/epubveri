@@ -33,7 +33,6 @@ pub(crate) fn check(ocf: &mut Ocf, report: &mut Report) {
     };
 
     check_metadata_file(ocf, report);
-    check_rendition_selection(&doc, report);
     check_mapping_document(ocf, &doc, report);
 }
 
@@ -97,67 +96,105 @@ fn check_metadata_file(ocf: &mut Ocf, report: &mut Report) {
     }
 }
 
-/// Every `rendition:*` attribute on a `<rootfile>` is a "rendition
-/// selection attribute". Only `media`/`layout` are real (confirmed via
-/// the EPUB Multiple-Renditions spec); anything else is RSC-005. A
-/// non-first rootfile with none at all is RSC-017 (the first is the
-/// default rendition and needs none).
-fn check_rendition_selection(container_doc: &roxmltree::Document, report: &mut Report) {
-    let rootfiles: Vec<_> = container_doc
-        .descendants()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "rootfile"
-                && n.attr_no_ns("media-type") == Some("application/oebps-package+xml")
-        })
-        .collect();
-    for (i, rf) in rootfiles.iter().enumerate() {
-        let selection_attrs: Vec<_> = rf
-            .attributes()
-            .filter(|a| a.namespace() == Some(RENDITION_NS))
-            .collect();
-        if i > 0 && selection_attrs.is_empty() {
+/// The container document's Schematron rules (Multiple-Rendition
+/// Publications 1.0), which epubcheck runs on every EPUB 3 `container.xml`
+/// beside the schema, one rendition or several. Called from
+/// `ocf::check_container_schema`, under its conditions; the attribute values
+/// themselves are the schema's (`schemas/container.rng`).
+///
+/// - a `rendition:accessMode` naming one mode twice: RSC-005;
+/// - a `rootfile` after the first among its siblings with no `rendition:*`
+///   attribute: RSC-017, a warning. Counted per `rootfiles` element and over
+///   every rootfile, whatever its media type, as `rootfile[position() > 1]`
+///   counts;
+/// - more than one mapping link in one `links`: RSC-005, on the `links`;
+/// - a mapping link whose media type is not XHTML: RSC-005.
+///
+/// We had the second and the last two only when several package documents
+/// were declared, counted across the whole document and over package
+/// rootfiles only, with the mapping link found by a `rel` token: so a second
+/// `rootfiles` drew a warning epubcheck does not give, and a single-rendition
+/// book drew none of the four.
+pub(crate) fn check_container_rules(doc: &roxmltree::Document, report: &mut Report) {
+    let in_container = |n: &roxmltree::Node, name: &str| {
+        n.is_element()
+            && n.tag_name().name() == name
+            && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
+    };
+    for rf in doc.descendants().filter(|n| in_container(n, "rootfile")) {
+        if let Some(modes) = rf.attribute((RENDITION_NS, "accessMode")) {
+            // `count(tokenize(@a, $mode)) = 3`: the mode occurs exactly twice.
+            let twice = modes.xml_tokens().any(|m| modes.matches(m).count() == 2);
+            if twice {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    "the accessMode attribute contains a duplicate value",
+                    CONTAINER,
+                    rf,
+                    "renditions.rootfile.duplicate_access_mode",
+                    vec![modes.to_string()],
+                );
+            }
+        }
+        let later = rf
+            .prev_siblings()
+            .any(|s| s != rf && in_container(&s, "rootfile"));
+        if later && !rf.attributes().any(|a| a.namespace() == Some(RENDITION_NS)) {
             report.push_node(
                 RSC_017,
                 Severity::Warning,
                 "at least one rendition selection attribute should be specified for each non-first rootfile element",
                 CONTAINER,
-                *rf,
+                rf,
                 "renditions.rootfile.missing_selection_attribute",
                 Vec::new(),
             );
         }
-        for attr in &selection_attrs {
-            match attr.name() {
-                "media" => {
-                    let value = attr.value();
-                    if !(value.contains('(') && value.contains(')')) {
-                        report.push_node(
-                            RSC_005,
-                            Severity::Error,
-                            "value of attribute \"rendition:media\" is invalid",
-                            CONTAINER,
-                            *rf,
-                            "renditions.rootfile.invalid_media_selection",
-                            vec![value.to_string()],
-                        );
-                    }
-                }
-                "layout" => {}
-                other => {
-                    report.push_node(
-                        RSC_005,
-                        Severity::Error,
-                        format!("attribute \"rendition:{other}\" not allowed here"),
-                        CONTAINER,
-                        *rf,
-                        "renditions.rootfile.unknown_selection_attribute",
-                        vec![other.to_string()],
-                    );
-                }
+    }
+    for links in doc.descendants().filter(|n| in_container(n, "links")) {
+        let mapping: Vec<_> = links
+            .children()
+            .filter(|l| in_container(l, "link") && is_mapping_rel(l))
+            .collect();
+        if mapping.len() > 1 {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "the Container Document must not reference more than one mapping document",
+                CONTAINER,
+                links,
+                "renditions.mapping.multiple_mapping_documents",
+                Vec::new(),
+            );
+        }
+        for l in mapping {
+            if l.attr_no_ns("media-type").map(normalize_space).as_deref()
+                != Some("application/xhtml+xml")
+            {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    "the media type of Rendition Mapping Documents must be \"application/xhtml+xml\"",
+                    CONTAINER,
+                    l,
+                    "renditions.mapping.wrong_media_type",
+                    Vec::new(),
+                );
             }
         }
     }
+}
+
+/// `normalize-space(@rel) = 'mapping'`: the whole value, not one token of it.
+/// `rel="mapping foo"` is no mapping link to epubcheck's Schematron, and none
+/// to `OCFContainerFileHandler` either, which trims and compares.
+pub(crate) fn is_mapping_rel(link: &roxmltree::Node) -> bool {
+    link.attr_no_ns("rel").map(normalize_space).as_deref() == Some("mapping")
+}
+
+fn normalize_space(s: &str) -> String {
+    s.xml_tokens().collect::<Vec<_>>().join(" ")
 }
 
 /// The Rendition Mapping Document is optional - referenced via
@@ -165,39 +202,20 @@ fn check_rendition_selection(container_doc: &roxmltree::Document, report: &mut R
 /// media-type="..."/></links>`, entirely outside any OPF manifest. Only
 /// checked when such a link actually exists.
 fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, report: &mut Report) {
-    let mapping_links: Vec<_> = container_doc
-        .descendants()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "link"
-                && n.attr_no_ns("rel")
-                    .is_some_and(|r| r.xml_tokens().any(|t| t == "mapping"))
-        })
-        .collect();
-    if let Some(second) = mapping_links.get(1) {
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "the Container Document must not reference more than one mapping document",
-            CONTAINER,
-            *second,
-            "renditions.mapping.multiple_mapping_documents",
-            Vec::new(),
-        );
-    }
-    let Some(link) = mapping_links.first() else {
+    // The link `OCFContainerFileHandler.processMappingDoc` registers: `rel`
+    // trimmed to `mapping`, a non-empty `href`. The Schematron rules about
+    // such links are `check_container_rules`'; a mapping document of the
+    // wrong media type is not graded as XHTML, as before.
+    let Some(link) = container_doc.descendants().find(|n| {
+        n.is_element()
+            && n.tag_name().name() == "link"
+            && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
+            && is_mapping_rel(n)
+            && n.attr_no_ns("href").is_some_and(|h| !h.trim().is_empty())
+    }) else {
         return;
     };
     if link.attr_no_ns("media-type") != Some("application/xhtml+xml") {
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "the media type of Rendition Mapping Documents must be \"application/xhtml+xml\"",
-            CONTAINER,
-            *link,
-            "renditions.mapping.wrong_media_type",
-            Vec::new(),
-        );
         return;
     }
     let Some(href) = link.attr_no_ns("href") else {

@@ -4,8 +4,7 @@
 //! back the OPF and XHTML content-model validation in `opf.rs`, and
 //! [`validate_node_report`] names *which* node collapsed the model so the
 //! finding carries a real `line:column` and element path (issue #17), not just
-//! a whole-document verdict. The `container.xml` grammar ([`container_grammar`])
-//! is built via the pattern API instead of a schema file.
+//! a whole-document verdict. [`container_grammar`] loads `schemas/container.rng`.
 
 pub mod datatype;
 pub mod derive;
@@ -22,27 +21,19 @@ pub use pattern::*;
 /// The OCF container namespace.
 pub const CONTAINER_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:container";
 
-/// A simplified RELAX NG grammar for `META-INF/container.xml`, built via the
-/// pattern API. Covers the structure our hand-coded check relies on: a
-/// `container` root (version="1.0") holding a `rootfiles` element with one or
-/// more `rootfile` entries that each carry `full-path` and `media-type`.
-/// (Optional `links` and foreign content are intentionally omitted for now.)
-pub fn container_grammar() -> Grammar {
-    let rootfile = element(
-        qname(CONTAINER_NS, "rootfile"),
-        group(
-            attribute(local_name("full-path"), data(Datatype::Token)),
-            attribute(local_name("media-type"), data(Datatype::Token)),
-        ),
-    );
-    let rootfiles = element(qname(CONTAINER_NS, "rootfiles"), one_or_more(rootfile));
-    Grammar::single(element(
-        qname(CONTAINER_NS, "container"),
-        group(
-            attribute(local_name("version"), value(Datatype::Token, "1.0")),
-            rootfiles,
-        ),
-    ))
+/// Our own `META-INF/container.xml` schema, embedded at build time (authored
+/// from scratch, like the others). Two entry points, as epubcheck picks its
+/// container schema by the version the publication is validated as.
+pub const CONTAINER_RNG: &str = include_str!("../../schemas/container.rng");
+
+/// Load the container grammar for EPUB 3 (`epub3`) or EPUB 2.
+pub fn container_grammar(epub3: bool) -> Grammar {
+    let start = if epub3 {
+        "container-epub3"
+    } else {
+        "container-epub2"
+    };
+    load_from_define(CONTAINER_RNG, start).expect("built-in container.rng must parse")
 }
 
 /// Our own EPUB package-document RNG, embedded at build time (committed under
@@ -656,19 +647,19 @@ mod tests {
 
     #[test]
     fn container_grammar_accepts_valid() {
-        assert!(ok(&container_grammar(), CVALID));
+        assert!(ok(&container_grammar(true), CVALID));
     }
 
     #[test]
     fn container_grammar_rejects_bad_version() {
         let xml = CVALID.replace("version=\"1.0\"", "version=\"2.0\"");
-        assert!(!ok(&container_grammar(), &xml));
+        assert!(!ok(&container_grammar(true), &xml));
     }
 
     #[test]
     fn container_grammar_rejects_missing_rootfile_attr() {
         let xml = CVALID.replace(" media-type=\"application/oebps-package+xml\"", "");
-        assert!(!ok(&container_grammar(), &xml));
+        assert!(!ok(&container_grammar(true), &xml));
     }
 
     #[test]
@@ -678,13 +669,29 @@ mod tests {
             "xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\">",
             "<rootfiles></rootfiles></container>"
         );
-        assert!(!ok(&container_grammar(), xml));
+        assert!(!ok(&container_grammar(true), xml));
+    }
+
+    #[test]
+    fn the_epub2_container_grammar_takes_any_version_and_no_links() {
+        let g = container_grammar(false);
+        assert!(ok(&g, CVALID));
+        assert!(ok(
+            &g,
+            &CVALID.replace("version=\"1.0\"", "version=\"2.0\"")
+        ));
+        let links = CVALID.replace(
+            "</rootfiles>",
+            "</rootfiles><links><link href=\"m.xhtml\" rel=\"mapping\"/></links>",
+        );
+        assert!(ok(&container_grammar(true), &links));
+        assert!(!ok(&g, &links));
     }
 
     #[test]
     fn container_grammar_rejects_extra_attribute() {
         let xml = CVALID.replace("<rootfiles>", "<rootfiles bogus=\"x\">");
-        assert!(!ok(&container_grammar(), &xml));
+        assert!(!ok(&container_grammar(true), &xml));
     }
 
     const XHTML_NS_DECLS: &str = concat!(

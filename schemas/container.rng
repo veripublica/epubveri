@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  epubveri — OCF container document (META-INF/container.xml) schema.
+
+  Authored from scratch for epubveri (copyright the project owner; ships under
+  the project's dual AGPL/commercial license). NOT derived from epubcheck's or
+  the W3C's schema files: the content models below are the ones EPUB 3.3
+  (§ 4.2.6.3.1, "Container file (container.xml)"), Multiple-Rendition
+  Publications 1.0 (§ 3) and OCF 2.0.1 (§ 3.5.1) define, in our own structure
+  and naming.
+
+  TWO GRAMMARS, chosen by the version the publication is validated as, as
+  epubcheck picks its container schema by version:
+
+  - `container-epub3`: `version` is exactly "1.0"; `rootfiles` then an
+    optional `links`; a rootfile carries `full-path`, the package media type
+    and the optional rendition selection attributes; a link carries `href`,
+    `rel` and an optional `media-type`.
+  - `container-epub2`: OCF 2.0.1 fixes neither the value of `version` nor the
+    value of `media-type` in its schema, and has no `links`.
+
+  Elements and attributes from other namespaces are NOT allowed: epubcheck
+  attaches them to the container section and rejects them (RSC-005), and we
+  match it (measured on 5.4.0; whether EPUB 3.3's "after removing all
+  elements and attributes from other namespaces" should change that is a
+  question for upstream, not one this file settles alone).
+
+  SCOPE. Structure only. Which rootfiles count as package documents (namespace
+  and trimmed media type), RSC-003, OPF-016/017 and the Multiple-Rendition
+  Schematron rules stay hand-coded in `src/ocf.rs` and `src/renditions.rs`.
+
+  Two datatypes are our own names (see `src/rng/datatype.rs`), because the
+  loader reads no `<param>` facets: `mediaType` for a link's `media-type` and
+  `renditionMedia` for `rendition:media`. Both are the patterns the
+  specifications' schemas give, on the raw string, so a padded value fails.
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         ns="urn:oasis:names:tc:opendocument:xmlns:container"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <start>
+    <ref name="container-epub3"/>
+  </start>
+
+  <!-- ======================= EPUB 3 ======================= -->
+
+  <define name="container-epub3">
+    <element name="container">
+      <attribute name="version"><value type="token">1.0</value></attribute>
+      <element name="rootfiles">
+        <oneOrMore>
+          <ref name="rootfile-epub3"/>
+        </oneOrMore>
+      </element>
+      <optional>
+        <element name="links">
+          <oneOrMore>
+            <ref name="link"/>
+          </oneOrMore>
+        </element>
+      </optional>
+    </element>
+  </define>
+
+  <define name="rootfile-epub3">
+    <element name="rootfile">
+      <interleave>
+        <attribute name="full-path"><data type="anyURI"/></attribute>
+        <attribute name="media-type">
+          <value type="token">application/oebps-package+xml</value>
+        </attribute>
+        <optional>
+          <attribute name="rendition:media"
+                     xmlns:rendition="http://www.idpf.org/2013/rendition"><data type="renditionMedia"/></attribute>
+        </optional>
+        <optional>
+          <attribute name="rendition:layout"
+                     xmlns:rendition="http://www.idpf.org/2013/rendition">
+            <choice>
+              <value type="token">reflowable</value>
+              <value type="token">pre-paginated</value>
+              <value type="token">roll</value>
+            </choice>
+          </attribute>
+        </optional>
+        <optional>
+          <attribute name="rendition:language"
+                     xmlns:rendition="http://www.idpf.org/2013/rendition"><data type="language"/></attribute>
+        </optional>
+        <optional>
+          <attribute name="rendition:accessMode"
+                     xmlns:rendition="http://www.idpf.org/2013/rendition">
+            <list>
+              <oneOrMore>
+                <choice>
+                  <value type="token">auditory</value>
+                  <value type="token">tactile</value>
+                  <value type="token">textual</value>
+                  <value type="token">visual</value>
+                </choice>
+              </oneOrMore>
+            </list>
+          </attribute>
+        </optional>
+        <optional>
+          <attribute name="rendition:label"
+                     xmlns:rendition="http://www.idpf.org/2013/rendition"><text/></attribute>
+        </optional>
+      </interleave>
+      <empty/>
+    </element>
+  </define>
+
+  <define name="link">
+    <element name="link">
+      <interleave>
+        <attribute name="href"><data type="anyURI"/></attribute>
+        <attribute name="rel">
+          <list>
+            <zeroOrMore><data type="token"/></zeroOrMore>
+          </list>
+        </attribute>
+        <optional>
+          <attribute name="media-type"><data type="mediaType"/></attribute>
+        </optional>
+      </interleave>
+      <empty/>
+    </element>
+  </define>
+
+  <!-- ======================= EPUB 2 ======================= -->
+
+  <define name="container-epub2">
+    <element name="container">
+      <attribute name="version"><text/></attribute>
+      <element name="rootfiles">
+        <oneOrMore>
+          <element name="rootfile">
+            <attribute name="full-path"><text/></attribute>
+            <attribute name="media-type"><text/></attribute>
+          </element>
+        </oneOrMore>
+      </element>
+    </element>
+  </define>
+
+</grammar>

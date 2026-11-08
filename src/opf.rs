@@ -386,6 +386,14 @@ fn is_scheme_based_fragment(f: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_') && rest.ends_with(')')
 }
 
+/// Whether a URL's fragment is an EPUB CFI: the scheme-based form above,
+/// named `epubcfi`, as `URLFragment.getScheme()` reads it.
+fn has_epubcfi_fragment(href: &str) -> bool {
+    crate::url::trim_url(href)
+        .split_once('#')
+        .is_some_and(|(_, f)| f.starts_with("epubcfi(") && is_scheme_based_fragment(f))
+}
+
 /// `(t|xywh|track|id|xyn|xyr)=[^&]+(&[^&=]+=[^&]+)*`, matched whole.
 fn is_media_fragment(f: &str) -> bool {
     let mut parts = f.split('&');
@@ -875,9 +883,17 @@ enum ResourceRef {
 /// container (and a CSS `@import` target, handled in `css.rs`), which is why
 /// the first cell is silent here rather than reported under another id.
 ///
-/// The OPF itself, `mimetype` and `META-INF/*` are structural resources,
-/// never manifest items — the same exemption OPF-003 makes on the container
-/// side. Without it the `nav-cfi-valid` fixture, whose nav points at
+/// The OPF itself is the one structural target: epubcheck registers the
+/// package document in its resource registry (`OPFChecker`, under its own
+/// media type), so a reference to it is never "undeclared". `mimetype` and
+/// `META-INF/*` are *not* registered, so a reference to one of them is
+/// RSC-008 when the file exists and RSC-007 when it does not — measured on
+/// 5.4.0 for `<a>`, `<img>` and a stylesheet `<link>`. We exempted all three,
+/// on the reasoning OPF-003 uses on the container side, and that reasoning
+/// does not carry over: OPF-003 asks which files need a manifest item, this
+/// asks whether a reference resolves to a registered resource. A hyperlink
+/// to the OPF is RSC-010 instead (see the anchor walk). Without the OPF
+/// exemption the `nav-cfi-valid` fixture, whose nav points at
 /// `package.opf#epubcfi(...)`, became a false positive: the file is present,
 /// is not declared, and never could be.
 ///
@@ -1060,9 +1076,7 @@ fn classify_resource_ref(
     name_index: &HashMap<String, String>,
     opf_path: &str,
 ) -> ResourceRef {
-    let structural =
-        resolved == nfc(opf_path) || resolved == "mimetype" || resolved.starts_with("META-INF/");
-    if manifest_paths.contains(resolved) || structural {
+    if manifest_paths.contains(resolved) || resolved == nfc(opf_path) {
         return ResourceRef::Fine;
     }
     if name_index.contains_key(resolved) {
@@ -4674,10 +4688,15 @@ fn container_link_targets_silently(ocf: &mut Ocf) -> HashSet<String> {
     let Ok(doc) = crate::ocf::parse_xml(&text) else {
         return out;
     };
-    for n in doc
-        .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "link")
-    {
+    // Only the mapping link is a declaration: `OCFContainerFileHandler`
+    // registers that one and no other (`rel="mapping foo"` leaves its target
+    // undeclared, OPF-003 - measured on 5.4.0).
+    for n in doc.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().name() == "link"
+            && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
+            && crate::renditions::is_mapping_rel(n)
+    }) {
         if let Some(href) = n.attr_no_ns("href") {
             let href =
                 strip_url_fragment(href.trim_matches(crate::url::is_url_edge_space)).to_string();
@@ -11058,9 +11077,8 @@ fn check_text(
                     // real book (an `<image xlink:href>` pointing at a
                     // container file nobody declared) and on one probe per
                     // cell.
-                    let structural =
-                        key == nfc(opf_path) || key == "mimetype" || key.starts_with("META-INF/");
-                    if !structural && !manifest_paths.contains(&key) {
+                    // Only the OPF is exempt; see `classify_resource_ref`.
+                    if key != nfc(opf_path) && !manifest_paths.contains(&key) {
                         if name_index.contains_key(&key) {
                             report.push_node(
                                 RSC_008,
@@ -11702,8 +11720,15 @@ fn check_text(
                         }
                         let target = nfc(&resolve_ref(&dir, &path, href));
                         hyperlink_targets.insert(target.clone());
-                        if target != opf_own_name_nfc
-                            && let Some(abort) = hyperlink_abort(
+                        // The package document is a registered resource whose
+                        // media type is no content document type, so `case
+                        // HYPERLINK` reports RSC-010 for it - unless the
+                        // fragment is a CFI, which that case skips before any
+                        // type test (`nav-cfi-valid`). Measured on 5.4.0.
+                        let abort = if target == opf_own_name_nfc {
+                            (!has_epubcfi_fragment(href)).then_some(RSC_010)
+                        } else {
+                            hyperlink_abort(
                                 &target,
                                 &items,
                                 &items_by_path,
@@ -11711,7 +11736,8 @@ fn check_text(
                                 &spine_order,
                                 is_epub3,
                             )
-                        {
+                        };
+                        if let Some(abort) = abort {
                             hyperlink_refs.push((
                                 target,
                                 HyperlinkSource {
@@ -12333,9 +12359,9 @@ fn check_text(
     }
 
     // --- Spine reachability (RSC-011/OPF-096) ---
-    // A hyperlink to the package document itself (e.g. a CFI-style
-    // self-reference) isn't a content document that could ever be "in the
-    // spine" - confirmed via a real corpus fixture - so it was never kept.
+    // A hyperlink to the package document itself is kept only as RSC-010,
+    // and a CFI-style one (`nav-cfi-valid`) not at all; it is never asked
+    // the spine question.
     for (target, source) in &hyperlink_refs {
         // RSC-010 and RSC-011 both come from `hyperlink_abort`, which is also
         // what the fragment check consults so that the two cannot drift.
@@ -29592,8 +29618,10 @@ mod tests {
         let r = build(svg, "", false);
         assert_eq!(ids(&r, crate::ids::RSC_007), 1, "svg image, missing");
 
-        // The OPF itself is structural: present, undeclared, and never
-        // declarable. It must draw neither.
+        // The OPF itself is a registered resource: present, undeclared, and
+        // never declarable. It draws neither RSC-007 nor RSC-008. A plain
+        // hyperlink to it is RSC-010 (its type is no content document type);
+        // a CFI hyperlink is not asked the type question at all.
         let r = build("<p><a href=\"content.opf\">o</a></p>", "", false);
         assert_eq!(
             ids(&r, crate::ids::RSC_008),
@@ -29601,6 +29629,42 @@ mod tests {
             "the package document is not a manifest item"
         );
         assert_eq!(ids(&r, crate::ids::RSC_007), 0);
+        assert_eq!(ids(&r, crate::ids::RSC_010), 1, "a hyperlink to the OPF");
+        let r = build(
+            "<p><a href=\"content.opf#epubcfi(/6/4)\">o</a></p>",
+            "",
+            false,
+        );
+        assert_eq!(
+            ids(&r, crate::ids::RSC_010),
+            0,
+            "a CFI into the OPF, as `nav-cfi-valid`"
+        );
+
+        // `mimetype` and `META-INF/*` are present and registered nowhere, so
+        // they are RSC-008 like any undeclared file - and RSC-007 if gone.
+        // We exempted them with the OPF and said nothing; 5.4.0 reports each.
+        for (body, what) in [
+            (
+                "<p><a href=\"../META-INF/container.xml\">c</a></p>",
+                "a link into META-INF",
+            ),
+            (
+                "<p><img src=\"../META-INF/container.xml\" alt=\"a\"/></p>",
+                "an image in META-INF",
+            ),
+            ("<p><a href=\"../mimetype\">m</a></p>", "a link to mimetype"),
+        ] {
+            let r = build(body, "", false);
+            assert_eq!(ids(&r, crate::ids::RSC_008), 1, "{what}");
+            assert_eq!(ids(&r, crate::ids::RSC_007), 0, "{what}");
+        }
+        let r = build("<p><a href=\"../META-INF/gone.xml\">g</a></p>", "", false);
+        assert_eq!(
+            ids(&r, crate::ids::RSC_007),
+            1,
+            "a missing file in META-INF"
+        );
     }
 
     /// `https:x` and `https:/x` name paths inside the container, as they do

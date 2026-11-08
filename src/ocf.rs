@@ -1218,9 +1218,13 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     // gets told its full-path is missing rather than being passed over in
     // silence. Both cases then drop out of `paths` below, as they must: there
     // is no path to follow.
+    // Only container-namespace `<rootfile>`s count, as only those reach
+    // epubcheck's `OCFContainerFileHandler`: a container.xml in the wrong
+    // namespace declares no package document at all (RSC-003), where we used
+    // to match by local name and validate the book as usual.
     for rf in doc
         .descendants()
-        .filter(|n| n.is_element() && n.tag_name().name() == "rootfile")
+        .filter(|n| is_container_element(n, "rootfile"))
     {
         match rf.attr_no_ns("full-path") {
             None => report.push_node(
@@ -1248,12 +1252,14 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
     }
 
     // RSC-003: need at least one <rootfile> with the OPF media type and a full-path.
+    // The media type is trimmed first (`processRootFile`), so padding
+    // around it still declares a package document.
     let paths: Vec<String> = doc
         .descendants()
         .filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "rootfile"
-                && n.attr_no_ns("media-type") == Some("application/oebps-package+xml")
+            is_container_element(n, "rootfile")
+                && n.attr_no_ns("media-type").map(str::trim)
+                    == Some("application/oebps-package+xml")
         })
         .filter_map(|n| n.attr_no_ns("full-path"))
         .filter(|p| !p.trim().is_empty())
@@ -1271,25 +1277,55 @@ pub fn find_rootfiles(ocf: &mut Ocf, report: &mut Report) -> Vec<String> {
         );
     }
 
-    // `<container>`'s only real children are `<rootfiles>` and `<links>`
-    // (the Rendition Mapping Document reference) - any other direct child
-    // (confirmed via a real fixture, a stray `<foo/>`) is a content-model
-    // violation.
-    for child in doc.root_element().children().filter(|n| n.is_element()) {
-        if !matches!(child.tag_name().name(), "rootfiles" | "links") {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                format!("element \"{}\" not allowed here", child.tag_name().name()),
-                CONTAINER,
-                child,
-                "ocf.container.unexpected_child",
-                vec![child.tag_name().name().to_string()],
-            );
-        }
-    }
-
     paths
+}
+
+fn is_container_element(n: &roxmltree::Node, name: &str) -> bool {
+    n.is_element()
+        && n.tag_name().name() == name
+        && n.tag_name().namespace() == Some(crate::rng::CONTAINER_NS)
+}
+
+/// RSC-005: `META-INF/container.xml` against `schemas/container.rng`, entered
+/// at the grammar for the version the publication is validated as.
+///
+/// epubcheck validates the container file only once it has a package
+/// document to follow (`OCFChecker.checkOtherMetaFiles`, after
+/// `checkDeclaredPackageDocuments`): no rootfile is RSC-003 and nothing else,
+/// a rootfile whose file is missing is OPF-002 and nothing else, and a
+/// first package document that will not parse stops the check there too. So
+/// this runs under the same three conditions, and a schema error never comes
+/// on top of one of those.
+pub fn check_container_schema(
+    ocf: &mut Ocf,
+    opf_paths: &[String],
+    epub3: bool,
+    report: &mut Report,
+) {
+    const CONTAINER: &str = "META-INF/container.xml";
+    if opf_paths.is_empty() || !opf_paths.iter().all(|p| ocf.has(p)) {
+        return;
+    }
+    let first_parses = ocf
+        .read(&opf_paths[0])
+        .is_some_and(|b| parse_xml(&crate::encoding::decode_xml(&b)).is_ok());
+    if !first_parses {
+        return;
+    }
+    let Some(bytes) = ocf.read(CONTAINER) else {
+        return;
+    };
+    let text = crate::encoding::decode_xml(&bytes);
+    let Ok(doc) = parse_xml(&text) else {
+        return;
+    };
+    let grammar = crate::rng::container_grammar(epub3);
+    for blame in crate::rng::validate_node_report(&grammar, doc.root_element()) {
+        crate::opf::push_blame(report, CONTAINER, "ocf.container.schema_violation", &blame);
+    }
+    if epub3 {
+        crate::renditions::check_container_rules(&doc, report);
+    }
 }
 
 /// If `META-INF/encryption.xml` is present, report each encrypted resource as
@@ -2171,5 +2207,217 @@ mod unreadable_header_tests {
             }),
             None
         );
+    }
+}
+
+/// `container.xml` as epubcheck judges it: the schema for the version the
+/// book is validated as, its Schematron rules, and the conditions under which
+/// either runs. Every case here was measured against epubcheck 5.4.0, one
+/// book apiece, on books otherwise clean in both tools.
+#[cfg(test)]
+mod container_document_tests {
+    use std::io::Write;
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+    const NS: &str = "xmlns=\"urn:oasis:names:tc:opendocument:xmlns:container\" \
+                      xmlns:rendition=\"http://www.idpf.org/2013/rendition\"";
+    const RF: &str =
+        "<rootfile full-path=\"OEBPS/p.opf\" media-type=\"application/oebps-package+xml\"/>";
+
+    fn book(version: &str, container: &str, extra: &[(&str, &str)]) -> Vec<u8> {
+        let opf = if version == "3.0" {
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"3.0\" unique-identifier=\"id\">\
+             <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:identifier id=\"id\">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>\
+             <dc:title>T</dc:title><dc:language>en</dc:language>\
+             <meta property=\"dcterms:modified\">2020-01-01T00:00:00Z</meta></metadata>\
+             <manifest><item id=\"nav\" href=\"nav.xhtml\" media-type=\"application/xhtml+xml\" properties=\"nav\"/>\
+             <item id=\"c\" href=\"c.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>\
+             <spine><itemref idref=\"c\"/></spine></package>"
+        } else {
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <package xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\" unique-identifier=\"id\">\
+             <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\">\
+             <dc:identifier id=\"id\">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>\
+             <dc:title>T</dc:title><dc:language>en</dc:language></metadata>\
+             <manifest><item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/>\
+             <item id=\"c\" href=\"c.xhtml\" media-type=\"application/xhtml+xml\"/></manifest>\
+             <spine toc=\"ncx\"><itemref idref=\"c\"/></spine></package>"
+        };
+        const NAV: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+            <html xmlns=\"http://www.w3.org/1999/xhtml\" xmlns:epub=\"http://www.idpf.org/2007/ops\">\
+            <head><title>n</title></head><body><nav epub:type=\"toc\"><ol>\
+            <li><a href=\"c.xhtml\">c</a></li></ol></nav></body></html>";
+        const NCX: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+            <ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\"><head>\
+            <meta name=\"dtb:uid\" content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head>\
+            <docTitle><text>T</text></docTitle><navMap><navPoint id=\"n\" playOrder=\"1\">\
+            <navLabel><text>c</text></navLabel><content src=\"c.xhtml\"/></navPoint></navMap></ncx>";
+        let ch = if version == "3.0" {
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><!DOCTYPE html>\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>c</title></head>\
+             <body><p>c</p></body></html>"
+        } else {
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+             <html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>c</title></head>\
+             <body><p>c</p></body></html>"
+        };
+        let mut buf = Vec::new();
+        {
+            let mut z = ZipWriter::new(std::io::Cursor::new(&mut buf));
+            z.start_file(
+                "mimetype",
+                SimpleFileOptions::default().compression_method(CompressionMethod::Stored),
+            )
+            .unwrap();
+            z.write_all(b"application/epub+zip").unwrap();
+            let o = SimpleFileOptions::default();
+            let mut files = vec![
+                ("META-INF/container.xml", container),
+                ("OEBPS/p.opf", opf),
+                ("OEBPS/c.xhtml", ch),
+                if version == "3.0" {
+                    ("OEBPS/nav.xhtml", NAV)
+                } else {
+                    ("OEBPS/toc.ncx", NCX)
+                },
+            ];
+            files.extend_from_slice(extra);
+            for (name, body) in files {
+                z.start_file(name, o).unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    fn ids(version: &str, container: &str, extra: &[(&str, &str)]) -> Vec<&'static str> {
+        let mut v: Vec<_> = crate::validate_bytes(book(version, container, extra))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn c(attrs: &str, body: &str) -> String {
+        format!("<?xml version=\"1.0\"?><container {attrs} {NS}>{body}</container>")
+    }
+
+    #[test]
+    fn the_baselines_are_clean_in_both_versions() {
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        assert_eq!(ids("3.0", &x, &[]), Vec::<&str>::new());
+        assert_eq!(ids("2.0", &x, &[]), Vec::<&str>::new());
+    }
+
+    /// EPUB 3 fixes `version` at "1.0"; OCF 2.0.1's schema takes any value.
+    /// Neither takes a missing one.
+    #[test]
+    fn the_version_attribute_is_judged_by_the_books_version() {
+        let v2 = c("version=\"2.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        assert_eq!(ids("3.0", &v2, &[]), ["RSC-005"]);
+        assert_eq!(ids("2.0", &v2, &[]), Vec::<&str>::new());
+        let none = c("", &format!("<rootfiles>{RF}</rootfiles>"));
+        assert_eq!(ids("3.0", &none, &[]), ["RSC-005"]);
+        assert_eq!(ids("2.0", &none, &[]), ["RSC-005"]);
+    }
+
+    /// Structure the schema owns, which nothing reported before.
+    #[test]
+    fn the_schema_reports_what_the_content_model_forbids() {
+        let rf_extra = RF.replace("/>", " foo=\"x\"/>");
+        for body in [
+            format!("<rootfiles>{rf_extra}</rootfiles>"),
+            format!("<rootfiles foo=\"x\">{RF}</rootfiles>"),
+            format!("<rootfiles>hello{RF}</rootfiles>"),
+            format!("<rootfiles>{RF}</rootfiles><links/>"),
+            format!("<rootfiles>{RF}</rootfiles><links><link href=\"x.xml\"/></links>"),
+        ] {
+            let x = c("version=\"1.0\"", &body);
+            assert_eq!(ids("3.0", &x, &[]), ["RSC-005"], "{body}");
+            assert_eq!(ids("2.0", &x, &[]), ["RSC-005"], "{body}");
+        }
+        let bad_layout = RF.replace("/>", " rendition:layout=\"bogus\"/>");
+        let x = c(
+            "version=\"1.0\"",
+            &format!("<rootfiles>{bad_layout}</rootfiles>"),
+        );
+        assert_eq!(ids("3.0", &x, &[]), ["RSC-005"]);
+    }
+
+    /// The handler reads only container-namespace rootfiles, so a document in
+    /// another namespace declares no package document: RSC-003, and the schema
+    /// never runs. A missing package file is OPF-002 and stops it too.
+    #[test]
+    fn the_schema_runs_only_once_a_package_document_is_found() {
+        let wrong_ns = format!(
+            "<?xml version=\"1.0\"?><container version=\"2.0\" xmlns=\"urn:example:x\">\
+             <rootfiles>{RF}</rootfiles></container>"
+        );
+        assert_eq!(ids("3.0", &wrong_ns, &[]), ["RSC-003"]);
+        let gone = c(
+            "version=\"2.0\"",
+            "<rootfiles><rootfile full-path=\"OEBPS/gone.opf\" \
+             media-type=\"application/oebps-package+xml\"/></rootfiles>",
+        );
+        assert_eq!(ids("3.0", &gone, &[]), ["OPF-002"]);
+    }
+
+    /// `rootfile[position() > 1]`: per `rootfiles`, over every rootfile. Two
+    /// `rootfiles` elements are a schema error and no RSC-017; a second
+    /// rootfile without a package media type still needs a selection
+    /// attribute.
+    #[test]
+    fn rsc_017_counts_rootfiles_within_their_parent() {
+        let two_parents = c(
+            "version=\"1.0\"",
+            &format!("<rootfiles>{RF}</rootfiles><rootfiles>{RF}</rootfiles>"),
+        );
+        let got = ids("3.0", &two_parents, &[]);
+        assert!(got.contains(&"RSC-005"), "{got:?}");
+        assert!(!got.contains(&"RSC-017"), "{got:?}");
+        let untyped_second = c(
+            "version=\"1.0\"",
+            &format!(
+                "<rootfiles>{RF}<rootfile full-path=\"OEBPS/p.opf\" media-type=\"\"/></rootfiles>"
+            ),
+        );
+        assert_eq!(ids("3.0", &untyped_second, &[]), ["RSC-005", "RSC-017"]);
+    }
+
+    /// The Schematron rules run on a single-rendition book too, and a
+    /// mapping link is the one whose whole `rel` is `mapping`.
+    #[test]
+    fn the_container_schematron_runs_on_every_epub3_book() {
+        let dup = RF.replace("/>", " rendition:accessMode=\"textual textual\"/>");
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{dup}</rootfiles>"));
+        assert_eq!(ids("3.0", &x, &[]), ["RSC-005"]);
+        const MAP: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"/>";
+        let link = |rel: &str, mt: &str| {
+            format!("<link href=\"map.xhtml\" rel=\"{rel}\" media-type=\"{mt}\"/>")
+        };
+        let html = link("mapping", "text/html");
+        let x = c(
+            "version=\"1.0\"",
+            &format!("<rootfiles>{RF}</rootfiles><links>{html}</links>"),
+        );
+        assert_eq!(ids("3.0", &x, &[("map.xhtml", MAP)]), ["RSC-005"]);
+        let xh = link("mapping", "application/xhtml+xml");
+        let x = c(
+            "version=\"1.0\"",
+            &format!("<rootfiles>{RF}</rootfiles><links>{xh}{xh}</links>"),
+        );
+        assert_eq!(ids("3.0", &x, &[("map.xhtml", MAP)]), ["RSC-005"]);
+        // `rel="mapping foo"` is no mapping link: its target is undeclared.
+        let foo = link("mapping foo", "text/html");
+        let x = c(
+            "version=\"1.0\"",
+            &format!("<rootfiles>{RF}</rootfiles><links>{foo}{foo}</links>"),
+        );
+        assert_eq!(ids("3.0", &x, &[("map.xhtml", MAP)]), ["OPF-003"]);
     }
 }

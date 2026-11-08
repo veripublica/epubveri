@@ -271,6 +271,9 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
         Some(v) => v.starts_with('3'),
         None => epub3 == Some(true),
     };
+    // container.xml against its schema, picked by the version validated as
+    // (so `-v` moves it, as it moves epubcheck's `OCFMetaFileChecker`).
+    ocf::check_container_schema(&mut container, &opf_paths, validated_as_3, &mut report);
     let requested = options.profile.as_deref().filter(|p| PROFILES.contains(p));
     // "The first package document" is the first one *declaring a type*:
     // `OCFCheckerState.getPublicationTypes()` returns the first entry of a

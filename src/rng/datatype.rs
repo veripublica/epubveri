@@ -34,6 +34,14 @@ pub enum Datatype {
     /// under `XMLonly`; the unrestricted `string` alternative beside it is
     /// `HTMLonly`, which epubcheck sets to `notAllowed`).
     MetaCharset,
+    /// A media type as the container schema reads one: `datatype.mimetype`,
+    /// `xsd:string { pattern = '[a-zA-Z0-9!#$&+\-\^_]+/[a-zA-Z0-9!#$&+\-\^_]+.*' }`.
+    /// An `xsd:string` keeps its whitespace, so a padded value fails. Named
+    /// by us, as the pattern facet is not something the loader reads.
+    MediaType,
+    /// `rendition:media`'s value: the container schema's media-query pattern
+    /// (Multiple-Rendition Publications 1.0), on the raw `xsd:string`.
+    RenditionMedia,
     IdRef,
     IdRefs,
     Language,
@@ -77,6 +85,8 @@ impl Datatype {
             "html5Token" => Html5Token,
             "httpEquiv" => HttpEquiv,
             "metaCharset" => MetaCharset,
+            "mediaType" => MediaType,
+            "renditionMedia" => RenditionMedia,
             "IDREF" => IdRef,
             "IDREFS" => IdRefs,
             "language" => Language,
@@ -97,7 +107,7 @@ impl Datatype {
     /// Apply the XSD whiteSpace facet for this type.
     fn normalize(&self, s: &str) -> String {
         match self {
-            Datatype::String => s.to_string(),
+            Datatype::String | Datatype::MediaType | Datatype::RenditionMedia => s.to_string(),
             Datatype::NormalizedString => s
                 .chars()
                 .map(|c| {
@@ -128,6 +138,8 @@ impl Datatype {
             | Datatype::Token
             | Datatype::Unknown(_) => true,
             Datatype::AnyUri => Self::is_any_uri(&s),
+            Datatype::MediaType => is_media_type(&s),
+            Datatype::RenditionMedia => is_rendition_media(&s),
             Datatype::NmToken => is_nmtoken(&s),
             Datatype::NmTokens => !s.is_empty() && s.split(' ').all(is_nmtoken),
             Datatype::Name => is_name(&s),
@@ -580,5 +592,150 @@ mod tests {
         assert!(D::Boolean.equal("true", "1"));
         assert!(D::Token.equal("  a   b ", "a b"));
         assert!(!D::String.equal("a b", "a  b"));
+    }
+}
+
+/// `[a-zA-Z0-9!#$&+\-\^_]+/[a-zA-Z0-9!#$&+\-\^_]+.*`, matched whole. XSD's
+/// `.` is any character but a line feed or a carriage return.
+fn is_media_type(s: &str) -> bool {
+    let tchar = |c: char| c.is_ascii_alphanumeric() || "!#$&+-^_".contains(c);
+    let Some((ty, rest)) = s.split_once('/') else {
+        return false;
+    };
+    let sub_len = rest.chars().take_while(|&c| tchar(c)).count();
+    !ty.is_empty() && ty.chars().all(tchar) && sub_len > 0 && !rest.contains(['\n', '\r'])
+}
+
+/// The Multiple-Rendition media-query pattern, matched whole:
+///
+/// ```text
+/// \s*(((only|not)\s+)?all|\([^>)]+\))(\s+and\s+\([^>)]+\))*\s*
+///     (,\s*(((only|not)\s+)?all|\([^>)]+\))(\s+and\s+\([^>)]+\))*\s*)*
+/// ```
+///
+/// A comma-separated list of queries; each is `all`, optionally after
+/// `only`/`not`, or a parenthesised expression, then any number of
+/// `and (...)`. `\s` is the four XML whitespace characters.
+fn is_rendition_media(s: &str) -> bool {
+    let ws = |c: char| matches!(c, ' ' | '\t' | '\n' | '\r');
+    // One query, from the start of `q` (which carries no comma).
+    fn query(q: &str, ws: impl Fn(char) -> bool + Copy) -> bool {
+        let q = q.trim_start_matches(ws).trim_end_matches(ws);
+        // The head: `((only|not)\s+)?all` or `\([^>)]+\)`.
+        let rest = if let Some(r) = q.strip_prefix('(') {
+            let Some(end) = r.find(')') else { return false };
+            let inner = &r[..end];
+            if inner.is_empty() || inner.contains('>') {
+                return false;
+            }
+            &r[end + 1..]
+        } else {
+            let mut r = q;
+            for kw in ["only", "not"] {
+                if let Some(after) = r.strip_prefix(kw)
+                    && after.starts_with(ws)
+                {
+                    r = after.trim_start_matches(ws);
+                    break;
+                }
+            }
+            match r.strip_prefix("all") {
+                Some(after) => after,
+                None => return false,
+            }
+        };
+        // `(\s+and\s+\([^>)]+\))*`
+        let mut r = rest;
+        while !r.is_empty() {
+            if !r.starts_with(ws) {
+                return false;
+            }
+            let t = r.trim_start_matches(ws);
+            let Some(t) = t.strip_prefix("and") else {
+                return false;
+            };
+            if !t.starts_with(ws) {
+                return false;
+            }
+            let t = t.trim_start_matches(ws);
+            let Some(t) = t.strip_prefix('(') else {
+                return false;
+            };
+            let Some(end) = t.find(')') else { return false };
+            let inner = &t[..end];
+            if inner.is_empty() || inner.contains('>') {
+                return false;
+            }
+            r = &t[end + 1..];
+        }
+        true
+    }
+    // `[^>)]` admits a comma inside parentheses, so split only on commas at
+    // depth zero.
+    let mut parts = Vec::new();
+    let (mut depth, mut start) = (0usize, 0usize);
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' if depth == 0 => depth = 1,
+            ')' if depth == 1 => depth = 0,
+            ',' if depth == 0 => {
+                parts.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    parts.push(&s[start..]);
+    parts.iter().all(|q| query(q, ws))
+}
+
+#[cfg(test)]
+mod container_datatype_tests {
+    use super::Datatype;
+
+    /// Each value measured against epubcheck 5.4.0 as `rendition:media` on a
+    /// single-rendition book: accepted or RSC-005.
+    #[test]
+    fn rendition_media_matches_the_specifications_pattern() {
+        let dt = Datatype::from("", "renditionMedia");
+        for ok in [
+            "all",
+            "only all",
+            "not all",
+            "(min-width: 600px)",
+            "all and (color)",
+            "(a), (b)",
+            " all ",
+            "all,(x)",
+            "(x)  and  (y)",
+            "only  all",
+            "(a,b)",
+            "all and (x) and (y), not all",
+        ] {
+            assert!(dt.allows(ok), "{ok:?} is accepted");
+        }
+        for bad in [
+            "screen",
+            "(a>b)",
+            "(a),",
+            "(x) and(y)",
+            "()",
+            "not (x)",
+            "x",
+            "",
+        ] {
+            assert!(!dt.allows(bad), "{bad:?} is RSC-005");
+        }
+    }
+
+    /// `datatype.mimetype` is an `xsd:string`, so padding fails it.
+    #[test]
+    fn a_media_type_keeps_its_whitespace() {
+        let dt = Datatype::from("", "mediaType");
+        assert!(dt.allows("application/xhtml+xml"));
+        assert!(dt.allows("text/html; charset=utf-8"));
+        assert!(!dt.allows(" application/xhtml+xml "));
+        assert!(!dt.allows("xhtml"));
+        assert!(!dt.allows("/xhtml"));
     }
 }

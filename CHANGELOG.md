@@ -10,6 +10,33 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`META-INF/container.xml` is validated against its schema.** Nothing checked
+  its structure before: a `version` other than `1.0` in an EPUB 3 book, a
+  rootfile without `media-type`, an attribute or element the format does not
+  define, `links` before `rootfiles`, a bad `rendition:*` value. Each is now
+  RSC-005, as in epubcheck, against the EPUB 3 or the EPUB 2 schema according to
+  the version validated as. The check runs only once a package document has
+  been found, so it never adds to RSC-003 or OPF-002.
+- **A `container.xml` in the wrong namespace declares no package document.**
+  It is RSC-003. Rootfiles used to be matched by local name, so such a book
+  was validated as usual. A rootfile `media-type` with spaces around it now
+  counts, as epubcheck trims it.
+- **The container's Multiple-Rendition rules run on every EPUB 3 book.** A
+  duplicate `rendition:accessMode` value, two mapping links and a mapping link
+  that is not XHTML are RSC-005; a later rootfile without a selection
+  attribute is RSC-017. They used to run only when several package documents
+  were declared, and RSC-017 counted across `rootfiles` elements. That gave a
+  warning epubcheck does not give on a container with two `rootfiles`. A
+  mapping link is one whose whole `rel` is `mapping`; any other link's target
+  is undeclared (OPF-003).
+- **References to `mimetype`, to files in `META-INF` and to the package
+  document are checked.** A link, image or stylesheet pointing at `mimetype`
+  or into `META-INF` is RSC-008 when the file exists and RSC-007 when it does
+  not. A hyperlink to the package document is RSC-010, unless its fragment is
+  an EPUB CFI. All three were exempt before, and epubcheck reports each.
+
 ## [0.37.1] - 2026-11-04
 
 **Dependency updates, with no change to any report.** zip moves to 9.3.0, which carries
