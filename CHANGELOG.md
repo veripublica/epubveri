@@ -10,6 +10,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A package document's `version` must be exactly `3.0` or `2.0`.** `3.1`,
+  `3.0.1` or `2.0.1` passed as if they were those; they are now OPF-001 and
+  the book is not checked further, as for any other unknown version.
+- **The package document is checked against its full element tables,** in
+  EPUB 3 and EPUB 2. A `link` without `rel` or `href`, an attribute or child
+  element the table does not list, sections out of order, an incomplete
+  `guide` `reference` or `bindings` `mediaType`, and a malformed `media-type`
+  or `href` were accepted and are now RSC-005.
+- **A link's `rel` is checked like other property values:** a malformed value
+  is OPF-026 and an undeclared prefix OPF-028.
+- **`bindings` in an EPUB 2 book no longer draws the RSC-017 deprecation
+  warning.** It is not an EPUB 2 element, and is RSC-005 there.
+- **One fault, one finding** for a missing `manifest`, a missing `idref` and
+  `fallback-style` in EPUB 3, each of which was reported twice.
+
 ## [0.38.0] - 2026-11-08
 
 **Where the specification and epubcheck disagree, epubveri now follows the

@@ -984,6 +984,14 @@ fn item_id_is_padded(item: roxmltree::Node) -> bool {
         .is_some_and(|raw| raw != crate::xmlext::trim_xml_space(raw))
 }
 
+/// The two values a package document's `version` may have, compared whole.
+/// EPUB 3.3 `sec-package-elem`: "The attribute MUST have the value "3.0"";
+/// OPF 2.0.1 fixes "2.0" the same way. A prefix test let "3.1" and "2.0.1"
+/// through as if they were those.
+fn is_supported_version(version: &str) -> bool {
+    matches!(version, "2.0" | "3.0")
+}
+
 /// OPF-001 beside a package document that cannot be decoded. epubcheck's
 /// `PackageDocumentPeeker` reads the version with the same XML parser before
 /// anything else (`OCFChecker`:420), so the encoding fault that is our RSC-016
@@ -5302,20 +5310,6 @@ fn check_text(
     check_uuid_identifiers(&doc, opf_path, report);
     check_collection_roles(&doc, opf_path, report);
     check_guide_duplicates(&doc, opf_path, report);
-    if let Some(bindings) = pkg
-        .children()
-        .find(|n| n.is_element() && n.tag_name().name() == "bindings")
-    {
-        report.push_node(
-            RSC_017,
-            Severity::Warning,
-            "the \"bindings\" element is deprecated",
-            opf_path,
-            bindings,
-            "opf.package.deprecated_bindings",
-            Vec::new(),
-        );
-    }
 
     // --- version ---
     let version = pkg.attr_no_ns("version").unwrap_or("");
@@ -5335,7 +5329,7 @@ fn check_text(
             "opf.package.missing_version_attribute",
             Vec::new(),
         );
-    } else if !(version.starts_with("2.") || version.starts_with("3.")) {
+    } else if !is_supported_version(version) {
         report.push_node(
             OPF_001,
             Severity::Error,
@@ -5356,7 +5350,7 @@ fn check_text(
     // complain about - expects OPF-001 *and nothing else*. We were reporting
     // six extra findings on it, all of them about a spec the book never
     // claimed to follow (issue #26).
-    if !(version.starts_with("2.") || version.starts_with("3.")) {
+    if !is_supported_version(version) {
         return;
     }
     // PKG-001 (#61): the caller may demand a version, and epubcheck's rule is
@@ -5414,6 +5408,23 @@ fn check_text(
     // Down here for the same reason as its two neighbours: every OBS-001 site
     // is `OPFHandler30`'s, so the rule needs the settled version.
     check_outdated_features(&doc, opf_path, is_epub3, report);
+    // Here for the same reason: `bindings` is an EPUB 3 element and only there
+    // can it be deprecated. In EPUB 2 the grammar refuses it outright.
+    if is_epub3
+        && let Some(bindings) = pkg
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "bindings")
+    {
+        report.push_node(
+            RSC_017,
+            Severity::Warning,
+            "the \"bindings\" element is deprecated",
+            opf_path,
+            bindings,
+            "opf.package.deprecated_bindings",
+            Vec::new(),
+        );
+    }
     // Moved down here with its neighbours, for their reason: `OPF-086c` is
     // EPUB 3 only, and the version is only settled at this point — after the
     // `-v` override, so `-v 2.0` on a 3.0 book silences it too.
@@ -5435,6 +5446,33 @@ fn check_text(
             );
         }
         if let Some(v) = n.attr_no_ns("properties") {
+            check_prefix_usage(
+                v,
+                &declared_prefixes,
+                PrefixContext::Package,
+                opf_path,
+                n,
+                is_epub3,
+                report,
+            );
+        }
+        // A link's `rel` is a list of the same property values, read by the
+        // same parser (`OPFHandler30.processLinkRel`).
+        if n.tag_name().name() == "link"
+            && n.tag_name().namespace() == Some(OPF_PKG_NS)
+            && let Some(v) = n.attr_no_ns("rel")
+        {
+            if is_epub3 {
+                for token in v.xml_tokens().filter(|t| !vocab_property_is_well_formed(t)) {
+                    report.push_at_pos(
+                        OPF_026,
+                        Severity::Error,
+                        format!("link rel '{token}' is not well-formed"),
+                        opf_path,
+                        Position::of(n),
+                    );
+                }
+            }
             check_prefix_usage(
                 v,
                 &declared_prefixes,
@@ -5671,31 +5709,6 @@ fn check_text(
     let metadata = pkg
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "metadata");
-    // 5.4: the metadata element must come before the manifest element.
-    // A plain child-index compare, hand-coded because our XPath 1.0 core
-    // has no preceding-sibling:: axis to express this in Schematron.
-    {
-        let element_children: Vec<_> = pkg.children().filter(|n| n.is_element()).collect();
-        let metadata_pos = element_children
-            .iter()
-            .position(|n| n.tag_name().name() == "metadata");
-        let manifest_pos = element_children
-            .iter()
-            .position(|n| n.tag_name().name() == "manifest");
-        if let (Some(m), Some(mf)) = (metadata_pos, manifest_pos)
-            && mf < m
-        {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                "the \"metadata\" element must come before the \"manifest\" element",
-                opf_path,
-                pkg,
-                "opf.package.metadata_after_manifest",
-                Vec::new(),
-            );
-        }
-    }
     if let Some(md) = metadata {
         let elem_text = |n: roxmltree::Node| -> String {
             n.descendants()
@@ -6954,17 +6967,8 @@ fn check_text(
                     }
                 }
             }
-            if is_epub3 && item.attr_no_ns("fallback-style").is_some() {
-                report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    "the \"fallback-style\" attribute is an obsolete EPUB 2 construct",
-                    opf_path,
-                    item,
-                    "opf.manifest_item.obsolete_fallback_style",
-                    Vec::new(),
-                );
-            } else if let Some(fs) = item.attr_no_ns("fallback-style") {
+            // In EPUB 3 the grammar refuses the attribute.
+            if !is_epub3 && let Some(fs) = item.attr_no_ns("fallback-style") {
                 fallback_style_map.insert(
                     id.to_string(),
                     crate::xmlext::trim_xml_space(fs).to_string(),
@@ -7109,16 +7113,6 @@ fn check_text(
                 Vec::new(),
             );
         }
-    } else {
-        report.push_node(
-            RSC_005,
-            Severity::Error,
-            "OPF is missing the <manifest> element",
-            opf_path,
-            pkg,
-            "opf.package.missing_manifest_element",
-            Vec::new(),
-        );
     }
     // Sorted: these carry no position, so their order in the report is the
     // order they are pushed in, and a hash map's values come out differently
@@ -7802,15 +7796,8 @@ fn check_text(
         let mut spine_seen: HashSet<&str> = HashSet::new();
         for (position, ir) in refs.into_iter().enumerate() {
             match ir.attr_no_ns("idref").map(crate::xmlext::trim_xml_space) {
-                None => report.push_node(
-                    RSC_005,
-                    Severity::Error,
-                    "spine <itemref> is missing 'idref'",
-                    opf_path,
-                    ir,
-                    "opf.spine.itemref_missing_idref",
-                    Vec::new(),
-                ),
+                // A missing `idref` is the grammar's finding.
+                None => {}
                 Some(idref) => {
                     if !spine_seen.insert(idref) {
                         // Same underlying condition, version-scoped ID:
@@ -8394,7 +8381,9 @@ fn check_text(
         .children()
         .find(|n| n.is_element() && n.tag_name().name() == "manifest")
         .unwrap_or(pkg);
-    if is_epub3 && !nav_present {
+    // With no manifest at all the grammar has said so, and the absent
+    // navigation document is that same fault, not a second one.
+    if is_epub3 && !nav_present && manifest_node != pkg {
         report.push_node(
             RSC_005,
             Severity::Error,
@@ -22214,6 +22203,107 @@ mod tests {
         assert!(!ids(&head("")).contains(&OPF_003));
     }
 
+    /// The package document's tables are closed and its sections ordered,
+    /// and `version` is compared whole. Each shape here passed before
+    /// 2026-11-09 and is an error by the specification's element tables;
+    /// epub-test-books found the first three.
+    #[test]
+    fn package_tables_are_closed_and_version_is_exact() {
+        use crate::ids::{OPF_001, OPF_026, OPF_028, RSC_005};
+        const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+        let errors = |opf: &str| -> Vec<&'static str> {
+            crate::validate_bytes(epub_with_opf(Some(opf), CH1))
+                .messages
+                .iter()
+                .filter(|m| matches!(m.severity, super::Severity::Error | super::Severity::Fatal))
+                .map(|m| m.id)
+                .collect()
+        };
+        const META: &str = r#"<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>"#;
+        const MANIFEST: &str = r#"<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/></manifest>"#;
+        const SPINE: &str = r#"<spine><itemref idref="ch1"/></spine>"#;
+        let book = |package_attrs: &str, meta: &str, rest: &str| {
+            format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" unique-identifier="id" {package_attrs}>{META}{meta}</metadata>{rest}</package>"#
+            )
+        };
+        let v3 = |meta: &str, rest: &str| book(r#"version="3.0""#, meta, rest);
+        let tail = format!("{MANIFEST}{SPINE}");
+        assert_eq!(errors(&v3("", &tail)), Vec::<&str>::new());
+
+        for v in ["3.1", "3.0.1", "3.0 ", "2.0.1"] {
+            assert_eq!(
+                errors(&book(&format!(r#"version="{v}""#), "", &tail)),
+                vec![OPF_001],
+                "version {v:?}"
+            );
+        }
+
+        let href = r#"href="https://example.org/r.xml""#;
+        for link in [
+            format!(r#"<link {href} media-type="application/xml"/>"#),
+            r#"<link rel="record" media-type="application/xml"/>"#.to_string(),
+            format!(r#"<link rel="record" {href} media-type="application/xml" foo="1"/>"#),
+            format!(r#"<link rel="record" {href} media-type="application/xml">x</link>"#),
+            format!(r#"<link rel="record" {href} media-type="nope"/>"#),
+        ] {
+            assert_eq!(errors(&v3(&link, &tail)), vec![RSC_005], "{link}");
+        }
+        assert_eq!(
+            errors(&v3(
+                &format!(r#"<link rel="foaf:x" {href} media-type="application/xml"/>"#),
+                &tail
+            )),
+            vec![OPF_028]
+        );
+        assert_eq!(
+            errors(&v3(
+                &format!(r#"<link rel="foaf:" {href} media-type="application/xml"/>"#),
+                &tail
+            )),
+            vec![OPF_026]
+        );
+
+        let item = r#"<item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#;
+        for (from, to) in [
+            (
+                item,
+                r#"<item foo="1" id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>"#,
+            ),
+            (
+                r#"<itemref idref="ch1"/>"#,
+                r#"<itemref foo="1" idref="ch1"/>"#,
+            ),
+            ("<manifest>", r#"<manifest foo="1">"#),
+            ("<spine>", r#"<spine foo="1">"#),
+            ("<manifest>", r#"<manifest><x:a xmlns:x="urn:x"/>"#),
+            (
+                "</spine>",
+                "</spine><guide><reference type=\"toc\"/></guide>",
+            ),
+        ] {
+            assert_eq!(
+                errors(&v3("", &tail.replace(from, to))),
+                vec![RSC_005],
+                "{to}"
+            );
+        }
+        assert_eq!(
+            errors(&v3("", &format!("{SPINE}{MANIFEST}"))),
+            vec![RSC_005, RSC_005],
+            "spine before manifest"
+        );
+
+        // One fault, one finding: the grammar's, not a second one by hand.
+        assert_eq!(
+            errors(&v3(
+                "",
+                &tail.replace(item, &item.replace("/>", r#" fallback-style="nav"/>"#))
+            )),
+            vec![RSC_005]
+        );
+    }
+
     /// A package `meta` is the EPUB 3 form (`property`) or the legacy one
     /// (`name` and `content`), and EPUB 2 metadata admits nothing else in the
     /// OPF or DC namespace. Both were clean here; RSC-005 in 5.4.0.
@@ -22235,7 +22325,9 @@ mod tests {
             )
         };
         assert_eq!(rsc_005(&v3("<meta>x</meta>")), 1);
-        assert_eq!(rsc_005(&v3(r#"<meta name="x">y</meta>"#)), 1);
+        // Two faults, as epubcheck 5.4.0 reports them: no `content`, and a value
+        // the legacy form does not take.
+        assert_eq!(rsc_005(&v3(r#"<meta name="x">y</meta>"#)), 2);
         assert_eq!(rsc_005(&v3(r#"<meta name="cover" content="ch1"/>"#)), 0);
         assert_eq!(
             rsc_005(&v3(r#"<meta property="dcterms:creator">x</meta>"#)),

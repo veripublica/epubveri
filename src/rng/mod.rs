@@ -1005,22 +1005,25 @@ mod tests {
     /// allows, and a real legacy EPUB 2 book using it was being rejected.
     #[test]
     fn legacy_tours_package_child_is_accepted() {
-        let with = MIN_OPF.replace(
+        let epub2 = MIN_OPF
+            .replace("version=\"3.0\"", "version=\"2.0\"")
+            .replace(" properties=\"nav\"", "");
+        let with = epub2.replace(
             "<spine><itemref idref=\"nav\"/></spine>",
             "<spine><itemref idref=\"nav\"/></spine>\
              <tours><tour id=\"t\" title=\"T\"><site title=\"s\" href=\"a.xhtml\"/></tour></tours>",
         );
         assert!(
-            validate_xml(&package_grammar(), &with).unwrap(),
+            validate_xml(&package_grammar_epub2(), &with).unwrap(),
             "opf20.rng allows tours as a package child"
         );
         // An unrecognised OPF-namespaced child is still a violation - the
         // point is that `tours` is real, not that the model went loose.
-        let bogus = MIN_OPF.replace(
+        let bogus = epub2.replace(
             "<spine><itemref idref=\"nav\"/></spine>",
             "<spine><itemref idref=\"nav\"/></spine><hello/>",
         );
-        assert!(!validate_xml(&package_grammar(), &bogus).unwrap());
+        assert!(!validate_xml(&package_grammar_epub2(), &bogus).unwrap());
     }
 
     /// JSWolf, MobileRead #236 (issue #90): an EPUB 2 `<package>` carrying
@@ -1091,20 +1094,23 @@ mod tests {
     #[test]
     fn empty_tours_is_rejected() {
         let tours = |body: &str| {
-            MIN_OPF.replace(
-                "<spine><itemref idref=\"nav\"/></spine>",
-                &format!("<spine><itemref idref=\"nav\"/></spine><tours>{body}</tours>"),
-            )
+            MIN_OPF
+                .replace("version=\"3.0\"", "version=\"2.0\"")
+                .replace(" properties=\"nav\"", "")
+                .replace(
+                    "<spine><itemref idref=\"nav\"/></spine>",
+                    &format!("<spine><itemref idref=\"nav\"/></spine><tours>{body}</tours>"),
+                )
         };
         for body in ["", "\n  ", " "] {
             assert!(
-                !validate_xml(&package_grammar(), &tours(body)).unwrap(),
+                !validate_xml(&package_grammar_epub2(), &tours(body)).unwrap(),
                 "an empty <tours> is missing its required <tour> (body {body:?})"
             );
         }
         assert!(
             validate_xml(
-                &package_grammar(),
+                &package_grammar_epub2(),
                 &tours("<tour id=\"t\" title=\"T\"><site title=\"s\" href=\"a.xhtml\"/></tour>")
             )
             .unwrap(),

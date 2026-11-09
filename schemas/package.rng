@@ -6,12 +6,12 @@
   the project's dual AGPL/commercial license). NOT derived from epubcheck's or
   W3C's schema files.
 
-  Deliberately PERMISSIVE: it pins the package skeleton (package > metadata,
-  manifest, spine; manifest items carry id/href/media-type; spine itemrefs carry
-  idref) but allows any attributes, foreign elements, and loose metadata so it
-  does not false-positive on the wide variety of valid real-world packages.
-  Finer constraints (required dc metadata, vocabularies, refines) are handled by
-  the hand-coded checks today and will move to Schematron later.
+  The document's structure is closed, as the specification's element tables
+  are: which children, in which order, which attributes, of which type. EPUB 3
+  follows EPUB 3.3 section 5 and EPUB 2 follows OPF 2.0.1. What is left to the
+  hand-coded checks and to package.sch: a required value's meaning, references
+  between elements, vocabularies, and requiredness that has its own finding
+  (`unique-identifier`, `spine@toc`, `version`'s value).
 
   One exception to "allows any attributes": `id`, `idref`, `toc` and `fallback`
   are typed. An XML `id` is an NCName — no spaces, no commas, no apostrophes,
@@ -35,62 +35,59 @@
          ns="http://www.idpf.org/2007/opf"
          datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
 
+  <!-- The order is the specification's: metadata, manifest, spine, then an
+       optional guide, an optional bindings and any collections. It was an
+       interleave with a wildcard beside each attribute list, which accepted
+       unknown attributes, a foreign element anywhere, and the sections in any
+       order (epub-test-books, 2026-11-09). -->
   <start>
     <element name="package">
-      <ref name="anyAttributesExceptTypedAndLang"/>
       <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
+      <optional><ref name="dirAttr"/></optional>
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <optional><attribute name="prefix"/></optional>
       <!-- Required by the spec; its absence is reported in opf.rs (OPF-048),
            so only its type is the grammar's. -->
       <optional><attribute name="unique-identifier"><data type="IDREF"/></attribute></optional>
       <attribute name="version"><data type="string"/></attribute>
-      <interleave>
-        <element name="metadata"><ref name="metadataContent-epub3"/></element>
-        <element name="manifest">
-          <ref name="anyAttributesExceptTyped"/>
-          <optional><attribute name="id"><data type="ID"/></attribute></optional>
-          <oneOrMore>
-            <choice>
-              <element name="item">
-                <ref name="anyAttributesExceptTyped"/>
-                <attribute name="id"><data type="ID"/></attribute>
-                <attribute name="href"><data type="string"/></attribute>
-                <attribute name="media-type"><data type="string"/></attribute>
-                <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
-                <optional><attribute name="fallback"><data type="IDREF"/></attribute></optional>
-                <optional><attribute name="media-overlay"><data type="IDREF"/></attribute></optional>
-              </element>
-              <ref name="foreignElement"/>
-            </choice>
-          </oneOrMore>
-        </element>
-        <element name="spine">
-          <ref name="anyAttributesExceptTyped"/>
-          <optional><attribute name="id"><data type="ID"/></attribute></optional>
-          <optional><attribute name="toc"><data type="IDREF"/></attribute></optional>
-          <optional>
-            <attribute name="page-progression-direction">
-              <choice><value>ltr</value><value>rtl</value><value>default</value></choice>
-            </attribute>
-          </optional>
-          <oneOrMore>
-            <choice>
-              <element name="itemref">
-                <ref name="anyAttributesExceptTyped"/>
-                <attribute name="idref"><data type="IDREF"/></attribute>
-                <optional><attribute name="id"><data type="ID"/></attribute></optional>
-                <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
-                <optional>
-                  <attribute name="linear"><choice><value>yes</value><value>no</value></choice></attribute>
-                </optional>
-              </element>
-              <ref name="foreignElement"/>
-            </choice>
-          </oneOrMore>
-        </element>
-        <!-- guide, collection, bindings, foreign top-level children -->
-        <zeroOrMore><ref name="otherPackageChild"/></zeroOrMore>
-      </interleave>
+      <element name="metadata"><ref name="metadataContent-epub3"/></element>
+      <element name="manifest">
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <oneOrMore>
+          <element name="item">
+            <attribute name="id"><data type="ID"/></attribute>
+            <attribute name="href"><data type="anyURI"/></attribute>
+            <attribute name="media-type"><data type="mediaType"/></attribute>
+            <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
+            <optional><attribute name="fallback"><data type="IDREF"/></attribute></optional>
+            <optional><attribute name="media-overlay"><data type="IDREF"/></attribute></optional>
+            <empty/>
+          </element>
+        </oneOrMore>
+      </element>
+      <element name="spine">
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <optional><attribute name="toc"><data type="IDREF"/></attribute></optional>
+        <optional>
+          <attribute name="page-progression-direction">
+            <choice><value>ltr</value><value>rtl</value><value>default</value></choice>
+          </attribute>
+        </optional>
+        <oneOrMore>
+          <element name="itemref">
+            <attribute name="idref"><data type="IDREF"/></attribute>
+            <optional><attribute name="id"><data type="ID"/></attribute></optional>
+            <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
+            <optional>
+              <attribute name="linear"><choice><value>yes</value><value>no</value></choice></attribute>
+            </optional>
+            <empty/>
+          </element>
+        </oneOrMore>
+      </element>
+      <optional><ref name="guideEl-epub3"/></optional>
+      <optional><ref name="bindingsEl-epub3"/></optional>
+      <zeroOrMore><ref name="collection"/></zeroOrMore>
     </element>
   </start>
 
@@ -99,52 +96,10 @@
     <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
   </define>
 
-  <!-- The EPUB 3 wildcard minus the attributes epubcheck's `package-30.rnc`
-       types and we now type too. **A typed attribute must be excepted from
-       the wildcard beside it**, or a bad value simply matches the wildcard
-       and the type is never asked. Typed (2026-10-07): `properties`, `rel`
-       (`xsd:NMTOKENS`), `property`, `scheme` (`xsd:NMTOKEN`), `linear`
-       (`yes`|`no`), `page-progression-direction` (`ltr`|`rtl`|`default`),
-       and `id` (`xsd:ID`) wherever `opf.id.attr` puts it: `package`,
-       `manifest`, `spine`, `itemref`, `meta`, `link` (`item`'s was typed
-       already). Measured the same way for `id`: every id on those elements
-       in the shelf, the fixtures and epub-tests is an NCName. And
-       `unique-identifier`, `fallback`, `media-overlay` and `toc` as
-       `xsd:IDREF` (2026-10-07): lexical only, as Jing checks it there -
-       a reference to an id that does not exist is the hand-coded checks'
-       question (OPF-030, OPF-040, OPF-049). All 1,494 values in the same
-       three sets are NCNames.
-       Each is excepted on every element, which is harmless where an element
-       does not carry it: there, the attribute was already foreign.
-
-       Why these: a probe sweep found `properties="nav&#160;"`, `linear="yes&#160;"`
-       and the like passing here and failing there, and the same typing gives
-       epubcheck's RSC-005 on its own fixtures for an empty or list-valued
-       `property`/`scheme` and an empty link `properties`, which four
-       Schematron patterns used to imitate (removed). Measured before
-       shipping: of 75 EPUB 3 packages on the shelf (1,001 values), 1,086
-       epubcheck fixtures and 208 epub-tests packages, the only values these
-       types reject are in the four fixtures that expect the RSC-005. -->
-  <define name="anyAttributesExceptTyped">
-    <zeroOrMore>
-      <attribute>
-        <anyName>
-          <except>
-            <name ns="">properties</name>
-            <name ns="">rel</name>
-            <name ns="">property</name>
-            <name ns="">scheme</name>
-            <name ns="">linear</name>
-            <name ns="">page-progression-direction</name>
-            <name ns="">id</name>
-            <name ns="">unique-identifier</name>
-            <name ns="">fallback</name>
-            <name ns="">media-overlay</name>
-            <name ns="">toc</name>
-          </except>
-        </anyName>
-      </attribute>
-    </zeroOrMore>
+  <define name="dirAttr">
+    <attribute name="dir">
+      <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
+    </attribute>
   </define>
 
   <!-- `opf.xml.lang.attr = attribute xml:lang { "" | datatype.languagecode }`
@@ -157,79 +112,56 @@
     <choice><value type="token"></value><data type="language"/></choice>
   </define>
 
-  <!-- The typed wildcard minus `xml:lang` as well, for the two elements here
-       that type it (`package`, `meta`). Not folded into
-       `anyAttributesExceptTyped`: `item`, `itemref`, `spine`, `manifest` and
-       `link` carry no `xml:lang` in package-30.rnc, and taking it out of
-       their wildcard would make it an error there, which is not measured. -->
-  <define name="anyAttributesExceptTypedAndLang">
-    <zeroOrMore>
-      <attribute>
-        <anyName>
-          <except>
-            <name ns="">properties</name>
-            <name ns="">rel</name>
-            <name ns="">property</name>
-            <name ns="">scheme</name>
-            <name ns="">linear</name>
-            <name ns="">page-progression-direction</name>
-            <name ns="">id</name>
-            <name ns="">unique-identifier</name>
-            <name ns="">fallback</name>
-            <name ns="">media-overlay</name>
-            <name ns="">toc</name>
-            <name ns="http://www.w3.org/XML/1998/namespace">lang</name>
-          </except>
-        </anyName>
-      </attribute>
-    </zeroOrMore>
-  </define>
-
-  <!-- EPUB 3 `<meta>` and `<link>`, typed as above and otherwise as loose as
-       they were: any other attribute, any content. -->
-  <!-- A package `meta` is one of two forms (`package-30.rnc`,
-       `opf.meta`): the EPUB 3 one with a `property`, or the legacy one with
-       both `name` and `content`. `property` used to be optional outright, so
-       a `<meta>` carrying neither was clean here and RSC-005 there (measured
-       on 5.4.0; none of the shelf's 75 EPUB 3 packages has one). A
-       collection's `meta` takes the EPUB 3 form only. -->
+  <!-- A package `meta` is one of two forms: the EPUB 3 one with a `property`
+       and a text value, or the legacy one with exactly `name` and `content`
+       and no value. A collection's `meta` takes the EPUB 3 form only. An
+       empty value in the EPUB 3 form has its own finding in package.sch. -->
   <define name="metaEl-epub3">
     <element name="meta">
-      <ref name="metaCommon-epub3"/>
       <choice>
         <ref name="metaPropertyForm-epub3"/>
         <group>
           <attribute name="name"/>
           <attribute name="content"/>
+          <empty/>
         </group>
       </choice>
     </element>
   </define>
   <define name="collectionMetaEl-epub3">
     <element name="meta">
-      <ref name="metaCommon-epub3"/>
       <ref name="metaPropertyForm-epub3"/>
     </element>
-  </define>
-  <define name="metaCommon-epub3">
-    <ref name="anyAttributesExceptTypedAndLang"/>
-    <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
-    <optional><attribute name="id"><data type="ID"/></attribute></optional>
-    <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
   </define>
   <define name="metaPropertyForm-epub3">
     <attribute name="property"><data type="NMTOKEN"/></attribute>
     <optional><attribute name="scheme"><data type="NMTOKEN"/></attribute></optional>
+    <optional><attribute name="refines"><data type="anyURI"/></attribute></optional>
+    <optional><attribute name="id"><data type="ID"/></attribute></optional>
+    <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
+    <optional><ref name="dirAttr"/></optional>
+    <text/>
   </define>
+  <!-- EPUB 3.3 `sec-link-elem`: `rel` and `href` are REQUIRED, the attribute
+       list is closed and the content model is empty. Used by the package
+       metadata and by a collection's metadata. -->
   <define name="linkEl-epub3">
     <element name="link">
-      <ref name="anyAttributesExceptTyped"/>
+      <attribute name="href"><data type="anyURI"/></attribute>
+      <attribute name="rel"><data type="NMTOKENS"/></attribute>
+      <optional>
+        <attribute name="hreflang">
+          <choice><value type="token"></value><data type="language"/></choice>
+        </attribute>
+      </optional>
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <optional><attribute name="rel"><data type="NMTOKENS"/></attribute></optional>
+      <optional><attribute name="refines"><data type="anyURI"/></attribute></optional>
+      <optional><attribute name="media-type"><data type="mediaType"/></attribute></optional>
       <optional><attribute name="properties"><data type="NMTOKENS"/></attribute></optional>
-      <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
+      <empty/>
     </element>
   </define>
+
 
   <!-- fully permissive mixed content: any attributes, any child elements, text -->
   <define name="looseContent">
@@ -237,12 +169,8 @@
     <mixed><zeroOrMore><ref name="anyElement"/></zeroOrMore></mixed>
   </define>
 
-  <!-- EPUB 3 `<metadata>`. Everything here except the Dublin Core elements
-       stays as permissive as `looseContent` - `<meta>`, `<link>` and foreign
-       elements are unconstrained, and so is any dc-namespace element outside
-       the fifteen below, because *which* dc elements may appear is a separate
-       question from what attributes they take and tightening it here would
-       bundle two changes.
+  <!-- EPUB 3 `<metadata>`: the fifteen Dublin Core elements, `<meta>`, `<link>`.
+
 
        The fifteen are constrained because a legacy OPF 2 package converted to
        EPUB 3 keeps `opf:role`, `opf:file-as`, `opf:scheme` and `opf:event` on
@@ -283,7 +211,6 @@
       <choice>
         <ref name="dcFull-epub3"/>
         <ref name="dcIdOnly-epub3"/>
-        <ref name="otherDcElement"/>
         <ref name="metaOrLinkEl-epub3"/>
       </choice>
     </zeroOrMore>
@@ -298,29 +225,20 @@
   <define name="collection">
     <element name="collection">
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <optional>
-        <attribute name="dir">
-          <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
-        </attribute>
-      </optional>
+      <optional><ref name="dirAttr"/></optional>
       <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
       <attribute name="role"><data type="string"/></attribute>
-      <!-- Still loose, except that its `<meta>` and `<link>` are typed as the
-           package metadata's are (`opf.collection.meta`, `opf.link`): the
-           Schematron patterns the typing replaced covered them here too. -->
       <optional>
         <element name="metadata">
-          <ref name="anyAttributes"/>
+          <optional><attribute name="id"><data type="ID"/></attribute></optional>
+          <optional><ref name="dirAttr"/></optional>
+          <optional><attribute name="xml:lang"><ref name="opfLangValue"/></attribute></optional>
           <zeroOrMore>
             <choice>
+              <ref name="dcFull-epub3"/>
+              <ref name="dcIdOnly-epub3"/>
               <ref name="collectionMetaEl-epub3"/>
               <ref name="linkEl-epub3"/>
-              <element>
-                <anyName>
-                  <except><name>meta</name><name>link</name></except>
-                </anyName>
-                <ref name="looseContent"/>
-              </element>
             </choice>
           </zeroOrMore>
         </element>
@@ -331,10 +249,10 @@
           <zeroOrMore><ref name="collection"/></zeroOrMore>
           <oneOrMore>
             <element name="link">
-              <attribute name="href"><data type="string"/></attribute>
+              <attribute name="href"><data type="anyURI"/></attribute>
               <optional><attribute name="rel"><data type="NMTOKENS"/></attribute></optional>
               <optional><attribute name="id"><data type="ID"/></attribute></optional>
-              <optional><attribute name="media-type"><data type="string"/></attribute></optional>
+              <optional><attribute name="media-type"><data type="mediaType"/></attribute></optional>
               <empty/>
             </element>
           </oneOrMore>
@@ -400,12 +318,6 @@
        both tools - measured the same way. So this constrains the EPUB 3 model
        only.
 
-       What is tightened here is the *namespace*, not the vocabulary: an
-       unrecognized element in the DC namespace is still accepted, keeping the
-       deliberate split recorded above ("which dc elements may appear is a
-       separate question"). epubcheck would reject one; closing that is its own
-       change with its own evidence.
-
        0 of the shelf's 74 EPUB 3 packages - and 0 of its 390 EPUB 2 ones -
        carry a metadata child that is not a dc element, a `<meta>` or a
        `<link>`. -->
@@ -416,134 +328,79 @@
     </choice>
   </define>
 
-  <!-- A DC-namespace element that is not one of the fifteen: still fully
-       permissive, on the split described above. -->
-  <define name="otherDcElement">
-    <element>
-      <nsName ns="http://purl.org/dc/elements/1.1/">
-        <except>
-          <name>dc:title</name>
-          <name>dc:source</name>
-          <name>dc:creator</name>
-          <name>dc:subject</name>
-          <name>dc:description</name>
-          <name>dc:publisher</name>
-          <name>dc:contributor</name>
-          <name>dc:relation</name>
-          <name>dc:coverage</name>
-          <name>dc:rights</name>
-          <name>dc:identifier</name>
-          <name>dc:language</name>
-          <name>dc:date</name>
-          <name>dc:type</name>
-          <name>dc:format</name>
-        </except>
-      </nsName>
-      <ref name="looseContent"/>
-    </element>
-  </define>
-
   <define name="anyElement">
     <element><anyName/><ref name="looseContent"/></element>
   </define>
 
-  <define name="foreignElement">
-    <element>
-      <anyName><except><nsName ns="http://www.idpf.org/2007/opf"/></except></anyName>
-      <ref name="looseContent"/>
+  <define name="guideEl-epub3">
+    <element name="guide">
+      <oneOrMore>
+        <element name="reference">
+          <attribute name="href"><data type="anyURI"/></attribute>
+          <attribute name="type"/>
+          <optional><attribute name="title"/></optional>
+          <empty/>
+        </element>
+      </oneOrMore>
     </element>
   </define>
 
-  <!-- The other real package children, plus any element from a *different*
-       namespace (a vendor extension) - an unrecognized OPF-namespaced
-       element (confirmed via a real fixture, a stray <hello/>) is a real
-       content-model violation, not something to stay permissive about.
-
-       `tours` was previously left out on the grounds that no corpus fixture
-       exercises it. That was the wrong test (#58): epubcheck's `opf20.rng`
-       lists it explicitly in `OPF20.package-content` - metadata, manifest,
-       spine, optional tours, optional guide - so a legacy EPUB 2 book using
-       it is valid and we were rejecting it. The corpus not covering
-       something says nothing about whether the schema allows it.
-
-       Like `bindings`/`collection` (EPUB 3-only) it is accepted regardless
-       of version: this grammar has no version switch, and being permissive
-       about a legacy element in EPUB 3 costs a missed error, where the
-       reverse cost a wrong one. -->
-  <define name="otherPackageChild">
-    <choice>
-      <element name="guide">
-        <!-- must have at least one <reference> (confirmed via a real
-             fixture, an empty <guide></guide>), and the child is named.
-
-             **The child used to be `anyElement`, and that was a false
-             negative** (JSWolf, MobileRead #254): `<guide><referen/>…</guide>`
-             validated here and draws `element "referen" not allowed anywhere;
-             expected element "reference"` from epubcheck. Both grammars name
-             it - `OPF20.guide-content` is `oneOrMore reference-element` and
-             `package-30.rnc` has `opf.guide = element guide { opf.reference+ }`
-             - so this is right at either version.
-
-             The comment that justified `anyElement` said naming the child
-             "would duplicate a violation the surrounding grammar already
-             reports". Nothing did. That is the same shape as the silent-skip
-             family: one check defers to another that does not cover the case,
-             and the gap reports nothing at all. -->
-        <ref name="anyAttributes"/>
-        <oneOrMore>
-          <element name="reference"><ref name="looseContent"/></element>
-        </oneOrMore>
-      </element>
-      <element name="bindings"><ref name="looseContent"/></element>
-      <ref name="collection"/>
-      <!-- must have at least one <tour> (JSWolf, MobileRead #234; issue #87).
-           `opf20.rng`'s `OPF20.tours-content` is `oneOrMore tour-element`, so
-           an empty <tours></tours> is an error there and was accepted here.
-           #58 added the element's *existence* and stopped; a permissive
-           placeholder in a grammar is not local to the element it is on, and
-           this is the second time that has cost a finding (see `mapEl`). The
-           child is `anyElement` rather than `tour` by name for the same
-           reason `guide` above uses it: the cardinality is the finding, and
-           naming the child would duplicate a violation the surrounding
-           grammar already reports. -->
-      <element name="tours">
-        <ref name="anyAttributes"/>
-        <oneOrMore>
-          <!-- and a <tour> holds <site> elements, `OPF20.tour-content`. Found
-               by the same probe as the child-name fix above: with the name
-               corrected, a *well-formed* `<tours><tour title="t"/></tours>`
-               still drew `element "tour" incomplete; missing required element
-               "site"` from epubcheck and nothing from us. One tightening
-               exposing the next is the pattern here - close the neighbourhood,
-               not the case. -->
-          <element name="tour">
-            <ref name="anyAttributes"/>
-            <oneOrMore>
-              <element name="site"><ref name="looseContent"/></element>
-            </oneOrMore>
-          </element>
-        </oneOrMore>
-      </element>
-      <ref name="foreignElement"/>
-    </choice>
+  <define name="bindingsEl-epub3">
+    <element name="bindings">
+      <oneOrMore>
+        <element name="mediaType">
+          <attribute name="media-type"><data type="mediaType"/></attribute>
+          <attribute name="handler"><data type="IDREF"/></attribute>
+          <empty/>
+        </element>
+      </oneOrMore>
+    </element>
   </define>
+
+  <!-- OPF 2.0.1's `tours` and `guide`: `tour` and `reference` need their
+       attributes, and a `tour` holds at least one `site`. -->
+  <define name="toursEl-epub2">
+    <element name="tours">
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <oneOrMore>
+        <element name="tour">
+          <optional><attribute name="id"><data type="ID"/></attribute></optional>
+          <attribute name="title"/>
+          <oneOrMore>
+            <element name="site">
+              <optional><attribute name="id"><data type="ID"/></attribute></optional>
+              <attribute name="title"/>
+              <attribute name="href"><data type="anyURI"/></attribute>
+              <empty/>
+            </element>
+          </oneOrMore>
+        </element>
+      </oneOrMore>
+    </element>
+  </define>
+
+  <define name="guideEl-epub2">
+    <element name="guide">
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <oneOrMore>
+        <element name="reference">
+          <optional><attribute name="id"><data type="ID"/></attribute></optional>
+          <attribute name="type"/>
+          <optional><attribute name="title"/></optional>
+          <attribute name="href"><data type="anyURI"/></attribute>
+          <empty/>
+        </element>
+      </oneOrMore>
+    </element>
+  </define>
+
 
   <!-- ============================================================ -->
   <!-- EPUB 2 (OPF 2.0.1) package document.                          -->
   <!--                                                               -->
-  <!-- The grammar above is deliberately permissive and has no        -->
-  <!-- version switch, which meant an EPUB 2 package was checked      -->
-  <!-- against EPUB 3's rules. epubcheck validates one against a      -->
-  <!-- *closed* grammar (schema/20/rng/opf20.rng), and the difference -->
-  <!-- accounted for four of the eleven findings we were missing on a -->
-  <!-- mislabelled book (issue #63; DNSB, MobileRead #134).           -->
-  <!--                                                               -->
-  <!-- Scoped to the three element shapes that evidence covers:       -->
-  <!-- `meta`, `item`, `itemref`. The metadata *element pool* is left -->
-  <!-- as permissive as before on purpose - that is where real EPUB 2 -->
-  <!-- books vary most (legacy `dc-metadata`/`x-metadata` forms,      -->
-  <!-- vendor extensions), so it is where a false positive would come -->
-  <!-- from, and no evidence asked for it.                            -->
+  <!-- A closed grammar of its own, with OPF 2.0.1's order: metadata,  -->
+  <!-- manifest, spine, then optional tours and guide. The metadata   -->
+  <!-- pool stays open to foreign elements, as OPF 2.0.1's is.        -->
   <!--                                                               -->
   <!-- `spine@toc` is required by opf20 too, but stays out of here:   -->
   <!-- a hand-coded check already reports it, and both would double.  -->
@@ -568,36 +425,21 @@
       <attribute name="version"><data type="string"/></attribute>
       <optional><attribute name="unique-identifier"><data type="IDREF"/></attribute></optional>
       <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <interleave>
-        <element name="metadata"><ref name="metadataContent-epub2"/></element>
-        <element name="manifest">
-          <ref name="anyAttributes"/>
-          <oneOrMore>
-            <choice>
-              <ref name="itemEl-epub2"/>
-              <ref name="foreignElement"/>
-            </choice>
-          </oneOrMore>
-        </element>
-        <element name="spine">
-          <!-- OPF 2.0.1's spine attlist (epubcheck schema/20/rng/opf20.rng)
-               is exactly optional `id` plus `toc` - not the EPUB 3 wildcard.
-               `page-progression-direction` is an EPUB 3 addition and drew
-               nothing from us in a 2.0 package until 2026-08-04, found in a
-               MobileRead #148 output diff and confirmed against epubcheck
-               locally. `toc`'s *requiredness* is deliberately not encoded
-               here; a missing one is reported by its own check. -->
-          <optional><attribute name="id"><data type="ID"/></attribute></optional>
-          <optional><attribute name="toc"><data type="IDREF"/></attribute></optional>
-          <oneOrMore>
-            <choice>
-              <ref name="itemrefEl-epub2"/>
-              <ref name="foreignElement"/>
-            </choice>
-          </oneOrMore>
-        </element>
-        <zeroOrMore><ref name="otherPackageChild"/></zeroOrMore>
-      </interleave>
+      <element name="metadata"><ref name="metadataContent-epub2"/></element>
+      <element name="manifest">
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <oneOrMore><ref name="itemEl-epub2"/></oneOrMore>
+      </element>
+      <element name="spine">
+        <!-- OPF 2.0.1's spine attlist is exactly optional `id` plus `toc`.
+             `toc`'s *requiredness* is deliberately not encoded here; a
+             missing one is reported by its own check. -->
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <optional><attribute name="toc"><data type="IDREF"/></attribute></optional>
+        <oneOrMore><ref name="itemrefEl-epub2"/></oneOrMore>
+      </element>
+      <optional><ref name="toursEl-epub2"/></optional>
+      <optional><ref name="guideEl-epub2"/></optional>
     </element>
   </define>
 
@@ -643,7 +485,7 @@
 
        0 of the shelf's 390 EPUB 2 packages use a wrapper at all. -->
   <define name="metadataContent-epub2">
-    <ref name="anyAttributes"/>
+    <optional><attribute name="id"><data type="ID"/></attribute></optional>
     <choice>
       <ref name="legacyMetadata-epub2"/>
       <ref name="modernMetadata-epub2"/>
@@ -813,7 +655,7 @@
   <define name="itemEl-epub2">
     <element name="item">
       <attribute name="id"><data type="ID"/></attribute>
-      <attribute name="href"><data type="string"/></attribute>
+      <attribute name="href"><data type="anyURI"/></attribute>
       <attribute name="media-type"><data type="string"/></attribute>
       <optional><attribute name="fallback"><data type="IDREF"/></attribute></optional>
       <optional><attribute name="fallback-style"><data type="string"/></attribute></optional>
