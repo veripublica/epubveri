@@ -10,6 +10,10 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-09
+
+**More books are reported invalid.** The package document and the navigation document are now checked against their full tables, and an EPUB 3 `img` with no `alt` is an error. Where the specification and epubcheck disagree the specification decides, so a book that passes epubcheck can fail here and, in a few listed cases, the other way round. Each difference is in AGENTS.md, "Known differences from epubcheck".
+
 ### Fixed
 
 - **A package document's `version` must be exactly `3.0` or `2.0`.** `3.1`,

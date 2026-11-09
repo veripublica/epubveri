@@ -58,18 +58,24 @@ Each line is a place where epubveri follows the specification and epubcheck
   ([w3c/epubcheck#1754](https://github.com/w3c/epubcheck/issues/1754)).
 - **An `svg` element directly inside an SVG `title` is RSC-005.** EPUB 3.3
   § 6.2.3: "the markup MUST contain only elements declared in the HTML
-  namespace". epubcheck 5.4.0 accepts it, as flow content.
+  namespace". epubcheck 5.4.0 accepts it, as flow content
+  ([w3c/epubcheck#1759](https://github.com/w3c/epubcheck/issues/1759)).
 - **An `hgroup` in a restricted `nav` is RSC-005.** EPUB 3.3 § 7.3 gives the
-  heading as "h1-h6"; epubcheck 5.4.0 also accepts `hgroup`.
+  heading as "h1-h6"; epubcheck 5.4.0 also accepts `hgroup`
+  ([w3c/epubcheck#1758](https://github.com/w3c/epubcheck/issues/1758)).
 - **A `nav` of another type needs no heading.** EPUB 3.3 § 7.3 has "h1-h6
-  [0 or 1]" and § 7.4.5 adds nothing; epubcheck 5.4.0 reports RSC-005.
+  [0 or 1]" and § 7.4.5 adds nothing; epubcheck 5.4.0 reports RSC-005
+  ([w3c/epubcheck#1758](https://github.com/w3c/epubcheck/issues/1758)).
 - **`dc-metadata` and `x-metadata` pass in EPUB 2.** OPF 2.0.1 § 2.2 deprecates
-  them and keeps them; epubcheck 5.4.0 reports OPF-049.
+  them and keeps them; epubcheck 5.4.0 reports OPF-049
+  ([w3c/epubcheck#1761](https://github.com/w3c/epubcheck/issues/1761)).
 - **An `img` with no `alt` in EPUB 3 is RSC-005,** with HTML's own exceptions.
-  HTML 4.8.4.4.15 and EPUB 3.3 § 6.1.2; epubcheck 5.4.0 is silent.
+  HTML 4.8.4.4.15 and EPUB 3.3 § 6.1.2; epubcheck 5.4.0 is silent
+  ([w3c/epubcheck#1760](https://github.com/w3c/epubcheck/issues/1760)).
 - **EPUB 2: OPF-092 on a malformed `dc:language`, RSC-005 on an `ncx` with no
   `version`, SPEC-002 and SPEC-003.** OPF 2.0.1 §§ 2.2.12, 2.4.1.2, 2.3.1.1 and
-  2.4.1.2; epubcheck 5.4.0 reports none of them.
+  2.4.1.2; epubcheck 5.4.0 reports none of them
+  ([w3c/epubcheck#1761](https://github.com/w3c/epubcheck/issues/1761)).
 - **A compressed `mimetype` is PKG-007, an error.** EPUB 3.3 § 4.3.3: "EPUB
   creators MUST NOT compress or encrypt the `mimetype` file". epubcheck 5.4.0
   compares only the inflated contents.
