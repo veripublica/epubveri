@@ -1919,9 +1919,12 @@ fn check_href_attribute(n: roxmltree::Node, path: &str, report: &mut Report) {
 /// `body` holding an `<svg>` with a `title` and a `desc` inside is one
 /// finding there and was three here. What sits under a rejected section is
 /// not validated, except that a further change of namespace opens a new
-/// section and is rejected again. An SVG element straight under `title` is
-/// the same section as `title` itself, and the grammar's flow content takes
-/// `svg`, so it draws nothing. Each shape was probed on 5.4.0 (2026-10-14).
+/// section and is rejected again. Each shape was probed on 5.4.0 (2026-10-14).
+///
+/// An SVG element straight under `title` is rejected too. EPUB 3.3
+/// `sec-svg-restrictions`: "the markup MUST contain only elements declared in
+/// the HTML namespace". epubcheck agrees on every SVG element but `svg`
+/// itself, which its flow content lets through.
 pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &mut Report) {
     // The XHTML half first. When it runs, the grammar answers `href` itself,
     // so the hand check below stands aside rather than say it twice.
@@ -1962,17 +1965,12 @@ pub(crate) fn check_title_content(title: roxmltree::Node, path: &str, report: &m
 /// survived the text). Every rejected section
 /// blanked to spaces of the same length so each offset still points at the
 /// same character, and findings are mapped back to the real file. Returns
-/// whether it ran: not when the title holds no XHTML element, and not when
-/// it holds an SVG element directly, whose unprefixed name would land in
-/// the wrapper's XHTML namespace.
+/// whether it ran: not when the title holds no XHTML element.
 fn check_title_xhtml(title: roxmltree::Node, path: &str, report: &mut Report) -> bool {
     let kids: Vec<_> = title.children().filter(|c| c.is_element()).collect();
     if !kids
         .iter()
         .any(|c| c.tag_name().namespace() == Some(XHTML_NS))
-        || kids
-            .iter()
-            .any(|c| c.tag_name().namespace() == Some(SVG_NS))
     {
         return false;
     }
@@ -2084,14 +2082,10 @@ fn walk_title_sections(
                 },
             );
             walk_title_sections(n, ns, rejected, f);
-        } else if ns == parent_ns {
-            // Same section. Under a rejected one, keep looking for nested
-            // sections; an SVG child of `title` itself is allowed content,
-            // which the callers' own walk over the document goes on to check.
-            if rejected {
-                f(n, TitleStep::Unvalidated);
-                walk_title_sections(n, ns, true, f);
-            }
+        } else if ns == parent_ns && rejected {
+            // Same section: keep looking for nested ones.
+            f(n, TitleStep::Unvalidated);
+            walk_title_sections(n, ns, true, f);
         } else {
             f(n, TitleStep::Rejected);
             walk_title_sections(n, ns, true, f);
@@ -5817,12 +5811,14 @@ mod tests {
                 ),
                 vec!["urn:x", "urn:y"],
             ),
-            // An svg straight under title is title's own section.
+            // SVG straight under title is not HTML either: one finding per
+            // element, with nothing inside it asked again.
             (
                 "<x:a xmlns:x=\"urn:x\"/><y:b xmlns:y=\"urn:y\"><y:c/></y:b><svg><rect/></svg>"
                     .to_string(),
-                vec!["urn:x", "urn:y"],
+                vec!["urn:x", "urn:y", SVG_NS],
             ),
+            ("<rect/><g><circle/></g>".to_string(), vec![SVG_NS, SVG_NS]),
         ] {
             let xml = format!("<svg xmlns=\"{SVG_NS}\"><title>{inner}</title></svg>");
             let d = doc(&xml);
@@ -5900,7 +5896,7 @@ mod tests {
     }
 
     /// The callers skip a `foreignObject` or `title` inside a rejected
-    /// section, and keep one under an svg that is title's own content.
+    /// section, an svg directly under a `title` being one.
     #[test]
     fn nothing_inside_a_rejected_title_section_is_visited_again() {
         let xml = format!(
@@ -5918,7 +5914,7 @@ mod tests {
         };
         assert!(skipped.contains(&by_id("in")));
         assert!(skipped.contains(&by_id("t")));
-        assert!(!skipped.contains(&by_id("own")));
+        assert!(skipped.contains(&by_id("own")));
     }
 
     #[test]

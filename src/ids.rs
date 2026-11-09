@@ -402,6 +402,12 @@ pub fn advisory_basis(id: &str) -> Option<AdvisoryBasis> {
 // `mimetype`, the six `META-INF` files, or a package document. EPUB 3.3
 // § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2. epubcheck 5.4.0 has no check for the list.
 pub const SPEC_001: &str = "SPEC-001"; // EPUB 3.3 §4.2.6.3.2.1: a file that must never be encrypted is declared encrypted (error)
+// SPEC-002: OPF 2.0.1 § 2.3.1.1, an EPUB 2 manifest item of a non-core type,
+// not an embedded font and not used by the spine or a document, with no
+// fallback. SPEC-003: OPF 2.0.1 § 2.4.1.2, the NCX item carries fallback
+// information. epubcheck 5.4.0 has neither check.
+pub const SPEC_002: &str = "SPEC-002"; // OPF 2.0.1 §2.3.1.1: an unused non-core item has no fallback (error)
+pub const SPEC_003: &str = "SPEC-003"; // OPF 2.0.1 §2.4.1.2: the NCX item carries fallback information (error)
 
 // --- Resource limits (epubveri-owned; see the module note) ---
 //

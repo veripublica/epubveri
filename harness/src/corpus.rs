@@ -717,6 +717,9 @@ const SINGLE_DOC_WRAP_EXCLUDED: &[&str] = &[
 /// disagrees with the feature file. "We would rather not be wrong here" is
 /// not a reason.
 const WRAPPED_MODE_EXPECTATION: &[(&str, &[&str])] = &[
+    // Not a wrap question: EPUB 3.3 § 7.3 has "h1-h6 [0 or 1]" and no sentence
+    // requires a heading on this `nav`. AGENTS.md, "Known differences".
+    ("nav-other-heading-missing-error.xhtml", &[]),
     // `<package>` with no `version` attribute. In `-mode opf` the grammar
     // reports RSC-005 `missing required attribute "version"`. Wrapped as a
     // publication, `OCFChecker` resolves the version before any grammar runs
@@ -1199,9 +1202,12 @@ fn run_report(scenarios: &[Scenario], res_dir: &Path) {
             }
             if s.clean && !single_doc_wrap {
                 n_strict += 1;
+                // A SPEC-* finding is by definition one epubcheck has no id
+                // for, so its fixtures cannot have asked for its absence.
                 let extra: Vec<String> = warn_ids
                     .iter()
                     .filter(|i| !expected.iter().any(|e| *e == i.as_str()))
+                    .filter(|i| !i.starts_with("SPEC-"))
                     .cloned()
                     .collect();
                 if !extra.is_empty() {

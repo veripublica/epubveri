@@ -149,7 +149,7 @@ pub(crate) fn check(
     check_play_order_sequence(&d, ncx_path, report);
     check_page_target_uniqueness(&d, ncx_path, report);
     check_multi_lang_siblings(&d, ncx_path, report);
-    check_schema(&d, ncx_xml, ncx_path, report);
+    check_schema(&d, ncx_xml, ncx_path, is_epub3, report);
 }
 
 /// Every `id` attribute anywhere in the NCX must be a valid XML NCName
@@ -661,7 +661,13 @@ fn dtd_supplies_version(ncx_xml: &str) -> bool {
     decl.contains("-//NISO//DTD ncx 2005-1//EN") || decl.contains("ncx-2005-1.dtd")
 }
 
-fn check_schema(doc: &roxmltree::Document, ncx_xml: &str, ncx_path: &str, report: &mut Report) {
+fn check_schema(
+    doc: &roxmltree::Document,
+    ncx_xml: &str,
+    ncx_path: &str,
+    is_epub3: bool,
+    report: &mut Report,
+) {
     // `navPoint`'s own content model stays owned by `check_nav_point_model`
     // above, whose three messages were measured shape-by-shape against
     // epubcheck (#79) and name the fault far better than a grammar can:
@@ -697,7 +703,9 @@ fn check_schema(doc: &roxmltree::Document, ncx_xml: &str, ncx_path: &str, report
 
     let grammar = crate::rng::ncx_grammar();
     for blame in crate::rng::validate_node_report(&grammar, doc.root_element()) {
-        if dtd_version && is_missing_ncx_version(&blame) {
+        // OPF 2.0.1 § 2.4.1.2 requires `version` "explicitly specified in the
+        // document instance", so a DTD default does not excuse it in EPUB 2.
+        if is_epub3 && dtd_version && is_missing_ncx_version(&blame) {
             continue;
         }
         if is_nav_point_content_model(&blame)

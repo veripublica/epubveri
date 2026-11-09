@@ -24,6 +24,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   is OPF-026 and an undeclared prefix OPF-028.
 - **`bindings` in an EPUB 2 book no longer draws the RSC-017 deprecation
   warning.** It is not an EPUB 2 element, and is RSC-005 there.
+- **The navigation document's `nav` and `li` content models are closed.** A
+  second `ol`, a heading after the `ol`, a second label in a `li`, any other
+  element after them, and stray text were accepted and are now RSC-005.
+- **An SVG `title` may hold only HTML-namespace markup.** An SVG element in it
+  was accepted and is now RSC-005. EPUB 3.3 § 6.2.3 requires this, so it
+  includes a nested `svg`, which epubcheck accepts.
+- **ADV-010 no longer reports the fallback of an item in use.** A Reading
+  System shows that file in place of the item.
+- **A `page-list` or `landmarks` nav with two lists now draws RSC-017** as
+  well as the RSC-005.
+- **EPUB 3: an `img` with no `alt` is RSC-005,** unless HTML's own list
+  excuses it (a non-empty `title`, a `figure` holding only the image and a
+  captioned `figcaption`, or the generator attribute). EPUB 3.3 § 6.1.2 holds
+  a content document to HTML, and HTML requires a checker to report it.
+- **EPUB 2: four OPF 2.0.1 rules are reported.** A malformed `dc:language` is
+  OPF-092, an `ncx` with no `version` attribute RSC-005 even where the DTD
+  supplies one, an unused non-core item with no fallback SPEC-002, and fallback
+  attributes on the NCX item SPEC-003.
+- **A `nav` of another type needs no heading,** and **`dc-metadata` and
+  `x-metadata` draw no finding.** Neither specification asks for what
+  epubcheck reports here.
 - **One fault, one finding** for a missing `manifest`, a missing `idref` and
   `fallback-style` in EPUB 3, each of which was reported twice.
 

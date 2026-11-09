@@ -11,6 +11,7 @@ use crate::xmlext::NodeExt;
 use crate::xmlext::XmlTokens;
 
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
+const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 
 fn nav_type<'a>(nav: roxmltree::Node<'a, 'a>) -> Option<&'a str> {
     nav.attribute((EPUB_NS, "type"))
@@ -107,6 +108,52 @@ fn check_hidden_attrs(doc: &roxmltree::Document, path: &str, report: &mut Report
     }
 }
 
+/// RSC-005 for the first run of non-blank text directly inside a restricted
+/// `nav` or `li`, whose content models hold elements only. One finding per
+/// parent, as with the `li` that has no element at all.
+fn report_stray_text(parent: roxmltree::Node, rule: &'static str, path: &str, report: &mut Report) {
+    if let Some(text) = parent
+        .children()
+        .find(|c| c.is_text() && c.text().is_some_and(|t| !crate::xmlext::is_xml_blank(t)))
+    {
+        report.push_node_text(
+            RSC_005,
+            Severity::Error,
+            format!("text not allowed inside \"{}\"", parent.tag_name().name()),
+            path,
+            text,
+            rule,
+            Vec::new(),
+        );
+    }
+}
+
+/// RSC-005 for each XHTML element after the last place the content model has
+/// room for one. An element from another namespace already has its finding
+/// from the document-wide foreign-element check.
+fn report_extra_children(
+    extras: &[roxmltree::Node],
+    rule: &'static str,
+    path: &str,
+    report: &mut Report,
+) {
+    for extra in extras
+        .iter()
+        .filter(|n| n.tag_name().namespace() == Some(XHTML_NS))
+    {
+        let name = extra.tag_name().name();
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            format!("element \"{name}\" not allowed here"),
+            path,
+            *extra,
+            rule,
+            vec![name.to_string()],
+        );
+    }
+}
+
 /// One `<li>`'s content model: its first element child must be `<a>` or
 /// `<span>` (the "label"); anything else (e.g. a bare nested `<ol>`) is
 /// "not allowed yet". A `<span>` label has no link of its own, so a
@@ -171,7 +218,16 @@ fn check_li(li: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
         );
         return;
     }
+    report_stray_text(li, "navdoc.li.stray_text", path, report);
     let nested_ol = children.get(1).filter(|c| c.tag_name().name() == "ol");
+    // EPUB 3.3 `sec-nav-def-model`: one label, then at most one list.
+    let allowed = 1 + usize::from(nested_ol.is_some());
+    report_extra_children(
+        &children[allowed.min(children.len())..],
+        "navdoc.li.unexpected_child",
+        path,
+        report,
+    );
     if label_name == "span" && nested_ol.is_none() {
         report.push_node(
             RSC_005,
@@ -228,43 +284,22 @@ fn check_ol(ol: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
     }
 }
 
-/// A restricted `<nav>`'s own children: `[heading]? <ol>`. `toc`/`page-
-/// list`/`landmarks` don't require a heading; any *other* named type does
-/// (confirmed via a real fixture pair - the same "lot" nav valid with a
-/// heading, invalid without one).
+/// A restricted `<nav>`'s own children: `[heading]? <ol>`.
 fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &mut Report) {
     let children: Vec<_> = nav.children().filter(|c| c.is_element()).collect();
-    let mut idx = 0;
-    let mut heading = None;
-    if let Some(first) = children.first()
-        && matches!(
+    // The heading is optional in every restricted nav: EPUB 3.3 § 7.3 has
+    // "h1-h6 [0 or 1]", and § 7.4.5 adds no requirement for other types.
+    // epubcheck 5.4.0 requires one there (`epub-nav-30.sch`, `req-heading`).
+    //
+    // The empty-heading check is not here: `heading-content`'s context is
+    // every `h1`-`h6` in the navigation document, so it runs once over the
+    // whole document in `check`.
+    let idx = usize::from(children.first().is_some_and(|first| {
+        matches!(
             first.tag_name().name(),
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6"
         )
-    {
-        heading = Some(*first);
-        idx = 1;
-    }
-    match heading {
-        // The empty-heading check is not here: `heading-content`'s context is
-        // every `h1`-`h6` in the navigation document, not only the one a nav
-        // opens with, so it runs once over the whole document in `check`.
-        // Doing it here missed `<h2>  </h2>` sitting outside any nav, which
-        // epubcheck reports (#79).
-        Some(_) => {}
-        None if !matches!(ty, "toc" | "page-list" | "landmarks") => {
-            report.push_node(
-                RSC_005,
-                Severity::Error,
-                format!("the \"{ty}\" nav must have a heading"),
-                path,
-                nav,
-                "navdoc.nav.missing_heading",
-                vec![ty.to_string()],
-            );
-        }
-        None => {}
-    }
+    }));
     // `epub-nav-30.sch`'s `flat-nav`: a `page-list` or `landmarks` nav asserts
     // `count(.//ol) = 1`, so both zero and two or more fail it. Reported as a
     // warning, and independent of the missing-`ol` error below - the book in
@@ -282,11 +317,15 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
         // this one unconditionally double-reported a nested landmarks nav -
         // caught by the test below, which is why it asserts counts and not
         // just presence.
-        if ols == 0 {
+        let top_level_ols = children
+            .iter()
+            .filter(|c| c.tag_name().name() == "ol")
+            .count();
+        if ols == 0 || top_level_ols > 1 {
             report.push_node(
                 RSC_017,
                 Severity::Warning,
-                format!("the \"{ty}\" nav must contain an ol descendant"),
+                format!("the \"{ty}\" nav must contain exactly one ol descendant"),
                 path,
                 nav,
                 "navdoc.nav.not_flat",
@@ -300,6 +339,7 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
     // case escaped in silence, which is the one shape a user cannot notice
     // (CHANGELOG 0.7.12-0.7.14). Found via #79, where a `<nav><h1>…</h1></nav>`
     // came back VALID here and drew RSC-005 from epubcheck.
+    report_stray_text(nav, "navdoc.nav.stray_text", path, report);
     let Some(ol) = children.get(idx) else {
         report.push_node(
             RSC_005,
@@ -324,6 +364,13 @@ fn check_nav_content_model(nav: roxmltree::Node, ty: &str, path: &str, report: &
         );
         return;
     }
+    // EPUB 3.3 `sec-nav-def-model`: "ol [exactly 1]", and nothing after it.
+    report_extra_children(
+        &children[idx + 1..],
+        "navdoc.nav.unexpected_child",
+        path,
+        report,
+    );
     check_ol(*ol, ty, path, report);
 }
 
@@ -537,6 +584,63 @@ pub(crate) fn check(doc: &roxmltree::Document, path: &str, dir: &str, report: &m
         }
         if ty == "landmarks" {
             check_landmarks(nav, dir, path, report);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const A: &str = r##"<a href="c.xhtml">x</a>"##;
+
+    fn errors(nav_body: &str) -> usize {
+        let xml = format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="{EPUB_NS}"><head><title>t</title></head><body><nav epub:type="toc">{nav_body}</nav></body></html>"#
+        );
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let mut report = Report::new();
+        check(&doc, "nav.xhtml", "", &mut report);
+        report.messages.iter().filter(|m| m.id == RSC_005).count()
+    }
+
+    /// EPUB 3.3 § 7.3 makes the heading optional for every restricted nav.
+    #[test]
+    fn a_nav_of_another_type_needs_no_heading() {
+        let xml = format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="{EPUB_NS}"><head><title>t</title></head><body><nav epub:type="toc"><ol><li>{A}</li></ol></nav><nav epub:type="lot"><ol><li>{A}</li></ol></nav></body></html>"#
+        );
+        let doc = roxmltree::Document::parse(&xml).unwrap();
+        let mut report = Report::new();
+        check(&doc, "nav.xhtml", "", &mut report);
+        assert!(report.messages.is_empty(), "{:?}", report.messages);
+    }
+
+    /// EPUB 3.3 `sec-nav-def-model`: a nav is one optional heading then
+    /// exactly one `ol`, and a `li` one label then at most one `ol`, with no
+    /// text of their own. Each shape's count is epubcheck 5.4.0's.
+    #[test]
+    fn nav_and_li_content_models_are_closed() {
+        let ol = format!("<ol><li>{A}</li></ol>");
+        assert_eq!(errors(&ol), 0);
+        assert_eq!(errors(&format!("<h1>t</h1>{ol}")), 0);
+        assert_eq!(errors(&format!("<ol><li>{A}{ol}</li></ol>")), 0);
+        for body in [
+            format!("{ol}{ol}"),
+            format!("{ol}<h1>t</h1>"),
+            format!("{ol}<p>x</p>"),
+            format!("x{ol}"),
+            format!("{ol}x"),
+            format!("<h1>t</h1>x{ol}"),
+            format!("<ol><li>{A}{A}</li></ol>"),
+            format!("<ol><li>{A}<p>x</p></li></ol>"),
+            format!("<ol><li>{A}{ol}{ol}</li></ol>"),
+            format!("<ol><li>{A}{ol}{A}</li></ol>"),
+            format!("<ol><li>{A}x</li></ol>"),
+            format!("<ol><li>x{A}</li></ol>"),
+            format!("<ol><li>{A}<ol><li>{A}{A}</li></ol></li></ol>"),
+        ] {
+            assert_eq!(errors(&body), 1, "{body}");
         }
     }
 }

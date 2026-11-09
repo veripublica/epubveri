@@ -984,6 +984,85 @@ fn item_id_is_padded(item: roxmltree::Node) -> bool {
         .is_some_and(|raw| raw != crate::xmlext::trim_xml_space(raw))
 }
 
+const XHTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
+
+/// May this `img` lack `alt` without a finding? HTML 4.8.4.4.15's conditions
+/// a document can show: a non-empty `title`, an empty
+/// `generator-unable-to-provide-required-alt`, or a `figure` holding only the
+/// image and a `figcaption` with content. An `alt` that is present passes.
+fn img_may_omit_alt(img: roxmltree::Node) -> bool {
+    if img.has_attr_no_ns("alt")
+        || img.attr_no_ns("title").is_some_and(|t| !t.is_empty())
+        || img.attr_no_ns("generator-unable-to-provide-required-alt") == Some("")
+    {
+        return true;
+    }
+    img.ancestors()
+        .skip(1)
+        .find(|a| a.is_element() && a.tag_name().name() == "figure")
+        .is_some_and(|figure| {
+            let is_caption = |n: &roxmltree::Node| n.tag_name().name() == "figcaption";
+            let has_caption = figure.children().filter(is_caption).any(|c| {
+                c.descendants().any(|d| {
+                    d.is_element() && d != c
+                        || d.is_text() && d.text().is_some_and(|t| !crate::xmlext::is_xml_blank(t))
+                })
+            });
+            let only_image = figure
+                .descendants()
+                .skip(1)
+                .filter(|d| !d.ancestors().any(|a| is_caption(&a)))
+                .all(|d| {
+                    if d.is_element() {
+                        d == img
+                    } else {
+                        !d.is_text() || d.text().is_none_or(crate::xmlext::is_xml_blank)
+                    }
+                });
+            has_caption && only_image
+        })
+}
+
+/// OPS 2.0.1's Core Media Types, with the ones OPF 2.0.1 § 2.3.1 says to
+/// treat as core: NCX, OpenType and schema files. Compared without parameters.
+fn is_epub2_core_media_type(mt: &str) -> bool {
+    let base = crate::xmlext::trim_xml_space(mt.split(';').next().unwrap_or(mt));
+    matches!(
+        base.to_ascii_lowercase().as_str(),
+        "application/xhtml+xml"
+            | "application/x-dtbook+xml"
+            | "text/css"
+            | "application/xml"
+            | "text/x-oeb1-document"
+            | "text/x-oeb1-css"
+            | "image/gif"
+            | "image/jpeg"
+            | "image/png"
+            | "image/svg+xml"
+            | "application/x-dtbncx+xml"
+            | "application/vnd.ms-opentype"
+            | "application/xml-dtd"
+            | "application/relax-ng-compact-syntax"
+    )
+}
+
+/// An embedded font, which OPF 2.0.1 § 2.3.1 exempts from fallback, by its
+/// media type or, for the many declared as a generic type, its extension.
+fn is_font_item(mt: &str, href: &str) -> bool {
+    let mt = mt.to_ascii_lowercase();
+    let path = href
+        .split(['#', '?'])
+        .next()
+        .unwrap_or(href)
+        .to_ascii_lowercase();
+    mt.starts_with("font/")
+        || mt.starts_with("application/font")
+        || mt.starts_with("application/x-font")
+        || [".ttf", ".otf", ".woff", ".woff2"]
+            .iter()
+            .any(|e| path.ends_with(e))
+}
+
 /// The two values a package document's `version` may have, compared whole.
 /// EPUB 3.3 `sec-package-elem`: "The attribute MUST have the value "3.0"";
 /// OPF 2.0.1 fixes "2.0" the same way. A prefix test let "3.1" and "2.0.1"
@@ -1903,6 +1982,26 @@ fn is_valid_lang_tag(raw: &str) -> bool {
 /// writes, and no book of ours has it.
 fn check_lang_tags(doc: &roxmltree::Document, opf_path: &str, is_epub3: bool, report: &mut Report) {
     if !is_epub3 {
+        // OPF 2.0.1 § 2.2.12: "The content of this element must comply with
+        // RFC 3066 ... or its successor". epubcheck 5.4.0 does not ask.
+        for n in doc.descendants().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "language"
+                && n.tag_name().namespace() == Some(DC_ELEMENTS_NS)
+        }) {
+            let tag = crate::xmlext::trim_xml_space(n.text().unwrap_or(""));
+            if !tag.is_empty() && !is_valid_lang_tag(tag) {
+                report.push_node(
+                    OPF_092,
+                    Severity::Error,
+                    format!("language tag '{tag}' is not well-formed"),
+                    opf_path,
+                    n,
+                    "opf.language.invalid_tag",
+                    vec!["dc:language".to_string(), tag.to_string()],
+                );
+            }
+        }
         return;
     }
     for n in doc.descendants().filter(|n| n.is_element()) {
@@ -6091,34 +6190,9 @@ fn check_text(
         // format instead of to the oracle is the mistake this project keeps
         // having to undo. epubcheck reports none of these three here, so
         // neither do we — and OPF-030 stays, as it does there.
-        // OPF-049 on a legacy `<dc-metadata>` / `<x-metadata>` wrapper in a
-        // package that is not OEBPS 1.2. `OPFHandler`:625 reports it with the
-        // element's own name - the message reads "Item id … was not found in
-        // the manifest", which is an odd choice for this condition but is
-        // deliberate: the branch is exactly `if (!opf12PackageFile)`.
-        //
-        // The wrapper's own contents are not judged here. 0 of the shelf's 390
-        // EPUB 2 packages use one; 2 books of an external 2,798-book run did.
-        if !is_oeb12 {
-            for w in md
-                .descendants()
-                .filter(|n| n.is_element())
-                .filter(|n| matches!(n.tag_name().name(), "dc-metadata" | "x-metadata"))
-            {
-                report.push_node(
-                    OPF_049,
-                    Severity::Error,
-                    format!(
-                        "<{}> is a legacy OEBPS 1.2 wrapper and does not belong in this package",
-                        w.tag_name().name()
-                    ),
-                    opf_path,
-                    w,
-                    "opf.metadata.legacy_wrapper",
-                    vec![w.tag_name().name().to_string()],
-                );
-            }
-        }
+        // `<dc-metadata>` and `<x-metadata>` draw no finding: OPF 2.0.1 § 2.2
+        // deprecates them and lets a package use them. epubcheck 5.4.0 reports
+        // OPF-049 for each (`OPFHandler`:625).
         if !has("title") && !is_oeb12 {
             report.push_node(
                 RSC_005,
@@ -9601,6 +9675,28 @@ fn check_text(
                     src,
                     "opf.content_document.empty_img_src",
                     Vec::new(),
+                );
+            }
+        }
+
+        // HTML 4.8.4.4.15 lists when a checker may stay silent about a missing
+        // `alt`; EPUB 3.3 § 6.1.2 holds a content document to HTML. EPUB 2 has
+        // the attribute as required in its grammar.
+        if is_epub3 {
+            for n in d.descendants().filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "img"
+                    && n.tag_name().namespace() == Some(XHTML_NAMESPACE)
+                    && !img_may_omit_alt(*n)
+            }) {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    "element \"img\" missing required attribute \"alt\"",
+                    path.clone(),
+                    n,
+                    "opf.content_document.img_missing_alt",
+                    vec!["alt".to_string()],
                 );
             }
         }
@@ -13472,6 +13568,65 @@ fn check_text(
     // EPUB 3 path does not exempt `properties="cover-image"` either, and
     // neither does epubcheck. Exempting here for 4% would make the two paths
     // disagree about the same book for no measured gain.
+    if !is_epub3 {
+        let manifest = pkg
+            .children()
+            .find(|n| n.is_element() && n.tag_name().name() == "manifest");
+        let toc = spine
+            .and_then(|sp| sp.attr_no_ns("toc"))
+            .map(crate::xmlext::trim_xml_space);
+        for item in manifest
+            .into_iter()
+            .flat_map(|mn| mn.children())
+            .filter(|n| n.is_element() && n.tag_name().name() == "item")
+        {
+            let id = item.attr_no_ns("id").map(crate::xmlext::trim_xml_space);
+            // OPF 2.0.1 § 2.4.1.2.
+            if toc.is_some() && id == toc {
+                for attr in ["fallback", "fallback-style", "required-namespace"] {
+                    if item.has_attr_no_ns(attr) {
+                        report.push_node(
+                            SPEC_003,
+                            Severity::Error,
+                            format!("the NCX item must not carry \"{attr}\""),
+                            opf_path,
+                            item,
+                            "opf.manifest_item.ncx_fallback",
+                            vec![attr.to_string()],
+                        );
+                    }
+                }
+                continue;
+            }
+            // OPF 2.0.1 § 2.3.1.1. An item a document uses has its fallback
+            // questions asked at the reference (OPF-043, RSC-032, and `img`
+            // and `object`, whose own content is the fallback).
+            let (Some(href), Some(mt)) = (item.attr_no_ns("href"), item.attr_no_ns("media-type"))
+            else {
+                continue;
+            };
+            // The package document listed in its own manifest is a fault of
+            // its own, not a resource wanting a fallback.
+            if !is_epub2_core_media_type(mt)
+                && mt != "application/oebps-package+xml"
+                && !is_font_item(mt, href)
+                && !item.has_attr_no_ns("fallback")
+                && !id.is_some_and(|id| spine_idrefs.contains(id))
+                && !is_remote_url(href)
+                && !resource_refs.contains(&nfc(&resolve(&base_dir, href)))
+            {
+                report.push_node(
+                    SPEC_002,
+                    Severity::Error,
+                    format!("the non-core item '{href}' ('{mt}') must have a fallback"),
+                    opf_path,
+                    item,
+                    "opf.manifest_item.non_core_without_fallback",
+                    vec![href.to_string(), mt.to_string()],
+                );
+            }
+        }
+    }
     if is_epub3 || advisory {
         // **The overlays' own references, folded in before the question is
         // asked.** The comment below always claimed the SMIL's audio/text
@@ -13521,6 +13676,44 @@ fn check_text(
         let manifest = pkg
             .children()
             .find(|n| n.is_element() && n.tag_name().name() == "manifest");
+        // The manifest items reachable through `fallback` or `fallback-style`
+        // from an item the spine or a document uses.
+        let fallbacks_in_use: HashSet<&str> = {
+            let trimmed = crate::xmlext::trim_xml_space;
+            let manifest_items: Vec<_> = manifest
+                .into_iter()
+                .flat_map(|mn| mn.children())
+                .filter(|n| n.is_element() && n.tag_name().name() == "item")
+                .collect();
+            let mut pending: Vec<&str> = manifest_items
+                .iter()
+                .filter(|item| {
+                    item.attr_no_ns("id")
+                        .is_some_and(|id| spine_idrefs.contains(trimmed(id)))
+                        || item
+                            .attr_no_ns("href")
+                            .is_some_and(|h| resource_refs.contains(&nfc(&resolve(&base_dir, h))))
+                })
+                .filter_map(|item| item.attr_no_ns("id").map(trimmed))
+                .collect();
+            let mut reached = HashSet::new();
+            while let Some(id) = pending.pop() {
+                let Some(item) = manifest_items
+                    .iter()
+                    .find(|item| item.attr_no_ns("id").map(trimmed) == Some(id))
+                else {
+                    continue;
+                };
+                for attr in ["fallback", "fallback-style"] {
+                    if let Some(target) = item.attr_no_ns(attr).map(trimmed)
+                        && reached.insert(target)
+                    {
+                        pending.push(target);
+                    }
+                }
+            }
+            reached
+        };
         if let Some(mn) = manifest {
             for item in mn
                 .children()
@@ -13678,6 +13871,16 @@ fn check_text(
                     || is_spine_ncx
                     || overlay_paths.contains(&resolved)
                     || resource_refs.contains(&resolved)
+                {
+                    continue;
+                }
+                // A Reading System shows a fallback in place of the item it
+                // stands behind, so "nothing loads it" would be untrue here.
+                if !is_epub3
+                    && item
+                        .attr_no_ns("id")
+                        .map(crate::xmlext::trim_xml_space)
+                        .is_some_and(|id| fallbacks_in_use.contains(id))
                 {
                     continue;
                 }
@@ -22304,6 +22507,127 @@ mod tests {
         );
     }
 
+    /// HTML 4.8.4.4.15's conditions for a missing `alt`, each paired with a
+    /// near miss so the exemption cannot swallow the rule.
+    #[test]
+    fn img_may_omit_alt_only_under_the_listed_conditions() {
+        let may = |body: &str| {
+            let xml = format!(r#"<body xmlns="http://www.w3.org/1999/xhtml">{body}</body>"#);
+            let d = roxmltree::Document::parse(&xml).unwrap();
+            let img = d
+                .descendants()
+                .find(|n| n.tag_name().name() == "img")
+                .unwrap();
+            crate::opf::img_may_omit_alt(img)
+        };
+        assert!(may(r#"<img src="a" alt=""/>"#));
+        assert!(may(r#"<img src="a" title="t"/>"#));
+        assert!(may(
+            r#"<img src="a" generator-unable-to-provide-required-alt=""/>"#
+        ));
+        assert!(may(
+            r#"<figure><img src="a"/><figcaption>c</figcaption></figure>"#
+        ));
+        assert!(!may(r#"<img src="a"/>"#));
+        assert!(!may(r#"<img src="a" title=""/>"#));
+        assert!(!may(
+            r#"<img src="a" generator-unable-to-provide-required-alt="x"/>"#
+        ));
+        assert!(!may(r#"<figure><img src="a"/></figure>"#));
+        assert!(!may(
+            r#"<figure><img src="a"/><figcaption> </figcaption></figure>"#
+        ));
+        assert!(!may(
+            r#"<figure><p>x</p><img src="a"/><figcaption>c</figcaption></figure>"#
+        ));
+    }
+
+    /// SPEC-002 and SPEC-003, EPUB 2's fallback rules. `id` carries each test's
+    /// book, built on the same base so only the manifest differs.
+    #[test]
+    fn epub2_fallback_rules_are_reported_and_exempt_what_the_spec_exempts() {
+        const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+        let count = |version: &str, id: &str, items: &str, toc: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language></metadata><manifest><item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>{items}</manifest><spine{toc}><itemref idref="ch1"/></spine></package>"#
+            );
+            crate::validate_bytes(epub_with_opf(Some(&opf), CH1))
+                .messages
+                .iter()
+                .filter(|m| m.id == id)
+                .count()
+        };
+        use crate::ids::{SPEC_002, SPEC_003};
+        let item = |attrs: &str| format!(r#"<item id="x" href="meta.xml" {attrs}/>"#);
+        let two = |attrs: &str| count("2.0", SPEC_002, &item(attrs), "");
+        assert_eq!(two(r#"media-type="text/plain""#), 1);
+        assert_eq!(two(r#"media-type="text/plain" fallback="ch1""#), 0);
+        assert_eq!(two(r#"media-type="application/xml""#), 0);
+        assert_eq!(two(r#"media-type="application/font-sfnt""#), 0);
+        assert_eq!(
+            count(
+                "2.0",
+                SPEC_002,
+                r#"<item id="f" href="a.ttf" media-type="application/octet-stream"/>"#,
+                ""
+            ),
+            0
+        );
+        assert_eq!(
+            count("3.0", SPEC_002, &item(r#"media-type="text/plain""#), ""),
+            0
+        );
+        let ncx = |extra: &str| {
+            format!(
+                r#"<item id="n" href="meta.xml" media-type="application/x-dtbncx+xml"{extra}/>"#
+            )
+        };
+        let toc = r#" toc="n""#;
+        assert_eq!(count("2.0", SPEC_003, &ncx(r#" fallback="ch1""#), toc), 1);
+        assert_eq!(count("2.0", SPEC_003, &ncx(""), toc), 0);
+        assert_eq!(count("3.0", SPEC_003, &ncx(r#" fallback="ch1""#), toc), 0);
+    }
+
+    /// ADV-010 says nothing loads a file, which is untrue of the fallback of
+    /// an item in use. An unused item's own fallback is still unused.
+    #[test]
+    fn adv_010_treats_the_fallback_of_a_used_item_as_used() {
+        const CH1: &str = "<?xml version=\"1.0\"?><html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head><body><p>x</p></body></html>";
+        let count = |items: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language></metadata><manifest>{items}</manifest><spine><itemref idref="ch1"/></spine></package>"#
+            );
+            let opts = crate::Options {
+                advisory: true,
+                ..Default::default()
+            };
+            crate::validate_bytes_with_options(epub_with_opf(Some(&opf), CH1), &opts)
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::ADV_010)
+                .count()
+        };
+        const X: &str = r#"media-type="application/xhtml+xml""#;
+        const META: &str = r#"<item id="meta" href="meta.xml" media-type="application/xml"/>"#;
+        assert_eq!(
+            count(&format!(r#"<item id="ch1" href="ch1.xhtml" {X}/>{META}"#)),
+            1
+        );
+        assert_eq!(
+            count(&format!(
+                r#"<item id="ch1" href="ch1.xhtml" {X} fallback="meta"/>{META}"#
+            )),
+            0
+        );
+        assert_eq!(
+            count(&format!(
+                r#"<item id="ch1" href="ch1.xhtml" {X}/><item id="unused" href="ghost.xml" media-type="application/xml" fallback="meta"/>{META}"#
+            )),
+            2,
+            "nothing in use leads to either"
+        );
+    }
+
     /// A package `meta` is the EPUB 3 form (`property`) or the legacy one
     /// (`name` and `content`), and EPUB 2 metadata admits nothing else in the
     /// OPF or DC namespace. Both were clean here; RSC-005 in 5.4.0.
@@ -23921,17 +24245,18 @@ mod tests {
         assert_eq!(fires("<p lang=\" en\" xml:lang=\"en\">x</p>"), 1);
     }
 
-    /// The legacy `<dc-metadata>` wrapper: reported as OPF-049, and its
-    /// contents still count as the required metadata.
+    /// The legacy `<dc-metadata>` wrapper draws no finding, and its contents
+    /// still count as the required metadata. OPF 2.0.1 § 2.2 deprecates the
+    /// wrapper and keeps it; epubcheck 5.4.0 reports OPF-049.
     ///
-    /// Both halves measured against epubcheck 5.3.0. The second is the one
+    /// The second half was measured against epubcheck 5.3.0, and is the one
     /// that was wrong in *our* favour's opposite direction: a pure legacy
     /// EPUB 2 package drew three "Required metadata … is missing" errors and
     /// an OPF-030 here, and none of them there, because `OPFHandler`
     /// dispatches on namespace plus local name at any depth while we looked at
     /// direct children. A false positive found by measuring, not reported.
     #[test]
-    fn a_legacy_metadata_wrapper_is_opf_049_and_still_holds_the_metadata() {
+    fn a_legacy_metadata_wrapper_is_clean_and_still_holds_the_metadata() {
         let opf = |metadata: &str| {
             format!(
                 r#"<?xml version="1.0" encoding="utf-8"?>
@@ -23958,10 +24283,10 @@ mod tests {
         };
         // Plain: nothing to say.
         assert!(ids(DC).is_empty(), "a plain EPUB 2 metadata block is clean");
-        // Wrapped: the wrapper is the only complaint - the metadata inside it
-        // is found, so no OPF-030 and no "required metadata missing".
+        // Wrapped: the metadata inside it is found, so no OPF-030 and no
+        // "required metadata missing".
         let wrapped = ids(&format!("<dc-metadata>{DC}</dc-metadata>"));
-        assert_eq!(wrapped, vec![crate::ids::OPF_049], "got {wrapped:?}");
+        assert!(wrapped.is_empty(), "got {wrapped:?}");
     }
 
     /// An empty `unique-identifier` is a missing one (OPF-048), *beside* the
@@ -24343,8 +24668,9 @@ mod tests {
     ///
     /// Found by walking `--bin versions`' EPUB-3-only list after a user's
     /// library turned up OPF-091 in the same class. `en_US` — the spelling a
-    /// Java or Windows locale writes — is an error at 3.0 and silent at 2.0,
-    /// and we reported it at both.
+    /// Java or Windows locale writes — is an error at 3.0 and, since OPF 2.0.1
+    /// § 2.2.12 requires RFC 3066, on `dc:language` at 2.0 as well, though
+    /// epubcheck 5.4.0 is silent there.
     ///
     /// **Zero population on the 474-book shelf**, which is why no instrument
     /// here could have found it: all 390 EPUB 2 packages spell their tags
@@ -24352,7 +24678,7 @@ mod tests {
     /// `en-US` 3 — the hyphenated form is fine). Paired so the gate cannot
     /// overshoot into never firing.
     #[test]
-    fn opf_092_is_epub3_only() {
+    fn opf_092_on_dc_language_in_both_versions() {
         let opf = |version: &str, lang: &str| {
             format!(
                 r#"<?xml version="1.0" encoding="utf-8"?>
@@ -24374,7 +24700,10 @@ mod tests {
             fires("3.0", "en_US"),
             "EPUB 3 still reports a malformed tag"
         );
-        assert!(!fires("2.0", "en_US"), "EPUB 2 never reaches it");
+        assert!(
+            fires("2.0", "en_US"),
+            "OPF 2.0.1 § 2.2.12 requires RFC 3066"
+        );
         assert!(!fires("3.0", "en-US"), "a hyphenated tag is well-formed");
     }
 

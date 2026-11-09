@@ -342,8 +342,15 @@ pub fn wrap_single_doc(
         if fn_ == target_name && matches!(mt, "application/xhtml+xml" | "image/svg+xml") {
             target_id = Some(format!("f{i}"));
         }
+        // An inert sibling is the wrapper's, and OPF 2.0.1 § 2.3.1.1 would ask
+        // it for a fallback (SPEC-002), which no fixture is about.
+        let fallback = if mt == "application/octet-stream" {
+            " fallback=\"_nav\""
+        } else {
+            ""
+        };
         manifest_items.push(format!(
-            "<item id=\"f{i}\" href=\"{fn_}\" media-type=\"{mt}\"/>"
+            "<item id=\"f{i}\" href=\"{fn_}\" media-type=\"{mt}\"{fallback}/>"
         ));
     }
 
