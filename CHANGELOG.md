@@ -8,6 +8,17 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An `@charset` label is looked up as the Encoding Standard says,** as CSS
+  Syntax 3 § 3.2 requires, so CSS-004 fires only when the sheet really decodes
+  in an encoding other than UTF-8 or UTF-16. An unknown or empty label, which
+  falls back to UTF-8, and aliases such as `utf8`, `unicode-1-1-utf-8`,
+  `unicode` and `ucs-2` were reported. `latin1`, `us-ascii` and other labels
+  of windows-1252 are still CSS-004, and the message now names the encoding.
+
 ## [0.40.0] - 2026-11-11
 
 ### Fixed

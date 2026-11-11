@@ -110,6 +110,14 @@ Each line is a place where epubveri follows the specification and epubcheck
   grammar reads it as two properties without values, which the appendix
   allows; epubcheck 5.4.0 reports HTM-047
   ([w3c/epubcheck#1763](https://github.com/w3c/epubcheck/issues/1763)).
+- **An `@charset` label is read as CSS Syntax 3 § 3.2 reads it.** A label
+  the Encoding Standard does not know (`x-unknown`) leaves the sheet in the
+  referring document's encoding or UTF-8, an alias of UTF-8 (`utf8`,
+  `unicode-1-1-utf-8`) names UTF-8, and the UTF-16 family (`utf-16`,
+  `unicode`, `ucs-2`) becomes UTF-8. A declaration in single quotes or
+  with two spaces is no declaration. All of these pass EPUB 3.3 § 6.3.1.2.
+  epubcheck 5.4.0 reports CSS-004 for each, and CSS-003 with CSS-008 for
+  `"utf-16"` (upstream issue pending, filed by epub-test-books).
 - **SPEC-001 (error): `encryption.xml` declares encrypted a file that must
   never be.** That is `mimetype`, the six `META-INF` files, or a package
   document: EPUB 3.3 § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2. epubcheck 5.4.0 does

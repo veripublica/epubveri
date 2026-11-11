@@ -87,19 +87,23 @@ fn has_utf16_bom(bytes: &[u8]) -> bool {
         && ((bytes[0] == 0xFE && bytes[1] == 0xFF) || (bytes[0] == 0xFF && bytes[1] == 0xFE))
 }
 
-/// Whether an `@charset` value names UTF-8 or UTF-16 — the two encodings a
-/// CSS resource may declare (CSS-004; a UTF-16 one additionally draws
-/// CSS-003, since UTF-8 is what it *should* be).
+/// The encoding an `@charset` label makes a stylesheet decode with, when it
+/// is not UTF-8 or UTF-16 - `None` when the sheet ends up in one of those two,
+/// which EPUB 3.3 § 6.3.1.2 allows.
 ///
-/// The byte-order variants count: `UTF-16BE` and `UTF-16LE` are UTF-16, so
-/// matching the name literally reports a corpus fixture that declares
-/// `UTF-16BE` as if it had declared Latin-1 (issue #26).
-fn is_utf8_or_utf16(charset: &str) -> bool {
-    let c = charset.trim();
-    c.eq_ignore_ascii_case("utf-8")
-        || c.eq_ignore_ascii_case("utf-16")
-        || c.eq_ignore_ascii_case("utf-16be")
-        || c.eq_ignore_ascii_case("utf-16le")
+/// CSS Syntax 3 § 3.2, "determine the fallback encoding": the label goes
+/// through the Encoding Standard's "get an encoding" (every alias, ASCII
+/// whitespace trimmed, case-blind: `utf8` and `unicode-1-1-utf-8` are UTF-8).
+/// "If the return value was utf-16be or utf-16le, return utf-8", so the whole
+/// UTF-16 family (`unicode`, `ucs-2`, ...) is UTF-8 here. A label the
+/// standard does not know, the empty one included, returns failure: the sheet
+/// then takes the referring document's encoding, or UTF-8, and a content
+/// document is UTF-8 or UTF-16. Only a known other encoding is a fault.
+fn charset_label_fault(label: &str) -> Option<&'static str> {
+    let encoding = styloria::Encoding::for_label(label)?;
+    let name = encoding.name();
+    let utf = encoding == styloria::Encoding::UTF_8 || name.starts_with("UTF-16");
+    (!utf).then_some(name)
 }
 
 /// Where a stylesheet's text physically sits, so a byte offset within it
@@ -298,12 +302,14 @@ fn check_in(
         // styloria's `charset_rule` reads exactly that pattern off the raw
         // bytes, and a BOM in front of it already stops the match.
         if let Some(charset) = styloria::charset_rule(bytes)
-            && !is_utf8_or_utf16(charset)
+            && let Some(encoding) = charset_label_fault(charset)
         {
             report.push_at(
                 CSS_004,
                 Severity::Error,
-                format!("@charset value '{charset}' is not utf-8 or utf-16"),
+                format!(
+                    "@charset value '{charset}' names {encoding}, which is not utf-8 or utf-16"
+                ),
                 css_path,
             );
         }
@@ -3566,11 +3572,44 @@ mod tests {
                 "'{cs}' is a permitted encoding"
             );
         }
-        for cs in ["ISO-8859-1", "windows-1252", "utf-32", "utf-16x"] {
+        for cs in [
+            "ISO-8859-1",
+            "windows-1252",
+            "latin1",
+            "us-ascii",
+            "replacement",
+        ] {
             let css = format!("@charset \"{cs}\";\nbody {{ color: red; }}");
             assert!(
                 run_bytes(css.as_bytes()).contains(&CSS_004),
                 "'{cs}' is not utf-8 or utf-16"
+            );
+        }
+    }
+
+    /// CSS Syntax 3 § 3.2 runs the label through the Encoding Standard's "get
+    /// an encoding": an alias names its encoding, the UTF-16 family becomes
+    /// UTF-8, and a label it does not know (empty, `utf-32`, `x-unknown`)
+    /// falls back to the referring document's encoding or UTF-8. None of
+    /// those is a stylesheet outside UTF-8 and UTF-16 (EPUB 3.3 § 6.3.1.2).
+    #[test]
+    fn charset_labels_follow_the_encoding_standard() {
+        for cs in [
+            "utf8",
+            "UTF8",
+            "unicode-1-1-utf-8",
+            "unicode",
+            "ucs-2",
+            "csunicode",
+            "x-unknown",
+            "",
+            "utf-32",
+            "utf-16x",
+        ] {
+            let css = format!("@charset \"{cs}\";\nbody {{ color: red; }}");
+            assert!(
+                !run_bytes(css.as_bytes()).contains(&CSS_004),
+                "'{cs}' leaves the sheet in UTF-8 or UTF-16"
             );
         }
     }
