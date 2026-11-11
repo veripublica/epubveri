@@ -3643,7 +3643,8 @@
         <element name="style"><ref name="i18nAttrs-epub2"/>
           <optional><attribute name="title"><data type="string"/></attribute></optional>
           <optional><attribute name="xml:space"><value>preserve</value></attribute></optional>
-          <attribute name="type"><data type="string"/></attribute>
+          <!-- OPS 2.0.1 § 2.3.8: text/css or the deprecated text/x-oeb1-css. -->
+          <attribute name="type"><data type="epub2StyleType"/></attribute>
           <optional><attribute name="media"><data type="string"/></attribute></optional>
           <text/>
         </element>
@@ -4044,8 +4045,10 @@
     <ref name="globalAttrs-epub2"/>
     <optional>
       <attribute name="align">
+        <!-- XHTML 1.1 also has `char`; OPS 2.0.1 § 2.3.9 leaves it out of
+             the subset. -->
         <choice><value>left</value><value>center</value><value>right</value>
-          <value>justify</value><value>char</value></choice>
+          <value>justify</value></choice>
       </attribute>
     </optional>
     <optional><attribute name="char"><data type="string"/></attribute></optional>

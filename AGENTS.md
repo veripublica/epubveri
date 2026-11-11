@@ -84,6 +84,13 @@ Each line is a place where epubveri follows the specification and epubcheck
   1x)` naming a missing file. CSS reads the url, and EPUB 3.3 asks the same of
   every resource a publication uses. epubcheck 5.4.0 reads only a
   declaration's top-level components.
+- **EPUB 2 content documents are held to OPS 2.0.1's restrictions beyond
+  XHTML 1.1:** a `noscript` before every `script` (§ 2.3.7), a `style` type
+  other than `text/css` or `text/x-oeb1-css` (§ 2.3.8), `align="char"`
+  (§ 2.3.9), and SVG animation, `script` and event attributes (§ 2.5.1) are
+  RSC-005, and an `object` type that names another media type than the
+  manifest is OPF-013 as an error (§ 2.3.6). epubcheck 5.4.0 accepts the
+  first four and gives OPF-013 as a warning.
 - **UTF-16 draws no finding in an EPUB 2 book.** OCF 2.0.1 § 1.3: "All XML
   files MUST be encoded in UTF-8 or UTF-16", and OPF 2.0.1 § 1.4.1.1 and
   OPS 2.0.1 § 1.4.1.2 say it again. epubcheck 5.4.0 grades encoding without

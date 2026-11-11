@@ -10280,15 +10280,41 @@ fn check_text(
             if let Some((_, actual_type)) = items_by_path.get(&resolved)
                 && !normalize_opus(actual_type).eq_ignore_ascii_case(declared_type)
             {
-                report.push_at_pos(
+                // OPS 2.0.1 § 2.3.6 makes it a MUST for an EPUB 2 `object`:
+                // "The MIME media type values for the codetype and type
+                // attributes must match those specified in the Publication's
+                // Manifest". An error only where the types themselves differ;
+                // a difference in parameters alone stays epubcheck's warning.
+                let essence = |t: &str| {
+                    t.split(';')
+                        .next()
+                        .unwrap_or("")
+                        .trim_matches(crate::xmlext::is_xml_space)
+                        .to_ascii_lowercase()
+                };
+                let text = format!(
+                    "declared type \"{declared_type}\" doesn't match the resource's actual media-type \"{actual_type}\""
+                );
+                if !is_epub3
+                    && n.tag_name().name() == "object"
+                    && essence(actual_type) != essence(declared_type)
+                {
+                    report.push_at_pos(
                         OPF_013,
-                        Severity::Warning,
-                        format!(
-                            "declared type \"{declared_type}\" doesn't match the resource's actual media-type \"{actual_type}\""
-                        ),
+                        Severity::Error,
+                        text,
                         path.clone(),
                         Position::of(n),
                     );
+                } else {
+                    report.push_at_pos(
+                        OPF_013,
+                        Severity::Warning,
+                        text,
+                        path.clone(),
+                        Position::of(n),
+                    );
+                }
             }
         }
 
@@ -23729,6 +23755,132 @@ mod tests {
             assert_eq!(epub2(markup), 1, "EPUB 2 must reject: {markup}");
             assert_eq!(epub3(markup), 0, "EPUB 3 must accept: {markup}");
         }
+    }
+
+    /// OPS 2.0.1's restrictions beyond XHTML 1.1, one case each: § 2.3.7
+    /// (`noscript` after its script), § 2.3.8 (`style` type), § 2.3.9
+    /// (`align="char"`), § 2.5.1 (no SVG animation or scripting) and § 2.3.6
+    /// (an `object` type that names another media type is an error). Each has
+    /// a control that must stay clean. Measured against epubcheck 5.4.0, which
+    /// reports none of them.
+    #[test]
+    fn epub2_ops_restrictions_beyond_xhtml_1_1() {
+        let doc = |head: &str, body: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title>{head}</head><body>{body}</body></html>"
+            )
+        };
+        let found = |head: &str, body: &str, id: &str, sev: crate::report::Severity| {
+            crate::validate_bytes(epub2_with_ch1(&doc(head, body)))
+                .messages
+                .iter()
+                .filter(|m| m.id == id && m.severity == sev)
+                .count()
+        };
+        let rsc005 = |head: &str, body: &str| {
+            found(
+                head,
+                body,
+                crate::ids::RSC_005,
+                crate::report::Severity::Error,
+            )
+        };
+        let svg = |inner: &str| {
+            format!(
+                "<div><svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" \
+                 viewBox=\"0 0 10 10\">{inner}</svg></div>"
+            )
+        };
+        let script = "<script type=\"text/javascript\">var a = 1;</script>";
+        let noscript = "<noscript><p>n</p></noscript>";
+        let style = |t: &str| format!("<style type=\"{t}\">p {{ margin: 0 }}</style>");
+        for (head, body, want) in [
+            // § 2.3.7
+            (String::new(), format!("{script}{noscript}"), 0),
+            (String::new(), noscript.to_string(), 0),
+            (String::new(), format!("{noscript}{script}"), 1),
+            // § 2.3.8
+            (style("text/css"), "<p>x</p>".to_string(), 0),
+            (style("TEXT/CSS; charset=utf-8"), "<p>x</p>".to_string(), 0),
+            (style("text/x-oeb1-css"), "<p>x</p>".to_string(), 0),
+            (style("text/plain"), "<p>x</p>".to_string(), 1),
+            // § 2.3.9
+            (
+                String::new(),
+                "<table><tr><td align=\"left\">1</td></tr></table>".to_string(),
+                0,
+            ),
+            (
+                String::new(),
+                "<table><tr><td align=\"char\">1</td></tr></table>".to_string(),
+                1,
+            ),
+            // § 2.5.1
+            (String::new(), svg("<rect width=\"5\" height=\"5\"/>"), 0),
+            (
+                String::new(),
+                svg(
+                    "<rect width=\"5\" height=\"5\"><animate attributeName=\"x\" to=\"5\" dur=\"1s\"/></rect>",
+                ),
+                1,
+            ),
+            (
+                String::new(),
+                svg("<rect width=\"5\" height=\"5\"><set attributeName=\"x\" to=\"5\"/></rect>"),
+                1,
+            ),
+            (
+                String::new(),
+                svg("<script type=\"text/ecmascript\">var a;</script>"),
+                1,
+            ),
+            (
+                String::new(),
+                svg("<rect width=\"5\" height=\"5\" onclick=\"f()\"/>"),
+                1,
+            ),
+        ] {
+            assert_eq!(rsc005(&head, &body), want, "{head} {body}");
+        }
+        // § 2.3.6: ch1.xhtml is in the manifest as application/xhtml+xml.
+        let object =
+            |t: &str| format!("<div><object data=\"ch1.xhtml\" type=\"{t}\">x</object></div>");
+        assert_eq!(
+            found(
+                "",
+                &object("image/png"),
+                crate::ids::OPF_013,
+                crate::report::Severity::Error
+            ),
+            1
+        );
+        assert_eq!(
+            found(
+                "",
+                &object("image/png"),
+                crate::ids::OPF_013,
+                crate::report::Severity::Warning
+            ),
+            0
+        );
+        assert_eq!(
+            found(
+                "",
+                &object("application/xhtml+xml"),
+                crate::ids::OPF_013,
+                crate::report::Severity::Error
+            ) + found(
+                "",
+                &object("application/xhtml+xml"),
+                crate::ids::OPF_013,
+                crate::report::Severity::Warning
+            ),
+            0
+        );
     }
 
     /// OPS 2.0.1 § 2.3.6: "The param element must only appear before the

@@ -34,6 +34,12 @@ pub enum Datatype {
     /// under `XMLonly`; the unrestricted `string` alternative beside it is
     /// `HTMLonly`, which epubcheck sets to `notAllowed`).
     MetaCharset,
+    /// An EPUB 2 `<style type>`: OPS 2.0.1 § 2.3.8, "must be given the value of
+    /// text/css or the deprecated text/x-oeb1-css". Compared as a media type:
+    /// the essence before any `;` parameter, trimmed, case-blind, so only a
+    /// value that names another type fails. Named by us; epubcheck takes any
+    /// string here.
+    Epub2StyleType,
     /// A media type as the container schema reads one: `datatype.mimetype`,
     /// `xsd:string { pattern = '[a-zA-Z0-9!#$&+\-\^_]+/[a-zA-Z0-9!#$&+\-\^_]+.*' }`.
     /// An `xsd:string` keeps its whitespace, so a padded value fails. Named
@@ -85,6 +91,7 @@ impl Datatype {
             "html5Token" => Html5Token,
             "httpEquiv" => HttpEquiv,
             "metaCharset" => MetaCharset,
+            "epub2StyleType" => Epub2StyleType,
             "mediaType" => MediaType,
             "renditionMedia" => RenditionMedia,
             "IDREF" => IdRef,
@@ -153,6 +160,12 @@ impl Datatype {
                 .iter()
                 .any(|d| s.eq_ignore_ascii_case(d)),
             Datatype::MetaCharset => s.eq_ignore_ascii_case("utf-8"),
+            Datatype::Epub2StyleType => {
+                let essence = raw.split(';').next().unwrap_or("");
+                let essence = crate::xmlext::trim_xml_space(essence);
+                essence.eq_ignore_ascii_case("text/css")
+                    || essence.eq_ignore_ascii_case("text/x-oeb1-css")
+            }
             Datatype::IdRefs => !s.is_empty() && s.split(' ').all(is_ncname),
             Datatype::Language => is_language(&s),
             Datatype::Boolean => matches!(s.as_str(), "true" | "false" | "0" | "1"),

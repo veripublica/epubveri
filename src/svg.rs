@@ -132,8 +132,30 @@ pub(crate) const SVG_ELEMENTS: &[&str] = &[
 /// missing, which is what makes the EPUB 2 arm below safe to make an error.
 const SVG2_ONLY_ELEMENTS: &[&str] = &["feDropShadow"];
 
+/// OPS 2.0.1 § 2.5.1: "SVG animation and scripting features are not
+/// supported and must not be used by publication authors". These are SVG
+/// 1.1's animation elements (chapter 19, `mpath` with them) and its `script`
+/// element. epubcheck's EPUB 2 grammar includes their modules and accepts them.
+const EPUB2_FORBIDDEN_ELEMENTS: &[&str] = &[
+    "animate",
+    "animateColor",
+    "animateMotion",
+    "animateTransform",
+    "mpath",
+    "script",
+    "set",
+];
+
+/// The same clause's scripting half for attributes: SVG 1.1's event
+/// attributes (chapter 18.4), every one of them named `on…`. No other SVG 1.1
+/// attribute starts with `on`.
+fn is_epub2_forbidden_attribute(name: &str) -> bool {
+    name.starts_with("on")
+}
+
 fn is_recognized_element(name: &str, is_epub3: bool) -> bool {
-    if !is_epub3 && SVG2_ONLY_ELEMENTS.contains(&name) {
+    if !is_epub3 && (SVG2_ONLY_ELEMENTS.contains(&name) || EPUB2_FORBIDDEN_ELEMENTS.contains(&name))
+    {
         return false;
     }
     SVG_ELEMENTS.contains(&name)
@@ -1200,6 +1222,9 @@ mod svg11 {
 
 fn is_recognized_attribute(name: &str, element: &str, is_epub3: bool) -> bool {
     if !is_epub3 {
+        if is_epub2_forbidden_attribute(name) {
+            return false;
+        }
         // EPUB 2 validates SVG against the whole SVG 1.1 grammar, so an
         // attribute is judged against its own element's list: `font-size` on
         // a `rect` and `fill` on a `stop` are RSC-005 there. The same table
@@ -5050,7 +5075,6 @@ mod tests {
             r#"<defs><filter id="f"><rect width="1" height="1"/></filter></defs>"#,
             r#"<defs><filter id="f"><feMerge><rect width="1" height="1"/></feMerge></filter></defs>"#,
             r#"<defs><filter id="f"><feMerge><desc>d</desc></feMerge></filter></defs>"#,
-            r#"<defs><filter id="f"><feMerge><animate attributeName="x" dur="1s"/></feMerge></filter></defs>"#,
             r#"<defs><filter id="f"><feComponentTransfer><desc>d</desc></feComponentTransfer></filter></defs>"#,
             // The light source keeps this cell about containment alone -
             // without it the parent is *also* incomplete, and epubcheck
@@ -5237,13 +5261,37 @@ mod tests {
         );
     }
 
+    /// An animation element inside a filter primitive is wrong twice in
+    /// EPUB 3 (containment, as RSC-025) and once in EPUB 2, where OPS 2.0.1
+    /// § 2.5.1 forbids the element itself: the vocabulary reports it and the
+    /// content model leaves unknown elements to the vocabulary. One finding.
+    #[test]
+    fn epub2_animation_in_a_filter_primitive_is_one_finding() {
+        let body = r#"<defs><filter id="f"><feMerge><animate attributeName="x" dur="1s"/></feMerge></filter></defs>"#;
+        let xml = format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><title>s</title>{body}</svg>"#
+        );
+        let d = doc(&xml);
+        let run = |is_epub3: bool| {
+            let mut report = Report::new();
+            check_vocabulary(d.root_element(), "c.xhtml", is_epub3, &mut report);
+            check_content_model(d.root_element(), "c.xhtml", is_epub3, &mut report);
+            report.messages.iter().map(|m| m.id).collect::<Vec<_>>()
+        };
+        assert_eq!(run(false), vec![crate::ids::RSC_005]);
+        assert_eq!(run(true), vec![RSC_025]);
+    }
+
     #[test]
     fn the_svg_vocabulary_covers_all_of_svg_1_1() {
+        // `animateColor` is SVG 1.1 too, but OPS 2.0.1 § 2.5.1 bars animation
+        // from EPUB 2 (see `EPUB2_FORBIDDEN_ELEMENTS`).
+        assert!(is_recognized_element("animateColor", true));
+        assert!(!is_recognized_element("animateColor", false));
         for name in [
             "altGlyph",
             "altGlyphDef",
             "altGlyphItem",
-            "animateColor",
             "color-profile",
             "definition-src",
             "font-face-format",

@@ -34,11 +34,17 @@ use regex::Regex;
 
 /// (id, our severity, why it differs from epubcheck on purpose).
 ///
-/// Empty since 2026-10-12, and FORMATS' `code` row (conventions#35) keeps it
-/// that way for anything below epubcheck's grade: an epubcheck id may carry
-/// its own severity or a higher one, never a lower. The last entry, RSC-007 at
-/// warning on the EPUB 2 package `<link>` arm, now uses RSC-007w.
-const ALLOWED: &[(&str, &str, &str)] = &[];
+/// FORMATS' `code` row (conventions#35) keeps this to grades above
+/// epubcheck's: an epubcheck id may carry its own severity or a higher one,
+/// never a lower. The last lower entry, RSC-007 at warning on the EPUB 2
+/// package `<link>` arm, now uses RSC-007w (empty from 2026-10-12 until the
+/// entry below).
+const ALLOWED: &[(&str, &str, &str)] = &[(
+    "OPF-013",
+    "Error",
+    "an EPUB 2 object whose type names another media type than the manifest's: \
+     OPS 2.0.1 § 2.3.6 says the two must match (2026-11-11)",
+)];
 
 fn read(p: &Path) -> String {
     std::fs::read_to_string(p).unwrap_or_else(|e| {

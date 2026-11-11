@@ -2120,7 +2120,7 @@ mod tests {
         // header-association attributes, and the wider XHTML 1.1 `scope`.
         let full = "<table summary=\"s\" width=\"80%\" cellpadding=\"2\" cellspacing=\"0\" \
              frame=\"box\" rules=\"all\" border=\"2\">\
-             <tbody align=\"char\" char=\".\" charoff=\"2\" valign=\"baseline\">\
+             <tbody align=\"justify\" char=\".\" charoff=\"2\" valign=\"baseline\">\
              <tr align=\"justify\"><th scope=\"rowgroup\" abbr=\"a\" axis=\"x\" id=\"h\">H</th>\
              <td headers=\"h\" valign=\"middle\">v</td></tr></tbody></table>";
         let xf = doc(full);
@@ -2131,6 +2131,19 @@ mod tests {
             )
             .is_empty(),
             "EPUB 2 must accept the full Tables Module attribute set"
+        );
+        // Less `align="char"`: XHTML 1.1 has it, OPS 2.0.1 § 2.3.9 leaves it
+        // out of the subset.
+        let xc =
+            doc("<table><tbody align=\"char\"><tr><td align=\"char\">1</td></tr></tbody></table>");
+        assert_eq!(
+            validate_node_report(
+                &xhtml_grammar_epub2(),
+                roxmltree::Document::parse(&xc).unwrap().root_element()
+            )
+            .len(),
+            2,
+            "align=\"char\" is not in the OPS subset"
         );
 
         // Still strict where epubcheck is: the enumerated values are checked,

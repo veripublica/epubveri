@@ -1107,6 +1107,30 @@ pub(crate) fn check_obsolete_attrs(
 /// EPUB 3's HTML5-based, more extensible profile), and `<a>` may never
 /// nest another `<a>` (all three confirmed via dedicated real fixtures).
 pub(crate) fn check_dom_epub2(d: &roxmltree::Document, path: &str, report: &mut Report) {
+    // OPS 2.0.1 § 2.3.7: a `noscript` "must appear after the closing tag of
+    // the script it is associated with". Which script that is goes unsaid, so
+    // only the case true for every reading is reported: a `noscript` with no
+    // `script` before it and one after it, whose script can only come later.
+    let is_xhtml = |n: &roxmltree::Node, name: &str| {
+        n.is_element() && n.tag_name().namespace() == Some(XHTML_NS) && n.tag_name().name() == name
+    };
+    let has_script = d.descendants().any(|n| is_xhtml(&n, "script"));
+    let mut script_seen = false;
+    for node in d.descendants() {
+        if is_xhtml(&node, "script") {
+            script_seen = true;
+        } else if is_xhtml(&node, "noscript") && has_script && !script_seen {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "a \"noscript\" element must come after the script it belongs to",
+                path,
+                node,
+                "htm.epub2_dom.noscript_before_script",
+                Vec::new(),
+            );
+        }
+    }
     for node in d.descendants().filter(|n| n.is_element()) {
         // **Custom-namespaced attributes are the content model's business,
         // not this walk's.** XHTML 1.1's attribute lists are closed and our

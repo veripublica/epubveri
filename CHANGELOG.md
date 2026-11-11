@@ -12,6 +12,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **EPUB 2 content documents follow OPS 2.0.1's restrictions beyond XHTML
+  1.1.** Each was accepted and is now an error:
+  - a `noscript` with no `script` before it and one after it, RSC-005
+    (§ 2.3.7: it "must appear after the closing tag of the script it is
+    associated with");
+  - a `style` `type` other than `text/css` or `text/x-oeb1-css`, RSC-005
+    (§ 2.3.8; case and parameters do not matter);
+  - `align="char"` on a table element, RSC-005 (§ 2.3.9);
+  - SVG animation elements, SVG `script` and SVG event attributes such as
+    `onclick`, inline or in an SVG file, RSC-005 (§ 2.5.1: "SVG animation
+    and scripting features are not supported and must not be used");
+  - an `object` whose `type` names another media type than the manifest
+    gives its `data`: OPF-013 is an error there, not a warning (§ 2.3.6).
+
 - **`<?xml version="1.1"?>` is HTM-001 in every XML file,** in both
   versions: OCF 2.0.1 § 1.3 and OPS 2.0.1 § 1.4.1.2 require XML 1.0, as
   EPUB 3 does. Only the package document and EPUB 3 content documents were
