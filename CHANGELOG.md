@@ -12,6 +12,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **UTF-16 is no longer reported in an EPUB 2 book.** OCF 2.0.1 § 1.3 lets
+  every XML file be UTF-8 or UTF-16, and the OPF and OPS 2.0.1 conformance
+  lists say the same of the package, content documents and the NCX. A UTF-16
+  XHTML document drew the EPUB 3 error HTM-058, and a UTF-16 package, NCX,
+  SVG or `container.xml` the warning RSC-027. Any other encoding is still
+  RSC-028. `-v` moves the grade with the version, as it moves the rest.
+
 - **A fixed-layout viewport separated by `;` or a space is no longer an
   error.** EPUB 3.3 appendix F separates properties with any run of `,`, `;`
   or space; only commas were split on, so `width=1200;height=600` and

@@ -4407,6 +4407,23 @@ fn check_duplicate_ids(doc: &roxmltree::Document, opf_path: &str, report: &mut R
     }
 }
 
+/// Whether a UTF-16 package document is validated as EPUB 3, decided before
+/// the full parse the way `check_rendition` decides it after: a requested
+/// version wins, else the declared `version`. Unknown is EPUB 2's answer,
+/// the one both versions share: UTF-16 allowed.
+fn utf16_opf_validated_as_3(text: &str, options: &crate::Options) -> bool {
+    match options.epub_version.as_deref() {
+        Some("2" | "2.0") => return false,
+        Some("3" | "3.0") => return true,
+        _ => {}
+    }
+    crate::ocf::parse_xml(text).ok().is_some_and(|d| {
+        d.root_element()
+            .attr_no_ns("version")
+            .is_some_and(|v| v.starts_with("3."))
+    })
+}
+
 /// EPUB 3 §3.9 (XML conformance): decodes the OPF's raw bytes into text and
 /// grades its encoding. The grading is [`crate::encoding::sniff`]'s, the one
 /// every other XML resource gets; only the rule keys and the decode are the
@@ -4422,7 +4439,12 @@ fn check_duplicate_ids(doc: &roxmltree::Document, opf_path: &str, report: &mut R
 ///   actual bytes (a UTF-16-BOM'd file declaring `UTF-8`) or names an
 ///   encoding we don't recognize at all - a real, strict XML parser
 ///   can't recover from either, so neither can we.
-fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option<String> {
+fn decode_opf_bytes(
+    bytes: &[u8],
+    opf_path: &str,
+    options: &crate::Options,
+    report: &mut Report,
+) -> Option<String> {
     use crate::encoding::Sniffed;
     match crate::encoding::sniff(bytes) {
         Sniffed::Utf8 => {
@@ -4430,23 +4452,34 @@ fn decode_opf_bytes(bytes: &[u8], opf_path: &str, report: &mut Report) -> Option
             Some(String::from_utf8_lossy(body).into_owned())
         }
         Sniffed::Utf16 => {
-            report.push_at(
-                RSC_027,
-                Severity::Warning,
-                "the OPF is UTF-16 encoded; EPUB requires UTF-8",
-                opf_path,
-            );
             // A BOM, or `<?` in 16-bit form; otherwise only the declaration
             // said UTF-16, over bytes that are not.
-            let text = match bytes {
-                [0xFE, 0xFF, rest @ ..] => crate::encoding::decode_utf16(rest, true),
-                [0xFF, 0xFE, rest @ ..] => crate::encoding::decode_utf16(rest, false),
-                [0, 0x3C, ..] => crate::encoding::decode_utf16(bytes, true),
-                [0x3C, 0, ..] => crate::encoding::decode_utf16(bytes, false),
+            let decoded = match bytes {
+                [0xFE, 0xFF, rest @ ..] => Some(crate::encoding::decode_utf16(rest, true)),
+                [0xFF, 0xFE, rest @ ..] => Some(crate::encoding::decode_utf16(rest, false)),
+                [0, 0x3C, ..] => Some(crate::encoding::decode_utf16(bytes, true)),
+                [0x3C, 0, ..] => Some(crate::encoding::decode_utf16(bytes, false)),
+                _ => None,
+            };
+            // EPUB 2 allows a UTF-16 package document (OPF 2.0.1 § 1.4.1.1),
+            // so the warning waits for the version it is validated as.
+            let peek = decoded
+                .clone()
+                .unwrap_or_else(|| String::from_utf8_lossy(bytes).into_owned());
+            if utf16_opf_validated_as_3(&peek, options) {
+                report.push_at(
+                    RSC_027,
+                    Severity::Warning,
+                    "the OPF is UTF-16 encoded; EPUB requires UTF-8",
+                    opf_path,
+                );
+            }
+            let text = match decoded {
+                Some(text) => text,
                 // Xerces reads that declaration and stops at it, as it does
                 // for any UTF-16 name over 8-bit bytes (measured on 5.4.0:
                 // RSC-027, a fatal RSC-016 and OPF-001).
-                _ => {
+                None => {
                     report.push_at_rule(
                         RSC_016,
                         Severity::Fatal,
@@ -5241,7 +5274,7 @@ fn check_rendition(ocf: &mut Ocf, opf_path: &str, options: &crate::Options, repo
             return;
         }
     };
-    let Some(text) = decode_opf_bytes(&bytes, opf_path, report) else {
+    let Some(text) = decode_opf_bytes(&bytes, opf_path, options, report) else {
         return;
     };
     check_text(ocf, opf_path, text, options, report);
@@ -8648,7 +8681,7 @@ fn check_text(
             continue;
         };
         if let Some(head) = ocf.read_head_content(&orig, crate::encoding::SNIFF_LEN as u64) {
-            crate::encoding::check(&head, path, mt, report);
+            crate::encoding::check(&head, path, mt, is_epub3, report);
         }
     }
     // The subset the RELAX NG grammar and the Schematron run over. Measured,
@@ -8850,7 +8883,7 @@ fn check_text(
         // ID-reference resolution.
         let schema_validated = schema_validated_docs.contains(&nfc(&path));
         if let Some(mt) = content_doc_types.get(path.as_str()) {
-            crate::encoding::check(&b, &path, mt, report);
+            crate::encoding::check(&b, &path, mt, is_epub3, report);
         }
         // epubcheck's parser stops at a declaration it cannot take, before
         // the first element, so nothing in the document is checked or

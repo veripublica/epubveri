@@ -245,7 +245,6 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     };
     ocf::check_signatures(&mut container, &mut report);
     let opf_paths = ocf::find_rootfiles(&mut container, &mut report);
-    ocf::check_meta_inf_encodings(&mut container, &opf_paths, &mut report);
     // `encryption.xml`'s content model is version-dependent, so the rootfiles
     // have to be found first (issue #88). Measured against epubcheck 5.3.0, one
     // book per shape: an empty `<enc:EncryptedData>` is "missing required
@@ -271,6 +270,9 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
         Some(v) => v.starts_with('3'),
         None => epub3 == Some(true),
     };
+    // EPUB 2 allows UTF-16 in every XML file (OCF 2.0.1 § 1.3), so the
+    // grade waits for the version too.
+    ocf::check_meta_inf_encodings(&mut container, &opf_paths, validated_as_3, &mut report);
     // container.xml against its schema, picked by the version validated as
     // (so `-v` moves it, as it moves epubcheck's `OCFMetaFileChecker`).
     ocf::check_container_schema(&mut container, &opf_paths, validated_as_3, &mut report);

@@ -1778,7 +1778,12 @@ fn check_encrypted_item(item: roxmltree::Node, report: &mut Report, epub3: Optio
 /// file has named package documents that all exist: `OCFChecker.check()`
 /// returns before `checkEncryptionFile` / `checkOtherMetaFiles` otherwise.
 /// `manifest.xml` and `rights.xml` are never parsed, so never graded.
-pub fn check_meta_inf_encodings(ocf: &mut Ocf, opf_paths: &[String], report: &mut Report) {
+pub fn check_meta_inf_encodings(
+    ocf: &mut Ocf,
+    opf_paths: &[String],
+    validated_as_3: bool,
+    report: &mut Report,
+) {
     let mut files = vec!["META-INF/container.xml"];
     if !opf_paths.is_empty() && opf_paths.iter().all(|p| ocf.has(p)) {
         files.extend([
@@ -1792,7 +1797,7 @@ pub fn check_meta_inf_encodings(ocf: &mut Ocf, opf_paths: &[String], report: &mu
             continue;
         }
         if let Some(head) = ocf.read_head_content(name, crate::encoding::SNIFF_LEN as u64) {
-            crate::encoding::check(&head, name, "application/xml", report);
+            crate::encoding::check(&head, name, "application/xml", validated_as_3, report);
         }
     }
 }

@@ -225,7 +225,7 @@ fn check_mapping_document(ocf: &mut Ocf, container_doc: &roxmltree::Document, re
         m.location.as_deref() == Some(href)
             && m.rule.is_some_and(|r| r.starts_with("xml.encoding."))
     }) {
-        crate::encoding::check(&bytes, href, "application/xhtml+xml", report);
+        crate::encoding::check(&bytes, href, "application/xhtml+xml", true, report);
     }
     let text = crate::encoding::decode_xml(&bytes);
     let doc = match parse_xml(&text) {

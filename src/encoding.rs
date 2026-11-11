@@ -20,6 +20,10 @@
 //! - the declared name is compared case-blind with `UTF-8` and `UTF-16` and
 //!   nothing else, so `utf8` and `UTF-16LE` are encodings other than UTF-8.
 //!
+//! **The grade is the specification's, and depends on the version.** epubcheck
+//! grades UTF-16 the same in both; EPUB 2 allows it in every XML file (OCF
+//! 2.0.1 § 1.3), so [`Sniffed::finding_for`] gives it no finding there.
+//!
 //! Public because a transformer that leaves a document untouched for its
 //! encoding reports it with these codes (kepubverto, 2026-10-14), and a second
 //! copy of the sniffer is a second oracle that drifts.
@@ -67,9 +71,21 @@ impl Sniffed {
     ///
     /// The media type is the one the resource is checked as — the manifest's
     /// for a publication resource, `application/xml` for a `META-INF` file.
+    ///
+    /// This is the EPUB 3 grade. [`Sniffed::finding_for`] takes the version.
     pub fn finding(&self, media_type: &str) -> Option<(&'static str, Severity)> {
+        self.finding_for(media_type, true)
+    }
+
+    /// [`Sniffed::finding`] for the version the book is validated as. In
+    /// EPUB 2, UTF-16 draws no finding: OCF 2.0.1 § 1.3 ("All XML files MUST
+    /// be encoded in UTF-8 or UTF-16"), OPF 2.0.1 § 1.4.1.1 and OPS 2.0.1
+    /// § 1.4.1.2 to 1.4.1.4 allow it, and none of them recommends UTF-8. Every
+    /// other encoding but UTF-8 is RSC-028 in both versions.
+    pub fn finding_for(&self, media_type: &str, epub3: bool) -> Option<(&'static str, Severity)> {
         match self {
             Sniffed::Utf8 => None,
+            Sniffed::Utf16 if !epub3 => None,
             Sniffed::Utf16 if media_type == "application/xhtml+xml" => {
                 Some((HTM_058, Severity::Error))
             }
@@ -456,9 +472,14 @@ pub(crate) fn decode_xml(bytes: &[u8]) -> String {
 /// declared encoding (see [`parser_accepts`]). For every XML resource except
 /// the package document, whose decode needs the same answer and reports it
 /// itself.
-pub(crate) fn check(bytes: &[u8], path: &str, media_type: &str, report: &mut Report) {
+pub(crate) fn check(bytes: &[u8], path: &str, media_type: &str, epub3: bool, report: &mut Report) {
     let sniffed = sniff(bytes);
-    let Some((id, severity)) = sniffed.finding(media_type) else {
+    let Some((id, severity)) = sniffed.finding_for(media_type, epub3) else {
+        // RSC-016 does not depend on the grade: UTF-16 named over bytes that
+        // are not stops the parser in either version.
+        if !parser_accepts(bytes) {
+            push_unparsable_declaration(&sniffed, path, report);
+        }
         return;
     };
     let (text, rule, params) = match &sniffed {
@@ -493,20 +514,24 @@ pub(crate) fn check(bytes: &[u8], path: &str, media_type: &str, report: &mut Rep
         params,
     );
     if !parser_accepts(bytes) {
-        let declared = match &sniffed {
-            Sniffed::Declared(name) => name.clone(),
-            _ => "UTF-16".to_owned(),
-        };
-        report.push_full(
-            RSC_016,
-            Severity::Fatal,
-            format!("the XML parser does not support the declared encoding '{declared}'"),
-            path,
-            Position { line: 1, column: 1 },
-            "xml.encoding.unsupported",
-            vec![declared],
-        );
+        push_unparsable_declaration(&sniffed, path, report);
     }
+}
+
+fn push_unparsable_declaration(sniffed: &Sniffed, path: &str, report: &mut Report) {
+    let declared = match sniffed {
+        Sniffed::Declared(name) => name.clone(),
+        _ => "UTF-16".to_owned(),
+    };
+    report.push_full(
+        RSC_016,
+        Severity::Fatal,
+        format!("the XML parser does not support the declared encoding '{declared}'"),
+        path,
+        Position { line: 1, column: 1 },
+        "xml.encoding.unsupported",
+        vec![declared],
+    );
 }
 
 #[cfg(test)]
@@ -874,6 +899,128 @@ mod tests {
 
     fn be16(s: &str, bom: bool) -> Vec<u8> {
         utf16(s, true, bom)
+    }
+
+    const OPF2: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<package xmlns=\"http://www.idpf.org/2007/opf\" version=\"2.0\" unique-identifier=\"uid\"><metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:opf=\"http://www.idpf.org/2007/opf\"><dc:identifier id=\"uid\">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language></metadata>\n<manifest><item id=\"ncx\" href=\"toc.ncx\" media-type=\"application/x-dtbncx+xml\"/><item id=\"c1\" href=\"c1.xhtml\" media-type=\"application/xhtml+xml\"/><item id=\"img\" href=\"i.svg\" media-type=\"image/svg+xml\"/></manifest><spine toc=\"ncx\"><itemref idref=\"c1\"/></spine></package>\n";
+    const NCX: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ncx xmlns=\"http://www.daisy.org/z3986/2005/ncx/\" version=\"2005-1\"><head><meta name=\"dtb:uid\" content=\"urn:uuid:12345678-1234-1234-1234-123456789abc\"/></head><docTitle><text>T</text></docTitle><navMap><navPoint id=\"n1\" playOrder=\"1\"><navLabel><text>C</text></navLabel><content src=\"c1.xhtml\"/></navPoint></navMap></ncx>\n";
+
+    /// The EPUB 2 probe: [`probe`] with an EPUB 2 package, an NCX and no
+    /// navigation document, then `over`.
+    fn probe2(over: &[Entry]) -> Vec<u8> {
+        let mut all: Vec<Entry> = vec![
+            ("OEBPS/content.opf", OPF2.into()),
+            ("OEBPS/toc.ncx", NCX.into()),
+        ];
+        all.extend_from_slice(over);
+        let book = probe(&all);
+        // Drop the EPUB 3 navigation document the base probe carries.
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(book)).unwrap();
+        let mut buf = Vec::new();
+        let mut w = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+        for i in 0..z.len() {
+            let f = z.by_index_raw(i).unwrap();
+            if f.name().unwrap() != "OEBPS/nav.xhtml" {
+                w.raw_copy_file(f).unwrap();
+            }
+        }
+        w.finish().unwrap();
+        buf
+    }
+
+    /// EPUB 2 allows UTF-16 in every XML file (OCF 2.0.1 § 1.3, OPF 2.0.1
+    /// § 1.4.1.1, OPS 2.0.1 § 1.4.1.2 and 1.4.1.4) and recommends nothing
+    /// else, so none of these draws a finding the UTF-8 book does not.
+    #[test]
+    fn epub2_allows_utf16_in_every_xml_file() {
+        let baseline = ids(probe2(&[]));
+        assert!(
+            !baseline
+                .iter()
+                .any(|i| [HTM_058, RSC_027, RSC_028, RSC_016].contains(i)),
+            "{baseline:?}"
+        );
+        let cases: Vec<(&str, Vec<Entry>)> = vec![
+            (
+                "chapter",
+                vec![(
+                    "OEBPS/c1.xhtml",
+                    utf16(&chapter("UTF-16", "hi"), false, true),
+                )],
+            ),
+            (
+                "svg",
+                vec![("OEBPS/i.svg", be16(&SVG.replace("{enc}", "UTF-16"), true))],
+            ),
+            (
+                "ncx",
+                vec![("OEBPS/toc.ncx", be16(&NCX.replace("UTF-8", "UTF-16"), true))],
+            ),
+            (
+                "opf",
+                vec![(
+                    "OEBPS/content.opf",
+                    be16(&OPF2.replace("UTF-8", "UTF-16"), true),
+                )],
+            ),
+            (
+                "container.xml",
+                vec![(
+                    "META-INF/container.xml",
+                    be16(&CONTAINER.replace("UTF-8", "UTF-16"), true),
+                )],
+            ),
+        ];
+        for (name, over) in cases {
+            assert_eq!(ids(probe2(&over)), baseline, "{name}");
+        }
+        // Any other encoding is still RSC-028: "UTF-8 or UTF-16" is a MUST.
+        let latin1 = chapter("ISO-8859-1", "hi").into_bytes();
+        let mut want = baseline.clone();
+        want.push(RSC_028);
+        want.sort_unstable();
+        assert_eq!(ids(probe2(&[("OEBPS/c1.xhtml", latin1)])), want);
+    }
+
+    #[test]
+    fn a_requested_version_decides_the_utf16_grade() {
+        let book = probe(&[(
+            "OEBPS/c1.xhtml",
+            utf16(&chapter("UTF-16", "hi"), false, true),
+        )]);
+        let as2 = crate::Options {
+            epub_version: Some("2.0".into()),
+            ..Default::default()
+        };
+        let as3 = crate::validate_bytes(book.clone());
+        assert!(as3.messages.iter().any(|m| m.id == HTM_058));
+        let as2 = crate::validate_bytes_with_options(book, &as2);
+        assert!(!as2.messages.iter().any(|m| m.id == HTM_058));
+
+        let book2 = probe2(&[(
+            "OEBPS/content.opf",
+            be16(&OPF2.replace("UTF-8", "UTF-16"), true),
+        )]);
+        let as3 = crate::Options {
+            epub_version: Some("3.0".into()),
+            ..Default::default()
+        };
+        let r = crate::validate_bytes_with_options(book2, &as3);
+        assert!(r.messages.iter().any(|m| m.id == RSC_027));
+    }
+
+    #[test]
+    fn finding_for_epub2_is_silent_on_utf16_only() {
+        for mt in ["application/xhtml+xml", "image/svg+xml", "application/xml"] {
+            assert_eq!(Sniffed::Utf16.finding_for(mt, false), None);
+            assert_eq!(
+                Sniffed::Utf16.finding_for(mt, true),
+                Sniffed::Utf16.finding(mt)
+            );
+            assert_eq!(
+                Sniffed::Ucs4.finding_for(mt, false),
+                Some((RSC_028, Severity::Error))
+            );
+        }
     }
 
     #[test]

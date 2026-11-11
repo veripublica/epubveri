@@ -84,6 +84,11 @@ Each line is a place where epubveri follows the specification and epubcheck
   1x)` naming a missing file. CSS reads the url, and EPUB 3.3 asks the same of
   every resource a publication uses. epubcheck 5.4.0 reads only a
   declaration's top-level components.
+- **UTF-16 draws no finding in an EPUB 2 book.** OCF 2.0.1 § 1.3: "All XML
+  files MUST be encoded in UTF-8 or UTF-16", and OPF 2.0.1 § 1.4.1.1 and
+  OPS 2.0.1 § 1.4.1.2 say it again. epubcheck 5.4.0 grades encoding without
+  the version, so a UTF-16 XHTML document is HTM-058 there and any other
+  UTF-16 XML file RSC-027.
 - **A fixed-layout viewport `width` or `height` of `0` is HTM-057.** EPUB
   3.3 § 8.2.2.6: each "MUST have as its value a positive number [css2]".
   epubcheck 5.4.0's pattern accepts zero
