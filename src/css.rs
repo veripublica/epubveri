@@ -262,7 +262,11 @@ fn check_in(
                 css_path,
             );
         }
-        if has_utf16_bom(bytes) {
+        // EPUB 2 allows UTF-16 with a BOM: OPS 2.0.1 § 1.4.1.5, "External CSS
+        // stylesheets referenced by OPS documents must use UTF-8 or UTF-16
+        // encoding. Inclusion of Byte Order Mark (BOM) is mandatory for
+        // UTF-16". Nothing there recommends UTF-8.
+        if is_epub3 && has_utf16_bom(bytes) {
             report.push_at(
                 CSS_003,
                 Severity::Warning,
@@ -3425,6 +3429,24 @@ mod tests {
         }
         let findings = run_bytes(&be_bytes);
         assert!(findings.contains(&CSS_003));
+
+        // EPUB 2 allows it (OPS 2.0.1 § 1.4.1.5).
+        let text = decode_bytes(&be_bytes);
+        let mut report = Report::new();
+        check(
+            &text,
+            "style.css",
+            "OEBPS",
+            &HashMap::new(),
+            &HashSet::new(),
+            CssOrigin::File {
+                bytes: Some(&be_bytes),
+            },
+            false,
+            false,
+            &mut report,
+        );
+        assert!(!report.messages.iter().any(|m| m.id == CSS_003));
     }
 
     #[test]

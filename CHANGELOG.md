@@ -27,6 +27,8 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   XHTML document drew the EPUB 3 error HTM-058, and a UTF-16 package, NCX,
   SVG or `container.xml` the warning RSC-027. Any other encoding is still
   RSC-028. `-v` moves the grade with the version, as it moves the rest.
+  A stylesheet in UTF-16 with a byte order mark no longer draws the CSS-003
+  warning in EPUB 2 either (OPS 2.0.1 § 1.4.1.5).
 
 - **A fixed-layout viewport separated by `;` or a space is no longer an
   error.** EPUB 3.3 appendix F separates properties with any run of `,`, `;`

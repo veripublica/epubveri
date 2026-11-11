@@ -88,7 +88,8 @@ Each line is a place where epubveri follows the specification and epubcheck
   files MUST be encoded in UTF-8 or UTF-16", and OPF 2.0.1 § 1.4.1.1 and
   OPS 2.0.1 § 1.4.1.2 say it again. epubcheck 5.4.0 grades encoding without
   the version, so a UTF-16 XHTML document is HTM-058 there and any other
-  UTF-16 XML file RSC-027.
+  UTF-16 XML file RSC-027. The same holds for a stylesheet with a byte order
+  mark (OPS 2.0.1 § 1.4.1.5), which epubcheck 5.4.0 gives CSS-003.
 - **A fixed-layout viewport `width` or `height` of `0` is HTM-057.** EPUB
   3.3 § 8.2.2.6: each "MUST have as its value a positive number [css2]".
   epubcheck 5.4.0's pattern accepts zero
