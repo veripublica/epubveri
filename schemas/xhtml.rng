@@ -87,7 +87,12 @@
              in 0.8.3 and this copy was missed - the same one-directional fix
              that left `link` shared. -->
         <element name="style"><ref name="globalAttrsCore"/>
-          <optional><attribute name="type"><data type="string"/></attribute></optional>
+          <!-- HTML § 16.1 (obsolete but conforming): "If the attribute is
+               present, its value must be an ASCII case-insensitive match for
+               "text/css"." Same as epubcheck's epub-xhtml-integration.rnc
+               (measured against 5.4.0: `TEXT/CSS` passes, a parameter or
+               padding is RSC-005). -->
+          <optional><attribute name="type"><data type="htmlStyleType"/></attribute></optional>
           <optional><attribute name="media"><data type="string"/></attribute></optional>
           <optional><attribute name="blocking"><data type="string"/></attribute></optional>
           <text/>
@@ -152,7 +157,7 @@
       <optional><attribute name="src"><data type="anyURI"/></attribute></optional>
       <optional><attribute name="type"><data type="string"/></attribute></optional>
       <!-- Obsolete but conforming, UTF-8 only; see imgEl's note. -->
-      <optional><attribute name="charset"><data type="string"><param name="pattern">[uU][tT][fF]-8</param></data></attribute></optional>
+      <optional><attribute name="charset"><data type="htmlScriptCharset"/></attribute></optional>
       <text/>
     </element>
   </define>

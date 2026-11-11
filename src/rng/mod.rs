@@ -2818,6 +2818,42 @@ mod tests {
     }
 
     #[test]
+    fn xhtml_grammar_style_type_is_text_css_in_any_case() {
+        // HTML § 16.1: if present, an ASCII case-insensitive match for
+        // "text/css" - nothing more, so parameters and padding fail.
+        let doc = |ty: &str| {
+            format!(
+                "<html {XHTML_NS_DECLS}><head><title>T</title><meta charset=\"utf-8\"/>\
+                 <style type=\"{ty}\">p{{}}</style></head><body><p>x</p></body></html>"
+            )
+        };
+        for good in ["text/css", "TEXT/CSS", "Text/Css"] {
+            assert!(ok(&xhtml_grammar(), &doc(good)), "{good}");
+        }
+        for bad in [
+            "text/plain",
+            "text/css; charset=utf-8",
+            " text/css",
+            "",
+            "text/x-oeb1-css",
+        ] {
+            assert!(!ok(&xhtml_grammar(), &doc(bad)), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn xhtml_grammar_script_charset_is_utf_8_in_any_case() {
+        // HTML § 16.1: if present, an ASCII case-insensitive match for "utf-8".
+        let doc = |cs: &str| xhtml_doc(&format!("<script charset=\"{cs}\" src=\"s.js\"></script>"));
+        for good in ["utf-8", "UTF-8"] {
+            assert!(ok(&xhtml_grammar(), &doc(good)), "{good}");
+        }
+        for bad in ["iso-8859-1", "utf8", " utf-8", ""] {
+            assert!(!ok(&xhtml_grammar(), &doc(bad)), "{bad:?}");
+        }
+    }
+
+    #[test]
     fn xhtml_grammar_rejects_style_in_body() {
         let xml = xhtml_doc("<style>p{color:red}</style>");
         assert!(!ok(&xhtml_grammar(), &xml));

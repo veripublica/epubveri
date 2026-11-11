@@ -6,7 +6,8 @@
 //! `notAllowed`/`value`/`data`, with `ns` and `datatypeLibrary` inheritance and
 //! prefix resolution. `ref`s are kept as `Pattern::Ref` indices into the
 //! grammar's definitions, so **recursive grammars are supported** (no inlining).
-//! Not yet: `<include>`/`<externalRef>`, `combine`, `<param>` facets.
+//! Not yet: `<include>`/`<externalRef>`, `combine`, `<param>` facets (a
+//! `<data>` holding one is refused, not read as the bare type).
 
 use std::collections::HashMap;
 
@@ -172,6 +173,13 @@ impl Loader {
                 Datatype::from(dtlib, node.attr_no_ns("type").unwrap_or("token")),
                 node.text().unwrap_or("").to_string(),
             )),
+            // A facet would be dropped, and the value it restricts accepted:
+            // refuse it, and name the restriction as one of our datatypes.
+            "data" if node.children().any(|c| c.is_element()) => {
+                Err("<data> with <param> or <except>: facets are not read; \
+                 use a named datatype (src/rng/datatype.rs)"
+                    .to_string())
+            }
             "data" => Ok(data(Datatype::from(
                 dtlib,
                 node.attr_no_ns("type").unwrap_or("token"),
@@ -307,6 +315,21 @@ mod tests {
         assert!(validate_xml(&g, "<note><to>x</to><from>y</from></note>").unwrap());
         assert!(!validate_xml(&g, "<note></note>").unwrap());
         assert!(!validate_xml(&g, "<note><from>y</from></note>").unwrap());
+    }
+
+    #[test]
+    fn a_facet_is_refused_not_dropped() {
+        // Dropping it accepted every value; script charset sat that way.
+        let rng = concat!(
+            "<element name=\"a\" xmlns=\"http://relaxng.org/ns/structure/1.0\" ",
+            "datatypeLibrary=\"http://www.w3.org/2001/XMLSchema-datatypes\">",
+            "<data type=\"string\"><param name=\"pattern\">x</param></data>",
+            "</element>"
+        );
+        match load(rng) {
+            Err(e) => assert!(e.contains("<param>"), "{e}"),
+            Ok(_) => panic!("a <param> facet was dropped"),
+        }
     }
 
     const CONTAINER_RNG: &str = concat!(

@@ -12,6 +12,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **An EPUB 3 `style` `type` other than `text/css`, and a `script` `charset`
+  other than `utf-8`, are RSC-005,** as in epubcheck. HTML § 16.1 allows each
+  attribute only as "an ASCII case-insensitive match" for that one value, so
+  `TEXT/CSS` passes and `text/css; charset=utf-8` does not. Both were
+  accepted: the schema loader dropped the `<param>` facet that held the
+  `charset` pattern. It now refuses a `<data>` with a facet instead of
+  reading it as the bare type.
+
 - **EPUB 2 content documents follow OPS 2.0.1's restrictions beyond XHTML
   1.1.** Each was accepted and is now an error:
   - a `noscript` with no `script` before it and one after it, RSC-005

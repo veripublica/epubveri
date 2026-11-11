@@ -40,6 +40,15 @@ pub enum Datatype {
     /// value that names another type fails. Named by us; epubcheck takes any
     /// string here.
     Epub2StyleType,
+    /// An EPUB 3 `<style type>`: HTML § 16.1, "If the attribute is present, its
+    /// value must be an ASCII case-insensitive match for "text/css"". No
+    /// trimming and no parameters, as for an `xsd:string` pattern. Named by
+    /// us, as the loader reads no `<param>` facets.
+    HtmlStyleType,
+    /// An EPUB 3 `<script charset>`: HTML § 16.1, "If the attribute is
+    /// present, its value must be an ASCII case-insensitive match for
+    /// "utf-8"". Exact, like [`Datatype::HtmlStyleType`].
+    HtmlScriptCharset,
     /// A media type as the container schema reads one: `datatype.mimetype`,
     /// `xsd:string { pattern = '[a-zA-Z0-9!#$&+\-\^_]+/[a-zA-Z0-9!#$&+\-\^_]+.*' }`.
     /// An `xsd:string` keeps its whitespace, so a padded value fails. Named
@@ -92,6 +101,8 @@ impl Datatype {
             "httpEquiv" => HttpEquiv,
             "metaCharset" => MetaCharset,
             "epub2StyleType" => Epub2StyleType,
+            "htmlStyleType" => HtmlStyleType,
+            "htmlScriptCharset" => HtmlScriptCharset,
             "mediaType" => MediaType,
             "renditionMedia" => RenditionMedia,
             "IDREF" => IdRef,
@@ -166,6 +177,8 @@ impl Datatype {
                 essence.eq_ignore_ascii_case("text/css")
                     || essence.eq_ignore_ascii_case("text/x-oeb1-css")
             }
+            Datatype::HtmlStyleType => raw.eq_ignore_ascii_case("text/css"),
+            Datatype::HtmlScriptCharset => raw.eq_ignore_ascii_case("utf-8"),
             Datatype::IdRefs => !s.is_empty() && s.split(' ').all(is_ncname),
             Datatype::Language => is_language(&s),
             Datatype::Boolean => matches!(s.as_str(), "true" | "false" | "0" | "1"),
