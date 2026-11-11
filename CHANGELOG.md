@@ -19,6 +19,12 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   `unicode` and `ucs-2` were reported. `latin1`, `us-ascii` and other labels
   of windows-1252 are still CSS-004, and the message now names the encoding.
 
+### Changed
+
+- **zip 9.5.1, crc32fast 1.5.5, itoa 1.0.19 and syn 3.0.10 in the lockfile,**
+  the family's shared-crate targets for this release. zip's two releases
+  since 9.4.2 change writing and extraction only; epubveri reads.
+
 ## [0.40.0] - 2026-11-11
 
 ### Fixed
