@@ -8682,6 +8682,10 @@ fn check_text(
         };
         if let Some(head) = ocf.read_head_content(&orig, crate::encoding::SNIFF_LEN as u64) {
             crate::encoding::check(&head, path, mt, is_epub3, report);
+            // HTM-001: every XML file epubcheck parses, in both versions
+            // (`XMLHandler.checkXMLVersion`; OCF 2.0.1 § 1.3). The
+            // declaration is at the start, so the head holds it.
+            crate::htm::check_xml_version(&crate::encoding::decode_xml(&head), path, report);
         }
     }
     // The subset the RELAX NG grammar and the Schematron run over. Measured,
@@ -23724,6 +23728,40 @@ mod tests {
         ] {
             assert_eq!(epub2(markup), 1, "EPUB 2 must reject: {markup}");
             assert_eq!(epub3(markup), 0, "EPUB 3 must accept: {markup}");
+        }
+    }
+
+    /// OPS 2.0.1 § 2.3.6: "The param element must only appear before the
+    /// renderable content of an object." Whitespace before it is not
+    /// content. Measured against epubcheck 5.4.0, one book per shape.
+    #[test]
+    fn epub2_param_comes_before_the_object_s_content() {
+        let body = |markup: &str| {
+            format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\
+                 <!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.1//EN\" \
+                 \"http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd\">\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body><div>{markup}</div></body></html>"
+            )
+        };
+        let rsc005 = |markup: &str| {
+            crate::validate_bytes(epub2_with_ch1(&body(markup)))
+                .messages
+                .iter()
+                .filter(|m| m.id == crate::ids::RSC_005)
+                .count()
+        };
+        let p = "<param name=\"a\" value=\"b\"/>";
+        for (markup, want) in [
+            ("<object>text</object>".to_string(), 0),
+            (format!("<object>{p}text</object>"), 0),
+            (format!("<object>\n  {p}\n  text</object>"), 0),
+            (format!("<object>{p}</object>"), 0),
+            (format!("<object>text{p}</object>"), 1),
+            (format!("<object><span>text</span>{p}</object>"), 1),
+        ] {
+            assert_eq!(rsc005(&markup), want, "{markup}");
         }
     }
 

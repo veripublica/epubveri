@@ -47,11 +47,13 @@ pub(crate) fn check_raw(text: &str, path: &str, is_epub3: bool, report: &mut Rep
     // not misflagged as undeclared.
     check_entities(text, path, is_epub3, report);
 
+    // XML 1.0 in both versions: OPS 2.0.1 § 1.4.1.2 ("a well-formed XML
+    // document (as defined by XML 1.0)"), as EPUB 3.
+    check_xml_version(text, path, report);
     if !is_epub3 {
         check_doctype_epub2(text, path, report);
         return;
     }
-    check_xml_version(text, path, report);
 
     check_doctype(text, path, report);
 }

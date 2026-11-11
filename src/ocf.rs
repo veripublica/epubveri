@@ -1798,6 +1798,9 @@ pub fn check_meta_inf_encodings(
         }
         if let Some(head) = ocf.read_head_content(name, crate::encoding::SNIFF_LEN as u64) {
             crate::encoding::check(&head, name, "application/xml", validated_as_3, report);
+            // HTM-001, as for every XML file epubcheck parses (OCF 2.0.1
+            // § 1.3: "compatible with the XML 1.0 specification").
+            crate::htm::check_xml_version(&crate::encoding::decode_xml(&head), name, report);
         }
     }
 }

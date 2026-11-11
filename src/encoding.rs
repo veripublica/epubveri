@@ -1008,6 +1008,43 @@ mod tests {
         assert!(r.messages.iter().any(|m| m.id == RSC_027));
     }
 
+    /// HTM-001 in every XML file epubcheck parses, in both versions
+    /// (`XMLHandler.checkXMLVersion`; OCF 2.0.1 § 1.3, OPS 2.0.1 § 1.4.1.2).
+    #[test]
+    fn xml_1_1_is_htm_001_in_every_xml_file() {
+        let v11 = |s: &str| {
+            s.replacen("version=\"1.0\"", "version=\"1.1\"", 1)
+                .into_bytes()
+        };
+        let count = |book: Vec<u8>| {
+            ids(book)
+                .iter()
+                .filter(|i| **i == crate::ids::HTM_001)
+                .count()
+        };
+        assert_eq!(count(probe2(&[])), 0);
+        assert_eq!(count(probe(&[])), 0);
+        let chapter2 = chapter("UTF-8", "hi");
+        let svg = SVG.replace("{enc}", "UTF-8");
+        let epub2: Vec<(&str, Vec<u8>)> = vec![
+            ("OEBPS/c1.xhtml", v11(&chapter2)),
+            ("OEBPS/toc.ncx", v11(NCX)),
+            ("OEBPS/i.svg", v11(&svg)),
+            ("META-INF/container.xml", v11(CONTAINER)),
+            ("OEBPS/content.opf", v11(OPF2)),
+        ];
+        for (name, data) in epub2 {
+            assert_eq!(count(probe2(&[(name, data)])), 1, "EPUB 2 {name}");
+        }
+        for (name, data) in [
+            ("OEBPS/i.svg", v11(&svg)),
+            ("META-INF/container.xml", v11(CONTAINER)),
+            ("OEBPS/c1.xhtml", v11(&chapter2)),
+        ] {
+            assert_eq!(count(probe(&[(name, data)])), 1, "EPUB 3 {name}");
+        }
+    }
+
     #[test]
     fn finding_for_epub2_is_silent_on_utf16_only() {
         for mt in ["application/xhtml+xml", "image/svg+xml", "application/xml"] {

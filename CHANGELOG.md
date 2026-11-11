@@ -12,6 +12,15 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Fixed
 
+- **`<?xml version="1.1"?>` is HTM-001 in every XML file,** in both
+  versions: OCF 2.0.1 § 1.3 and OPS 2.0.1 § 1.4.1.2 require XML 1.0, as
+  EPUB 3 does. Only the package document and EPUB 3 content documents were
+  checked; an EPUB 2 content document, an NCX, an SVG and `container.xml`
+  passed.
+- **In EPUB 2, a `param` after an `object`'s content is RSC-005.** OPS 2.0.1
+  § 2.3.6: "The param element must only appear before the renderable
+  content of an object." It was accepted anywhere in the object.
+
 - **UTF-16 is no longer reported in an EPUB 2 book.** OCF 2.0.1 § 1.3 lets
   every XML file be UTF-8 or UTF-16, and the OPF and OPS 2.0.1 conformance
   lists say the same of the package, content documents and the NCX. A UTF-16

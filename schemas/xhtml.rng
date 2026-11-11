@@ -3901,10 +3901,11 @@
       <!-- XHTML 1.1 `Length` (pixels or percentage), text in schema/20 (#43). -->
       <optional><attribute name="width"><data type="string"/></attribute></optional>
       <optional><attribute name="height"><data type="string"/></attribute></optional>
-      <interleave>
-        <zeroOrMore><ref name="paramEl-epub2"/></zeroOrMore>
-        <ref name="epub2Flow"/>
-      </interleave>
+      <!-- OPS 2.0.1 § 2.3.6: "The param element must only appear before the
+           renderable content of an object." So the params come first, not
+           interleaved; whitespace before them is not content. -->
+      <zeroOrMore><ref name="paramEl-epub2"/></zeroOrMore>
+      <ref name="epub2Flow"/>
     </element>
   </define>
 
