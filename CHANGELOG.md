@@ -10,6 +10,24 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A fixed-layout viewport separated by `;` or a space is no longer an
+  error.** EPUB 3.3 appendix F separates properties with any run of `,`, `;`
+  or space; only commas were split on, so `width=1200;height=600` and
+  `width=1200 height=600` drew HTM-057 and HTM-056.
+- **`<meta name=" viewport ">` is a viewport meta element.** Appendix F
+  compares the name after whitespace normalization; the padded name drew
+  HTM-046.
+- **A viewport `width` or `height` of zero is HTM-057.** Section 8.2.2.6
+  requires a positive number; `0` and `0.0` passed.
+- **Viewport numbers follow CSS 2:** `+1200` and `.5` pass, and `1200.` or
+  `1e3` is HTM-057.
+- **A viewport `content` that breaks appendix F's grammar is one HTM-047,**
+  as for a blank value: a leading or trailing separator, a property with no
+  name, or a value holding `=`. A trailing comma used to pass. A property
+  with no value (`user-scalable`) still passes, as the appendix allows.
+
 ## [0.39.0] - 2026-11-09
 
 **More books are reported invalid.** The package document and the navigation document are now checked against their full tables, and an EPUB 3 `img` with no `alt` is an error. Where the specification and epubcheck disagree the specification decides, so a book that passes epubcheck can fail here and, in a few listed cases, the other way round. Each difference is in AGENTS.md, "Known differences from epubcheck".

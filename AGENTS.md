@@ -84,6 +84,16 @@ Each line is a place where epubveri follows the specification and epubcheck
   1x)` naming a missing file. CSS reads the url, and EPUB 3.3 asks the same of
   every resource a publication uses. epubcheck 5.4.0 reads only a
   declaration's top-level components.
+- **A fixed-layout viewport `width` or `height` of `0` is HTM-057.** EPUB
+  3.3 § 8.2.2.6: each "MUST have as its value a positive number [css2]".
+  epubcheck 5.4.0's pattern accepts zero.
+- **Viewport values `+1200` and `.5` pass.** § 8.2.2.6 cites CSS 2's
+  `<number>`, which allows a sign and a leading dot (CSS 2 § 4.3.1);
+  epubcheck 5.4.0 reports HTM-057 for both.
+- **A viewport property with no value, followed by a space, passes**
+  (`initial-scale 1, width=1200, height=600`). EPUB 3.3 appendix F's
+  grammar reads it as two properties without values, which the appendix
+  allows; epubcheck 5.4.0 reports HTM-047.
 - **SPEC-001 (error): `encryption.xml` declares encrypted a file that must
   never be.** That is `mimetype`, the six `META-INF` files, or a package
   document: EPUB 3.3 § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2. epubcheck 5.4.0 does

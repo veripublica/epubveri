@@ -2,28 +2,30 @@
 //! the XHTML `<meta name="viewport">` mini-grammar and the SVG `viewBox`
 //! requirement. Plain XML/attribute parsing, no new parser needed.
 //!
-//! Grounded in the real corpus (read-only, for understanding — same
-//! clean-room stance as every prior increment): only the **first**
-//! `<meta name="viewport">` in a document is checked at all (additional
-//! ones are usage-flagged, not validated); the recognized keys are
-//! `width`/`height`, with `device-width`/`device-height` as the only valid
-//! keyword values; unrecognized keys (e.g. `initial-scale`) are silently
-//! ignored, matching the real corpus's own fixtures.
+//! The grammar is EPUB 3.3 appendix F (`#app-viewport-meta-syntax`): after
+//! XML whitespace normalization, properties are separated by any run of `,`,
+//! `;` or space, `=` may carry one space on either side, and a property may
+//! have no value. Only the **first** `<meta name="viewport">` in a document is
+//! checked (additional ones are usage-flagged, not validated). `width` and
+//! `height` must be a positive CSS 2 number or `device-width` /
+//! `device-height` (section 8.2.2.6, `#sec-fxl-icb-html`); other properties
+//! (e.g. `initial-scale`) are ignored.
 
 use crate::ids::*;
 use crate::report::{Position, Report, Severity};
 use crate::xmlext::NodeExt;
 
+/// Whether `n` is a `<meta>` whose `name` is `viewport` after XML whitespace
+/// normalization (appendix F), so `name=" viewport "` counts.
+fn is_viewport_meta(n: &roxmltree::Node) -> bool {
+    n.is_element()
+        && n.tag_name().name() == "meta"
+        && n.attr_no_ns("name").map(crate::xmlext::trim_xml_space) == Some("viewport")
+}
+
 /// Checks a fixed-layout XHTML content document's viewport declaration.
 pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: &mut Report) {
-    let metas: Vec<_> = d
-        .descendants()
-        .filter(|n| {
-            n.is_element()
-                && n.tag_name().name() == "meta"
-                && n.attr_no_ns("name") == Some("viewport")
-        })
-        .collect();
+    let metas: Vec<_> = d.descendants().filter(is_viewport_meta).collect();
 
     if metas.is_empty() {
         report.push_at_pos(
@@ -60,9 +62,7 @@ pub(crate) fn check_xhtml_viewport(d: &roxmltree::Document, path: &str, report: 
 /// usage-flagged if present (confirmed via the real corpus: "no other
 /// errors or warnings are reported" alongside the usage finding).
 pub(crate) fn check_reflowable_viewport(d: &roxmltree::Document, path: &str, report: &mut Report) {
-    let viewport = d.descendants().find(|n| {
-        n.is_element() && n.tag_name().name() == "meta" && n.attr_no_ns("name") == Some("viewport")
-    });
+    let viewport = d.descendants().find(is_viewport_meta);
     if let Some(n) = viewport {
         report.push_node(
             HTM_060B,
@@ -90,26 +90,69 @@ pub(crate) fn check_svg_viewbox(d: &roxmltree::Document, path: &str, report: &mu
     }
 }
 
-fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, report: &mut Report) {
-    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    let mut has_blank_value = false;
+/// One property of a viewport `content` value: its name, and its value if
+/// it has an `=`.
+type ViewportProperty = (String, Option<String>);
 
-    for piece in content.split(',') {
-        let piece = crate::xmlext::trim_xml_space(piece);
-        if piece.is_empty() {
+/// Parses a viewport `content` value by appendix F's grammar. `Err` carries
+/// the reason the value is not of that form.
+fn parse_viewport(content: &str) -> Result<Vec<ViewportProperty>, &'static str> {
+    // Whitespace normalization first: every requirement applies after it.
+    // Then the assign production's optional spaces around `=` are folded in,
+    // so the only spaces left are separators.
+    let norm = crate::xmlext::normalize_xml_space(content)
+        .replace(" =", "=")
+        .replace("= ", "=");
+    if norm.is_empty() {
+        return Ok(Vec::new());
+    }
+    let is_sep = |c: char| matches!(c, ',' | ';' | ' ');
+    if norm.starts_with(is_sep) {
+        return Err("it starts with a separator");
+    }
+    if norm.ends_with(is_sep) {
+        return Err("it ends with a separator");
+    }
+    let mut props = Vec::new();
+    for piece in norm.split(is_sep).filter(|p| !p.is_empty()) {
+        match piece.split_once('=') {
+            None => props.push((piece.to_string(), None)),
+            Some((_, value)) if value.contains('=') => {
+                return Err("a value contains '='");
+            }
+            Some(("", _)) => return Err("a property has no name"),
+            Some((_, "")) => return Err("a property has '=' but no value"),
+            Some((name, value)) => props.push((name.to_string(), Some(value.to_string()))),
+        }
+    }
+    Ok(props)
+}
+
+fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, report: &mut Report) {
+    let props = match parse_viewport(content) {
+        Ok(props) => props,
+        Err(reason) => {
+            report.push_at_pos(
+                HTM_047,
+                Severity::Error,
+                format!("viewport content '{content}' is not valid syntax: {reason}"),
+                path,
+                Position::of(node),
+            );
+            return;
+        }
+    };
+
+    let mut seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for (key, value) in &props {
+        let key = key.as_str();
+        if !matches!(key, "width" | "height") {
             continue;
         }
-        match piece.split_once('=') {
-            Some((key, value)) => {
-                let key = crate::xmlext::trim_xml_space(key);
-                let value = crate::xmlext::trim_xml_space(value);
-                if !matches!(key, "width" | "height") {
-                    continue;
-                }
-                *seen.entry(key).or_insert(0) += 1;
-                if value.is_empty() {
-                    has_blank_value = true;
-                } else if !is_valid_viewport_value(key, value) {
+        *seen.entry(key).or_insert(0) += 1;
+        match value {
+            Some(value) => {
+                if !is_valid_viewport_dimension(key, value) {
                     report.push_node(
                         HTM_057,
                         Severity::Error,
@@ -122,30 +165,17 @@ fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, repo
                 }
             }
             None => {
-                if matches!(piece, "width" | "height") {
-                    *seen.entry(piece).or_insert(0) += 1;
-                    report.push_node(
-                        HTM_057,
-                        Severity::Error,
-                        format!("viewport '{piece}' has no value"),
-                        path,
-                        node,
-                        "layout.viewport.missing_value",
-                        vec![piece.to_string()],
-                    );
-                }
+                report.push_node(
+                    HTM_057,
+                    Severity::Error,
+                    format!("viewport '{key}' has no value"),
+                    path,
+                    node,
+                    "layout.viewport.missing_value",
+                    vec![key.to_string()],
+                );
             }
         }
-    }
-
-    if has_blank_value {
-        report.push_at_pos(
-            HTM_047,
-            Severity::Error,
-            "viewport content has a blank value",
-            path,
-            Position::of(node),
-        );
     }
 
     for key in ["width", "height"] {
@@ -173,7 +203,31 @@ fn check_viewport_content(content: &str, path: &str, node: roxmltree::Node, repo
     }
 }
 
-pub(crate) fn is_valid_viewport_value(key: &str, value: &str) -> bool {
+/// A viewport meta `width` / `height` value: a positive CSS 2 number
+/// (`syndata.html#numbers`: an optional sign, then digits, or digits, a dot
+/// and at least one digit) or the matching `device-*` keyword.
+fn is_valid_viewport_dimension(key: &str, value: &str) -> bool {
+    if (key == "width" && value == "device-width") || (key == "height" && value == "device-height")
+    {
+        return true;
+    }
+    let unsigned = value.strip_prefix('+').unwrap_or(value);
+    let (int, frac) = match unsigned.split_once('.') {
+        Some((int, frac)) => (int, Some(frac)),
+        None => (unsigned, None),
+    };
+    let digits = |s: &str| s.bytes().all(|b| b.is_ascii_digit());
+    let well_formed = match frac {
+        None => !int.is_empty() && digits(int),
+        Some(frac) => !frac.is_empty() && digits(int) && digits(frac),
+    };
+    well_formed && unsigned.bytes().any(|b| (b'1'..=b'9').contains(&b))
+}
+
+/// The deprecated `rendition:viewport` property's value check, which keeps
+/// its own looser form (digits with at most one dot, or a `device-*`
+/// keyword); not appendix F's.
+pub(crate) fn is_valid_rendition_viewport_value(key: &str, value: &str) -> bool {
     if (key == "width" && value == "device-width") || (key == "height" && value == "device-height")
     {
         return true;
@@ -212,6 +266,60 @@ mod tests {
         assert!(run_xhtml("width=600.999,height=1200.5").is_empty());
         assert!(run_xhtml("width=device-width,height=device-height").is_empty());
         assert!(run_xhtml("  width\t=\t600,\n  height\t=\t1200  ").is_empty());
+    }
+
+    #[test]
+    fn appendix_f_separators_are_comma_semicolon_or_space() {
+        assert!(run_xhtml("width=1200;height=600").is_empty());
+        assert!(run_xhtml("width=1200 height=600").is_empty());
+        assert!(run_xhtml("width=1200, ;height=600").is_empty());
+        assert!(run_xhtml("width=1200,,,height=600").is_empty());
+        assert!(run_xhtml("width = 1200 ; height = 600").is_empty());
+    }
+
+    #[test]
+    fn valueless_properties_are_allowed_by_the_grammar() {
+        assert!(run_xhtml("width=1200, height=600, user-scalable").is_empty());
+        assert!(run_xhtml("p1 v1, width=1200, height=600").is_empty());
+        // A valueless width is grammatical but not a positive number.
+        assert_eq!(run_xhtml("width 1200, height=600"), vec![HTM_057]);
+    }
+
+    #[test]
+    fn syntax_errors_are_one_htm_047() {
+        for content in [
+            ",width=1200,height=600",
+            "width=1200,height=600;",
+            "width==1200,height=600",
+            "width=1200=1,height=600",
+            "=1200,width=1200,height=600",
+        ] {
+            assert_eq!(run_xhtml(content), vec![HTM_047], "{content}");
+        }
+    }
+
+    #[test]
+    fn dimensions_must_be_positive_css2_numbers() {
+        assert_eq!(run_xhtml("width=1200, height=0"), vec![HTM_057]);
+        assert_eq!(run_xhtml("width=0.0, height=600"), vec![HTM_057]);
+        assert_eq!(run_xhtml("width=-5, height=600"), vec![HTM_057]);
+        assert_eq!(run_xhtml("width=1200., height=600"), vec![HTM_057]);
+        assert_eq!(run_xhtml("width=1e3, height=600"), vec![HTM_057]);
+        assert!(run_xhtml("width=+1200, height=.5").is_empty());
+        assert!(run_xhtml("width=0.5, height=0600").is_empty());
+    }
+
+    #[test]
+    fn padded_viewport_name_is_normalized() {
+        let xhtml = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><meta name=" viewport " content="width=1200, height=600"/></head><body/></html>"#;
+        let d = crate::ocf::parse_xml(xhtml).unwrap();
+        let mut report = Report::new();
+        check_xhtml_viewport(&d, "content.xhtml", &mut report);
+        assert!(report.messages.is_empty());
+        let mut report = Report::new();
+        check_reflowable_viewport(&d, "content.xhtml", &mut report);
+        let ids: Vec<_> = report.messages.iter().map(|m| m.id).collect();
+        assert_eq!(ids, vec![HTM_060B]);
     }
 
     #[test]

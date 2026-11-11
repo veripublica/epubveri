@@ -6089,7 +6089,7 @@ fn check_text(
                         let key = key.trim_matches(crate::xmlext::is_xml_space);
                         let value = value.trim_matches(crate::xmlext::is_xml_space);
                         !matches!(key, "width" | "height")
-                            || crate::layout::is_valid_viewport_value(key, value)
+                            || crate::layout::is_valid_rendition_viewport_value(key, value)
                     }
                     _ => false,
                 });
