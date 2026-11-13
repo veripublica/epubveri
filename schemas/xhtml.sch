@@ -171,6 +171,14 @@
       <assert test="@dir">a "bdo" element must have a "dir" attribute</assert>
     </rule>
   </pattern>
+  <!-- HTML § 4.5.25: on `bdo`, "The auto value must not be specified." The
+       keyword is matched as HTML matches it, case-blind (`htmlDir`).
+       epubcheck 5.4.0 accepts it (epub-test-books, `bdo-dir-auto`). -->
+  <pattern id="bdo-dir-not-auto">
+    <rule context="h:bdo[@dir]">
+      <report test="lower-case(@dir) = 'auto'">the "dir" attribute of a "bdo" element must not be "auto"</report>
+    </rule>
+  </pattern>
   <pattern id="no-dfn-in-dfn">
     <rule context="h:dfn">
       <report test="ancestor::h:dfn">a "dfn" element must not appear inside a "dfn" element</report>

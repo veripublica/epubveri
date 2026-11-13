@@ -3,7 +3,7 @@
 //! grammar parser/serializer with no selector or property-value grammar
 //! yet):
 //! - `CSS-008`: the syntax errors styloria's error-recovering parser
-//!   recovered from — bad string/url tokens and unterminated rules/blocks,
+//!   recovered from — bad string tokens and unterminated rules,
 //!   surfaced by styloria 0.4's `syntax_errors` — plus in-block malformed
 //!   declaration *shapes* (an `ident` with no `:`), which the parser leaves
 //!   as raw component values, so `check_declaration_shapes_spanned` splits
@@ -319,8 +319,12 @@ fn check_in(
     // second-guessed.** An unclosed `{` swallows everything after it — the
     // next rule's selector and braces included — so what the parser finds
     // inside it is not what the author wrote as one block, and every shape
-    // complaint it produces is a consequence of the one defect the parser has
-    // already reported as `UnterminatedBlock`.
+    // complaint it produces is a consequence of the one defect it has.
+    //
+    // styloria 0.20 no longer reports such a block (CSS Syntax §5.5 closes it
+    // at the end of input without naming a parse error), so whether a block
+    // closed is read off the tree here: see `Ctx::never_closed`. The CSS-008
+    // the error used to draw went with it.
     //
     // Measured on `content-css-syntax-error`, which has two unclosed blocks:
     // styloria reports exactly two errors and so does epubcheck; the third
@@ -330,23 +334,13 @@ fn check_in(
     // a CSS-crate granularity difference sent a fix to the wrong repository.
     // Parity with epubcheck is this consumer's business, not the library's.
     //
-    // Positions still differ from epubcheck's and that is left alone: it
-    // points at the token that got confused (or at EOF), we point at the `{`
-    // that was never closed, which is the one an author has to fix.
-    //
     // It holds at any depth: a rule inside `@media` whose block a broken
     // string left open is the same case one level down.
-    let unterminated: Vec<usize> = syntax_errs
-        .iter()
-        .filter(|e| e.kind == SyntaxErrorKind::UnterminatedBlock)
-        .map(|e| e.span.start)
-        .collect();
     let ctx = Ctx {
         css,
         css_path,
         origin,
         is_epub3,
-        unterminated: &unterminated,
     };
     // Spans whose inner syntax errors are already accounted for: see
     // `Quiet`.
@@ -363,7 +357,7 @@ fn check_in(
                 if q.prelude.iter().all(|v| is_blank_component(&v.node)) {
                     report.push_full(
                         CSS_008,
-                        Severity::Error,
+                        ctx.syntax_severity(),
                         "a style rule must have a selector",
                         css_path,
                         origin.position(css, rule.span.start),
@@ -371,14 +365,14 @@ fn check_in(
                         Vec::new(),
                     );
                 }
-                walk_rule_block(rule, &q.block, ctx, &mut quiet, report);
+                walk_rule_block(&q.block, ctx, &mut quiet, report);
             }
             Rule::At(a) => {
                 if let Some(block) = &a.block {
                     if a.name.eq_ignore_ascii_case("font-face") {
                         check_font_face(block, a.name_span, ctx, report);
                     }
-                    walk_at_rule_block(&a.name, &block.node, ctx, &mut quiet, report);
+                    walk_at_rule_block(&a.name, block, ctx, &mut quiet, report);
                 }
             }
         }
@@ -864,7 +858,7 @@ pub(crate) fn check_style_attribute(
     }) {
         report.push_at_rule(
             CSS_008,
-            Severity::Error,
+            syntax_severity(is_epub3),
             syntax_error_text(value, e, None),
             path,
             "css.declaration.malformed_shape",
@@ -885,7 +879,7 @@ pub(crate) fn check_style_attribute(
                 };
                 report.push_at_rule(
                     CSS_008,
-                    Severity::Error,
+                    syntax_severity(is_epub3),
                     text,
                     path,
                     "css.declaration.malformed_shape",
@@ -964,6 +958,27 @@ fn check_style_attribute_declaration(
 
 const FLAGGED_PROPERTIES: [&str; 2] = ["direction", "unicode-bidi"];
 
+/// The severity of a CSS-008: an error in EPUB 2, usage in EPUB 3.
+///
+/// **EPUB 3.3 asks three things of a style sheet** (`sec-css-req`): no
+/// `direction`, no `unicode-bidi`, and UTF-8 or UTF-16. Whether it parses is
+/// not one of them, and a CSS parse error does not make a book invalid
+/// (owner, 2026-11-12). CSS Syntax names each of these errors and says how a
+/// browser recovers, so the finding is still a fact worth telling an author,
+/// and it stays: usage, not `--advisory`, because epubsana calls
+/// `validate_bytes` and dispatches on `css.stylesheet.unterminated` (a rule
+/// fixers dispatch on fires below error severity; it is not suppressed).
+/// epubcheck 5.4.0 reports them all as errors: a known difference.
+///
+/// EPUB 2 is unchanged: OPS 2.0.1 has not been read for this yet.
+fn syntax_severity(is_epub3: bool) -> Severity {
+    if is_epub3 {
+        Severity::Usage
+    } else {
+        Severity::Error
+    }
+}
+
 /// What every walk below needs about the stylesheet it is reporting on.
 #[derive(Clone, Copy)]
 struct Ctx<'a> {
@@ -971,16 +986,29 @@ struct Ctx<'a> {
     css_path: &'a str,
     origin: CssOrigin<'a>,
     is_epub3: bool,
-    /// Where each `UnterminatedBlock` starts, in order.
-    unterminated: &'a [usize],
 }
 
 impl Ctx<'_> {
-    /// Whether a `{` that never closed starts inside `span`: a binary search,
-    /// since a hostile sheet can hold one per rule.
-    fn never_closed(&self, span: Span) -> bool {
-        let i = self.unterminated.partition_point(|u| *u < span.start);
-        self.unterminated.get(i).is_some_and(|u| *u < span.end)
+    /// The severity of a CSS-008 in this stylesheet: see [`syntax_severity`].
+    fn syntax_severity(&self) -> Severity {
+        syntax_severity(self.is_epub3)
+    }
+
+    /// Whether `block`, or a bracket inside it, was still open at the end of
+    /// input.
+    ///
+    /// styloria reports no error for such a block (CSS Syntax §5.5 closes it
+    /// there), so it is read off the tree. A block that closed ends in its own
+    /// `}`, after its last item. One that did not ends with its last token: a
+    /// byte other than `}`, or a `}` its last item holds (`p { a { b: c }`, or
+    /// a `(` or `[` left open in a value). Not "ends at the end of input": a
+    /// comment is no token, so `p { a: b /* c */` ends at the `b`.
+    fn never_closed(&self, block: &Block) -> bool {
+        let Some(close) = block.span.end.checked_sub(1) else {
+            return true;
+        };
+        self.css.as_bytes().get(close) != Some(&b'}')
+            || block.node.last().is_some_and(|i| i.span().end > close)
     }
 }
 
@@ -997,9 +1025,9 @@ impl Ctx<'_> {
 /// The same holds for a block that never closed, and for rules inside an
 /// at-rule whose block holds descriptors, which 0.11 skipped in silence.
 ///
-/// Only the shape kinds are quieted. A broken string, url or unicode-range,
-/// an unclosed `{` and the nesting guard are about tokens, and were reported
-/// wherever they sat.
+/// Only the shape kinds are quieted. A broken string, url or unicode-range
+/// and the nesting guard are about tokens, and are reported wherever they
+/// sit.
 #[derive(Default)]
 struct Quiet(Vec<Span>);
 
@@ -1134,9 +1162,27 @@ fn report_syntax_errors(
                 }
                 continue;
             }
-            // A top-level `--foo:hover { … }`, which CSS Syntax drops without
-            // naming a parse error. epubcheck is silent on it and so were we.
-            SyntaxErrorKind::DroppedCustomPropertyRule => continue,
+            // styloria 0.20: a stray `}` also draws its rule's own
+            // `InvalidSelector` or `UnterminatedRule`, at the same span, so it
+            // would be the same fact twice.
+            SyntaxErrorKind::StrayCloseBrace => continue,
+            // styloria 0.20 reports a parse error wherever CSS Syntax names
+            // one, and these six are new: a comment, string or url that runs
+            // to the end of input, a `\` at the end or before a newline, and
+            // an undeclared namespace prefix. In EPUB 3 each is a CSS-008 at
+            // usage, like every other parse error (`syntax_severity`). In
+            // EPUB 2 they stay silent, as they were: a CSS-008 is an error
+            // there, and these would be new ones.
+            SyntaxErrorKind::UnterminatedComment
+            | SyntaxErrorKind::UnterminatedString
+            | SyntaxErrorKind::UnterminatedUrl
+            | SyntaxErrorKind::UnterminatedEscape
+            | SyntaxErrorKind::InvalidEscape
+            | SyntaxErrorKind::UndeclaredNamespacePrefix => {
+                if !ctx.is_epub3 {
+                    continue;
+                }
+            }
             // styloria 0.17: the selector fails only because a code point at
             // or above U+0080 is outside the CSS Syntax CRD's narrowed ident
             // set (`.‣`, `.a\u{A0}b`), and parses when it is read as a name
@@ -1199,7 +1245,6 @@ fn report_syntax_errors(
             // the build here, where CSS-008 or not is decided.
             SyntaxErrorKind::BadString
             | SyntaxErrorKind::UnterminatedRule
-            | SyntaxErrorKind::UnterminatedBlock
             | SyntaxErrorKind::MalformedDeclaration
             | SyntaxErrorKind::UnexpectedToken
             | SyntaxErrorKind::InvalidSelector
@@ -1244,7 +1289,7 @@ fn report_syntax_errors(
         };
         report.push_full(
             CSS_008,
-            Severity::Error,
+            ctx.syntax_severity(),
             syntax_error_text(css, e, prelude.map(|(_, p)| p)),
             css_path,
             origin.position(css, e.span.start),
@@ -1363,9 +1408,7 @@ fn relax_class_names(prelude: &str) -> (String, Vec<(usize, usize)>) {
 fn syntax_error_slug(kind: SyntaxErrorKind) -> &'static str {
     match kind {
         SyntaxErrorKind::BadString | SyntaxErrorKind::BadUrl => "css.stylesheet.bad_token",
-        SyntaxErrorKind::UnterminatedRule | SyntaxErrorKind::UnterminatedBlock => {
-            "css.stylesheet.unterminated"
-        }
+        SyntaxErrorKind::UnterminatedRule => "css.stylesheet.unterminated",
         SyntaxErrorKind::MalformedDeclaration | SyntaxErrorKind::UnexpectedToken => {
             "css.stylesheet.malformed"
         }
@@ -1392,9 +1435,17 @@ fn syntax_error_slug(kind: SyntaxErrorKind) -> &'static str {
         // under a shared "malformed" slug would hide which it was.
         SyntaxErrorKind::NestingTooDeep => "css.stylesheet.nesting_too_deep",
         // Never reported: `report_syntax_errors` skips it before asking.
-        SyntaxErrorKind::DroppedCustomPropertyRule => "css.stylesheet.dropped_rule",
-        // Never reported: `report_syntax_errors` skips it before asking.
         SyntaxErrorKind::NarrowedIdent => "css.selector.narrowed_ident",
+        // styloria 0.20's new kinds: CSS-008 in EPUB 3 only, and never
+        // `StrayCloseBrace` (see `report_syntax_errors`).
+        SyntaxErrorKind::UnterminatedComment => "css.stylesheet.unterminated_comment",
+        SyntaxErrorKind::UnterminatedString => "css.stylesheet.unterminated_string",
+        SyntaxErrorKind::UnterminatedUrl => "css.stylesheet.unterminated_url",
+        SyntaxErrorKind::UnterminatedEscape | SyntaxErrorKind::InvalidEscape => {
+            "css.stylesheet.invalid_escape"
+        }
+        SyntaxErrorKind::StrayCloseBrace => "css.stylesheet.stray_close_brace",
+        SyntaxErrorKind::UndeclaredNamespacePrefix => "css.selector.undeclared_namespace_prefix",
     }
 }
 
@@ -1422,7 +1473,6 @@ fn syntax_error_text(css: &str, e: &SyntaxError, selector: Option<&str>) -> Stri
                 (None, None) => "invalid selector".to_string(),
             }
         }
-        (K::UnterminatedBlock, Some(t)) => format!("'{t}' is never closed"),
         (K::UnterminatedRule, _) => "the stylesheet ends before this rule's { } block".to_string(),
         (K::BadString, Some(t)) => format!("string '{t}' is broken by an unescaped line break"),
         (K::BadUrl, Some(t)) => format!(
@@ -1441,9 +1491,17 @@ fn syntax_error_text(css: &str, e: &SyntaxError, selector: Option<&str>) -> Stri
         (K::MalformedDeclaration, Some(t)) => format!("'{t}' is not followed by ':'"),
         (K::UnexpectedToken, Some(t)) => format!("'{t}' where a declaration was expected"),
         // Never reported: `report_syntax_errors` skips it before asking.
-        (K::DroppedCustomPropertyRule, Some(t)) => format!("'{t}' is dropped"),
-        // Never reported: `report_syntax_errors` skips it before asking.
         (K::NarrowedIdent, Some(t)) => format!("'{t}' is not an identifier code point"),
+        // styloria 0.20's new kinds, EPUB 3 only (see `report_syntax_errors`).
+        (K::UnterminatedComment, _) => "a comment runs to the end of the stylesheet".to_string(),
+        (K::UnterminatedString, Some(t)) => format!("string '{t}' is never closed"),
+        (K::UnterminatedUrl, Some(t)) => format!("'{t}' is never closed"),
+        (K::UnterminatedEscape, _) => "a '\\' ends the stylesheet and escapes nothing".to_string(),
+        (K::InvalidEscape, _) => "a '\\' before a line break escapes nothing".to_string(),
+        (K::StrayCloseBrace, _) => "a '}' that closes no block".to_string(),
+        (K::UndeclaredNamespacePrefix, Some(t)) => {
+            format!("'{t}' uses a namespace prefix no @namespace rule declares")
+        }
         // Every span above is a token, which is never blank; this is the
         // floor for one that is, not a shape anything is known to produce.
         (_, None) => return "CSS syntax error".to_string(),
@@ -1514,7 +1572,21 @@ fn is_blank_component(v: &ComponentValue) -> bool {
 /// styloria finds inside the rule from becoming more findings. A nested
 /// at-rule had its own slug already; a nested style rule gets the matching
 /// one.
-fn walk_style_block(items: &[BlockItem], ctx: Ctx, quiet: &mut Quiet, report: &mut Report) {
+///
+/// **In EPUB 3 a nested rule is CSS, not a fault** (`nesting`). CSS Syntax
+/// §5.5.5 and CSS Nesting make `p { span { … } }` a style rule inside a style
+/// rule, so there is nothing to report, and the walk goes into it like any
+/// other: `direction` one rule down is still `direction`. epubcheck 5.4.0
+/// reports a CSS-008, and so do we in EPUB 2, whose CSS 2 has no nesting.
+/// Inside `@font-face` a rule is still out of place (it holds descriptors),
+/// so that walk passes `nesting` false in both.
+fn walk_style_block(
+    items: &[BlockItem],
+    ctx: Ctx,
+    nesting: bool,
+    quiet: &mut Quiet,
+    report: &mut Report,
+) {
     let Ctx {
         css,
         css_path,
@@ -1524,6 +1596,14 @@ fn walk_style_block(items: &[BlockItem], ctx: Ctx, quiet: &mut Quiet, report: &m
     for item in items {
         match item {
             BlockItem::Declaration(d) => check_declaration(d, ctx, report),
+            BlockItem::Rule(r) if nesting => match &r.node {
+                Rule::Qualified(q) => walk_rule_block(&q.block, ctx, quiet, report),
+                Rule::At(a) => {
+                    if let Some(block) = &a.block {
+                        walk_at_rule_block(&a.name, block, ctx, quiet, report);
+                    }
+                }
+            },
             BlockItem::Rule(r) => {
                 quiet.push(r.span);
                 let (text, at, slug) = match &r.node {
@@ -1546,7 +1626,7 @@ fn walk_style_block(items: &[BlockItem], ctx: Ctx, quiet: &mut Quiet, report: &m
                 };
                 report.push_full(
                     CSS_008,
-                    Severity::Error,
+                    ctx.syntax_severity(),
                     text,
                     css_path,
                     origin.position(css, at),
@@ -1558,21 +1638,46 @@ fn walk_style_block(items: &[BlockItem], ctx: Ctx, quiet: &mut Quiet, report: &m
     }
 }
 
-/// Walk a style rule's block — unless a `{` inside the rule never closed, in
-/// which case what the parser found in the block is the unclosed brace's
-/// doing, and the block is quieted instead (see `check`).
-fn walk_rule_block(
-    rule: &Spanned<Rule>,
-    block: &Block,
-    ctx: Ctx,
-    quiet: &mut Quiet,
-    report: &mut Report,
-) {
-    if ctx.never_closed(rule.span) {
+/// Walk a style rule's block. In EPUB 2, a block that never closed is
+/// quieted instead: what the parser found in it is the unclosed brace's doing
+/// (see `check`). In EPUB 3 it is walked like any other, since CSS reads what
+/// it swallowed as its contents and so does a reading system.
+fn walk_rule_block(block: &Block, ctx: Ctx, quiet: &mut Quiet, report: &mut Report) {
+    if report_unclosed(block, ctx, report) && !ctx.is_epub3 {
         quiet.push(block.span);
     } else {
-        walk_style_block(&block.node, ctx, quiet, report);
+        walk_style_block(&block.node, ctx, ctx.is_epub3, quiet, report);
     }
+}
+
+/// A CSS-008 for a block that never closed, and whether it did not.
+///
+/// CSS Syntax §5.5 closes such a block at the end of input without naming a
+/// parse error, so styloria 0.20 reports none and the tree is asked instead
+/// (`Ctx::never_closed`). The finding stays because it is true and it
+/// matters: everything after the `{` becomes part of that block, nested rules
+/// included. epubsana's `fix.css_unterminated` dispatches on its key. An
+/// error in EPUB 2, usage in EPUB 3 (`syntax_severity`).
+fn report_unclosed(block: &Block, ctx: Ctx, report: &mut Report) -> bool {
+    if !ctx.never_closed(block) {
+        return false;
+    }
+    let text = if ctx.is_epub3 {
+        "'{' is never closed: CSS closes it at the end of the stylesheet, so \
+         everything after it belongs to this block"
+    } else {
+        "CSS syntax error: '{' is never closed"
+    };
+    report.push_full(
+        CSS_008,
+        ctx.syntax_severity(),
+        text,
+        ctx.css_path,
+        ctx.origin.position(ctx.css, block.span.start),
+        "css.stylesheet.unterminated",
+        Vec::new(),
+    );
+    true
 }
 
 /// Walk an at-rule's block: the EPUB rules for each declaration, a style
@@ -1604,13 +1709,9 @@ fn walk_rule_block(
 /// epubcheck reported 11 CSS-008 and we reported 0, every one a selector
 /// inside an `@media`, invisible in the totals because declaration errors in
 /// the same blocks were reported normally.
-fn walk_at_rule_block(
-    name: &str,
-    items: &[BlockItem],
-    ctx: Ctx,
-    quiet: &mut Quiet,
-    report: &mut Report,
-) {
+fn walk_at_rule_block(name: &str, block: &Block, ctx: Ctx, quiet: &mut Quiet, report: &mut Report) {
+    report_unclosed(block, ctx, report);
+    let items = &block.node;
     if name.eq_ignore_ascii_case("font-face") {
         // A nested at-rule here was silent before 0.12 and has not been
         // measured against epubcheck, so it stays silent; only the rule,
@@ -1618,7 +1719,7 @@ fn walk_at_rule_block(
         for item in items {
             match item {
                 BlockItem::Rule(r) if matches!(r.node, Rule::At(_)) => quiet.push(r.span),
-                _ => walk_style_block(std::slice::from_ref(item), ctx, quiet, report),
+                _ => walk_style_block(std::slice::from_ref(item), ctx, false, quiet, report),
             }
         }
         return;
@@ -1627,7 +1728,7 @@ fn walk_at_rule_block(
         match item {
             BlockItem::Declaration(d) => check_declaration(d, ctx, report),
             BlockItem::Rule(r) => match &r.node {
-                Rule::Qualified(q) => walk_rule_block(r, &q.block, ctx, quiet, report),
+                Rule::Qualified(q) => walk_rule_block(&q.block, ctx, quiet, report),
                 Rule::At(a) => {
                     // **Three at-rules exist only at the top level**, and
                     // epubcheck 5.4.0 reports each of them inside an `@media`
@@ -1644,7 +1745,7 @@ fn walk_at_rule_block(
                         let name = &ctx.css[a.name_span.start..a.name_span.end];
                         report.push_full(
                             CSS_008,
-                            Severity::Error,
+                            ctx.syntax_severity(),
                             format!(
                                 "CSS syntax error: '{name}' is only allowed at the top level \
                                  of a stylesheet"
@@ -1666,7 +1767,7 @@ fn walk_at_rule_block(
                     if a.name.eq_ignore_ascii_case("font-face") {
                         check_font_face(block, a.name_span, ctx, report);
                     }
-                    walk_at_rule_block(&a.name, &block.node, ctx, quiet, report);
+                    walk_at_rule_block(&a.name, block, ctx, quiet, report);
                 }
             },
         }
@@ -2046,8 +2147,14 @@ fn sheet_urls(sheet: &Stylesheet) -> Vec<SheetUrl> {
 /// styloria finds more than the token scan it replaced. `src("…")` and the
 /// strings inside `image-set()` stay unread: whether they are URLs an EPUB
 /// reading system fetches is unsettled in the spec, and epubcheck reads
-/// neither, so we follow it (probe set 2026-10-21_css-reach, r2/r3). A `<bad-url-token>` is read as epubcheck
-/// reads it ([`bad_url_target`]).
+/// neither, so we follow it (probe set 2026-10-21_css-reach, r2/r3).
+///
+/// **A `<bad-url-token>` refers to nothing.** CSS Syntax §4.3.6 (and CSS 2.1's
+/// `BAD_URI`) make `url(a b.png)`, `url(q'q.png)` and `url(p(p.png)` a token no
+/// grammar accepts, so a browser drops the declaration and fetches nothing.
+/// Reading a target out of it, as epubcheck's scanner does, drew RSC-007 and
+/// RSC-020 on a url that is not one (epub-test-books, `consume-url-token`).
+/// What is wrong with it is ADV-015's to say.
 fn checked_url(r: &UrlReference) -> Option<Spanned<String>> {
     let url = match r.form {
         // `url( "a.png" )` counts, whitespace and all: epubcheck's scanner
@@ -2057,25 +2164,24 @@ fn checked_url(r: &UrlReference) -> Option<Spanned<String>> {
         // missing (RSC-007), where epubcheck says neither (probe set
         // 2026-10-21_css-reach, r1/m1).
         UrlForm::UrlToken | UrlForm::UrlFunction | UrlForm::String => r.url.to_string(),
-        UrlForm::BadUrl => bad_url_target(&r.url),
-        UrlForm::SrcFunction => return None,
+        UrlForm::BadUrl | UrlForm::SrcFunction => return None,
     };
     Some(Spanned::new(url, r.span))
 }
 
 /// The target epubcheck reads out of an unquoted `url( … )` that CSS calls a
-/// `<bad-url-token>`, given the token's source text.
+/// `<bad-url-token>`, given the token's source text. Only ADV-015's text uses
+/// it now (see [`checked_url`]).
 ///
-/// **The verdict on such a url is epubcheck's.** CSS Syntax §4.3.6 makes
+/// **What epubcheck makes of such a url.** CSS Syntax §4.3.6 makes
 /// `url(a b.png)`, `url(q'q.png)` and `url(p(p.png)` bad-url tokens, which a
 /// browser drops along with their declaration. epubcheck's scanner
 /// (`CssScanner._uri`) has no such state: past `url(` and any whitespace it
 /// reads every character up to the first `)`, trims trailing whitespace, and
 /// hands the rest on as an ordinary URL. So `a b.png` draws RSC-020 there, a
 /// missing target RSC-007, and `q'q.png` naming a file in the container draws
-/// nothing at all. We reported CSS-008 for all three, which failed a book
-/// epubcheck passes; this reads the url the way it does instead, and the
-/// usual url checks take it from there (measured against 5.4.0).
+/// nothing at all (measured against 5.4.0). We followed it until the spec
+/// decided both directions (2026-11-08); a known difference now.
 fn bad_url_target(token: &str) -> String {
     let inner = token.find('(').map_or("", |at| &token[at + 1..]);
     let inner = inner.trim_start_matches(is_css_whitespace);
@@ -2297,9 +2403,24 @@ mod tests {
             one("@media print { h1,\n h2 >>> b { color: red } }"),
             "CSS syntax error: invalid selector 'h1, h2 >>> b' at '>'"
         );
+        // Not a parse error since styloria 0.20 (CSS Syntax §5.5), so EPUB 3
+        // says what CSS does with it; EPUB 2 keeps the old wording.
         assert_eq!(
             one("p { color: red"),
-            "CSS syntax error: '{' is never closed"
+            "'{' is never closed: CSS closes it at the end of the stylesheet, so \
+             everything after it belongs to this block"
+        );
+        let texts2 = |css: &str| -> Vec<String> {
+            run_report2(css)
+                .messages
+                .into_iter()
+                .filter(|m| m.id == CSS_008)
+                .map(|m| m.text)
+                .collect()
+        };
+        assert_eq!(
+            texts2("p { color: red"),
+            vec!["CSS syntax error: '{' is never closed".to_string()]
         );
         assert_eq!(
             one("@font-face { font-family: x; unicode-range: U+1234567; }"),
@@ -2313,9 +2434,10 @@ mod tests {
             one("h1 { 12px: x }"),
             "CSS syntax error: '12px' where a declaration was expected"
         );
+        // EPUB 2 only: in EPUB 3 a nested `@media` is CSS Nesting.
         assert_eq!(
-            one("p { @media print { color: red } }"),
-            "CSS syntax error: at-rule '@media' inside a style rule"
+            texts2("p { @media print { color: red } }"),
+            vec!["CSS syntax error: at-rule '@media' inside a style rule".to_string()]
         );
         assert!(texts("p { content: \"abc\n\" }").contains(
             &"CSS syntax error: string '\"abc' is broken by an unescaped line break".to_string()
@@ -2334,11 +2456,12 @@ mod tests {
         assert_eq!(t[0].position, None);
     }
 
-    /// A `<bad-url-token>` is read as epubcheck reads it and goes to the url
-    /// checks, never to CSS-008. The two silent shapes are the reason:
-    /// epubcheck passes them, and a CSS-008 error failed the book here.
+    /// A `<bad-url-token>` refers to nothing (CSS Syntax §4.3.6), so it goes
+    /// to no url check, and it is never CSS-008 either. epubcheck reads a
+    /// target out of it and draws RSC-007 / RSC-020 on a missing or spaced
+    /// one: a known difference (epub-test-books, `consume-url-token`).
     #[test]
-    fn a_bad_url_is_read_as_epubcheck_reads_it() {
+    fn a_bad_url_refers_to_nothing() {
         let files = ["OEBPS/q'q.png", "OEBPS/p(p.png", "OEBPS/ok.png"];
         let idx: HashMap<_, _> = files
             .iter()
@@ -2374,13 +2497,15 @@ mod tests {
         ] {
             assert!(ids(silent).is_empty(), "{silent:?}: {:?}", ids(silent));
         }
-        // A missing target is RSC-007, inside @media as well.
-        for missing in [
+        // Not RSC-007 for a target that would be missing, inside @media as
+        // well; the control shows the url checks do run on a real url.
+        for bad in [
             "p { background: url(ok.png x) }",
             "@media print { p { background: url(gone x.png) } }",
         ] {
-            assert_eq!(ids(missing), vec![RSC_007], "{missing:?}");
+            assert!(ids(bad).is_empty(), "{bad:?}: {:?}", ids(bad));
         }
+        assert_eq!(ids("p { background: url(gone.png) }"), vec![RSC_007]);
 
         // What CSS says about it is ADV-015, behind --advisory only, once per
         // token, and never an error.
@@ -2417,9 +2542,9 @@ mod tests {
     /// bad url too - otherwise its target is "declared but never referenced"
     /// (OPF-097), which epubcheck does not say.
     #[test]
-    fn stylesheet_urls_includes_a_bad_url_target() {
+    fn stylesheet_urls_leaves_out_a_bad_url() {
         let css = "p { background: url(q'q.png) } @media print { a { b: url(x y.png) } }";
-        assert_eq!(url_list(css), vec!["q'q.png", "x y.png"]);
+        assert!(url_list(css).is_empty());
         assert_eq!(url_list("p { background: url(ok.png) }"), vec!["ok.png"]);
     }
 
@@ -2588,6 +2713,29 @@ mod tests {
         report
     }
 
+    /// [`run_report`] in an EPUB 2 book, where a CSS-008 is still an error,
+    /// a nested rule is still one, and an unclosed block is still quieted.
+    fn run_report2(css: &str) -> Report {
+        let mut report = Report::new();
+        check(
+            css,
+            "style.css",
+            "OEBPS",
+            &HashMap::new(),
+            &HashSet::new(),
+            CssOrigin::File { bytes: None },
+            false,
+            false,
+            &mut report,
+        );
+        report
+    }
+
+    /// The ids [`run_report2`] finds.
+    fn run2(css: &str) -> Vec<&'static str> {
+        run_report2(css).messages.iter().map(|m| m.id).collect()
+    }
+
     fn pos_of(report: &Report, id: &str) -> Position {
         report
             .messages
@@ -2720,10 +2868,13 @@ mod tests {
                 r.messages
             );
         }
-        // Inside a nested rule the rule itself is the one finding.
+        // In EPUB 3 a nested rule is CSS, so its own selector is read like
+        // any other and the advisory reaches it, with no CSS-008 for the
+        // nesting itself.
         let r = run_advisory("p { #1a { color: red } }");
-        assert!(
-            !r.messages.iter().any(|m| m.id == ADV_017),
+        assert_eq!(
+            r.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![ADV_017],
             "{:?}",
             r.messages
         );
@@ -3324,7 +3475,8 @@ mod tests {
             r#"@media all { img[alt] { color: red } }"#,
             r#"@media print { a[href^="http"] { color: red } }"#,
             r#"@media all { li:nth-child(2n) { color: red } }"#,
-            r#"@media all and (prefers-color-scheme: dark) {
+            r#"@namespace epub "http://www.idpf.org/2007/ops";
+               @media all and (prefers-color-scheme: dark) {
                  img[epub|type~="se:image.color-depth.black-on-transparent"] {
                    filter: invert(100%);
                  }
@@ -3410,7 +3562,8 @@ mod tests {
 
     #[test]
     fn unterminated_block_and_bad_token_are_css008() {
-        // styloria 0.4 surfaces both; each maps to CSS-008.
+        // styloria 0.4 surfaces both; each maps to CSS-008 (since 0.20 the
+        // block is read off the tree: see `report_unclosed`).
         assert!(run("a { color: red", &empty_index()).contains(&CSS_008)); // unterminated block
         assert!(run("a { content: \"oops\n }", &empty_index()).contains(&CSS_008)); // bad string
     }
@@ -3814,8 +3967,35 @@ mod tests {
             ".a { color: red; @media print { color: blue } }",
             ".a { color: red; @nest & b { color: blue } }",
         ] {
-            assert_eq!(run(css, &empty_index()), vec![CSS_008], "{css}");
+            assert_eq!(run2(css), vec![CSS_008], "{css}");
         }
+    }
+
+    /// In EPUB 3 a nested rule is CSS Nesting, so it is no finding, and the
+    /// walk goes into it: `direction` one rule down is reported, and a
+    /// declaration fault there is a fault there (epub-test-books,
+    /// `consume-block-contents`).
+    #[test]
+    fn a_nested_rule_is_css_in_epub_3() {
+        let idx = empty_index();
+        for css in [
+            "p { span { margin: 0; } }",
+            "a { color: red; & b { color: blue } }",
+            "a { color: red; &:hover { color: blue } }",
+            ".a { color: red; @media print { color: blue } }",
+        ] {
+            assert!(run(css, &idx).is_empty(), "{css}: {:?}", run(css, &idx));
+        }
+        assert_eq!(run("p { span { direction: rtl; } }", &idx), vec![CSS_001]);
+        assert_eq!(
+            run("p { @media print { span { direction: rtl } } }", &idx),
+            vec![CSS_001]
+        );
+        assert_eq!(run("p { span { color red } }", &idx), vec![CSS_008]);
+        // `@font-face` holds descriptors, so a rule there is still out of
+        // place.
+        let ids = run("@font-face { font-family: f; p { color: red } }", &idx);
+        assert!(ids.contains(&CSS_008), "{ids:?}");
     }
 
     /// The other half, and the reason the at-rule case had been skipped in
@@ -3894,10 +4074,19 @@ mod tests {
             )]
         );
         assert_eq!(css008("p { color: red {} }").len(), 1);
-        // A nested rule is one finding however broken its own selector and
-        // block are; what styloria finds inside it is quieted.
+        // In EPUB 2 a nested rule is one finding however broken its own
+        // selector and block are; what styloria finds inside it is quieted.
+        // (EPUB 3 reads it as CSS Nesting: `a_nested_rule_is_css_in_epub_3`.)
+        let css008_2 = |css: &str| -> Vec<(String, &'static str)> {
+            run_report2(css)
+                .messages
+                .into_iter()
+                .filter(|m| m.id == CSS_008)
+                .map(|m| (m.text, m.rule.unwrap_or_default()))
+                .collect()
+        };
         assert_eq!(
-            css008("p { a. q { color red; . r { } } }"),
+            css008_2("p { a. q { color red; . r { } } }"),
             vec![(
                 "CSS syntax error: rule 'a. q' inside a style rule".to_string(),
                 "css.declaration.nested_rule"
@@ -3911,9 +4100,10 @@ mod tests {
                 .iter()
                 .any(|m| m.id == CSS_001)
         );
-        // A block a broken string left open inside `@media` is quieted like
-        // one at the top level: the string and the two `{` are the findings.
-        let kinds: Vec<_> = css008("@media print { p { content: \"a\n\" } . s { } }\n. t { }")
+        // In EPUB 2 a block a broken string left open inside `@media` is
+        // quieted like one at the top level: the string and the two `{` are
+        // the findings.
+        let kinds: Vec<_> = css008_2("@media print { p { content: \"a\n\" } . s { } }\n. t { }")
             .into_iter()
             .map(|(_, slug)| slug)
             .collect();
@@ -3980,8 +4170,11 @@ mod tests {
             .collect();
         assert_eq!(
             texts,
+            // The block the second string swallows is the third (usage in
+            // EPUB 3, where it is no parse error since styloria 0.20).
             vec![
-                "CSS syntax error: '{' is never closed",
+                "'{' is never closed: CSS closes it at the end of the stylesheet, so \
+                 everything after it belongs to this block",
                 "CSS syntax error: string '\"abc' is broken by an unescaped line break",
                 "CSS syntax error: string '\" }' is broken by an unescaped line break",
             ]
@@ -3997,15 +4190,19 @@ mod tests {
         assert!(findings.contains(&RSC_007));
     }
 
-    /// An unclosed block is **one** finding, however much it swallows.
+    /// An unclosed block multiplies no findings, however much it swallows.
     ///
     /// A `{` with no `}` absorbs everything after it — the next rule's
     /// selector and braces included — so the "declarations" inside it are not
-    /// declarations, and every shape complaint they produce is a consequence
-    /// of the one defect styloria has already reported as
-    /// `UnterminatedBlock`. On epubcheck's `content-css-syntax-error`, which
-    /// has two unclosed blocks, styloria reports two errors and so does
-    /// epubcheck; the third was ours.
+    /// what the author wrote as one block, and every shape complaint they
+    /// produce is a consequence of that one defect. On epubcheck's
+    /// `content-css-syntax-error`, which has two unclosed blocks, epubcheck
+    /// reports two errors; the third was ours.
+    ///
+    /// That is EPUB 2, where a CSS-008 is an error. Since styloria 0.20 the
+    /// unclosed block draws no parse error (CSS Syntax §5.5), so
+    /// `Ctx::never_closed` reads it off the tree, for the one finding and the
+    /// quieting both. EPUB 3 is the next test.
     ///
     /// **The controls matter more than the first case here.** Suppressing too
     /// eagerly would take a genuine malformed declaration with it, so a bad
@@ -4013,17 +4210,37 @@ mod tests {
     /// are both asserted.
     #[test]
     fn an_unclosed_block_does_not_multiply_its_findings() {
-        let idx = empty_index();
-        let count = |css: &str| run(css, &idx).iter().filter(|i| **i == CSS_008).count();
+        let count = |css: &str| run2(css).iter().filter(|i| **i == CSS_008).count();
+        let slugs = |css: &str| -> Vec<&'static str> {
+            run_report2(css)
+                .messages
+                .iter()
+                .filter_map(|m| m.rule)
+                .collect()
+        };
         assert_eq!(
-            count("a {\n  color: red;\n\nb { color: blue }\n"),
-            1,
-            "the unclosed block is the defect; the rule it ate is not a second one"
+            slugs("a {\n  color: red;\n\nb { color: blue }\n"),
+            vec!["css.stylesheet.unterminated"],
+            "the rule the unclosed block ate is not a finding of its own"
         );
         assert_eq!(
-            count("a { color: red"),
-            1,
-            "control: an unclosed block with nothing after it still reports"
+            slugs("a {\n  color: red;\n\nb. { color: blue }\n"),
+            vec!["css.stylesheet.unterminated"],
+            "nor is a broken selector inside what it ate"
+        );
+        // Each of these would draw "rule 'b' inside a style rule" and lose
+        // the unterminated one if the block were read as closed.
+        for css in [
+            "a { color: red; b { } /* }",
+            "a { color: red; b { } /* c */",
+            "a { b { color: blue }",
+        ] {
+            assert_eq!(slugs(css), vec!["css.stylesheet.unterminated"], "{css:?}");
+        }
+        assert_eq!(
+            slugs("a { b { } }"),
+            vec!["css.declaration.nested_rule"],
+            "control: the same nested rule in a closed block is reported"
         );
         assert_eq!(
             count("a { span.bold: bold }\n"),
@@ -4035,6 +4252,84 @@ mod tests {
             0,
             "control: valid CSS stays silent"
         );
+    }
+
+    /// styloria 0.20's new parse errors are CSS-008 at usage in EPUB 3 and
+    /// silent in EPUB 2, where they were silent before; a stray `}` is said
+    /// once, by its rule's own selector error.
+    #[test]
+    fn the_parse_errors_styloria_0_20_names() {
+        let idx = empty_index();
+        for (css, slug) in [
+            (
+                "p { color: red } /* open",
+                "css.stylesheet.unterminated_comment",
+            ),
+            ("p { content: \"open", "css.stylesheet.unterminated_string"),
+            (
+                "p { background: url(a.png",
+                "css.stylesheet.unterminated_url",
+            ),
+            ("p { color: red }\n\\", "css.stylesheet.invalid_escape"),
+            (
+                "svg|rect { fill: red }",
+                "css.selector.undeclared_namespace_prefix",
+            ),
+        ] {
+            let r = run_report(css, &idx);
+            assert!(
+                r.messages.iter().any(|m| m.id == CSS_008
+                    && m.severity == Severity::Usage
+                    && m.rule == Some(slug)),
+                "{css:?}: {:?}",
+                r.messages
+            );
+            assert!(
+                !run_report2(css)
+                    .messages
+                    .iter()
+                    .any(|m| m.rule == Some(slug)),
+                "EPUB 2, {css:?}"
+            );
+        }
+        let stray: Vec<_> = run_report("} p { margin: 0 }", &idx)
+            .messages
+            .into_iter()
+            .map(|m| m.rule)
+            .collect();
+        assert_eq!(stray, vec![Some("css.stylesheet.invalid_selector")]);
+    }
+
+    /// In EPUB 3 an unclosed block is one usage finding, and what it swallows
+    /// is CSS like any other: a reading system reads it as the block's
+    /// contents, so the EPUB rules reach it (epub-test-books,
+    /// `direction-in-unclosed-block`), and a rule it swallowed is a nested
+    /// rule, which is no fault.
+    #[test]
+    fn an_unclosed_block_is_usage_in_epub_3() {
+        let idx = empty_index();
+        let found = |css: &str| -> Vec<(&'static str, Severity, Option<&'static str>)> {
+            run_report(css, &idx)
+                .messages
+                .iter()
+                .map(|m| (m.id, m.severity, m.rule))
+                .collect()
+        };
+        let open = (
+            CSS_008,
+            Severity::Usage,
+            Some("css.stylesheet.unterminated"),
+        );
+        assert_eq!(found("p { margin: 0"), vec![open]);
+        assert_eq!(
+            found("a {\n  color: red;\n\nb { color: blue }\n"),
+            vec![open]
+        );
+        let ids: Vec<_> = found("p { direction: rtl").iter().map(|f| f.0).collect();
+        assert_eq!(ids, vec![CSS_008, CSS_001]);
+        // Inside `@media` as well, at its own `{`.
+        assert_eq!(found("@media print { p { margin: 0 }"), vec![open]);
+        assert!(found("p { margin: 0 }").is_empty(), "control");
     }
 
     #[test]

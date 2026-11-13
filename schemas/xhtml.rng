@@ -883,10 +883,11 @@
     <optional><attribute name="class"><data type="string"/></attribute></optional>
     <optional><attribute name="style"><data type="string"/></attribute></optional>
     <optional><attribute name="title"><data type="string"/></attribute></optional>
+    <!-- HTML's enumerated-attribute rule: ASCII case-insensitive, unpadded
+         (`htmlDir`). XHTML 1.1's `ltr | rtl` above stays an XML enumeration,
+         case-sensitive, as is the package document's. -->
     <optional>
-      <attribute name="dir">
-        <choice><value>ltr</value><value>rtl</value><value>auto</value></choice>
-      </attribute>
+      <attribute name="dir"><data type="htmlDir"/></attribute>
     </optional>
     <optional><attribute name="tabindex"><data type="integer"/></attribute></optional>
     <optional><attribute name="hidden"><data type="token"/></attribute></optional>

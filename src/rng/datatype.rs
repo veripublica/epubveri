@@ -49,6 +49,14 @@ pub enum Datatype {
     /// present, its value must be an ASCII case-insensitive match for
     /// "utf-8"". Exact, like [`Datatype::HtmlStyleType`].
     HtmlScriptCharset,
+    /// An EPUB 3 `dir` attribute: HTML § 2.3.3 makes an enumerated
+    /// attribute's value "an ASCII case-insensitive match for one of the
+    /// conforming keywords for that attribute, with no leading or trailing
+    /// whitespace", and § 3.2.6.4 lists `ltr`, `rtl` and `auto`. So `RTL` is
+    /// `rtl`, and ` rtl` is not (a `<value>` would have taken the first as
+    /// invalid and the second as valid). Named by us: epub-test-books,
+    /// `html-dir-uppercase`, where epubcheck 5.4.0 accepts both.
+    HtmlDir,
     /// A media type as the container schema reads one: `datatype.mimetype`,
     /// `xsd:string { pattern = '[a-zA-Z0-9!#$&+\-\^_]+/[a-zA-Z0-9!#$&+\-\^_]+.*' }`.
     /// An `xsd:string` keeps its whitespace, so a padded value fails. Named
@@ -103,6 +111,7 @@ impl Datatype {
             "epub2StyleType" => Epub2StyleType,
             "htmlStyleType" => HtmlStyleType,
             "htmlScriptCharset" => HtmlScriptCharset,
+            "htmlDir" => HtmlDir,
             "mediaType" => MediaType,
             "renditionMedia" => RenditionMedia,
             "IDREF" => IdRef,
@@ -179,6 +188,9 @@ impl Datatype {
             }
             Datatype::HtmlStyleType => raw.eq_ignore_ascii_case("text/css"),
             Datatype::HtmlScriptCharset => raw.eq_ignore_ascii_case("utf-8"),
+            Datatype::HtmlDir => ["ltr", "rtl", "auto"]
+                .iter()
+                .any(|k| raw.eq_ignore_ascii_case(k)),
             Datatype::IdRefs => !s.is_empty() && s.split(' ').all(is_ncname),
             Datatype::Language => is_language(&s),
             Datatype::Boolean => matches!(s.as_str(), "true" | "false" | "0" | "1"),
@@ -445,6 +457,18 @@ fn is_datetime(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::Datatype as D;
+
+    /// HTML § 2.3.3: an ASCII case-insensitive match, with no leading or
+    /// trailing whitespace (epub-test-books, `html-dir-uppercase`).
+    #[test]
+    fn html_dir_is_an_enumerated_attribute() {
+        for ok in ["ltr", "rtl", "auto", "RTL", "Ltr", "AUTO"] {
+            assert!(D::HtmlDir.allows(ok), "{ok}");
+        }
+        for bad in [" rtl", "rtl ", "\trtl", "", "rtl\u{a0}", "up", "r\u{130}l"] {
+            assert!(!D::HtmlDir.allows(bad), "{bad:?}");
+        }
+    }
 
     /// XSD's whitespace facet and `\s` mean the four XML whitespace
     /// characters; Jing keeps a NO-BREAK SPACE. Each value here was asked of

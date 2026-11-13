@@ -123,6 +123,21 @@ Each line is a place where epubveri follows the specification and epubcheck
   document: EPUB 3.3 § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2. epubcheck 5.4.0 does
   not check the list. `SPEC-*` is epubveri's family for a specification rule
   epubcheck has no id for; it is an ordinary finding, not an advisory.
+- **EPUB 3: a CSS parse error is CSS-008 at usage.** EPUB 3.3 `sec-css-req`
+  asks for no `direction`, no `unicode-bidi` and UTF-8 or UTF-16, and nothing
+  about parsing, so a sheet CSS Syntax recovers from passes. A nested style
+  rule is CSS Nesting and draws nothing. A `<bad-url-token>` refers to nothing
+  (CSS Syntax § 4.3.6), so it draws no RSC-007 or RSC-020. epubcheck 5.4.0
+  reports CSS-008, RSC-007 and RSC-020 as errors (upstream issue pending).
+- **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** § 3.3 does not
+  forbid `|`, controls or private use, and lets two names differ only by
+  normalization; § 3.5.1 says only one package rootfile SHOULD be included,
+  so a second is a PKG-013 warning. epubcheck 5.4.0 applies EPUB 3.3's rules
+  (upstream issue pending, drafted by epub-test-books).
+- **EPUB 3: `dir` is matched as HTML matches an enumerated attribute,** ASCII
+  case-insensitive and unpadded (HTML § 2.3.3), and `<bdo dir="auto">` is
+  RSC-005 (§ 4.5.25). So `dir=" rtl"` is RSC-005 too. epubcheck 5.4.0
+  accepts both (upstream issue pending).
 
 ## What it declines to do
 

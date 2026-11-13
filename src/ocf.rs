@@ -263,6 +263,9 @@ pub struct Ocf {
     archive: ZipArchive<Cursor<Vec<u8>>>,
     /// All entry names, in archive order.
     pub names: Vec<String>,
+    /// File-name findings only EPUB 3.3 makes, held until the version is
+    /// known and reported by [`check_epub3_names`].
+    epub3_names: Vec<Epub3Name>,
     /// Entries [`Ocf::read`] refused for exceeding [`MAX_ENTRY_BYTES`],
     /// drained by [`check_resource_limits`] at the end of the run.
     oversized: Vec<String>,
@@ -560,6 +563,55 @@ impl Ocf {
 /// was NEXT-016 behind `--advisory` from 0.29.0; the spec decides the verdict
 /// since 2026-11-08, so it is an error again, under the id whose own message
 /// names the fault. The rule key is unchanged.
+/// A file-name finding only EPUB 3.3 makes (see [`check_epub3_names`]).
+enum Epub3Name {
+    /// PKG-009 for a character OCF 2.0.1 does not forbid.
+    ForbiddenChar { segment: String, name: String },
+    /// OPF-060 for two names only normalization makes one.
+    NormalizationCollision(String),
+}
+
+fn report_forbidden_char(segment: &str, name: &str, report: &mut Report) {
+    report.push_at_rule(
+        PKG_009,
+        Severity::Error,
+        format!("file name '{segment}' contains a forbidden character"),
+        name,
+        "ocf.filename.forbidden_char",
+        vec![segment.to_string()],
+    );
+}
+
+fn report_case_fold_collision(name: &str, report: &mut Report) {
+    report.push_at_rule(
+        OPF_060,
+        Severity::Error,
+        format!("file name '{name}' collides with another entry after case-folding/normalization"),
+        name,
+        "ocf.container.case_fold_collision",
+        vec![name.to_string()],
+    );
+}
+
+/// The file-name findings EPUB 3.3 makes and OCF 2.0.1 does not, once the
+/// version validated as is known: a forbidden character outside OCF 2.0.1's
+/// list (`|`, controls, private use, …) and two names only Unicode
+/// normalization makes one (epub-test-books, `epub-2.0.1/ocf/Section3.3`).
+/// The same text and keys as the ones reported in both.
+pub(crate) fn check_epub3_names(ocf: &Ocf, validated_as_3: bool, report: &mut Report) {
+    if !validated_as_3 {
+        return;
+    }
+    for finding in &ocf.epub3_names {
+        match finding {
+            Epub3Name::ForbiddenChar { segment, name } => {
+                report_forbidden_char(segment, name, report)
+            }
+            Epub3Name::NormalizationCollision(name) => report_case_fold_collision(name, report),
+        }
+    }
+}
+
 pub(crate) fn check_mimetype_stored(ocf: &Ocf, report: &mut Report) {
     if ocf.mimetype_compressed {
         report.push_at_rule(
@@ -956,6 +1008,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
 
     let n = archive.len();
     let mut names = Vec::with_capacity(n);
+    let mut epub3_names = Vec::new();
     let mut first_name = String::new();
     let mut first_stored = false;
     for i in 0..n {
@@ -1002,15 +1055,15 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             // need it.
             if !name.ends_with('/') {
                 for segment in name.split('/').filter(|s| !s.is_empty()) {
-                    if crate::filename::has_forbidden_char(segment) {
-                        report.push_at_rule(
-                            PKG_009,
-                            Severity::Error,
-                            format!("file name '{segment}' contains a forbidden character"),
-                            name.as_str(),
-                            "ocf.filename.forbidden_char",
-                            vec![segment.to_string()],
-                        );
+                    // OCF 2.0.1's list is reported now; a character only
+                    // EPUB 3.3 forbids waits for the version.
+                    if crate::filename::has_ocf2_forbidden_char(segment) {
+                        report_forbidden_char(segment, &name, report);
+                    } else if crate::filename::has_forbidden_char(segment) {
+                        epub3_names.push(Epub3Name::ForbiddenChar {
+                            segment: segment.to_string(),
+                            name: name.clone(),
+                        });
                     }
                     if crate::filename::ends_with_full_stop(segment) {
                         report.push_at(
@@ -1073,25 +1126,27 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // Unicode canonical-normalization equivalence all confirmed via
     // dedicated real fixtures; mere *compatibility*-normalization
     // equivalence is deliberately not flagged, per another).
+    //
+    // A collision that needs the normalization is EPUB 3.3's alone: OCF 2.0.1
+    // § 3.3 says two names "MAY map to the same string following accent
+    // normalization", so it waits for the version. One case folding alone
+    // makes is reported now, in both, as it was.
     {
-        let mut seen: HashMap<String, &str> = HashMap::new();
+        let mut folded: HashSet<String> = HashSet::new();
+        let mut canonical: HashSet<String> = HashSet::new();
         let mut reported = HashSet::new();
         for name in &names {
+            let fold = crate::filename::case_fold_key(name);
             let key = crate::filename::canonical_fold_key(name);
-            if let Some(_first) = seen.get(key.as_str()) {
+            if folded.contains(&fold) {
                 if reported.insert(name.clone()) {
-                    report.push_at_rule(
-                        OPF_060,
-                        Severity::Error,
-                        format!("file name '{name}' collides with another entry after case-folding/normalization"),
-                        name.as_str(),
-                        "ocf.container.case_fold_collision",
-                        vec![name.clone()],
-                    );
+                    report_case_fold_collision(name, report);
                 }
-            } else {
-                seen.insert(key, name.as_str());
+            } else if canonical.contains(&key) && reported.insert(name.clone()) {
+                epub3_names.push(Epub3Name::NormalizationCollision(name.clone()));
             }
+            folded.insert(fold);
+            canonical.insert(key);
         }
     }
 
@@ -1134,6 +1189,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     let mut ocf = Ocf {
         archive,
         names,
+        epub3_names,
         oversized: Vec::new(),
         unreadable: Vec::new(),
         read_total: 0,

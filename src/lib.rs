@@ -276,6 +276,9 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     // container.xml against its schema, picked by the version validated as
     // (so `-v` moves it, as it moves epubcheck's `OCFMetaFileChecker`).
     ocf::check_container_schema(&mut container, &opf_paths, validated_as_3, &mut report);
+    // OCF 2.0.1 § 3.3 forbids fewer characters than EPUB 3.3 and lets two
+    // names differ only by normalization, so those findings wait for it too.
+    ocf::check_epub3_names(&container, validated_as_3, &mut report);
     let requested = options.profile.as_deref().filter(|p| PROFILES.contains(p));
     // "The first package document" is the first one *declaring a type*:
     // `OCFCheckerState.getPublicationTypes()` returns the first entry of a
@@ -341,11 +344,23 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
         if all_epub3 {
             edupub::check_multi_rendition_dc_type(&mut container, &opf_paths, &mut report);
             renditions::check(&mut container, &mut report);
-        } else {
+        } else if validated_as_3 {
             report.push(
                 ids::PKG_013,
                 report::Severity::Error,
                 "container.xml declares more than one rootfile outside of EPUB 3 Multiple Renditions",
+            );
+        } else {
+            // OCF 2.0.1 § 3.5.1: "Only one <rootfile> element with a
+            // media-type of "application/oebps-package+xml" SHOULD be
+            // included", and the first is the EPUB rootfile. A SHOULD is a
+            // warning (epub-test-books, `Section3.5.1/rootfile-two-opf`);
+            // epubcheck 5.4.0 reports an error.
+            report.push(
+                ids::PKG_013,
+                report::Severity::Warning,
+                "container.xml declares more than one package document; OCF 2.0.1 recommends \
+                 one, and the first is the publication's",
             );
         }
     }
@@ -495,6 +510,54 @@ mod tests {
             z.finish().unwrap();
         }
         buf
+    }
+
+    /// `book` with extra empty entries appended, each named as given.
+    fn with_extra_entries(book: Vec<u8>, extra: &[&str]) -> Vec<u8> {
+        let mut src = zip::ZipArchive::new(std::io::Cursor::new(book)).unwrap();
+        let mut buf = Vec::new();
+        {
+            let mut z = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            for i in 0..src.len() {
+                z.raw_copy_file(src.by_index(i).unwrap()).unwrap();
+            }
+            for name in extra {
+                z.start_file(*name, zip::write::SimpleFileOptions::default())
+                    .unwrap();
+                z.write_all(b"x").unwrap();
+            }
+            z.finish().unwrap();
+        }
+        buf
+    }
+
+    /// OCF 2.0.1 § 3.3 forbids fewer characters than EPUB 3.3 and lets two
+    /// names differ only by normalization; case folding makes two names one
+    /// in both (epub-test-books, `epub-2.0.1/ocf/Section3.3`).
+    #[test]
+    fn epub3_file_name_rules_wait_for_the_version() {
+        let ids = |book: Vec<u8>, extra: &[&str]| -> Vec<&'static str> {
+            let mut v: Vec<_> = crate::validate_bytes(with_extra_entries(book, extra))
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .filter(|id| [crate::ids::PKG_009, crate::ids::OPF_060].contains(id))
+                .collect();
+            v.sort_unstable();
+            v
+        };
+        let pipe = ["OEBPS/a|b.png"];
+        let twins = ["OEBPS/\u{e9}.png", "OEBPS/e\u{301}.png"];
+        let cased = ["OEBPS/A.png", "OEBPS/a.png"];
+        let star = ["OEBPS/a*b.png"];
+        assert_eq!(ids(epub3_minimal(), &pipe), [crate::ids::PKG_009]);
+        assert!(ids(epub2_with_link(""), &pipe).is_empty());
+        assert_eq!(ids(epub3_minimal(), &twins), [crate::ids::OPF_060]);
+        assert!(ids(epub2_with_link(""), &twins).is_empty());
+        for book in [epub3_minimal(), epub2_with_link("")] {
+            assert_eq!(ids(book.clone(), &cased), [crate::ids::OPF_060]);
+            assert_eq!(ids(book, &star), [crate::ids::PKG_009]);
+        }
     }
 
     fn epub2_with_body(title: &str, extra_body: &str) -> Vec<u8> {

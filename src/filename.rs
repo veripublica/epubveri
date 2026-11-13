@@ -45,6 +45,16 @@ pub(crate) fn has_forbidden_char(name: &str) -> bool {
     name.chars().any(is_forbidden)
 }
 
+/// PKG-009 under OCF 2.0.1 § 3.3, whose list is shorter: `/ " * : < > ? \`
+/// and a final period (PKG-011). `|`, the control characters, the
+/// replacement character, noncharacters and private use are EPUB 3.3's
+/// additions (epub-test-books, `Section3.3/filename-pipe`). `/` never
+/// reaches here, as names are split on it.
+pub(crate) fn has_ocf2_forbidden_char(name: &str) -> bool {
+    name.chars()
+        .any(|c| matches!(c, '"' | '*' | ':' | '<' | '>' | '?' | '\\'))
+}
+
 /// PKG-011: a name ending in a literal full stop.
 pub(crate) fn ends_with_full_stop(name: &str) -> bool {
     name.ends_with('.')
@@ -68,7 +78,15 @@ pub(crate) fn has_non_ascii(name: &str) -> bool {
 /// that without needing the complete CaseFolding.txt table.
 pub(crate) fn canonical_fold_key(name: &str) -> String {
     let nfc: String = name.nfc().collect();
-    nfc.chars()
+    case_fold_key(&nfc)
+}
+
+/// [`canonical_fold_key`] without the normalization: the key under OCF
+/// 2.0.1 § 3.3, where "Two File Names within the same directory MAY map to
+/// the same string following accent normalization", so only case folding
+/// makes two names one.
+pub(crate) fn case_fold_key(name: &str) -> String {
+    name.chars()
         .flat_map(|c| {
             if c == '\u{00DF}' {
                 vec!['s', 's']

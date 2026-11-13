@@ -6950,7 +6950,15 @@ fn check_text(
                 // item remains to collide with and OPF-074 never fires there.
                 // Counting it again here was the "OPF-074 as well" row of a
                 // 2,798-book library (4 books).
-                match resource_seen.get(&resolved_nfc) {
+                // Under OCF 2.0.1 § 3.3 two names that differ only by
+                // normalization are two files, so EPUB 2 keys by the name as
+                // written (epub-test-books, `filename-nfc-nfd-duplicate`).
+                let same_resource = if is_epub3 {
+                    resolved_nfc.clone()
+                } else {
+                    resolved.clone()
+                };
+                match resource_seen.get(&same_resource) {
                     Some(first_id) if first_id != id => report.push_at_pos(
                         OPF_074,
                         Severity::Error,
@@ -6962,7 +6970,7 @@ fn check_text(
                     ),
                     Some(_) => {}
                     None => {
-                        resource_seen.insert(resolved_nfc.clone(), id.to_string());
+                        resource_seen.insert(same_resource, id.to_string());
                     }
                 }
             }
@@ -19539,12 +19547,11 @@ mod tests {
             vec!["css.url.malformed_relative_url"],
             "a spaced url() in a stylesheet, quoted so it is valid CSS"
         );
-        // Unquoted, so a bad-url token to CSS, and still RSC-020, as in
-        // epubcheck.
-        assert_eq!(
-            rules("body { background: url(i m.png); }", "ch1.xhtml"),
-            vec!["css.url.malformed_relative_url"],
-            "an unquoted url with a space is read as epubcheck reads it"
+        // Unquoted, so a bad-url token to CSS, which refers to nothing:
+        // no RSC-020, where epubcheck reads it as a url (a known difference).
+        assert!(
+            rules("body { background: url(i m.png); }", "ch1.xhtml").is_empty(),
+            "an unquoted url with a space is no url"
         );
     }
 

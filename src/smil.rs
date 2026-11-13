@@ -38,6 +38,7 @@ pub(crate) struct TextLinks {
 
 const CORE_AUDIO_TYPES: [&str; 2] = ["audio/mpeg", "audio/mp4"];
 const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
+const SMIL_NS: &str = "http://www.w3.org/ns/SMIL";
 
 /// Parses and checks one SMIL overlay document. Returns `(text_targets,
 /// textref_targets)`: `text_targets` is the `(content-doc path, fragment
@@ -83,6 +84,32 @@ pub(crate) fn check(
         }
     };
     let root = doc.root_element();
+    // 9.2.2.1: `version` is required on `smil` and "MUST have the value
+    // "3.0"" (epub-test-books, `sec-smil-smil-elem/version-wrong`).
+    if root.tag_name().name() == "smil" {
+        match root.attr_no_ns("version") {
+            Some("3.0") => {}
+            Some(v) => report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!("value of attribute \"version\" is invalid: \"{v}\"; it must be \"3.0\""),
+                smil_path,
+                root,
+                "smil.smil.invalid_version",
+                vec![v.to_string()],
+            ),
+            None => report.push_node(
+                RSC_005,
+                Severity::Error,
+                "element \"smil\" missing required attribute \"version\"",
+                smil_path,
+                root,
+                "smil.smil.missing_version",
+                Vec::new(),
+            ),
+        }
+    }
+    check_unique_ids(&doc, smil_path, report);
     // 9.2.2.2: the head container may only hold a <metadata> element (not
     // a bare <meta>, which must be wrapped in one).
     if let Some(head) = root
@@ -141,6 +168,7 @@ pub(crate) fn check(
         if is_external(textref) {
             continue;
         }
+        report_leak(textref, base_dir, smil_path, n, "smil.textref", report);
         let (path_part, frag) = split_fragment(textref);
         let resolved_nfc = nfc(&resolve(base_dir, path_part));
         if !name_index.contains_key(&resolved_nfc) && !media_types.contains_key(&resolved_nfc) {
@@ -362,10 +390,25 @@ fn check_container(
     text: &mut TextLinks,
 ) {
     let is_par = node.tag_name().name() == "par";
+    // 9.2.2.5: "The seq element MUST contain an epub:textref attribute"
+    // (epub-test-books, `sec-smil-seq-elem/seq-no-textref`).
+    if node.tag_name().name() == "seq" && node.attribute((EPUB_NS, "textref")).is_none() {
+        report.push_node(
+            RSC_005,
+            Severity::Error,
+            "element \"seq\" missing required attribute \"epub:textref\"",
+            smil_path,
+            node,
+            "smil.seq.missing_textref",
+            Vec::new(),
+        );
+    }
     // A <par> may contain at most one <text> child - confirmed the first
     // is processed normally and every one after it is RSC-005 "not
-    // allowed here" instead.
+    // allowed here" instead. `audio` is "[0 or 1]" the same way (9.2.2.6;
+    // epub-test-books, `sec-smil-par-elem/par-two-audio`).
     let mut text_seen = 0;
+    let mut audio_seen = 0;
     for child in node.children().filter(|n| n.is_element()) {
         match (is_par, child.tag_name().name()) {
             (false, "seq") | (false, "par") => {
@@ -404,7 +447,20 @@ fn check_container(
                 }
             }
             (true, "audio") => {
-                check_audio(child, smil_path, base_dir, name_index, media_types, report);
+                audio_seen += 1;
+                if audio_seen > 1 {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        "element \"audio\" not allowed here (a <par> may only contain one)",
+                        smil_path,
+                        child,
+                        "smil.container.multiple_audio_in_par",
+                        Vec::new(),
+                    );
+                } else {
+                    check_audio(child, smil_path, base_dir, name_index, media_types, report);
+                }
             }
             (true, "seq") | (true, "par") => {
                 report.push_node(
@@ -428,8 +484,85 @@ fn check_container(
                     Vec::new(),
                 );
             }
+            // 9.2.1: a Media Overlay Document "MUST be valid to the media
+            // overlays schema", whose `body`, `seq` and `par` hold nothing
+            // else (epub-test-books, `sec-overlay-req/unknown-element`). Only
+            // a SMIL or unprefixed element: whether another namespace's may
+            // sit here has not been measured, so that stays silent.
+            (_, name) if child.tag_name().namespace().is_none_or(|ns| ns == SMIL_NS) => {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    format!("element \"{name}\" not allowed here"),
+                    smil_path,
+                    child,
+                    "smil.container.unknown_element",
+                    vec![name.to_string()],
+                );
+            }
             _ => {}
         }
+    }
+}
+
+/// 9.2.2: an `id` "MUST be unique within the document scope". Each holder
+/// of a repeated id is reported, as in the package document
+/// (epub-test-books, `sec-smil-par-elem/duplicate-id`).
+fn check_unique_ids(doc: &roxmltree::Document, smil_path: &str, report: &mut Report) {
+    let ids = || {
+        doc.root_element()
+            .descendants()
+            .filter(|n| n.is_element())
+            .filter_map(|n| {
+                n.attributes()
+                    .find(|a| a.namespace().is_none() && a.name() == "id")
+                    .map(|a| (n, crate::xmlext::trim_xml_space(a.value())))
+            })
+    };
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for (_, id) in ids() {
+        *counts.entry(id).or_insert(0) += 1;
+    }
+    for (node, id) in ids() {
+        if counts.get(id).is_some_and(|&c| c > 1) {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!("duplicate id \"{id}\""),
+                smil_path,
+                node,
+                "smil.ids.duplicate_id",
+                vec![id.to_string()],
+            );
+        }
+    }
+}
+
+/// RSC-026 for a `src` or `epub:textref` that is path-absolute or climbs out
+/// of the container: each "MUST be a path-relative-scheme-less-URL string"
+/// (9.2.2.5-8; epub-test-books, `sec-smil-text-elem/text-src-absolute`).
+fn report_leak(
+    value: &str,
+    base_dir: &str,
+    smil_path: &str,
+    node: roxmltree::Node,
+    site: &str,
+    report: &mut Report,
+) {
+    if crate::opf::href_leaks_container_root(base_dir, value) {
+        report.push_node(
+            RSC_026,
+            Severity::Error,
+            format!("'{value}' leaks outside the container"),
+            smil_path,
+            node,
+            match site {
+                "smil.text" => "smil.text.leaks_container_root",
+                "smil.audio" => "smil.audio.leaks_container_root",
+                _ => "smil.textref.leaks_container_root",
+            },
+            vec![value.to_string()],
+        );
     }
 }
 
@@ -455,6 +588,7 @@ fn check_text(
     if is_external(src) {
         return;
     }
+    report_leak(src, base_dir, smil_path, node, "smil.text", report);
     let (path_part, frag) = split_fragment(src);
     let resolved = resolve(base_dir, path_part);
     let resolved_nfc = nfc(&resolved);
@@ -547,6 +681,7 @@ fn check_audio(
     if is_external(src) {
         return;
     }
+    report_leak(src, base_dir, smil_path, node, "smil.audio", report);
     let (path_part, frag) = split_fragment(src);
     if frag.is_some() {
         report.push_at_pos(
@@ -793,9 +928,9 @@ mod tests {
         // The real corpus scenario for this exact shape (text + audio both
         // directly under <seq>) expects RSC-005 reported *twice*, once per
         // offending child - not deduplicated per container.
-        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" version="3.0">
+        let smil = r#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
             <body>
-                <seq id="seq1">
+                <seq id="seq1" epub:textref="chapter1.xhtml">
                     <text src="chapter1.xhtml#t1"/>
                     <audio src="chapter1.mp3" clipBegin="0s" clipEnd="10s"/>
                 </seq>
@@ -804,6 +939,65 @@ mod tests {
         let names = idx(&["OEBPS/chapter1.xhtml", "OEBPS/chapter1.mp3"]);
         let (findings, _) = run(smil, &names, &HashMap::new());
         assert_eq!(findings, vec![RSC_005, RSC_005]);
+    }
+
+    /// The six epub-test-books media overlay sets, one shape each, and the
+    /// clean overlay above as the control.
+    #[test]
+    fn the_overlay_schema_rules() {
+        let names = idx(&["OEBPS/chapter1.xhtml", "OEBPS/chapter1.mp3"]);
+        let mut types = HashMap::new();
+        types.insert("OEBPS/chapter1.mp3".to_string(), "audio/mpeg".to_string());
+        let rules = |version: &str, body: &str| -> Vec<(&'static str, &'static str)> {
+            let smil = format!(
+                r#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" {version}><body>{body}</body></smil>"#
+            );
+            let mut report = Report::new();
+            check(&smil, "content.smil", "OEBPS", &names, &types, &mut report);
+            report
+                .messages
+                .iter()
+                .map(|m| (m.id, m.rule.unwrap_or_default()))
+                .collect()
+        };
+        let v = r#"version="3.0""#;
+        let text = r#"<text src="chapter1.xhtml#t1"/>"#;
+        let audio = r#"<audio src="chapter1.mp3" clipEnd="3s"/>"#;
+        let par = |inner: &str| format!(r#"<par id="p1">{inner}</par>"#);
+        assert!(rules(v, &par(&format!("{text}{audio}"))).is_empty());
+        assert_eq!(
+            rules(v, &par(&format!(r#"{text}{audio}<img src="x"/>"#))),
+            [(RSC_005, "smil.container.unknown_element")]
+        );
+        assert_eq!(
+            rules(r#"version="3.1""#, &par(text)),
+            [(RSC_005, "smil.smil.invalid_version")]
+        );
+        assert_eq!(
+            rules("", &par(text)),
+            [(RSC_005, "smil.smil.missing_version")]
+        );
+        assert_eq!(
+            rules(v, &format!(r#"<seq id="s1">{}</seq>"#, par(text))),
+            [(RSC_005, "smil.seq.missing_textref")]
+        );
+        assert_eq!(
+            rules(v, &par(&format!("{text}{audio}{audio}"))),
+            [(RSC_005, "smil.container.multiple_audio_in_par")]
+        );
+        assert_eq!(
+            rules(v, &format!("{}{}", par(text), par(text))),
+            [
+                (RSC_005, "smil.ids.duplicate_id"),
+                (RSC_005, "smil.ids.duplicate_id")
+            ]
+        );
+        assert_eq!(
+            rules(v, &par(r#"<text src="/OEBPS/chapter1.xhtml#t1"/>"#)),
+            [(RSC_026, "smil.text.leaks_container_root")]
+        );
+        // Another namespace's element is left alone: not measured.
+        assert!(rules(v, &par(&format!(r#"{text}<x:y xmlns:x="urn:x"/>"#))).is_empty());
     }
 
     #[test]

@@ -709,10 +709,27 @@ mod tests {
         // patterns — the eighth is `bdo-dir-required`, epubcheck's `bdo-dir`,
         // added after diffing `schematron-error.xhtml` finding by finding; the
         // ninth is `aria-role-name-prohibited`, from 5.4.0's two new DPUB
-        // roles — 4 `obsolete-*` patterns, the USAGE RSC-036 family, and
+        // roles, and the tenth `bdo-dir-not-auto`, HTML's own rule — 4
+        // `obsolete-*` patterns, the USAGE RSC-036 family, and
         // `script-src-type` from 5.4.0. A change that dropped rules would
         // trip this.
-        assert_eq!(xhtml_schema().patterns.len(), 47);
+        assert_eq!(xhtml_schema().patterns.len(), 48);
+    }
+
+    /// HTML § 4.5.25: `auto` must not be specified on `bdo`, in any case.
+    #[test]
+    fn bdo_dir_auto_is_flagged() {
+        let msg = r#"the "dir" attribute of a "bdo" element must not be "auto""#.to_string();
+        for dir in ["auto", "AUTO"] {
+            let body = format!(r#"<p><bdo dir="{dir}">x</bdo></p>"#);
+            assert_eq!(xhtml_findings(&body), vec![msg.clone()], "{dir}");
+        }
+        for ok in [
+            r#"<p><bdo dir="rtl">x</bdo></p>"#,
+            r#"<p dir="auto"><bdo dir="RTL">x</bdo></p>"#,
+        ] {
+            assert!(xhtml_findings(ok).is_empty(), "{ok}");
+        }
     }
 
     #[test]

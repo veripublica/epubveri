@@ -8,6 +8,55 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Changed
+
+- **EPUB 3: a CSS parse error is CSS-008 at usage, not an error.** EPUB 3.3
+  (`sec-css-req`) asks three things of a style sheet: no `direction`, no
+  `unicode-bidi`, UTF-8 or UTF-16. Parsing is not one of them, so a sheet CSS
+  Syntax recovers from no longer makes a book invalid. The finding stays, with
+  its key, because it is true and epubsana dispatches on
+  `css.stylesheet.unterminated`. EPUB 2 is unchanged. epubcheck 5.4.0 reports
+  these as errors.
+- **EPUB 3: a nested style rule is CSS Nesting, not a fault.** `p { span { … } }`
+  draws nothing, and the checks go into it, so `direction` one rule down is
+  CSS-001. A rule inside `@font-face` is still CSS-008. EPUB 2 is unchanged.
+- **A block left open at the end of a stylesheet is reported again.** styloria
+  0.20 no longer names it a parse error (CSS Syntax § 5.5 closes it there), so
+  epubveri reads it off the tree: an error in EPUB 2, as before, and usage in
+  EPUB 3, where its contents are now checked like any other block's. `p {
+  direction: rtl` is CSS-001.
+- **EPUB 3: styloria 0.20's new parse errors are CSS-008 at usage:** a comment,
+  string or unquoted url that runs to the end of the sheet, a `\` that ends it
+  or comes before a line break, and a selector with an undeclared namespace
+  prefix. They are silent in EPUB 2, as they were.
+- **A bad url refers to nothing.** `url(a b.png)`, `url(q'q.png)` and
+  `url(a(b)` are `<bad-url-token>`s, which no CSS grammar accepts, so they draw
+  no RSC-007 or RSC-020 any more, and a file only they name is unreferenced
+  (OPF-097, usage). ADV-015 still says what is wrong with them. epubcheck 5.4.0
+  reads a target out of them.
+- **styloria 0.20.0,** whose syntax errors follow CSS Syntax's parse errors
+  exactly.
+
+### Fixed
+
+- **EPUB 3: `dir` follows HTML's rule for enumerated attributes.** `dir="RTL"`
+  is `rtl` and passes; `dir=" rtl"` is RSC-005. A package document's `dir` is
+  still matched exactly, as its schema says.
+- **EPUB 3: `<bdo dir="auto">` is RSC-005.** HTML § 4.5.25: "The auto value
+  must not be specified."
+- **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** A `|`, a control
+  character or a private-use character in a file name is not PKG-009 there,
+  and two names that differ only by Unicode normalization are not OPF-060 or
+  OPF-074 (§ 3.3). A second package rootfile is a PKG-013 warning, since
+  § 3.5.1 says only one SHOULD be included. EPUB 3 is unchanged.
+- **Media overlays: six schema rules.** An element the media overlays schema
+  does not allow in `body`, `seq` or `par`, a `version` other than `3.0` (or
+  none), a `seq` with no `epub:textref`, a second `audio` in a `par` and a
+  repeated `id` are RSC-005, and a path-absolute `src` or `epub:textref` is
+  RSC-026.
+
 ## [0.40.1] - 2026-11-11
 
 ### Fixed
