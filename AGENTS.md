@@ -128,7 +128,8 @@ Each line is a place where epubveri follows the specification and epubcheck
   about parsing, so a sheet CSS Syntax recovers from passes. A nested style
   rule is CSS Nesting and draws nothing. A `<bad-url-token>` refers to nothing
   (CSS Syntax § 4.3.6), so it draws no RSC-007 or RSC-020. epubcheck 5.4.0
-  reports CSS-008, RSC-007 and RSC-020 as errors (upstream issue pending).
+  reports CSS-008, RSC-007 and RSC-020 as errors
+  ([w3c/epubcheck#1768](https://github.com/w3c/epubcheck/issues/1768)).
 - **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** § 3.3 does not
   forbid `|`, controls or private use, and lets two names differ only by
   normalization; § 3.5.1 says only one package rootfile SHOULD be included,
@@ -137,7 +138,7 @@ Each line is a place where epubveri follows the specification and epubcheck
 - **EPUB 3: `dir` is matched as HTML matches an enumerated attribute,** ASCII
   case-insensitive and unpadded (HTML § 2.3.3), and `<bdo dir="auto">` is
   RSC-005 (§ 4.5.25). So `dir=" rtl"` is RSC-005 too. epubcheck 5.4.0
-  accepts both (upstream issue pending).
+  accepts both ([w3c/epubcheck#1769](https://github.com/w3c/epubcheck/issues/1769)).
 
 ## What it declines to do
 
