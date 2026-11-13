@@ -408,6 +408,14 @@ pub const SPEC_001: &str = "SPEC-001"; // EPUB 3.3 §4.2.6.3.2.1: a file that mu
 // information. epubcheck 5.4.0 has neither check.
 pub const SPEC_002: &str = "SPEC-002"; // OPF 2.0.1 §2.3.1.1: an unused non-core item has no fallback (error)
 pub const SPEC_003: &str = "SPEC-003"; // OPF 2.0.1 §2.4.1.2: the NCX item carries fallback information (error)
+// SPEC-004: a local file header's "version needed to extract" is not 10, 20
+// or 45. EPUB 3.3 § 4.3.2 and OCF 2.0.1 § 4: "In the local file header table,
+// … MUST set the 'version needed to extract' fields to the values 10, 20 or
+// 45". SPEC-005: a file name longer than 255 bytes in UTF-8. EPUB 3.3
+// § 4.2.3, "File names MUST NOT exceed 255 bytes", and OCF 2.0.1 § 3.3.
+// epubcheck 5.4.0 has neither check.
+pub const SPEC_004: &str = "SPEC-004"; // EPUB 3.3 §4.3.2: "version needed to extract" is not 10, 20 or 45 (error)
+pub const SPEC_005: &str = "SPEC-005"; // EPUB 3.3 §4.2.3: a file name exceeds 255 bytes (error)
 
 // --- Resource limits (epubveri-owned; see the module note) ---
 //

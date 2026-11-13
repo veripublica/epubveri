@@ -258,6 +258,66 @@ fn find_exact_duplicate_entry(bytes: &[u8]) -> Option<String> {
     None
 }
 
+/// Each entry whose **local** file header gives a "version needed to
+/// extract" other than 10, 20 or 45 (SPEC-004), with that value, in central
+/// directory order. Walked by hand like [`find_exact_duplicate_entry`],
+/// because the `zip` crate does not expose the field; a structure it cannot
+/// follow yields nothing, as "is this a ZIP" is reported elsewhere. ZIP64
+/// counts and offsets are not followed.
+fn bad_version_needed(bytes: &[u8]) -> Vec<(String, u16)> {
+    const EOCD_SIG: [u8; 4] = [0x50, 0x4B, 0x05, 0x06];
+    const CD_SIG: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
+    const LH_SIG: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
+    let mut out = Vec::new();
+    let le16 = |at: usize| {
+        bytes
+            .get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let le32 = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let search_start = bytes.len().saturating_sub(22 + 65535);
+    let Some(eocd) = bytes[search_start..]
+        .windows(4)
+        .rposition(|w| w == EOCD_SIG)
+        .map(|p| search_start + p)
+    else {
+        return out;
+    };
+    let (Some(count), Some(offset)) = (le16(eocd + 10), le32(eocd + 16)) else {
+        return out;
+    };
+    let mut pos = offset as usize;
+    for _ in 0..count {
+        if bytes.get(pos..pos + 4) != Some(&CD_SIG[..]) {
+            break;
+        }
+        let (Some(nl), Some(el), Some(cl), Some(lho)) = (
+            le16(pos + 28),
+            le16(pos + 30),
+            le16(pos + 32),
+            le32(pos + 42),
+        ) else {
+            break;
+        };
+        let (nl, el, cl, lho) = (nl as usize, el as usize, cl as usize, lho as usize);
+        let Some(name) = bytes.get(pos + 46..pos + 46 + nl) else {
+            break;
+        };
+        if bytes.get(lho..lho + 4) == Some(&LH_SIG[..])
+            && let Some(v) = le16(lho + 4)
+            && !matches!(v, 10 | 20 | 45)
+        {
+            out.push((String::from_utf8_lossy(name).into_owned(), v));
+        }
+        pos += 46 + nl + el + cl;
+    }
+    out
+}
+
 /// An opened EPUB container.
 pub struct Ocf {
     archive: ZipArchive<Cursor<Vec<u8>>>,
@@ -954,6 +1014,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // `ZipArchive::len()` reporting only 5. Scanned manually here, on the
     // raw bytes, before they're moved into the archive reader.
     let duplicate_entry_name = find_exact_duplicate_entry(&bytes);
+    let version_needed = bad_version_needed(&bytes);
     let raw_header = judge_raw_header(&bytes);
     // Java's reader is asked first: where it and zip choose different
     // end records, epubcheck has already refused the archive.
@@ -1006,9 +1067,23 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         );
     }
 
+    for (name, v) in version_needed {
+        report.push_at_rule(
+            SPEC_004,
+            Severity::Error,
+            format!(
+                "the local file header of '{name}' gives \"version needed to extract\" as {v}; it must be 10, 20 or 45"
+            ),
+            name.as_str(),
+            "ocf.zip.version_needed",
+            vec![name.clone(), v.to_string()],
+        );
+    }
+
     let n = archive.len();
     let mut names = Vec::with_capacity(n);
     let mut epub3_names = Vec::new();
+    let mut long_names_seen: HashSet<String> = HashSet::new();
     let mut first_name = String::new();
     let mut first_stored = false;
     for i in 0..n {
@@ -1054,6 +1129,29 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             // The entry stays in `names`: OPF-060 and PKG-014 below both
             // need it.
             if !name.ends_with('/') {
+                // SPEC-005: a file name, a directory's as much as a file's,
+                // over 255 bytes. Once per path prefix, so a long directory
+                // name is one finding however many files sit inside it.
+                let mut prefix_end = 0;
+                for segment in name.split('/') {
+                    prefix_end += segment.len() + 1;
+                    if segment.len() > 255
+                        && long_names_seen
+                            .insert(name[..(prefix_end - 1).min(name.len())].to_string())
+                    {
+                        report.push_at_rule(
+                            SPEC_005,
+                            Severity::Error,
+                            format!(
+                                "the file name '{segment}' is {} bytes long; file names must not exceed 255 bytes",
+                                segment.len()
+                            ),
+                            name.as_str(),
+                            "ocf.filename.too_long",
+                            vec![segment.to_string(), segment.len().to_string()],
+                        );
+                    }
+                }
                 for segment in name.split('/').filter(|s| !s.is_empty()) {
                     // OCF 2.0.1's list is reported now; a character only
                     // EPUB 3.3 forbids waits for the version.
@@ -1861,6 +1959,90 @@ pub fn check_meta_inf_encodings(
     }
 }
 
+/// OCF 2.0.1's rules for three optional `META-INF` files, at EPUB 2 only
+/// (EPUB 3.3 words them differently and is not asked here). epubcheck 5.4.0
+/// checks none of them (epub-test-books, 2026-11-12). Each is RSC-005:
+///
+/// - `manifest.xml`, § 3.5.2: "the file's content MUST be as defined in the
+///   ODF 1.0 manifest schema". Asked: well-formed, and the root is ODF's
+///   `manifest:manifest`. The rest of the ODF grammar is not;
+/// - `metadata.xml`, § 3.5.3: "MUST be valid XML with namespace-qualified
+///   elements". Asked: well-formed, and every element in a namespace;
+/// - `rights.xml`, § 3.5.6: "MUST be a well-formed XML document which uses
+///   and conforms to XML Namespaces".
+pub fn check_ocf2_meta_files(ocf: &mut Ocf, validated_as_3: bool, report: &mut Report) {
+    const ODF_MANIFEST_NS: &str = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0";
+    if validated_as_3 {
+        return;
+    }
+    for name in [
+        "META-INF/manifest.xml",
+        "META-INF/metadata.xml",
+        "META-INF/rights.xml",
+    ] {
+        if !ocf.has(name) {
+            continue;
+        }
+        let Some(bytes) = ocf.read(name) else {
+            continue;
+        };
+        let text = crate::encoding::decode_xml(&bytes);
+        let doc = match parse_xml(&text) {
+            Ok(d) => d,
+            Err(e) => {
+                report.push_at_pos(
+                    RSC_005,
+                    Severity::Error,
+                    format!(
+                        "{name} is not well-formed XML: {}",
+                        parse_error_detail(&text, &e)
+                    ),
+                    name,
+                    Position::of_parse_error(&e),
+                );
+                continue;
+            }
+        };
+        let root = doc.root_element();
+        match name {
+            "META-INF/manifest.xml"
+                if !(root.tag_name().name() == "manifest"
+                    && root.tag_name().namespace() == Some(ODF_MANIFEST_NS)) =>
+            {
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    "expected element \"manifest\" in the ODF manifest namespace as the root of META-INF/manifest.xml",
+                    name,
+                    root,
+                    "ocf.manifest_xml.wrong_root_element",
+                    vec![root.tag_name().name().to_string()],
+                );
+            }
+            "META-INF/metadata.xml" => {
+                if let Some(n) = doc
+                    .descendants()
+                    .find(|n| n.is_element() && n.tag_name().namespace().is_none())
+                {
+                    report.push_node(
+                        RSC_005,
+                        Severity::Error,
+                        format!(
+                            "element \"{}\" in META-INF/metadata.xml is in no namespace; its elements must be namespace-qualified",
+                            n.tag_name().name()
+                        ),
+                        name,
+                        n,
+                        "ocf.metadata_xml.unqualified_element",
+                        vec![n.tag_name().name().to_string()],
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 pub fn check_signatures(ocf: &mut Ocf, report: &mut Report) {
     const SIG: &str = "META-INF/signatures.xml";
     if !ocf.has(SIG) {
@@ -2451,16 +2633,121 @@ mod container_document_tests {
         assert_eq!(ids("2.0", &x, &[]), Vec::<&str>::new());
     }
 
-    /// EPUB 3 fixes `version` at "1.0"; OCF 2.0.1's schema takes any value.
-    /// Neither takes a missing one.
+    /// Both fix `version` at "1.0": EPUB 3.3's schema, and OCF 2.0.1 § 3.5.1
+    /// ("The "version="1.0"" attribute MUST be included") with its Appendix A.
+    /// This test said OCF 2.0.1 takes any value until 2026-11-13; epubcheck's
+    /// 2.0 schema does. Neither takes a missing one.
     #[test]
-    fn the_version_attribute_is_judged_by_the_books_version() {
+    fn the_version_attribute_is_one_point_zero_in_both_versions() {
         let v2 = c("version=\"2.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
         assert_eq!(ids("3.0", &v2, &[]), ["RSC-005"]);
-        assert_eq!(ids("2.0", &v2, &[]), Vec::<&str>::new());
+        assert_eq!(ids("2.0", &v2, &[]), ["RSC-005"]);
         let none = c("", &format!("<rootfiles>{RF}</rootfiles>"));
         assert_eq!(ids("3.0", &none, &[]), ["RSC-005"]);
         assert_eq!(ids("2.0", &none, &[]), ["RSC-005"]);
+    }
+
+    /// OCF 2.0.1 §§ 3.5.2, 3.5.3 and 3.5.6, at EPUB 2 only.
+    #[test]
+    fn ocf2_meta_files_follow_their_clauses() {
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        const ODF: &str = "<?xml version=\"1.0\"?><manifest:manifest \
+            xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\"/>";
+        for (file, body, want) in [
+            (
+                "META-INF/manifest.xml",
+                "<?xml version=\"1.0\"?><files/>",
+                1,
+            ),
+            (
+                "META-INF/manifest.xml",
+                "<?xml version=\"1.0\"?><manifest>",
+                1,
+            ),
+            ("META-INF/manifest.xml", ODF, 0),
+            (
+                "META-INF/metadata.xml",
+                "<?xml version=\"1.0\"?><metadata/>",
+                1,
+            ),
+            (
+                "META-INF/metadata.xml",
+                "<?xml version=\"1.0\"?><m:metadata xmlns:m=\"urn:x\"><title/></m:metadata>",
+                1,
+            ),
+            (
+                "META-INF/metadata.xml",
+                "<?xml version=\"1.0\"?><metadata xmlns=\"urn:x\"><title/></metadata>",
+                0,
+            ),
+            ("META-INF/rights.xml", "<?xml version=\"1.0\"?><rights>", 1),
+            ("META-INF/rights.xml", "<?xml version=\"1.0\"?><rights/>", 0),
+        ] {
+            let got = ids("2.0", &x, &[(file, body)]);
+            assert_eq!(
+                got.iter().filter(|i| **i == "RSC-005").count(),
+                want,
+                "{file} {body}: {got:?}"
+            );
+            assert!(
+                !ids("3.0", &x, &[(file, body)]).contains(&"RSC-005"),
+                "EPUB 3 is not asked: {file} {body}"
+            );
+        }
+    }
+
+    /// SPEC-005, EPUB 3.3 § 4.2.3 and OCF 2.0.1 § 3.3: a file name of more
+    /// than 255 bytes, once per name however many files sit under it.
+    #[test]
+    fn a_file_name_over_255_bytes_is_spec_005() {
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        let long = "a".repeat(256);
+        let ok = "a".repeat(251); // + ".css" = 255 bytes
+        for v in ["2.0", "3.0"] {
+            let two = [
+                (format!("OEBPS/{long}/x.css"), "p{}"),
+                (format!("OEBPS/{long}/y.css"), "p{}"),
+            ];
+            let two: Vec<(&str, &str)> = two.iter().map(|(a, b)| (a.as_str(), *b)).collect();
+            assert_eq!(
+                ids(v, &x, &two)
+                    .iter()
+                    .filter(|i| **i == "SPEC-005")
+                    .count(),
+                1
+            );
+            let fine = format!("OEBPS/{ok}.css");
+            assert!(!ids(v, &x, &[(fine.as_str(), "p{}")]).contains(&"SPEC-005"));
+        }
+    }
+
+    /// SPEC-004, EPUB 3.3 § 4.3.2 and OCF 2.0.1 § 4: the local header's
+    /// "version needed to extract" is 10, 20 or 45.
+    #[test]
+    fn version_needed_outside_10_20_45_is_spec_004() {
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        for v in ["2.0", "3.0"] {
+            let mut b = book(v, &x, &[]);
+            assert!(crate::ocf::bad_version_needed(&b).is_empty());
+            // The last local header in the file is `toc.ncx`/`nav.xhtml`'s:
+            // patch its version-needed field to 63.
+            let lh = b
+                .windows(4)
+                .rposition(|w| w == [0x50, 0x4B, 0x03, 0x04])
+                .unwrap();
+            b[lh + 4..lh + 6].copy_from_slice(&63u16.to_le_bytes());
+            let got = crate::ocf::bad_version_needed(&b);
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].1, 63);
+            assert_eq!(
+                crate::validate_bytes(b)
+                    .messages
+                    .iter()
+                    .filter(|m| m.id == "SPEC-004")
+                    .count(),
+                1
+            );
+        }
     }
 
     /// Structure the schema owns, which nothing reported before.

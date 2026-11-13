@@ -6205,6 +6205,42 @@ fn check_text(
 
         media_active_class = meta_property_text("media:active-class");
         media_playback_active_class = meta_property_text("media:playback-active-class");
+        // EPUB 3.3 § 9.3.4: "Each property MUST define a valid CSS class name
+        // not including any selectors". A character that only a selector uses
+        // (`.active`, `p.on`, `#x`, `[a]`, `a:hover`) is reported; a value
+        // with a backslash is left alone, as an escape can make any of them
+        // part of a class name. Several names separated by spaces are the
+        // Schematron's (`media-active-class-single-name`). epubcheck 5.4.0
+        // does not ask (epub-test-books, `pkg-active-class-css-selector`).
+        for n in md.children().filter(|n| {
+            n.is_element()
+                && n.tag_name().name() == "meta"
+                && matches!(
+                    n.attr_no_ns("property")
+                        .map(|p| p.trim_matches(crate::xmlext::is_xml_space)),
+                    Some("media:active-class" | "media:playback-active-class")
+                )
+        }) {
+            let text = elem_text(n);
+            if !text.contains('\\')
+                && text.contains([
+                    '.', '#', '[', ']', ':', '>', '+', '~', '*', ',', '(', ')', '"', '\'',
+                ])
+            {
+                let property = n.attr_no_ns("property").unwrap_or("").trim().to_string();
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    format!(
+                        "the \"{property}\" value '{text}' must be a CSS class name, not a selector"
+                    ),
+                    opf_path,
+                    n,
+                    "opf.metadata.active_class_is_selector",
+                    vec![property, text.clone()],
+                );
+            }
+        }
 
         // media:duration values must be valid SMIL3 clock values - reuses
         // the same clock-value grammar the Media Overlays checks already
@@ -7599,6 +7635,49 @@ fn check_text(
                 "opf.metadata.missing_global_media_duration",
                 Vec::new(),
             );
+        }
+        // D.8.2: "Exactly one for the EPUB publication and for each media
+        // overlay document", and D.2 reads a cardinality as "the number of
+        // times EPUB creators MAY specify the property". So a second total,
+        // or a second duration refining the same overlay, is RSC-005, once
+        // per fact, at the second. epubcheck 5.4.0 does not count them
+        // (epub-test-books, `pkg-duration-two-total`).
+        let durations = || {
+            md.children().filter(|n| {
+                n.is_element()
+                    && n.tag_name().name() == "meta"
+                    && n.attr_no_ns("property")
+                        .map(|p| p.trim_matches(crate::xmlext::is_xml_space))
+                        == Some("media:duration")
+            })
+        };
+        let overlay_ids: HashSet<&str> = overlay_items.iter().map(|(_, id)| id.as_str()).collect();
+        let mut seen_duration: HashSet<Option<String>> = HashSet::new();
+        let mut reported_duration: HashSet<Option<String>> = HashSet::new();
+        for n in durations() {
+            let key = n.attr_no_ns("refines").map(|r| {
+                r.trim_matches(crate::xmlext::is_xml_space)
+                    .trim_start_matches('#')
+                    .to_string()
+            });
+            if key.as_deref().is_some_and(|k| !overlay_ids.contains(k)) {
+                continue;
+            }
+            if !seen_duration.insert(key.clone()) && reported_duration.insert(key.clone()) {
+                let what = match &key {
+                    None => "the EPUB publication".to_string(),
+                    Some(id) => format!("the media overlay '{id}'"),
+                };
+                report.push_node(
+                    RSC_005,
+                    Severity::Error,
+                    format!("media:duration is given more than once for {what}; it must be given exactly once"),
+                    opf_path,
+                    n,
+                    "opf.metadata.duplicate_media_duration",
+                    vec![key.unwrap_or_default()],
+                );
+            }
         }
         for (item, overlay_id) in &overlay_items {
             let overlay_id = overlay_id.as_str();
@@ -17440,6 +17519,72 @@ mod tests {
             unreferenced[0].contains("orphan.css"),
             "and it is the stylesheet, not the audio: {unreferenced:?}"
         );
+    }
+
+    /// EPUB 3.3 D.8.2 ("Exactly one for the EPUB publication and for each
+    /// media overlay document", read through D.2) and § 9.3.4 ("a valid CSS
+    /// class name not including any selectors").
+    #[test]
+    fn overlay_metadata_cardinality_and_class_names() {
+        let rules = |metas: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+    {metas}
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml" media-overlay="ov"/>
+    <item id="ov" href="ov.smil" media-type="application/smil+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            const SMIL: &str = r#"<?xml version="1.0" encoding="utf-8"?>
+<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" version="3.0">
+<body><par><text src="ch1.xhtml#p1"/></par></body></smil>"#;
+            crate::validate_bytes(epub_with_opf_and_overlay(&opf, SMIL))
+                .messages
+                .iter()
+                .filter_map(|m| m.rule)
+                .filter(|r| {
+                    matches!(
+                        *r,
+                        "opf.metadata.duplicate_media_duration"
+                            | "opf.metadata.active_class_is_selector"
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        const ONE: &str = r##"<meta property="media:duration">0:00:01</meta>
+    <meta property="media:duration" refines="#ov">0:00:01</meta>"##;
+        assert!(rules(ONE).is_empty());
+        let two_total = format!("{ONE}<meta property=\"media:duration\">0:00:01</meta>");
+        assert_eq!(rules(&two_total), ["opf.metadata.duplicate_media_duration"]);
+        let three_total = format!("{two_total}<meta property=\"media:duration\">0:00:01</meta>");
+        assert_eq!(
+            rules(&three_total),
+            ["opf.metadata.duplicate_media_duration"],
+            "once per fact"
+        );
+        let two_item =
+            format!("{ONE}<meta property=\"media:duration\" refines=\"#ov\">0:00:01</meta>");
+        assert_eq!(rules(&two_item), ["opf.metadata.duplicate_media_duration"]);
+        for (value, want) in [
+            ("-epub-media-overlay-active", 0),
+            ("active", 0),
+            (".active", 1),
+            ("p.on", 1),
+            ("a:hover", 1),
+            (r"a\.b", 0),
+        ] {
+            let m = format!("{ONE}<meta property=\"media:active-class\">{value}</meta>");
+            assert_eq!(rules(&m).len(), want, "{value}");
+        }
     }
 
     /// An EPUB 3 with one chapter, one overlay and a caller-supplied package

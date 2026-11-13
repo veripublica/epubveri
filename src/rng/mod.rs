@@ -673,10 +673,11 @@ mod tests {
     }
 
     #[test]
-    fn the_epub2_container_grammar_takes_any_version_and_no_links() {
+    fn the_epub2_container_grammar_takes_version_one_point_zero_and_no_links() {
+        // OCF 2.0.1 § 3.5.1 and Appendix A fix `version` at "1.0".
         let g = container_grammar(false);
         assert!(ok(&g, CVALID));
-        assert!(ok(
+        assert!(!ok(
             &g,
             &CVALID.replace("version=\"1.0\"", "version=\"2.0\"")
         ));

@@ -154,6 +154,16 @@ Each line is a place where epubveri follows the specification and epubcheck
   both, are RSC-005.** HTML § 5.2.2 has a "must not" for each, and EPUB 3.3
   § 6.1.2 holds XHTML content documents to HTML's conformance criteria.
   epubcheck 5.4.0 is silent (upstream issue not yet filed).
+- **SPEC-004 and SPEC-005: "version needed to extract" other than 10, 20 or
+  45 in a local file header, and a file name over 255 bytes.** EPUB 3.3
+  §§ 4.3.2 and 4.2.3, OCF 2.0.1 §§ 4 and 3.3. epubcheck 5.4.0 checks neither.
+- **EPUB 2: `container version` must be `1.0`,** and `META-INF/manifest.xml`,
+  `metadata.xml` and `rights.xml` follow OCF 2.0.1 §§ 3.5.1–3.5.6 (ODF manifest
+  root, namespace-qualified elements, well-formed). epubcheck 5.4.0 takes any
+  `version` at EPUB 2 and does not check these rules for the other three.
+- **EPUB 3: one `media:duration` per publication and per overlay, and
+  `media:active-class` is a class name, not a selector** (D.8.2 with D.2;
+  § 9.3.4). epubcheck 5.4.0 checks neither.
 
 ## What it declines to do
 

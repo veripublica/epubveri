@@ -46,6 +46,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   Structural Semantics Vocabulary URL as epubcheck spells it, with `www`. EPUB
   3.3 forbids mapping a prefix to a default vocabulary (D.1.4) but gives no URL
   for this one, so epubcheck's spelling is the default.
+- **Six container faults epubcheck 5.4.0 misses,** each found by an
+  epub-test-books case:
+  - `SPEC-004`: a local file header's "version needed to extract" is not 10,
+    20 or 45 (EPUB 3.3 § 4.3.2, OCF 2.0.1 § 4);
+  - `SPEC-005`: a file name longer than 255 bytes (EPUB 3.3 § 4.2.3, OCF 2.0.1
+    § 3.3), once per name;
+  - EPUB 2: `container version` other than `1.0` is RSC-005 (OCF 2.0.1
+    § 3.5.1 and its schema). Until now we accepted any value at EPUB 2, as
+    epubcheck's 2.0 schema does;
+  - EPUB 2: a `META-INF/manifest.xml` whose root is not ODF's
+    `manifest:manifest`, a `metadata.xml` with an element in no namespace, and
+    a `rights.xml` that is not well-formed are RSC-005 (OCF 2.0.1 §§ 3.5.2,
+    3.5.3, 3.5.6).
+- **EPUB 3: two media overlay metadata faults epubcheck 5.4.0 misses** (RSC-005):
+  - a second `media:duration` for the publication, or for the same overlay
+    (D.8.2: "Exactly one", read through D.2);
+  - a `media:active-class` or `media:playback-active-class` that is a selector,
+    such as `.active` (§ 9.3.4: "not including any selectors").
+
+  No book on the shelf, in epub-test-books or in W3C's epub-tests draws any of
+  them.
 
 ## [0.41.0] - 2026-11-13
 

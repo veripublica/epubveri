@@ -279,6 +279,7 @@ pub fn validate_bytes_with_options(bytes: Vec<u8>, options: &Options) -> Report 
     // OCF 2.0.1 § 3.3 forbids fewer characters than EPUB 3.3 and lets two
     // names differ only by normalization, so those findings wait for it too.
     ocf::check_epub3_names(&container, validated_as_3, &mut report);
+    ocf::check_ocf2_meta_files(&mut container, validated_as_3, &mut report);
     let requested = options.profile.as_deref().filter(|p| PROFILES.contains(p));
     // "The first package document" is the first one *declaring a type*:
     // `OCFCheckerState.getPublicationTypes()` returns the first entry of a
