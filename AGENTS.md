@@ -150,6 +150,10 @@ Each line is a place where epubveri follows the specification and epubcheck
   (`dc:  http://…`). RDFa Core 1.1 § 5 gives `NCName ':' ' '+ xsd:anyURI`;
   epubcheck 5.4.0's pattern asks for exactly one space and reports RSC-005
   (upstream issue not yet filed).
+- **EPUB 3: `itemtype` or `itemref` without `itemscope`, and `itemid` without
+  both, are RSC-005.** HTML § 5.2.2 has a "must not" for each, and EPUB 3.3
+  § 6.1.2 holds XHTML content documents to HTML's conformance criteria.
+  epubcheck 5.4.0 is silent (upstream issue not yet filed).
 
 ## What it declines to do
 

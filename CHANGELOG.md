@@ -34,6 +34,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     is RSC-005 (SVG 2 § 2.4.5), such as an `<svg>` with no `xmlns`, or a `<g>`.
 
   No shelf book draws any of them.
+- **EPUB 3: HTML's microdata "must not" rules are RSC-005** (HTML § 5.2.2):
+  `itemtype` or `itemref` without `itemscope`, and `itemid` without both
+  `itemscope` and `itemtype`. epubcheck 5.4.0 reports none of them. An
+  `itemprop` outside every item is not reported: HTML words that rule as a
+  permission, and it is held as a question.
+- **A prefix mapped to a package vocabulary in a content document or media
+  overlay no longer draws OPF-007b.** Those are the package's default
+  vocabularies, not `epub:type`'s; epubcheck forbids them only in the package
+  document. In a content document or overlay, OPF-007b now fires for the
+  Structural Semantics Vocabulary URL as epubcheck spells it, with `www`. EPUB
+  3.3 forbids mapping a prefix to a default vocabulary (D.1.4) but gives no URL
+  for this one, so epubcheck's spelling is the default.
 
 ## [0.41.0] - 2026-11-13
 

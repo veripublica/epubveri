@@ -2749,6 +2749,32 @@ const DEFAULT_VOCAB_URIS: &[&str] = &[
     "http://idpf.org/epub/vocab/package/itemref/#",
 ];
 
+/// The default vocabulary of `epub:type`, in content documents and media
+/// overlays, as epubcheck spells it (`StructureVocab.URI`, the forbidden set
+/// at `OPSHandler30`:79 and `OverlayHandler`:37).
+///
+/// EPUB 3.3 D.1.3 forbids assigning a prefix to "the URLs associated with
+/// these vocabularies", but neither it nor C.2 nor SSV 1.1 states the URL
+/// for the Structural Semantics Vocabulary (read 2026-11-13). The
+/// specification is silent on the spelling, so epubcheck's is the default.
+/// `http://idpf.org/…` without `www` is therefore not on the list: we cannot
+/// cite a clause that makes it the default vocabulary.
+const DEFAULT_VOCAB_URIS_CONTENT: &[&str] = &["http://www.idpf.org/epub/vocab/structure/#"];
+
+impl PrefixContext {
+    /// The URLs a prefix must not be mapped to in this context (OPF-007b).
+    /// **Per context, like the reserved prefixes:** the package's four
+    /// default vocabularies are not `epub:type`'s, so mapping a prefix to one
+    /// of them in a content document is no fault, and epubcheck does not
+    /// report it there. We did, with one list for all three contexts.
+    fn default_vocabs(self) -> &'static [&'static str] {
+        match self {
+            PrefixContext::Package => DEFAULT_VOCAB_URIS,
+            PrefixContext::ContentDocument | PrefixContext::Overlay => DEFAULT_VOCAB_URIS_CONTENT,
+        }
+    }
+}
+
 const DC_ELEMENTS_NS: &str = "http://purl.org/dc/elements/1.1/";
 /// One way a `prefix` attribute value can be malformed, and the message ID
 /// epubcheck picks for it.
@@ -3114,7 +3140,7 @@ fn check_prefix_declaration(
                 "opf.prefix.reserved_underscore",
                 Vec::new(),
             );
-        } else if DEFAULT_VOCAB_URIS.contains(&uri.as_str()) {
+        } else if context.default_vocabs().contains(&uri.as_str()) {
             report.push_node_attr(
                 OPF_007B,
                 Severity::Error,
@@ -3292,6 +3318,63 @@ fn check_prefix_usage(
             path,
             Position::of(node),
         );
+    }
+}
+
+/// RSC-005: HTML's structural microdata rules (HTML § 5.2.2), in an EPUB 3
+/// XHTML content document. EPUB 3.3 § 6.1.2 holds these documents to HTML's
+/// conformance criteria, and each rule below is a "must not" there:
+///
+/// - `itemtype` or `itemref` on an element with no `itemscope`;
+/// - `itemid` on an element without both `itemscope` and `itemtype`.
+///
+/// **`itemprop` on an element that is no item's property is not asked,
+/// deliberately** (Baris, 2026-11-13). § 5.2.3 words it as a permission
+/// ("may have an itemprop attribute specified, if doing so adds one or more
+/// properties to one or more items"), not a "must not", and reading it as a
+/// requirement fails epubcheck's own `microdata-valid.xhtml` five times. The
+/// question goes to epub-test-books first.
+///
+/// The rules that depend on a vocabulary (which item types exist, whether a
+/// vocabulary has global identifiers) are not asked either. epubcheck 5.4.0
+/// reports none of these (epub-test-books, 2026-11-13).
+fn check_microdata(doc: &roxmltree::Document, path: &str, report: &mut Report) {
+    const XHTML: &str = "http://www.w3.org/1999/xhtml";
+    let is_html = |n: &roxmltree::Node| n.is_element() && n.tag_name().namespace() == Some(XHTML);
+    for n in doc.descendants().filter(is_html) {
+        let scope = n.attr_no_ns("itemscope").is_some();
+        let mut fault = |attr: &'static str, why: &str, rule: &'static str| {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!("attribute \"{attr}\" not allowed here: {why}"),
+                path,
+                n,
+                rule,
+                vec![attr.to_string(), n.tag_name().name().to_string()],
+            );
+        };
+        if !scope && n.attr_no_ns("itemtype").is_some() {
+            fault(
+                "itemtype",
+                "it needs \"itemscope\" on the same element",
+                "htm.microdata.itemtype_without_itemscope",
+            );
+        }
+        if !scope && n.attr_no_ns("itemref").is_some() {
+            fault(
+                "itemref",
+                "it needs \"itemscope\" on the same element",
+                "htm.microdata.itemref_without_itemscope",
+            );
+        }
+        if n.attr_no_ns("itemid").is_some() && !(scope && n.attr_no_ns("itemtype").is_some()) {
+            fault(
+                "itemid",
+                "it needs both \"itemscope\" and \"itemtype\" on the same element",
+                "htm.microdata.itemid_without_typed_item",
+            );
+        }
     }
 }
 
@@ -9296,6 +9379,9 @@ fn check_text(
                 })
                 .unwrap_or_default();
         check_prefix_placement(&d, &path, report);
+        if is_epub3 {
+            check_microdata(&d, &path, report);
+        }
         for n in d.descendants().filter(|n| n.is_element()) {
             if let Some(v) = n.attribute(("http://www.idpf.org/2007/ops", "type")) {
                 check_prefix_usage(
@@ -31883,6 +31969,73 @@ mod tests {
         assert!(
             errors(epub_declaring_props("foo:", "<p>x</p>")).contains(&OPF_026),
             "properties=\"foo:\""
+        );
+    }
+
+    /// HTML § 5.2.2's structural microdata rules.
+    #[test]
+    fn microdata_attributes_need_their_item() {
+        let rsc005 = |body: &str| {
+            crate::validate_bytes(epub_with_ch1(&format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            )))
+            .messages
+            .iter()
+            .filter(|m| m.id == crate::ids::RSC_005)
+            .filter_map(|m| m.rule)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            rsc005("<div itemtype=\"https://schema.org/Book\"><p>x</p></div>"),
+            ["htm.microdata.itemtype_without_itemscope"]
+        );
+        assert_eq!(
+            rsc005("<div itemref=\"a\"><p id=\"a\">x</p></div>"),
+            ["htm.microdata.itemref_without_itemscope"]
+        );
+        assert_eq!(
+            rsc005("<div itemscope=\"\" itemid=\"urn:isbn:0\"><p>x</p></div>"),
+            ["htm.microdata.itemid_without_typed_item"]
+        );
+        // Not asked: see `check_microdata`.
+        assert!(rsc005("<p itemprop=\"name\">x</p>").is_empty());
+        for ok in [
+            "<div itemscope=\"\" itemtype=\"https://schema.org/Book\" itemid=\"urn:isbn:0\">\
+             <p itemprop=\"name\">x</p><div itemprop=\"author\" itemscope=\"\">\
+             <span itemprop=\"name\">y</span></div></div>",
+            // Reached through `itemref`: the named element and its subtree.
+            "<div itemscope=\"\" itemref=\"a b\"></div><p id=\"a\" itemprop=\"x\">x</p>\
+             <div id=\"b\"><span itemprop=\"y\">y</span></div>",
+        ] {
+            assert!(rsc005(ok).is_empty(), "{ok}: {:?}", rsc005(ok));
+        }
+    }
+
+    /// OPF-007b's forbidden URLs depend on the context, as the reserved
+    /// prefixes do: `epub:type`'s default vocabulary in a content document,
+    /// the package's four in the package document.
+    #[test]
+    fn default_vocabulary_mapping_is_per_context() {
+        let ids = |prefix: &str| {
+            crate::validate_bytes(epub_with_ch1(&format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\" epub:prefix=\"{prefix}\">\
+                 <head><title>t</title></head><body><p>x</p></body></html>"
+            )))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect::<Vec<_>>()
+        };
+        assert!(
+            ids("s: http://www.idpf.org/epub/vocab/structure/#").contains(&crate::ids::OPF_007B)
+        );
+        assert!(
+            !ids("m: http://idpf.org/epub/vocab/package/meta/#").contains(&crate::ids::OPF_007B),
+            "a package vocabulary is not epub:type's default"
         );
     }
 
