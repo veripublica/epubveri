@@ -318,6 +318,118 @@ fn bad_version_needed(bytes: &[u8]) -> Vec<(String, u16)> {
     out
 }
 
+/// A structural fault between the central directory and the entries it
+/// describes, found by [`zip_structure_faults`].
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ZipFault {
+    /// SPEC-008: the header's offset, shifted as readers shift it, does not
+    /// land on a local file header.
+    NoLocalHeader,
+    /// SPEC-007: bit 3 is set, and no data descriptor follows the data.
+    MissingDataDescriptor,
+}
+
+/// Each central directory entry that points at no local file header
+/// (SPEC-008), or that sets bit 3 with no data descriptor after its data
+/// (SPEC-007), by name, in central directory order.
+///
+/// **Offsets are read as readers read them.** Data in front of the archive
+/// (a second archive, a stub) moves every local header by the same amount;
+/// Java's `ZipFile`, the `zip` crate and Info-ZIP all add the difference
+/// between where the central directory is and where the end record says it
+/// is. So an entry is faulty only when that one shift does not reach a local
+/// header for it: a book with a whole archive prepended stays clean, and one
+/// whose `mimetype` data grew stays faulty, because `mimetype` did not move
+/// and the rest did. The data descriptor is found by the central
+/// directory's compressed size, with or without its optional signature.
+/// ZIP64 sizes are not followed, and a structure the walk cannot follow
+/// yields nothing, as elsewhere.
+pub(crate) fn zip_structure_faults(bytes: &[u8]) -> Vec<(String, ZipFault)> {
+    const EOCD_SIG: [u8; 4] = [0x50, 0x4B, 0x05, 0x06];
+    const CD_SIG: [u8; 4] = [0x50, 0x4B, 0x01, 0x02];
+    const LH_SIG: [u8; 4] = [0x50, 0x4B, 0x03, 0x04];
+    const DD_SIG: [u8; 4] = [0x50, 0x4B, 0x07, 0x08];
+    let mut out = Vec::new();
+    let le16 = |at: usize| {
+        bytes
+            .get(at..at + 2)
+            .map(|b| u16::from_le_bytes([b[0], b[1]]))
+    };
+    let le32 = |at: usize| {
+        bytes
+            .get(at..at + 4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let search_start = bytes.len().saturating_sub(22 + 65535);
+    let Some(eocd) = bytes[search_start..]
+        .windows(4)
+        .rposition(|w| w == EOCD_SIG)
+        .map(|p| search_start + p)
+    else {
+        return out;
+    };
+    let (Some(count), Some(cd_size), Some(cd_offset)) =
+        (le16(eocd + 10), le32(eocd + 12), le32(eocd + 16))
+    else {
+        return out;
+    };
+    if cd_size == u32::MAX || cd_offset == u32::MAX {
+        return out;
+    }
+    let Some(cd_start) = eocd.checked_sub(cd_size as usize) else {
+        return out;
+    };
+    let Some(shift) = cd_start.checked_sub(cd_offset as usize) else {
+        return out;
+    };
+    let mut pos = cd_start;
+    for _ in 0..count {
+        if bytes.get(pos..pos + 4) != Some(&CD_SIG[..]) {
+            break;
+        }
+        let (Some(flags), Some(crc), Some(csize), Some(nl), Some(el), Some(cl), Some(lho)) = (
+            le16(pos + 8),
+            le32(pos + 16),
+            le32(pos + 20),
+            le16(pos + 28),
+            le16(pos + 30),
+            le16(pos + 32),
+            le32(pos + 42),
+        ) else {
+            break;
+        };
+        let (nl, el, cl) = (nl as usize, el as usize, cl as usize);
+        let Some(name) = bytes.get(pos + 46..pos + 46 + nl) else {
+            break;
+        };
+        let name = String::from_utf8_lossy(name).into_owned();
+        pos += 46 + nl + el + cl;
+        if lho == u32::MAX {
+            continue;
+        }
+        let local = lho as usize + shift;
+        if bytes.get(local..local + 4) != Some(&LH_SIG[..]) {
+            out.push((name, ZipFault::NoLocalHeader));
+            continue;
+        }
+        if flags & 0x0008 == 0 || csize == u32::MAX {
+            continue;
+        }
+        let (Some(lnl), Some(lel)) = (le16(local + 26), le16(local + 28)) else {
+            continue;
+        };
+        let end = local + 30 + lnl as usize + lel as usize + csize as usize;
+        let crc = crc.to_le_bytes();
+        let signed = bytes.get(end..end + 4) == Some(&DD_SIG[..])
+            && bytes.get(end + 4..end + 8) == Some(&crc[..]);
+        let unsigned = bytes.get(end..end + 4) == Some(&crc[..]);
+        if !signed && !unsigned {
+            out.push((name, ZipFault::MissingDataDescriptor));
+        }
+    }
+    out
+}
+
 /// An opened EPUB container.
 pub struct Ocf {
     archive: ZipArchive<Cursor<Vec<u8>>>,
@@ -332,6 +444,13 @@ pub struct Ocf {
     /// Entries that exist but could not be inflated, with the decoder's
     /// error, reported by [`check_resource_limits`] as PKG-008.
     unreadable: Vec<(String, String)>,
+    /// Entries whose central directory header points at no local file
+    /// header (SPEC-008), held to the end of the run: an entry that could
+    /// not be read is PKG-008 there, which already says the structure is
+    /// broken, so SPEC-008 is reported only when nothing drew PKG-008. That
+    /// leaves the entries no reader complained about, such as a `mimetype`
+    /// whose read failure epubcheck ignores.
+    missing_local_headers: Vec<String>,
     /// Bytes read so far from distinct entries, against [`MAX_BOOK_BYTES`].
     read_total: u64,
     /// Entries already charged to `read_total`; reading one again is free.
@@ -700,6 +819,18 @@ pub(crate) fn check_resource_limits(ocf: &Ocf, report: &mut Report) {
             vec![name.clone()],
         );
     }
+    if ocf.unreadable.is_empty() {
+        for name in &ocf.missing_local_headers {
+            report.push_at_rule(
+                SPEC_008,
+                Severity::Error,
+                format!("the central directory entry for '{name}' points at no local file header"),
+                name.as_str(),
+                "ocf.zip.no_local_header",
+                vec![name.clone()],
+            );
+        }
+    }
     for name in &ocf.oversized {
         report.push_at(
             LIM_001,
@@ -1015,6 +1146,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
     // raw bytes, before they're moved into the archive reader.
     let duplicate_entry_name = find_exact_duplicate_entry(&bytes);
     let version_needed = bad_version_needed(&bytes);
+    let structure_faults = zip_structure_faults(&bytes);
     let raw_header = judge_raw_header(&bytes);
     // Java's reader is asked first: where it and zip choose different
     // end records, epubcheck has already refused the archive.
@@ -1078,6 +1210,23 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
             "ocf.zip.version_needed",
             vec![name.clone(), v.to_string()],
         );
+    }
+
+    let mut missing_local_headers = Vec::new();
+    for (name, fault) in structure_faults {
+        match fault {
+            ZipFault::NoLocalHeader => missing_local_headers.push(name),
+            ZipFault::MissingDataDescriptor => report.push_at_rule(
+                SPEC_007,
+                Severity::Error,
+                format!(
+                    "'{name}' sets general purpose bit 3, but no data descriptor follows its data"
+                ),
+                name.as_str(),
+                "ocf.zip.missing_data_descriptor",
+                vec![name.clone()],
+            ),
+        }
     }
 
     let n = archive.len();
@@ -1300,6 +1449,7 @@ pub fn open(bytes: Vec<u8>, report: &mut Report) -> Option<Ocf> {
         encrypted_forbidden: std::collections::HashSet::new(),
         reads_suspended: false,
         mimetype_compressed: first_name == "mimetype" && !first_stored,
+        missing_local_headers,
     };
 
     // epubcheck's `OCFChecker.checkMimetypeFile` compares the inflated
@@ -2747,6 +2897,89 @@ mod container_document_tests {
                     .count(),
                 1
             );
+        }
+    }
+
+    /// SPEC-007, ZIP application note § 4.3.9.1 (EPUB 3.3 § 4.3.2, OCF
+    /// 2.0.1 § 4): bit 3 set and no data descriptor after the data. A
+    /// streamed archive, which writes real descriptors, stays clean.
+    #[test]
+    fn bit_3_without_a_data_descriptor_is_spec_007() {
+        use crate::ocf::{ZipFault, zip_structure_faults};
+        use std::io::Write;
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        for v in ["2.0", "3.0"] {
+            let mut b = book(v, &x, &[]);
+            assert!(zip_structure_faults(&b).is_empty());
+            // Set bit 3 on the last entry, in both its headers.
+            let lh = b
+                .windows(4)
+                .rposition(|w| w == [0x50, 0x4B, 0x03, 0x04])
+                .unwrap();
+            let cd = b
+                .windows(4)
+                .rposition(|w| w == [0x50, 0x4B, 0x01, 0x02])
+                .unwrap();
+            b[lh + 6] |= 0x08;
+            b[cd + 8] |= 0x08;
+            let got = zip_structure_faults(&b);
+            assert_eq!(got.len(), 1);
+            assert_eq!(got[0].1, ZipFault::MissingDataDescriptor);
+            let ids: Vec<_> = crate::validate_bytes(b)
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect();
+            assert_eq!(
+                ids.iter().filter(|i| **i == "SPEC-007").count(),
+                1,
+                "{ids:?}"
+            );
+        }
+        let mut streamed = zip::ZipWriter::new_stream(Vec::new());
+        let deflated = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        streamed.start_file("a.txt", deflated).unwrap();
+        streamed.write_all(b"hello hello hello").unwrap();
+        let streamed = streamed.finish().unwrap().into_inner();
+        assert!(streamed.windows(4).any(|w| w == [0x50, 0x4B, 0x07, 0x08]));
+        assert!(zip_structure_faults(&streamed).is_empty());
+    }
+
+    /// SPEC-008, ZIP application note § 4.3.2 (EPUB 3.3 § 4.3.2, OCF 2.0.1
+    /// § 4): a central directory header that points at no local header,
+    /// after the one shift every reader applies.
+    #[test]
+    fn a_central_header_with_no_local_header_is_spec_008() {
+        use crate::ocf::{ZipFault, zip_structure_faults};
+        let x = c("version=\"1.0\"", &format!("<rootfiles>{RF}</rootfiles>"));
+        for v in ["2.0", "3.0"] {
+            let b = book(v, &x, &[]);
+            // A whole prefix moves every header alike: readers shift, clean.
+            let mut prefixed = vec![0u8; 100];
+            prefixed.extend_from_slice(&b);
+            assert!(zip_structure_faults(&prefixed).is_empty());
+            // 22 bytes inside `mimetype`'s data move every header after it,
+            // but not `mimetype`'s own: it alone is lost.
+            let mut grown = b[..40].to_vec();
+            grown.extend_from_slice(&[0x50, 0x4B, 0x05, 0x06]);
+            grown.extend_from_slice(&[0u8; 18]);
+            grown.extend_from_slice(&b[40..]);
+            assert_eq!(
+                zip_structure_faults(&grown),
+                [("mimetype".to_string(), ZipFault::NoLocalHeader)]
+            );
+            let ids: Vec<_> = crate::validate_bytes(grown)
+                .messages
+                .iter()
+                .map(|m| m.id)
+                .collect();
+            assert_eq!(
+                ids.iter().filter(|i| **i == "SPEC-008").count(),
+                1,
+                "{ids:?}"
+            );
+            assert!(!ids.contains(&"PKG-008"), "{ids:?}");
         }
     }
 

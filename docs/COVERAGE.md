@@ -33,7 +33,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
 | **All** | **214** | **3** | **1** | **105** | **218** | **217/218** | |
 
-**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 25 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 27 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -462,3 +462,5 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | SPEC-004 | EPUB 3.3 §4.3.2: "version needed to extract" is not 10, 20 or 45 (error) | — | Y |
 | SPEC-005 | EPUB 3.3 §4.2.3: a file name exceeds 255 bytes (error) | — | Y |
 | SPEC-006 | EPUB 3.3 §4.2.2: the manifest lists the mimetype file (error) | — | Y |
+| SPEC-007 | ZIP APPNOTE §4.3.9.1 via EPUB 3.3 §4.3.2: bit 3 set, no data descriptor (error) | — | Y |
+| SPEC-008 | ZIP APPNOTE §4.3.2 via EPUB 3.3 §4.3.2: a central directory header points at no local header (error) | — | Y |

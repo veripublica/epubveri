@@ -421,6 +421,16 @@ pub const SPEC_005: &str = "SPEC-005"; // EPUB 3.3 §4.2.3: a file name exceeds 
 // resources so MUST NOT be listed in the manifest". The META-INF half is
 // epubcheck's PKG-025; epubcheck 5.4.0 has no check for `mimetype`.
 pub const SPEC_006: &str = "SPEC-006"; // EPUB 3.3 §4.2.2: the manifest lists the mimetype file (error)
+// SPEC-007: an entry sets general purpose bit 3 but no data descriptor
+// follows its data. SPEC-008: a central directory header points at no local
+// file header. EPUB 3.3 § 4.3.2 "uses the ZIP format as specified by" the
+// ZIP application note, whose § 4.3.9.1 says the descriptor "MUST exist if
+// bit 3 of the general purpose bit flag is set" and § 4.3.2 that "Each
+// 'local file header' MUST be accompanied by a corresponding 'central
+// directory header' record". OCF 2.0.1 § 4 rests on the same application
+// note, so both apply at EPUB 2 too. epubcheck 5.4.0 has neither check.
+pub const SPEC_007: &str = "SPEC-007"; // ZIP APPNOTE §4.3.9.1 via EPUB 3.3 §4.3.2: bit 3 set, no data descriptor (error)
+pub const SPEC_008: &str = "SPEC-008"; // ZIP APPNOTE §4.3.2 via EPUB 3.3 §4.3.2: a central directory header points at no local header (error)
 
 // --- Resource limits (epubveri-owned; see the module note) ---
 //

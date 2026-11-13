@@ -24,6 +24,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   manifest". The META-INF half was already PKG-025; epubcheck 5.4.0 gives
   only USAGE OPF-097 for `mimetype`.
 
+- **Two ZIP structure faults epubcheck 5.4.0 misses, both versions.** EPUB
+  3.3 § 4.3.2 and OCF 2.0.1 § 4 take the ZIP format "as specified by" the
+  ZIP application note, which makes each a MUST:
+  - `SPEC-007`: an entry sets general purpose bit 3, and no data descriptor
+    follows its data (§ 4.3.9.1, "This descriptor MUST exist if bit 3 …
+    is set");
+  - `SPEC-008`: a central directory header points at no local file header
+    (§ 4.3.2), after the one offset shift every ZIP reader applies, so a
+    book with data in front of the archive stays clean. Where an entry
+    could not be read at all, PKG-008 already reports the fact and
+    SPEC-008 stays silent.
+
+  A local header that only disagrees with its central header (CRC, size,
+  method) still draws nothing: the application note has no rule that
+  they match, so epubcheck's verdict stands. No shelf book, no
+  epub-test-books set and no W3C epub-tests publication draws either.
+
 ## [0.42.0] - 2026-11-13
 
 ### Fixed

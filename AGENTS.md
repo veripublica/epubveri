@@ -171,6 +171,10 @@ Each line is a place where epubveri follows the specification and epubcheck
 - **SPEC-006: the manifest lists the `mimetype` file** (EPUB 3.3 § 4.2.2,
   "MUST NOT be listed in the manifest"). epubcheck 5.4.0 gives only USAGE
   OPF-097.
+- **SPEC-007 and SPEC-008: bit 3 set with no data descriptor, and a central
+  directory header that points at no local file header** (ZIP application
+  note §§ 4.3.9.1 and 4.3.2, through EPUB 3.3 § 4.3.2 and OCF 2.0.1 § 4).
+  epubcheck 5.4.0 reads both books as valid.
 - **EPUB 3: one `media:duration` per publication and per overlay, and
   `media:active-class` is a class name, not a selector** (D.8.2 with D.2;
   § 9.3.4). epubcheck 5.4.0 checks neither ([w3c/epubcheck#1778](https://github.com/w3c/epubcheck/issues/1778)).
