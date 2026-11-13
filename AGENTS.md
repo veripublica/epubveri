@@ -149,21 +149,31 @@ Each line is a place where epubveri follows the specification and epubcheck
 - **An RDFa `prefix` with more than one space after the colon passes**
   (`dc:  http://…`). RDFa Core 1.1 § 5 gives `NCName ':' ' '+ xsd:anyURI`;
   epubcheck 5.4.0's pattern asks for exactly one space and reports RSC-005
-  (upstream issue not yet filed).
+  ([w3c/epubcheck#1776](https://github.com/w3c/epubcheck/issues/1776)).
 - **EPUB 3: `itemtype` or `itemref` without `itemscope`, and `itemid` without
   both, are RSC-005.** HTML § 5.2.2 has a "must not" for each, and EPUB 3.3
   § 6.1.2 holds XHTML content documents to HTML's conformance criteria.
-  epubcheck 5.4.0 is silent (upstream issue not yet filed).
+  epubcheck 5.4.0 is silent ([w3c/epubcheck#1775](https://github.com/w3c/epubcheck/issues/1775)).
 - **SPEC-004 and SPEC-005: "version needed to extract" other than 10, 20 or
   45 in a local file header, and a file name over 255 bytes.** EPUB 3.3
-  §§ 4.3.2 and 4.2.3, OCF 2.0.1 §§ 4 and 3.3. epubcheck 5.4.0 checks neither.
+  §§ 4.3.2 and 4.2.3, OCF 2.0.1 §§ 4 and 3.3. epubcheck 5.4.0 checks neither
+  ([w3c/epubcheck#1777](https://github.com/w3c/epubcheck/issues/1777)).
 - **EPUB 2: `container version` must be `1.0`,** and `META-INF/manifest.xml`,
   `metadata.xml` and `rights.xml` follow OCF 2.0.1 §§ 3.5.1–3.5.6 (ODF manifest
   root, namespace-qualified elements, well-formed). epubcheck 5.4.0 takes any
-  `version` at EPUB 2 and does not check these rules for the other three.
+  `version` at EPUB 2 and does not check these rules for the other three
+  ([w3c/epubcheck#1777](https://github.com/w3c/epubcheck/issues/1777)).
+- **EPUB 3: a prefix mapped to `http://idpf.org/epub/vocab/structure/#` is
+  OPF-007b,** as one mapped to the `www` spelling already was. EPUB 3.4
+  § 7.4.3.2 gives this URL for the Structural Semantics Vocabulary, and
+  § 5.3.4 forbids mapping a prefix to a default vocabulary. epubcheck 5.4.0
+  checks only the `www` spelling.
+- **SPEC-006: the manifest lists the `mimetype` file** (EPUB 3.3 § 4.2.2,
+  "MUST NOT be listed in the manifest"). epubcheck 5.4.0 gives only USAGE
+  OPF-097.
 - **EPUB 3: one `media:duration` per publication and per overlay, and
   `media:active-class` is a class name, not a selector** (D.8.2 with D.2;
-  § 9.3.4). epubcheck 5.4.0 checks neither.
+  § 9.3.4). epubcheck 5.4.0 checks neither ([w3c/epubcheck#1778](https://github.com/w3c/epubcheck/issues/1778)).
 
 ## What it declines to do
 

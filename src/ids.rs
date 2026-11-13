@@ -416,6 +416,11 @@ pub const SPEC_003: &str = "SPEC-003"; // OPF 2.0.1 §2.4.1.2: the NCX item carr
 // epubcheck 5.4.0 has neither check.
 pub const SPEC_004: &str = "SPEC-004"; // EPUB 3.3 §4.3.2: "version needed to extract" is not 10, 20 or 45 (error)
 pub const SPEC_005: &str = "SPEC-005"; // EPUB 3.3 §4.2.3: a file name exceeds 255 bytes (error)
+// SPEC-006: the manifest lists the `mimetype` file. EPUB 3.3 § 4.2.2: "Files
+// in the META-INF directory and the mimetype file are not publication
+// resources so MUST NOT be listed in the manifest". The META-INF half is
+// epubcheck's PKG-025; epubcheck 5.4.0 has no check for `mimetype`.
+pub const SPEC_006: &str = "SPEC-006"; // EPUB 3.3 §4.2.2: the manifest lists the mimetype file (error)
 
 // --- Resource limits (epubveri-owned; see the module note) ---
 //

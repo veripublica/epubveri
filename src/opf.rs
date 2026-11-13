@@ -2754,12 +2754,16 @@ const DEFAULT_VOCAB_URIS: &[&str] = &[
 /// at `OPSHandler30`:79 and `OverlayHandler`:37).
 ///
 /// EPUB 3.3 D.1.3 forbids assigning a prefix to "the URLs associated with
-/// these vocabularies", but neither it nor C.2 nor SSV 1.1 states the URL
-/// for the Structural Semantics Vocabulary (read 2026-11-13). The
-/// specification is silent on the spelling, so epubcheck's is the default.
-/// `http://idpf.org/…` without `www` is therefore not on the list: we cannot
-/// cite a clause that makes it the default vocabulary.
-const DEFAULT_VOCAB_URIS_CONTENT: &[&str] = &["http://www.idpf.org/epub/vocab/structure/#"];
+/// these vocabularies" but states no URL for this one. EPUB 3.4 does
+/// (§ 7.4.3.2, CRD 2026-11-13): "The prefix URL for referencing its
+/// properties is `http://idpf.org/epub/vocab/structure/#`", without `www`,
+/// and keeps the MUST NOT (§ 5.3.4). So both spellings are on the list: the
+/// 3.4 one by its clause (epubcheck 5.4.0 misses it), the `www` one as
+/// epubcheck's default, which 3.3's silence leaves in place.
+const DEFAULT_VOCAB_URIS_CONTENT: &[&str] = &[
+    "http://idpf.org/epub/vocab/structure/#",
+    "http://www.idpf.org/epub/vocab/structure/#",
+];
 
 impl PrefixContext {
     /// The URLs a prefix must not be mapped to in this context (OPF-007b).
@@ -7453,6 +7457,19 @@ fn check_text(
                     name.as_str(),
                 );
             }
+        }
+        // SPEC-006: the other half of the same sentence (EPUB 3.3 § 4.2.2),
+        // "the mimetype file … MUST NOT be listed in the manifest". The
+        // reserved name is the root `mimetype` only; one in a subdirectory is
+        // an ordinary file. epubcheck 5.4.0 gives only USAGE OPF-097.
+        if declared.contains("mimetype") {
+            report.push_at(
+                crate::ids::SPEC_006,
+                Severity::Error,
+                "the mimetype file is listed in the manifest; it is not a publication resource"
+                    .to_string(),
+                opf_path,
+            );
         }
     }
 
@@ -31690,6 +31707,43 @@ mod tests {
     }
 
     #[test]
+    fn the_mimetype_file_listed_in_the_manifest_is_spec_006() {
+        // EPUB 3.3 § 4.2.2: "the mimetype file … MUST NOT be listed in the
+        // manifest". Only the root `mimetype`; the reserved name does not
+        // reach into subdirectories.
+        let ids = |ver: &str, href: &str| {
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{ver}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier>
+    <dc:title>T</dc:title><dc:language>en</dc:language>
+    <meta property="dcterms:modified">2020-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="m" href="{href}" media-type="text/plain"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            );
+            crate::validate_bytes(epub_with_opf(
+                Some(&opf),
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>C</title></head><body><p>Hi</p></body></html>"#,
+            ))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .collect::<Vec<_>>()
+        };
+        let spec_006 = |v: Vec<&str>| v.iter().filter(|&&i| i == crate::ids::SPEC_006).count();
+        assert_eq!(spec_006(ids("3.0", "../mimetype")), 1);
+        assert_eq!(spec_006(ids("3.0", "meta.xml")), 0);
+    }
+
+    #[test]
     fn deprecated_link_rel_keyword_is_warned_as_opf_086() {
         // A legacy `*-record` metadata link (superseded by `record` +
         // `properties`) draws a warning-level OPF-086, matching epubcheck's
@@ -32177,6 +32231,10 @@ mod tests {
         };
         assert!(
             ids("s: http://www.idpf.org/epub/vocab/structure/#").contains(&crate::ids::OPF_007B)
+        );
+        assert!(
+            ids("s: http://idpf.org/epub/vocab/structure/#").contains(&crate::ids::OPF_007B),
+            "EPUB 3.4 § 7.4.3.2 spells it without www"
         );
         assert!(
             !ids("m: http://idpf.org/epub/vocab/package/meta/#").contains(&crate::ids::OPF_007B),

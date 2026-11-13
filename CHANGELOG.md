@@ -8,6 +8,22 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **EPUB 3: mapping a prefix to `http://idpf.org/epub/vocab/structure/#`
+  is OPF-007b.** EPUB 3.4 § 7.4.3.2 states the Structural Semantics
+  Vocabulary's URL for the first time, without `www`, and § 5.3.4 forbids
+  mapping a prefix to a default vocabulary. We matched only epubcheck's
+  spelling, `http://www.idpf.org/epub/vocab/structure/#`, which still
+  draws it too. epubcheck 5.4.0 misses the 3.4 spelling.
+- **EPUB 3: the manifest listing the `mimetype` file is the new SPEC-006**
+  (error). EPUB 3.3 § 4.2.2: "Files in the META-INF directory and the
+  mimetype file are not publication resources so MUST NOT be listed in the
+  manifest". The META-INF half was already PKG-025; epubcheck 5.4.0 gives
+  only USAGE OPF-097 for `mimetype`.
+
 ## [0.42.0] - 2026-11-13
 
 ### Fixed
