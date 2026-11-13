@@ -96,7 +96,8 @@ Each line is a place where epubveri follows the specification and epubcheck
   OPS 2.0.1 § 1.4.1.2 say it again. epubcheck 5.4.0 grades encoding without
   the version, so a UTF-16 XHTML document is HTM-058 there and any other
   UTF-16 XML file RSC-027. The same holds for a stylesheet with a byte order
-  mark (OPS 2.0.1 § 1.4.1.5), which epubcheck 5.4.0 gives CSS-003.
+  mark (OPS 2.0.1 § 1.4.1.5), which epubcheck 5.4.0 gives CSS-003
+  ([w3c/epubcheck#1772](https://github.com/w3c/epubcheck/issues/1772)).
 - **A fixed-layout viewport `width` or `height` of `0` is HTM-057.** EPUB
   3.3 § 8.2.2.6: each "MUST have as its value a positive number [css2]".
   epubcheck 5.4.0's pattern accepts zero
@@ -117,7 +118,7 @@ Each line is a place where epubveri follows the specification and epubcheck
   `unicode`, `ucs-2`) becomes UTF-8. A declaration in single quotes or
   with two spaces is no declaration. All of these pass EPUB 3.3 § 6.3.1.2.
   epubcheck 5.4.0 reports CSS-004 for each, and CSS-003 with CSS-008 for
-  `"utf-16"` (upstream issue pending, filed by epub-test-books).
+  `"utf-16"` ([w3c/epubcheck#1770](https://github.com/w3c/epubcheck/issues/1770)).
 - **SPEC-001 (error): `encryption.xml` declares encrypted a file that must
   never be.** That is `mimetype`, the six `META-INF` files, or a package
   document: EPUB 3.3 § 4.2.6.3.2.1, OCF 2.0.1 § 3.5.2. epubcheck 5.4.0 does
@@ -134,11 +135,17 @@ Each line is a place where epubveri follows the specification and epubcheck
   forbid `|`, controls or private use, and lets two names differ only by
   normalization; § 3.5.1 says only one package rootfile SHOULD be included,
   so a second is a PKG-013 warning. epubcheck 5.4.0 applies EPUB 3.3's rules
-  (upstream issue pending, drafted by epub-test-books).
+  ([w3c/epubcheck#1771](https://github.com/w3c/epubcheck/issues/1771)).
 - **EPUB 3: `dir` is matched as HTML matches an enumerated attribute,** ASCII
   case-insensitive and unpadded (HTML § 2.3.3), and `<bdo dir="auto">` is
   RSC-005 (§ 4.5.25). So `dir=" rtl"` is RSC-005 too. epubcheck 5.4.0
   accepts both ([w3c/epubcheck#1769](https://github.com/w3c/epubcheck/issues/1769)).
+- **EPUB 3: a `<script type="module">` is scripted content.** EPUB 3.3
+  § 6.3.2.1 excludes only data blocks, and HTML 4.12.1 does not make a module
+  script one, so it needs the `scripted` property (OPF-014 without it, no
+  OPF-015 with it). epubcheck 5.4.0 asks only for a JavaScript media type, so
+  it reports OPF-015 on the declared case and nothing on the other
+  ([w3c/epubcheck#1773](https://github.com/w3c/epubcheck/issues/1773)).
 
 ## What it declines to do
 

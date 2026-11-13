@@ -1285,17 +1285,12 @@ fn media_by_path(items: &ManifestItems, items_by_path: &ItemsByPath) -> MediaByP
 /// A comment at the NCX site used to say a dangling fragment into such a
 /// document "draws nothing there". That was measured for RSC-012 and true;
 /// the conclusion was not, because nobody had looked for the other id.
-/// The media types that make a `<script>` javascript, mirroring epubcheck's
+/// The media types that are JavaScript, mirroring epubcheck's
 /// `OPFChecker.isScriptType` — sixteen spellings, most of them historical.
-///
-/// **`module` is deliberately absent, and it is the whole reason this list is
-/// spelled out rather than guessed.** `type="module"` is an HTML keyword, not
-/// a media type, so epubcheck's `checkScript` does not reach
-/// `processJavascript` for it and never requires the `scripted` property —
-/// measured against 5.4.0's `foreign-exempt-xhtml-script-module-valid`, which
-/// declares no `scripted` and is expected to be clean. We used to mark it
-/// scripted and to omit the legacy javascript spellings, so a `text/ecmascript`
-/// script drew OPF-015 ("declared but not needed") on a book that needs it.
+/// They are also HTML's "JavaScript MIME type essence" strings, the same
+/// sixteen. This is a *media type* list (a manifest item, an SVG script's
+/// `type`); whether an HTML `<script type>` is scripting is
+/// [`is_html_scripting_type`]'s question, which adds HTML's keywords.
 pub(crate) fn is_script_media_type(t: &str) -> bool {
     const TYPES: [&str; 16] = [
         "application/javascript",
@@ -1316,6 +1311,34 @@ pub(crate) fn is_script_media_type(t: &str) -> bool {
         "text/x-javascript",
     ];
     TYPES.iter().any(|k| t.eq_ignore_ascii_case(k))
+}
+
+/// Whether an HTML `<script>` whose `type` attribute is `t` (empty when
+/// absent) is scripting rather than a data block.
+///
+/// EPUB 3.3 §6.3.2.1: "When an HTML script element contains a data block, it
+/// does not represent scripted content." HTML 4.12.1 makes a script a data
+/// block only for "any other value" than the classic, `module`, `importmap`
+/// and `speculationrules` cases. A module script is JavaScript that runs, so
+/// it is scripting. The matching is HTML's ("prepare the script element"):
+/// the JavaScript check (step 11) strips leading and trailing ASCII
+/// whitespace, and the `module` check (step 12) compares the raw value ASCII
+/// case-insensitively, so `" module"` is a data block.
+///
+/// **`importmap` and `speculationrules` are left out on purpose.** They are
+/// not data blocks, but neither runs any code, and §6.3.2.1 asks whether the
+/// document "contains scripting"; that they are scripting is not true in
+/// every case, so they stay where epubcheck has them (its
+/// `foreign-xhtml-script-importmap-block-valid` is clean).
+///
+/// **A departure from epubcheck**, whose `checkScript` asks only for a media
+/// type and so treats `type="module"` as no scripting at all: it reports
+/// OPF-015 on a module script that declares `scripted` and misses OPF-014 on
+/// one that does not (w3c/epubcheck#1773). We followed it until 0.41.0.
+pub(crate) fn is_html_scripting_type(t: &str) -> bool {
+    t.is_empty()
+        || is_script_media_type(t.trim_matches(|c: char| c.is_ascii_whitespace()))
+        || t.eq_ignore_ascii_case("module")
 }
 
 /// The severity `missing_fragment_id`'s answer carries. **RSC-012 is an
@@ -11906,7 +11929,13 @@ fn check_text(
             }
             if node.tag_name().name() == "script" {
                 let script_type = node.attr_no_ns("type").unwrap_or("");
-                if script_type.is_empty() || is_script_media_type(script_type) {
+                let scripting =
+                    if node.tag_name().namespace() == Some("http://www.w3.org/1999/xhtml") {
+                        is_html_scripting_type(script_type)
+                    } else {
+                        script_type.is_empty() || is_script_media_type(script_type)
+                    };
+                if scripting {
                     has_script.get_or_insert(node);
                 }
             }
@@ -21460,6 +21489,42 @@ mod tests {
     #[test]
     fn form_element_is_scripted() {
         assert!(is_detected_scripted("<form></form>"));
+    }
+
+    /// EPUB 3.3 §6.3.2.1 excludes only data blocks from scripted content,
+    /// and HTML 4.12.1 makes a script a data block only for a `type` that is
+    /// neither JavaScript nor one of its three keywords. epub-test-books'
+    /// `module-script` set (2026-11-13) had us report OPF-015 on a module
+    /// script that declared `scripted`, and nothing on one that did not.
+    #[test]
+    fn html_script_keywords_are_scripted_and_data_blocks_are_not() {
+        let s = |t: &str| format!("<script type=\"{t}\">let a = 1;</script><p>x</p>");
+        for t in [
+            "module",
+            "MODULE",
+            "text/javascript",
+            " text/javascript ",
+            "",
+        ] {
+            assert!(is_detected_scripted(&s(t)), "type={t:?} is scripting");
+        }
+        for t in ["application/json", "text/x-template", " module", "  "] {
+            assert!(!is_detected_scripted(&s(t)), "type={t:?} is a data block");
+        }
+        // Not data blocks, but they run no code: see `is_html_scripting_type`.
+        for t in ["importmap", "speculationrules"] {
+            assert!(!is_detected_scripted(&s(t)), "type={t:?} runs no code");
+        }
+        // The other direction: declared and used draws nothing.
+        let declared = crate::validate_bytes(epub_declaring_props("scripted", &s("module")));
+        assert!(
+            !declared
+                .messages
+                .iter()
+                .any(|m| m.id == crate::ids::OPF_015 || m.id == crate::ids::OPF_014),
+            "{:?}",
+            declared.messages
+        );
     }
 
     #[test]

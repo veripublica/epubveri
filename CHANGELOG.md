@@ -8,6 +8,20 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **EPUB 3: a `<script type="module">` is scripted content.** EPUB 3.3
+  § 6.3.2.1 excludes only data blocks from scripting, and HTML does not make
+  a module script one. A module script with the `scripted` property no longer
+  draws a wrong OPF-015, and one without it now draws OPF-014. `importmap`
+  and `speculationrules` are not data blocks either, but they run no code, so
+  they still draw neither finding. The JavaScript media types are now matched
+  with surrounding whitespace stripped, as HTML matches them. epubcheck 5.4.0
+  reports OPF-015 on a declared module script and misses the other case
+  (w3c/epubcheck#1773). No shelf book has a module script.
+
 ## [0.41.0] - 2026-11-13
 
 ### Changed
