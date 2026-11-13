@@ -3225,9 +3225,25 @@ fn check_prefix_usage(
         // defect, and the second invites the author to declare a prefix that
         // would not help. `metadata-meta-property-malformed-error.opf` is the
         // fixture; epubcheck's condition is `group(2).isEmpty() ||
-        // group(3).isEmpty()`, i.e. either half missing, and the empty-prefix
-        // half is the `prefix.is_empty()` test just below.
-        if local.is_empty() {
+        // group(3).isEmpty()`, i.e. either half missing.
+        //
+        // **The package document reports OPF-026 at its own call sites**
+        // (`meta` property and scheme, `link rel`, `properties`), each with
+        // its attribute's name; here it is the content document's and the
+        // overlay's `epub:type`, which epubcheck parses with the same
+        // `VocabUtil.parsePropertyList` (`OPSHandler30.checkType`,
+        // `OverlayHandler.checkType`). EPUB 3.3 D.1.2: "a property value
+        // that only consists of a prefix and colon is invalid".
+        if local.is_empty() || prefix.is_empty() {
+            if !matches!(ctx, PrefixContext::Package) {
+                report.push_at_pos(
+                    OPF_026,
+                    Severity::Error,
+                    format!("epub:type value '{tok}' is not well-formed"),
+                    path,
+                    Position::of(node),
+                );
+            }
             continue;
         }
         // `OPF-086c` on a *use*: epubcheck asks this at `VocabUtil`:123,
@@ -5601,6 +5617,20 @@ fn check_text(
             );
         }
         if let Some(v) = n.attr_no_ns("properties") {
+            // `item`, `itemref` and `link` properties go through the same
+            // parser as `rel` (`OPFHandler30`:491, 527, 544), OPF-026
+            // included.
+            if is_epub3 {
+                for token in v.xml_tokens().filter(|t| !vocab_property_is_well_formed(t)) {
+                    report.push_at_pos(
+                        OPF_026,
+                        Severity::Error,
+                        format!("properties value '{token}' is not well-formed"),
+                        opf_path,
+                        Position::of(n),
+                    );
+                }
+            }
             check_prefix_usage(
                 v,
                 &declared_prefixes,
@@ -12739,6 +12769,39 @@ fn check_text(
         let Ok(d) = parse_xml(&text) else { continue };
         let findings_start = report.messages.len();
         let dir = parent_dir(doc_path);
+        // **The root must be an SVG `svg` element** (RSC-005). EPUB 3.3
+        // § 6.2.2 asks an SVG content document to be an SVG document, and
+        // SVG 2 § 2.4.5 has a conforming one only when "its root element is
+        // an 'svg' element" — in the SVG namespace, which is what makes it
+        // one. epubcheck's grammar starts at `svg`, so a root `<svg>` with no
+        // `xmlns`, or a `<g>`, is RSC-005 there. Nothing asked here; the
+        // checks below walk whatever root they are given. EPUB 3 only: the
+        // EPUB 2 route is an NVDL with its own reading, not measured.
+        // epub-test-books, `svg-no-namespace` and `svg-root-not-svg`.
+        let root = d.root_element();
+        if is_epub3
+            && !(root.tag_name().name() == "svg"
+                && root.tag_name().namespace() == Some(crate::svg::SVG_NS))
+        {
+            let ns = root.tag_name().namespace().unwrap_or("");
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!(
+                    "the root element of an SVG document must be \"svg\" in the SVG namespace, not \"{}\"{}",
+                    root.tag_name().name(),
+                    if ns.is_empty() {
+                        " in no namespace".to_string()
+                    } else {
+                        format!(" in \"{ns}\"")
+                    }
+                ),
+                doc_path.clone(),
+                root,
+                "svg.root_not_svg",
+                vec![root.tag_name().name().to_string(), ns.to_string()],
+            );
+        }
         let declared_prefixes =
             attr_ns_node(d.root_element(), "http://www.idpf.org/2007/ops", "prefix")
                 .map(|p| {
@@ -31732,6 +31795,94 @@ mod tests {
                 r#"<section epub:type="index"><h1>Idx</h1></section>"#
             )),
             "a declared index with no index-entry-list must still be flagged"
+        );
+    }
+
+    /// epub-test-books' six XHTML-extension sets that epubcheck reports and
+    /// we did not (2026-11-13), one assertion per set, plus the package
+    /// `properties` attribute, which goes through the same parser.
+    #[test]
+    fn xhtml_extension_sets_from_epub_test_books() {
+        use crate::ids::{OPF_026, OPF_028, RSC_005};
+        let errors = |bytes: Vec<u8>| -> Vec<&'static str> {
+            crate::validate_bytes(bytes)
+                .messages
+                .iter()
+                .filter(|m| {
+                    matches!(
+                        m.severity,
+                        crate::report::Severity::Fatal
+                            | crate::report::Severity::Error
+                            | crate::report::Severity::Warning
+                    )
+                })
+                .map(|m| m.id)
+                .collect()
+        };
+        let xhtml = |html_attrs: &str, body: &str| {
+            epub_with_ch1(&format!(
+                "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n\
+                 <html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:epub=\"http://www.idpf.org/2007/ops\"{html_attrs}>\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            ))
+        };
+        // C.2: "one or more whitespace-separated terms".
+        assert_eq!(errors(xhtml("", "<p epub:type=\"\">x</p>")), [RSC_005]);
+        assert_eq!(errors(xhtml("", "<p epub:type=\"  \">x</p>")), [RSC_005]);
+        // D.1.2: a prefix and a colon alone is invalid; OPF-026 and no OPF-028.
+        assert_eq!(
+            errors(xhtml(
+                " epub:prefix=\"foo: http://example.org/\"",
+                "<p epub:type=\"foo:\">x</p>"
+            )),
+            [OPF_026]
+        );
+        assert_eq!(errors(xhtml("", "<p epub:type=\":x\">x</p>")), [OPF_026]);
+        assert!(!errors(xhtml("", "<p epub:type=\"foo:\">x</p>")).contains(&OPF_028));
+        // RDFa Core § 5: `NCName ':' ' '+ URI`.
+        assert_eq!(
+            errors(xhtml(
+                " prefix=\"dc http://purl.org/dc/terms/\"",
+                "<p>x</p>"
+            )),
+            [RSC_005]
+        );
+        assert!(
+            errors(xhtml(
+                " prefix=\"dc: http://purl.org/dc/terms/\"",
+                "<p>x</p>"
+            ))
+            .is_empty()
+        );
+        // SVG 2 § 2.4.5: the root is an SVG `svg` element.
+        assert_eq!(
+            errors(epub_with_svg_spine(
+                "<svg version=\"1.1\" viewBox=\"0 0 10 10\"><rect width=\"5\" height=\"5\"/></svg>"
+            ))
+            .first()
+            .copied(),
+            Some(RSC_005)
+        );
+        assert_eq!(
+            errors(epub_with_svg_spine(
+                "<g xmlns=\"http://www.w3.org/2000/svg\"><rect width=\"5\" height=\"5\"/></g>"
+            ))
+            .first()
+            .copied(),
+            Some(RSC_005)
+        );
+        assert!(
+            errors(epub_with_svg_spine(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\" version=\"1.1\" viewBox=\"0 0 10 10\">\
+                 <rect width=\"5\" height=\"5\"/></svg>"
+            ))
+            .is_empty()
+        );
+        // The package's `properties` attribute: same parser, same OPF-026.
+        assert!(
+            errors(epub_declaring_props("foo:", "<p>x</p>")).contains(&OPF_026),
+            "properties=\"foo:\""
         );
     }
 

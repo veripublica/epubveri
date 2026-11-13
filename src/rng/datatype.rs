@@ -57,6 +57,18 @@ pub enum Datatype {
     /// invalid and the second as valid). Named by us: epub-test-books,
     /// `html-dir-uppercase`, where epubcheck 5.4.0 accepts both.
     HtmlDir,
+    /// RDFa's `prefix` attribute. RDFa Core 1.1 § 5: "a white space
+    /// separated list of prefix-name IRI pairs of the form `NCName ':' ' '+
+    /// xsd:anyURI`", with § 5.2's white space (`#x20 | #x9 | #xD | #xA`)
+    /// between pairs and leading or trailing white space ignored;
+    /// epubcheck's `rdfa.rnc` also takes the empty string. So
+    /// `prefix="dc http://purl.org/dc/terms/"` (no colon), `dc:http://…` (no
+    /// space) and a tab after the colon are invalid. Read raw, not collapsed,
+    /// because only U+0020 may follow the colon. **epubcheck's pattern asks
+    /// for exactly one space there; RDFa's `' '+` allows more, so we do**
+    /// (measured: 5.4.0 gives RSC-005 for `dc:  http://…`). Named by us.
+    /// epub-test-books, `rdfa-prefix-no-colon`.
+    RdfaPrefix,
     /// A media type as the container schema reads one: `datatype.mimetype`,
     /// `xsd:string { pattern = '[a-zA-Z0-9!#$&+\-\^_]+/[a-zA-Z0-9!#$&+\-\^_]+.*' }`.
     /// An `xsd:string` keeps its whitespace, so a padded value fails. Named
@@ -112,6 +124,7 @@ impl Datatype {
             "htmlStyleType" => HtmlStyleType,
             "htmlScriptCharset" => HtmlScriptCharset,
             "htmlDir" => HtmlDir,
+            "rdfaPrefix" => RdfaPrefix,
             "mediaType" => MediaType,
             "renditionMedia" => RenditionMedia,
             "IDREF" => IdRef,
@@ -134,7 +147,10 @@ impl Datatype {
     /// Apply the XSD whiteSpace facet for this type.
     fn normalize(&self, s: &str) -> String {
         match self {
-            Datatype::String | Datatype::MediaType | Datatype::RenditionMedia => s.to_string(),
+            Datatype::String
+            | Datatype::MediaType
+            | Datatype::RenditionMedia
+            | Datatype::RdfaPrefix => s.to_string(),
             Datatype::NormalizedString => s
                 .chars()
                 .map(|c| {
@@ -191,6 +207,7 @@ impl Datatype {
             Datatype::HtmlDir => ["ltr", "rtl", "auto"]
                 .iter()
                 .any(|k| raw.eq_ignore_ascii_case(k)),
+            Datatype::RdfaPrefix => is_rdfa_prefix(&s),
             Datatype::IdRefs => !s.is_empty() && s.split(' ').all(is_ncname),
             Datatype::Language => is_language(&s),
             Datatype::Boolean => matches!(s.as_str(), "true" | "false" | "0" | "1"),
@@ -656,6 +673,30 @@ fn is_media_type(s: &str) -> bool {
     !ty.is_empty() && ty.chars().all(tchar) && sub_len > 0 && !rest.contains(['\n', '\r'])
 }
 
+/// [`Datatype::RdfaPrefix`] on the raw value.
+fn is_rdfa_prefix(s: &str) -> bool {
+    let ws = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    let mut rest = s.trim_matches(ws);
+    while !rest.is_empty() {
+        let Some((name, after)) = rest.split_once(':') else {
+            return false;
+        };
+        if !is_ncname(name) {
+            return false;
+        }
+        let after_spaces = after.trim_start_matches(' ');
+        if after_spaces.len() == after.len() {
+            return false;
+        }
+        let iri_end = after_spaces.find(ws).unwrap_or(after_spaces.len());
+        if iri_end == 0 {
+            return false;
+        }
+        rest = after_spaces[iri_end..].trim_start_matches(ws);
+    }
+    true
+}
+
 /// The Multiple-Rendition media-query pattern, matched whole:
 ///
 /// ```text
@@ -745,6 +786,31 @@ mod container_datatype_tests {
 
     /// Each value measured against epubcheck 5.4.0 as `rendition:media` on a
     /// single-rendition book: accepted or RSC-005.
+    #[test]
+    fn rdfa_prefix_is_a_list_of_ncname_colon_uri_pairs() {
+        for ok in [
+            "",
+            "dc: http://purl.org/dc/terms/",
+            "  dc: http://a/  foaf:   http://b/ ",
+            "foaf: http://xmlns.com/foaf/0.1/",
+            "dc: http://a/\n\tfoaf: http://b/",
+        ] {
+            assert!(Datatype::RdfaPrefix.allows(ok), "{ok:?}");
+        }
+        for bad in [
+            "dc http://purl.org/dc/terms/",
+            "dc:http://purl.org/dc/terms/",
+            "dc:",
+            ": http://a/",
+            "1dc: http://a/",
+            "dc: http://a/ foaf:",
+            "dc:\thttp://a/",
+            "dc :http://a/",
+        ] {
+            assert!(!Datatype::RdfaPrefix.allows(bad), "{bad:?}");
+        }
+    }
+
     #[test]
     fn rendition_media_matches_the_specifications_pattern() {
         let dt = Datatype::from("", "renditionMedia");

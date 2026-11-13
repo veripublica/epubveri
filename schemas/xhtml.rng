@@ -938,7 +938,8 @@
          from the namespaced `epub:prefix` (schema/30/mod/epub-prefix-
          attr.rnc), which is separate, HTML-only-on-<html>, and not yet
          added (#35 territory - epub: namespaced attribute family). -->
-    <optional><attribute name="prefix"><data type="string"/></attribute></optional>
+    <!-- Typed since 2026-11-13 (RDFa Core 1.1 § 5): see `RdfaPrefix`. -->
+    <optional><attribute name="prefix"><data type="rdfaPrefix"/></attribute></optional>
 
     <!-- #34 slice C: the rest of RDFA 1.1's global attribute set
          (mod/html5/rdfa.rnc, via epubcheck's epub-xhtml-inc.rnc). Checked
@@ -1202,7 +1203,7 @@
     <ref name="globalAttrsCore"/>
     <optional>
       <attribute name="epub:type">
-        <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>
+        <list><oneOrMore><data type="NMTOKEN"/></oneOrMore></list>
       </attribute>
     </optional>
     <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
@@ -1213,7 +1214,7 @@
     <ref name="globalAttrsCoreNoRole"/>
     <optional>
       <attribute name="epub:type">
-        <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>
+        <list><oneOrMore><data type="NMTOKEN"/></oneOrMore></list>
       </attribute>
     </optional>
     <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>
@@ -1224,7 +1225,7 @@
     <ref name="globalAttrsCoreBodyRole"/>
     <optional>
       <attribute name="epub:type">
-        <list><zeroOrMore><data type="NMTOKEN"/></zeroOrMore></list>
+        <list><oneOrMore><data type="NMTOKEN"/></oneOrMore></list>
       </attribute>
     </optional>
     <optional><attribute name="epub:trigger"><data type="token"/></attribute></optional>

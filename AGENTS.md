@@ -146,6 +146,10 @@ Each line is a place where epubveri follows the specification and epubcheck
   OPF-015 with it). epubcheck 5.4.0 asks only for a JavaScript media type, so
   it reports OPF-015 on the declared case and nothing on the other
   ([w3c/epubcheck#1773](https://github.com/w3c/epubcheck/issues/1773)).
+- **An RDFa `prefix` with more than one space after the colon passes**
+  (`dc:  http://…`). RDFa Core 1.1 § 5 gives `NCName ':' ' '+ xsd:anyURI`;
+  epubcheck 5.4.0's pattern asks for exactly one space and reports RSC-005
+  (upstream issue not yet filed).
 
 ## What it declines to do
 

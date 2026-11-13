@@ -21,6 +21,19 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   with surrounding whitespace stripped, as HTML matches them. epubcheck 5.4.0
   reports OPF-015 on a declared module script and misses the other case
   (w3c/epubcheck#1773). No shelf book has a module script.
+- **EPUB 3: five content-document faults epubcheck reports and we missed,**
+  each found by an epub-test-books set:
+  - an empty or all-whitespace `epub:type` is RSC-005 (EPUB 3.3 C.2: "one or
+    more whitespace-separated terms");
+  - an `epub:type` term that is only a prefix and a colon (`foo:`), or a colon
+    and a name (`:x`), is OPF-026 (D.1.2), as it already was in the package
+    document. The package's `properties` attribute now draws it too;
+  - an RDFa `prefix` that is not a list of `NCName ':' ' '+ IRI` pairs is
+    RSC-005 (RDFa Core 1.1 § 5), such as `prefix="dc http://…"`;
+  - a standalone SVG whose root is not an `svg` element in the SVG namespace
+    is RSC-005 (SVG 2 § 2.4.5), such as an `<svg>` with no `xmlns`, or a `<g>`.
+
+  No shelf book draws any of them.
 
 ## [0.41.0] - 2026-11-13
 
