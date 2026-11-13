@@ -341,41 +341,50 @@ use out of proportion to the input counts as a security problem (`SECURITY.md`).
 
 ## Measurements
 
-**epubcheck's own test suite,** epubveri 0.36.0 against epubcheck 5.4.0, 1086
+**epubcheck's own test suite,** epubveri 0.43.0 against epubcheck 5.4.0, 1086
 scenarios (each run prints what it skips, and why):
 
 | | |
 |---|---|
-| Should-error cases flagged | 548 of 548 |
-| Exact message ID | 687 of 687 |
-| False positives on should-be-clean cases | 0 of 368 |
-| Wrong severity | 0 of 727 |
+| Should-error cases flagged | 542 of 547 |
+| Exact message ID | 686 of 686 |
+| False positives on should-be-clean cases | 1 of 369 |
+| Wrong severity | 6 of 726 |
 
-These fixtures are synthetic and say nothing about real books. One scenario is a
-partial hit: epubcheck adds CHK-008 there, announcing a failure of its own checker
+Every miss and every gap above is a deliberate difference listed under "Known
+differences from epubcheck": a CSS parse error is CSS-008 at usage in EPUB 3
+(four misses, five severities), a second package document in EPUB 2 is a PKG-013
+warning (one miss, one severity), and the clean case is a document with
+`<bdo dir="auto">`, which HTML forbids. These fixtures are synthetic and say
+nothing about real books. One scenario is a partial hit: epubcheck adds CHK-008
+there, announcing a failure of its own checker
 ([w3c/epubcheck#1735](https://github.com/w3c/epubcheck/issues/1735)).
 
 **Real books,** the same versions, 562 books on a private shelf, compared by
 message ID with `-u`:
 
-- 512 books report exactly the same set of IDs.
-- No ID is reported by epubveri alone.
-- 49 of the other 50 are EPUB 3 books whose `nav` carries `aria-label` or
+- 503 books report exactly the same set of IDs.
+- 49 of the other 59 are EPUB 3 books whose `nav` carries `aria-label` or
   `aria-labelledby`, which epubcheck 5.4.0 rejects
   ([w3c/epubcheck#1726](https://github.com/w3c/epubcheck/issues/1726), closed
   upstream). epubveri accepts it.
+- 9 report an ID epubveri alone has, each a rule epubcheck lacks: SPEC-002 in 7
+  EPUB 2 books (OPF 2.0.1 § 2.3.1.1), which epubcheck rejects on other grounds,
+  and RSC-005 for an EPUB 3 `img` without `alt` in 2 books, which epubcheck
+  accepts.
 - The last one is a deliberate difference about entity handling, in a document
   epubcheck stops reading.
-- Where both report an ID a different number of times (225 cases), epubveri's
-  count is always the lower.
+- Where both report an ID a different number of times (221 cases), epubveri's
+  count is the lower, except in two books where the surplus is exactly those
+  `img` errors.
 
 **Coverage,** per message ID against epubcheck 5.4.0: 217 of 218 live checks, 214
 in full and 3 in part. `docs/COVERAGE.md` is generated, so regenerate it rather
 than editing it.
 
-**Speed,** epubveri 0.36.0 against epubcheck 5.4.0 on one machine
-(`docs/BENCHMARK.md`, with the method): a median book took 0.023 s against 2.01 s,
-and the shelf 19 s against about 19 minutes. Each release is also checked by
+**Speed,** epubveri 0.43.0 against epubcheck 5.4.0 on one machine
+(`docs/BENCHMARK.md`, with the method): a median book took 0.023 s against 1.96 s,
+and the shelf 18.5 s against about 19 minutes. Each release is also checked by
 `--bin speed` against the previous one.
 
 ## Repository layout
