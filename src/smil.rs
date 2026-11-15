@@ -34,6 +34,8 @@ pub(crate) type Targets = Vec<(String, String)>;
 pub(crate) struct TextLinks {
     pub fragments: Targets,
     pub srcs: Vec<String>,
+    /// `--advisory`, carried down the walk for ADV-025.
+    pub advisory: bool,
 }
 
 const CORE_AUDIO_TYPES: [&str; 2] = ["audio/mpeg", "audio/mp4"];
@@ -50,15 +52,40 @@ const SMIL_NS: &str = "http://www.w3.org/ns/SMIL";
 /// same shape as the NCX `<content src>` fragment check). Both need the
 /// whole-package view (reading another file's DOM), so neither check can
 /// finish here.
+/// ADV-025 for a reference a lookup found only by percent-decoding it.
+/// Media overlays are EPUB 3 only, so there is no EPUB 2 half here; see
+/// `refspell.rs`.
+#[allow(clippy::too_many_arguments)]
+fn report_spelling(
+    report: &mut Report,
+    advisory: bool,
+    name_index: &HashMap<String, String>,
+    base_dir: &str,
+    href: &str,
+    key: &str,
+    smil_path: &str,
+    node: roxmltree::Node,
+) {
+    if let Some(entry) = name_index.get(key)
+        && let Some(f) = crate::refspell::check(true, advisory, base_dir, href, entry)
+    {
+        report.push_node(f.id, f.severity, f.text, smil_path, node, f.rule, f.params);
+    }
+}
+
 pub(crate) fn check(
     smil_xml: &str,
     smil_path: &str,
     base_dir: &str,
     name_index: &HashMap<String, String>,
     media_types: &HashMap<String, String>,
+    advisory: bool,
     report: &mut Report,
 ) -> (Targets, Targets, Vec<String>) {
-    let mut text = TextLinks::default();
+    let mut text = TextLinks {
+        advisory,
+        ..TextLinks::default()
+    };
     let mut textref_targets = Vec::new();
     let doc = match crate::ocf::parse_xml(smil_xml) {
         Ok(doc) => doc,
@@ -183,6 +210,16 @@ pub(crate) fn check(
             );
             continue;
         }
+        report_spelling(
+            report,
+            advisory,
+            name_index,
+            base_dir,
+            textref,
+            &resolved_nfc,
+            smil_path,
+            n,
+        );
         text.srcs.push(resolved_nfc.clone());
         if let Some(frag) = frag
             && !frag.is_empty()
@@ -459,7 +496,15 @@ fn check_container(
                         Vec::new(),
                     );
                 } else {
-                    check_audio(child, smil_path, base_dir, name_index, media_types, report);
+                    check_audio(
+                        child,
+                        smil_path,
+                        base_dir,
+                        name_index,
+                        media_types,
+                        text.advisory,
+                        report,
+                    );
                 }
             }
             (true, "seq") | (true, "par") => {
@@ -614,6 +659,16 @@ fn check_text(
         );
         return;
     }
+    report_spelling(
+        report,
+        text.advisory,
+        name_index,
+        base_dir,
+        src,
+        &resolved_nfc,
+        smil_path,
+        node,
+    );
     // **Two lists, because two questions.** `text_targets` answers "does
     // this fragment resolve, and to what kind of element", so it holds only
     // the targets that *have* a fragment. `text_srcs` answers "may an
@@ -673,6 +728,7 @@ fn check_audio(
     base_dir: &str,
     name_index: &HashMap<String, String>,
     media_types: &HashMap<String, String>,
+    advisory: bool,
     report: &mut Report,
 ) {
     let Some(src) = node.attr_no_ns("src") else {
@@ -705,16 +761,28 @@ fn check_audio(
             "smil.audio.missing_resource",
             vec![src.to_string()],
         );
-    } else if let Some(media_type) = media_types.get(&resolved_nfc)
-        && !CORE_AUDIO_TYPES.contains(&media_type.as_str())
-    {
-        report.push_at_pos(
-            MED_005,
-            Severity::Error,
-            format!("audio resource '{src}' is not a Core Media Type ({media_type})"),
+    } else {
+        report_spelling(
+            report,
+            advisory,
+            name_index,
+            base_dir,
+            src,
+            &resolved_nfc,
             smil_path,
-            Position::of(node),
+            node,
         );
+        if let Some(media_type) = media_types.get(&resolved_nfc)
+            && !CORE_AUDIO_TYPES.contains(&media_type.as_str())
+        {
+            report.push_at_pos(
+                MED_005,
+                Severity::Error,
+                format!("audio resource '{src}' is not a Core Media Type ({media_type})"),
+                smil_path,
+                Position::of(node),
+            );
+        }
     }
 
     for attr_name in ["clipBegin", "clipEnd"] {
@@ -881,6 +949,7 @@ mod tests {
             "OEBPS",
             name_index,
             media_types,
+            false,
             &mut report,
         );
         (report.messages.iter().map(|m| m.id).collect(), targets)
@@ -953,7 +1022,15 @@ mod tests {
                 r#"<smil xmlns="http://www.w3.org/ns/SMIL" xmlns:epub="http://www.idpf.org/2007/ops" {version}><body>{body}</body></smil>"#
             );
             let mut report = Report::new();
-            check(&smil, "content.smil", "OEBPS", &names, &types, &mut report);
+            check(
+                &smil,
+                "content.smil",
+                "OEBPS",
+                &names,
+                &types,
+                false,
+                &mut report,
+            );
             report
                 .messages
                 .iter()
@@ -1215,6 +1292,7 @@ mod tests {
             "OEBPS",
             &names,
             &HashMap::new(),
+            false,
             &mut report,
         );
         assert_eq!(
@@ -1249,6 +1327,7 @@ mod tests {
             "OEBPS",
             &names,
             &HashMap::new(),
+            false,
             &mut report,
         );
         let finding = report

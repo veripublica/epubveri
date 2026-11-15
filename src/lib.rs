@@ -40,6 +40,7 @@ pub mod ncx;
 pub mod ocf;
 pub mod opf;
 pub mod previews;
+pub(crate) mod refspell;
 pub mod regionnav;
 pub mod renditions;
 pub mod report;

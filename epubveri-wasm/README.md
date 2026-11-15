@@ -96,7 +96,8 @@ no specification requires, at `usage` severity:
   browsers drop the rule, and CSS a browser drops that epubcheck accepts: a pseudo-class
   such as `:hovr`, an at-rule such as `@medai`, an `@import` or `@namespace` after rules it
   must precede, a media feature such as `min-widht`, an `!important` inside a keyframe, a
-  value its property cannot take such as `font-style: bold`).
+  value its property cannot take such as `font-style: bold`, and a reference that names its
+  file only once it is percent-decoded, such as `Agatha%27nin.xhtml` for `Agatha'nin.xhtml`).
 
 It is **off by default**: leaving the argument out, or passing `false`/`undefined`,
 produces a byte-identical report, so existing two-argument callers are unaffected. It never

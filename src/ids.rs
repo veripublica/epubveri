@@ -255,6 +255,22 @@ pub const ADV_023: &str = "ADV-023"; // an !important declaration inside a keyfr
 // quirks mode, `css.value.invalid` is the rest. `params` is `[name, value]`, plus
 // the at-rule's name when in one. See docs/DECISIONS.md.
 pub const ADV_024: &str = "ADV-024"; // a declaration value its property or descriptor cannot take (usage)
+// ADV-025: a reference names its file only once it is percent-decoded, as
+// `Agatha%27nin.xhtml` names `Agatha'nin.xhtml`. Both tools find the file
+// that way and report nothing; a reading system that compares the URLs finds
+// two files (a Kobo counts the chapter twice: kepubverto, MobileRead 375668
+// #29). EPUB 3 compares under the URL Standard (§ 4.6), EPUB 2 asks only for a
+// percent-encoded reserved character (RFC 3986 § 2.2).
+//
+// **An advisory, not an error, on purpose** (owner, 2026-11-15). EPUB 3.3
+// § 4.2.5 reads as a MUST ("after parsing, be equal to the content URL of an
+// existing file"), but epubcheck's own test of that clause ("Allow
+// percent-encoded URLs", `@xref:sec-container-iri`) calls
+// `content%26001.xhtml` for `content&001.xhtml` valid, and the editors read
+// a file name's URL as its percent-encoding (w3c/epub-specs#2077). So the
+// two spellings name one file, and the verdict is epubcheck's. See
+// `refspell.rs` and docs/DECISIONS.md.
+pub const ADV_025: &str = "ADV-025"; // a reference names its file only once percent-decoded (usage)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

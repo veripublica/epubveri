@@ -267,7 +267,7 @@ Schematron files in `schemas/`. Searching `src/` alone misses the second.
 - **`ADV-*` (`spec-silent`):** no specification requires it, but the book is
   probably wrong. These never graduate.
   - ADV-001 to ADV-004, ADV-009 to ADV-012, ADV-014, ADV-015, ADV-017,
-    ADV-019 to ADV-024.
+    ADV-019 to ADV-025.
 
 `NEXT-*` (`spec-ahead`) is closed. Its rules are required by a specification,
 so since the verdict follows the specification they report without the flag:

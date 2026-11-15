@@ -86,7 +86,10 @@ OPTIONS:
                                      it; epubcheck reads it as a URL), a
                                      selector like #1a or p::before span
                                      whose shape CSS rejects (browsers drop
-                                     the rule; epubcheck accepts it), and
+                                     the rule; epubcheck accepts it), an
+                                     EPUB 2 reference that percent-encodes
+                                     a reserved character its file name
+                                     holds as it is (%27 for '), and
                                      CSS a browser drops that epubcheck
                                      accepts: a pseudo-class like :hovr, an
                                      at-rule like @medai, an @import or
@@ -922,7 +925,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            17,
+            18,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

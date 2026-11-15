@@ -8,6 +8,44 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **`--advisory`: a reference that names its file only once it is
+  percent-decoded (ADV-025).** `Agatha%27nin.xhtml` for the file
+  `Agatha'nin.xhtml` is found by epubveri and epubcheck alike, because
+  both decode before they look a file up, and neither said anything. A
+  reading system that compares the two URLs finds two files: a Kobo counts
+  such a chapter twice and opens a book at the wrong page (reported via
+  kepubverto on MobileRead). Usage severity, behind `--advisory`; no
+  verdict changes. The Sigil and calibre plugins pass `--advisory`, so
+  their users will see it.
+  - EPUB 3 compares the reference with the file's URL under the URL
+    Standard (§ 4.6), so `%27` for `'`, `%41` for `A` and lowercase hex
+    such as `%c4` for `%C4` are reported, while `%20` for a space and
+    `%C4%9F` for `ğ` are the same URL and are not. EPUB 2 reports only a
+    percent-encoded reserved character (RFC 3986 § 2.2); hex case and
+    encoded unreserved characters are equivalent there.
+  - Checked in the manifest, the NCX, the navigation document, content
+    document references (`href`, `src`, `srcset`, SVG `xlink:href`), the
+    guide, CSS `url()`, SVG documents, media overlays and dictionary search
+    key maps. Unicode normalization is left out: both sides are compared
+    NFC-normalized, as every other lookup is.
+  - `params` is `[reference as written, the file name it was found
+    under]`. Two rule keys: `url.reference.content_url_mismatch` (EPUB 3)
+    and `url.reference.reserved_character_encoded` (EPUB 2).
+  - **Why not an error.** EPUB 3.3 § 4.2.5 reads as a MUST: a reference,
+    "after parsing", must "be equal to the content URL of an existing
+    file". But epubcheck's own test of that clause ("Allow percent-encoded
+    URLs") calls `content%26001.xhtml` for the file `content&001.xhtml`
+    valid, and the spec's editors read a file name's URL as its
+    percent-encoding
+    ([w3c/epub-specs#2077](https://github.com/w3c/epub-specs/issues/2077)).
+    So the two spellings name one file, and the verdict stays epubcheck's.
+  - On 562 real books it fires in 4, all EPUB 2, 81 references in all;
+    without `--advisory` every book's output is byte-identical to 0.43.0.
+
 ## [0.43.0] - 2026-11-13
 
 ### Fixed

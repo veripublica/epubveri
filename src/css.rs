@@ -508,7 +508,16 @@ fn check_in(
                         "css.url.missing_resource",
                     );
                 }
-                (true, true) => {}
+                (true, true) => {
+                    // ADV-025: found only because the lookup
+                    // percent-decodes; see `refspell.rs`.
+                    if let Some(entry) = name_index.get(&resolved)
+                        && let Some(f) =
+                            crate::refspell::check(is_epub3, advisory, base_dir, &url, entry)
+                    {
+                        report.push_full(f.id, f.severity, f.text, css_path, pos, f.rule, f.params);
+                    }
+                }
             }
         }
     }

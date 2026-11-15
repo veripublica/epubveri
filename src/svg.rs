@@ -310,6 +310,7 @@ fn for_each_reference<'a>(
 /// family? **No** — measured, and this one is an error at both versions,
 /// because it is `ResourceReferencesChecker`'s question rather than the
 /// grammar's. One book per version.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn check_resource_references(
     svg_root: roxmltree::Node,
     path: &str,
@@ -317,6 +318,7 @@ pub(crate) fn check_resource_references(
     name_index: &std::collections::HashMap<String, String>,
     manifest_paths: &std::collections::HashSet<String>,
     is_epub3: bool,
+    advisory: bool,
     report: &mut Report,
 ) {
     use crate::opf::{is_external, nfc, resolve};
@@ -335,6 +337,14 @@ pub(crate) fn check_resource_references(
         // `checkUndeclaredReference`'s RSC-007 never sees it (probed one book
         // against 5.4.0, declared-and-missing vs undeclared-and-missing).
         if name_index.contains_key(&resolved) || manifest_paths.contains(&resolved) {
+            // ADV-025, for a target that is both declared and
+            // present; see `refspell.rs`.
+            if manifest_paths.contains(&resolved)
+                && let Some(entry) = name_index.get(&resolved)
+                && let Some(f) = crate::refspell::check(is_epub3, advisory, base_dir, v, entry)
+            {
+                report.push_node(f.id, f.severity, f.text, path, n, f.rule, f.params);
+            }
             return;
         }
         report.push_node(
@@ -4506,6 +4516,7 @@ mod tests {
                 &index,
                 &HashSet::new(),
                 true,
+                false,
                 &mut report,
             );
             report
@@ -4566,6 +4577,7 @@ mod tests {
                 &index,
                 declared,
                 true,
+                false,
                 &mut report,
             );
             report.messages.len()
@@ -4676,6 +4688,7 @@ mod tests {
                 &index,
                 &HashSet::new(),
                 is_epub3,
+                false,
                 &mut report,
             );
             report

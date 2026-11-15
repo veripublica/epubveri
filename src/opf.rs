@@ -249,6 +249,38 @@ fn resolve_ref(dir: &str, doc_path: &str, href: &str) -> String {
     }
 }
 
+/// ADV-025: report `href`, written in a document in `dir`, if it
+/// was found as the entry under `key` only because the lookup decodes it.
+/// Call it where the lookup succeeded; a missing file is RSC-007's. The
+/// finding is anchored at `attr` on `node`, or at `node` when the attribute is
+/// not there by that name. See `refspell.rs`.
+#[allow(clippy::too_many_arguments)]
+fn report_spelling(
+    report: &mut Report,
+    is_epub3: bool,
+    advisory: bool,
+    name_index: &HashMap<String, String>,
+    dir: &str,
+    href: &str,
+    key: &str,
+    location: &str,
+    node: roxmltree::Node,
+    attr: &str,
+) {
+    let Some(entry) = name_index.get(key) else {
+        return;
+    };
+    let Some(f) = crate::refspell::check(is_epub3, advisory, dir, href, entry) else {
+        return;
+    };
+    match attr_no_ns_node(node, attr) {
+        Some(a) => report.push_node_attr(
+            f.id, f.severity, f.text, location, node, a, f.rule, f.params,
+        ),
+        None => report.push_node(f.id, f.severity, f.text, location, node, f.rule, f.params),
+    }
+}
+
 fn hex(c: u8) -> Option<u8> {
     match c {
         b'0'..=b'9' => Some(c - b'0'),
@@ -3809,6 +3841,7 @@ fn check_guide_references(
     items_by_path: &ItemsByPath,
     fallback_map: &HashMap<String, String>,
     is_epub3: bool,
+    advisory: bool,
     opf_path: &str,
     report: &mut Report,
 ) {
@@ -3912,6 +3945,10 @@ fn check_guide_references(
                 }
             }
             Some((id, mt)) => {
+                report_spelling(
+                    report, is_epub3, advisory, name_index, base_dir, href, &resolved, opf_path, r,
+                    "href",
+                );
                 // epubcheck exempts the *deprecated* content-document types
                 // here as well as the real ones - `OPFChecker`:172 tests
                 // `!isBlessedItemType && !isDeprecatedBlessedItemType` - so a
@@ -4032,6 +4069,7 @@ fn check_ncx_content_fragments(
     fallback_map: &HashMap<String, String>,
     spine_order: &HashMap<String, usize>,
     is_epub3: bool,
+    advisory: bool,
     report: &mut Report,
 ) {
     let dir = parent_dir(ncx_path);
@@ -4203,6 +4241,14 @@ fn check_ncx_content_fragments(
                 vec![src.to_string()],
             );
             continue;
+        }
+        if !target
+            .trim_matches(crate::url::is_url_edge_space)
+            .is_empty()
+        {
+            report_spelling(
+                report, is_epub3, advisory, name_index, &dir, src, &resolved, ncx_path, n, "src",
+            );
         }
         // **Present in the container, absent from the manifest.** epubcheck
         // registers an NCX `<content src>` like any reference and reports an
@@ -7324,6 +7370,19 @@ fn check_text(
                 // and the opposite of the rule: epubcheck asks it when there
                 // is **no container at all**, not when a resource is missing
                 // from one. `ocf.rs` now carries all four filename rules.
+            } else if !is_external(href) {
+                report_spelling(
+                    report,
+                    is_epub3,
+                    advisory,
+                    &name_index,
+                    &base_dir,
+                    href,
+                    &nfc(&resolved),
+                    opf_path,
+                    item,
+                    "href",
+                );
             }
             // An XHTML Content Document can never be remote - it *is* the
             // publication's content, unlike embedded media/fonts, which
@@ -7508,6 +7567,7 @@ fn check_text(
         &items_by_path,
         &fallback_map,
         is_epub3,
+        advisory,
         opf_path,
         report,
     );
@@ -8588,6 +8648,7 @@ fn check_text(
                                 &fallback_map,
                                 &spine_order,
                                 is_epub3,
+                                advisory,
                                 report,
                             );
                             // Outside the `package_identifier_text` guard
@@ -9261,7 +9322,28 @@ fn check_text(
                         &name_index,
                         opf_path,
                     ) {
-                        ResourceRef::Fine => continue,
+                        ResourceRef::Fine => {
+                            if let Some(entry) = name_index.get(&resolved)
+                                && let Some(f) = crate::refspell::check(
+                                    is_epub3,
+                                    advisory,
+                                    &parent_dir(&path),
+                                    v,
+                                    entry,
+                                )
+                            {
+                                report.push_full(
+                                    f.id,
+                                    f.severity,
+                                    f.text,
+                                    path.clone(),
+                                    Position::of_offset(&t, off),
+                                    f.rule,
+                                    f.params,
+                                );
+                            }
+                            continue;
+                        }
                         ResourceRef::Undeclared => (
                             RSC_008,
                             format!("resource '{v}' is not declared in the manifest"),
@@ -11001,7 +11083,18 @@ fn check_text(
                     // RSC-007 - measured on 5.4.0, one book each. Asking only
                     // the manifest called both RSC-008.
                     match classify_resource_ref(&resolved, &manifest_paths, &name_index, opf_path) {
-                        ResourceRef::Fine => {}
+                        ResourceRef::Fine => report_spelling(
+                            report,
+                            is_epub3,
+                            advisory,
+                            &name_index,
+                            &dir,
+                            url,
+                            &resolved,
+                            &path,
+                            n,
+                            "srcset",
+                        ),
                         ResourceRef::Undeclared => report.push_node_attr(
                             RSC_008,
                             Severity::Error,
@@ -11490,6 +11583,19 @@ fn check_text(
                                 vec![v.to_string()],
                             );
                         }
+                    } else {
+                        report_spelling(
+                            report,
+                            is_epub3,
+                            advisory,
+                            &name_index,
+                            &dir,
+                            v,
+                            &key,
+                            &path,
+                            node,
+                            "href",
+                        );
                     }
                 }
             }
@@ -11981,7 +12087,20 @@ fn check_text(
                                 vec![v.to_string()],
                             );
                         }
-                        ResourceRef::Fine => {}
+                        ResourceRef::Fine => {
+                            report_spelling(
+                                report,
+                                is_epub3,
+                                advisory,
+                                &name_index,
+                                &dir,
+                                v,
+                                &resolved,
+                                &path,
+                                node,
+                                attr,
+                            );
+                        }
                     }
                 }
             }
@@ -13082,6 +13201,7 @@ fn check_text(
             &name_index,
             &manifest_paths,
             is_epub3,
+            advisory,
             report,
         );
         crate::svg::check_attribute_vocabulary(d.root_element(), doc_path, is_epub3, report);
@@ -14298,6 +14418,7 @@ fn check_text(
             &dir,
             &name_index,
             &media_type_index,
+            advisory,
             report,
         );
         overlay_links.extend(
@@ -14701,6 +14822,7 @@ fn check_text(
         ocf,
         &mut target_ids,
         opf_path,
+        advisory,
         report,
     );
     crate::indexes::check_collections(&pkg, &items, &base_dir, opf_path, report);
@@ -14865,6 +14987,7 @@ fn check_dictionaries(
     ocf: &mut Ocf,
     target_ids: &mut TargetIds,
     opf_path: &str,
+    advisory: bool,
     report: &mut Report,
 ) {
     const SKM_MT: &str = "application/vnd.epub.search-key-map+xml";
@@ -14922,6 +15045,20 @@ fn check_dictionaries(
                     vec![href.clone()],
                 );
                 continue;
+            }
+            // ADV-025; dictionaries are EPUB 3 only. See `refspell.rs`.
+            if let Some(entry) = name_index.get(&resolved)
+                && let Some(f) = crate::refspell::check(true, advisory, &skm_dir, &href, entry)
+            {
+                report.push_node(
+                    f.id,
+                    f.severity,
+                    f.text,
+                    path.as_str(),
+                    d.root_element(),
+                    f.rule,
+                    f.params,
+                );
             }
             if let Some((_, target_mt)) = items_by_path.get(&resolved)
                 && target_mt != "application/xhtml+xml"
@@ -18115,6 +18252,92 @@ mod tests {
             zip.finish().unwrap();
         }
         buf
+    }
+
+    /// ADV-025 end to end: a manifest href that names its file only once
+    /// percent-decoded. Behind `--advisory` only, and the verdict is the same
+    /// either way, spelled raw or encoded. EPUB 3 also reports lowercase hex;
+    /// EPUB 2 does not, since RFC 3986 makes hex case equivalent.
+    #[test]
+    fn a_reference_found_only_by_decoding_is_an_advisory_and_nothing_else() {
+        let opf = |version: &str, href: &str| {
+            format!(
+                r#"<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="{version}" unique-identifier="id">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="id">urn:uuid:00000000-0000-4000-8000-000000000000</dc:identifier>
+    <dc:title>t</dc:title><dc:language>tr</dc:language>
+    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+    <item id="ch1" href="{href}" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="ch1"/></spine>
+</package>"#
+            )
+        };
+        let run = |version: &str, href: &str, file: &str, advisory: bool| {
+            let opts = crate::Options {
+                advisory,
+                ..Default::default()
+            };
+            crate::validate_bytes_with_options(
+                epub_named_resource(&opf(version, href), Some(file)),
+                &opts,
+            )
+        };
+        let adv = |r: &crate::report::Report| {
+            r.messages
+                .iter()
+                .filter(|m| m.id == crate::ids::ADV_025)
+                .map(|m| (m.severity, m.params.clone()))
+                .collect::<Vec<_>>()
+        };
+        let errors = |r: &crate::report::Report| {
+            let mut e: Vec<&str> = r
+                .messages
+                .iter()
+                .filter(|m| m.severity == crate::report::Severity::Error)
+                .map(|m| m.id)
+                .collect();
+            e.sort();
+            e
+        };
+
+        let raw = run("3.0", "Agatha'nin.xhtml", "Agatha'nin.xhtml", true);
+        let enc = run("3.0", "Agatha%27nin.xhtml", "Agatha'nin.xhtml", true);
+        assert!(adv(&raw).is_empty(), "{:?}", raw.messages);
+        assert_eq!(
+            adv(&enc),
+            vec![(
+                crate::report::Severity::Usage,
+                vec![
+                    "Agatha%27nin.xhtml".to_string(),
+                    "OEBPS/Agatha'nin.xhtml".to_string()
+                ]
+            )]
+        );
+        assert_eq!(errors(&raw), errors(&enc), "the verdict does not move");
+        let quiet = run("3.0", "Agatha%27nin.xhtml", "Agatha'nin.xhtml", false);
+        assert!(adv(&quiet).is_empty(), "off without --advisory");
+
+        let lower = run("3.0", "a%c4%9f.xhtml", "ağ.xhtml", true);
+        assert_eq!(adv(&lower).len(), 1, "{:?}", lower.messages);
+        let lower2 = run("2.0", "a%c4%9f.xhtml", "ağ.xhtml", true);
+        assert!(adv(&lower2).is_empty(), "{:?}", lower2.messages);
+        let enc2 = run("2.0", "Agatha%27nin.xhtml", "Agatha'nin.xhtml", true);
+        assert_eq!(adv(&enc2).len(), 1, "{:?}", enc2.messages);
+
+        // A file that holds an escape in its own name keeps its verdict: the
+        // reading that would accept `a%27b.xhtml` for it waits on the Working
+        // Group, so this is RSC-001 as before.
+        let named = run("3.0", "a%27b.xhtml", "a%27b.xhtml", true);
+        assert!(
+            errors(&named).contains(&crate::ids::RSC_001),
+            "{:?}",
+            named.messages
+        );
     }
 
     /// The package grammar is the only thing that reports a missing
