@@ -408,7 +408,6 @@ fn check_in(
             // asked in `opf.rs`, where the reference is registered; an inline
             // `<style>`, or a sheet with no book around it, is asked here.
             if (book.is_none() || !matches!(origin, CssOrigin::File { .. }))
-                && !nested
                 && let Some(err) = crate::url::unit_error(&url)
             {
                 push(
@@ -418,7 +417,11 @@ fn check_in(
                 );
             }
             // CSSHandler.resolveAndRegister: an empty url is CSS-002, whatever
-            // holds it. `check_font_face` asks this of a font's.
+            // holds it. `check_font_face` asks this of a font's. Not asked of
+            // a url inside another function: no specification forbids an
+            // empty url, so this is epubcheck's rule, and epubcheck never
+            // reads a nested one. RSC-020 and RSC-033 above are EPUB 3.3
+            // § 4.2.5's ("any URL string MUST be ..."), and ask of every url.
             if url.trim().is_empty() && !nested {
                 push(CSS_002, "url() is empty".to_string(), "css.url.empty");
             }
@@ -427,7 +430,6 @@ fn check_in(
             }
             // RSC-033, on the same terms as the RSC-020 above.
             if (book.is_none() || !matches!(origin, CssOrigin::File { .. }))
-                && !nested
                 && url.split('#').next().unwrap_or(&url).contains('?')
             {
                 push(
@@ -2055,9 +2057,11 @@ struct SheetUrl {
 pub(crate) struct CssUrl {
     pub(crate) url: String,
     /// Inside another function (`image-set(url(a.png) 1x)`), which epubcheck
-    /// never reads. It counts as a use of the resource, and `css::check` asks
-    /// of its target as of any url; `opf.rs` does not yet ask of its form
-    /// (RSC-020/032/033, OPF-014), which is still epubcheck's reading.
+    /// never reads. CSS reads it, so it is asked what the specifications ask
+    /// of every url: its target (`css::check`), its form (RSC-020, RSC-033),
+    /// a remote target (RSC-006, OPF-014). Not RSC-032: a function such as
+    /// `image-set()` can carry its own fallback, so "no fallback" would not
+    /// be true of every nested url. Not CSS-002, which is epubcheck's rule.
     pub(crate) nested: bool,
 }
 

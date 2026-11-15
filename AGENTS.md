@@ -78,19 +78,26 @@ Each line is a place where epubveri follows the specification and epubcheck
   ([w3c/epubcheck#1761](https://github.com/w3c/epubcheck/issues/1761)).
 - **A compressed `mimetype` is PKG-007, an error.** EPUB 3.3 § 4.3.3: "EPUB
   creators MUST NOT compress or encrypt the `mimetype` file". epubcheck 5.4.0
-  compares only the inflated contents.
-- **A bad `url()` inside another CSS function is reported** (RSC-007, RSC-008,
-  RSC-026 or RSC-030, as at the top level), such as `image-set(url(a.png)
-  1x)` naming a missing file. CSS reads the url, and EPUB 3.3 asks the same of
-  every resource a publication uses. epubcheck 5.4.0 reads only a
-  declaration's top-level components.
+  compares only the inflated contents
+  ([w3c/epubcheck#1779](https://github.com/w3c/epubcheck/issues/1779)).
+- **A bad `url()` inside another CSS function is reported** as at the top
+  level, such as `image-set(url(a.png) 1x)` naming a missing file: its target
+  (RSC-007, RSC-008, RSC-026 or RSC-030), its form (RSC-020, RSC-033; EPUB 3.3
+  § 4.2.5) and a remote target (RSC-006, and OPF-014 without the
+  `remote-resources` property; §§ 3.6 and 5.6.2.1). CSS reads the url, and
+  EPUB 3.3 asks the same of every resource a publication uses. epubcheck 5.4.0
+  reads only a declaration's top-level components
+  ([w3c/epubcheck#1743](https://github.com/w3c/epubcheck/issues/1743)). Two
+  questions stay top-level only: RSC-032, since `image-set()` can carry its
+  own fallback, and CSS-002, which is epubcheck's rule.
 - **EPUB 2 content documents are held to OPS 2.0.1's restrictions beyond
   XHTML 1.1:** a `noscript` before every `script` (§ 2.3.7), a `style` type
   other than `text/css` or `text/x-oeb1-css` (§ 2.3.8), `align="char"`
   (§ 2.3.9), and SVG animation, `script` and event attributes (§ 2.5.1) are
   RSC-005, and an `object` type that names another media type than the
   manifest is OPF-013 as an error (§ 2.3.6). epubcheck 5.4.0 accepts the
-  first four and gives OPF-013 as a warning.
+  first four and gives OPF-013 as a warning
+  ([w3c/epubcheck#1780](https://github.com/w3c/epubcheck/issues/1780)).
 - **UTF-16 draws no finding in an EPUB 2 book.** OCF 2.0.1 § 1.3: "All XML
   files MUST be encoded in UTF-8 or UTF-16", and OPF 2.0.1 § 1.4.1.1 and
   OPS 2.0.1 § 1.4.1.2 say it again. epubcheck 5.4.0 grades encoding without
@@ -157,7 +164,8 @@ Each line is a place where epubveri follows the specification and epubcheck
 - **SPEC-004 and SPEC-005: "version needed to extract" other than 10, 20 or
   45 in a local file header, and a file name over 255 bytes.** EPUB 3.3
   §§ 4.3.2 and 4.2.3, OCF 2.0.1 §§ 4 and 3.3. epubcheck 5.4.0 checks neither
-  ([w3c/epubcheck#1777](https://github.com/w3c/epubcheck/issues/1777)).
+  ([w3c/epubcheck#1777](https://github.com/w3c/epubcheck/issues/1777),
+  [w3c/epubcheck#1779](https://github.com/w3c/epubcheck/issues/1779)).
 - **EPUB 2: `container version` must be `1.0`,** and `META-INF/manifest.xml`,
   `metadata.xml` and `rights.xml` follow OCF 2.0.1 §§ 3.5.1–3.5.6 (ODF manifest
   root, namespace-qualified elements, well-formed). epubcheck 5.4.0 takes any
@@ -170,11 +178,12 @@ Each line is a place where epubveri follows the specification and epubcheck
   checks only the `www` spelling.
 - **SPEC-006: the manifest lists the `mimetype` file** (EPUB 3.3 § 4.2.2,
   "MUST NOT be listed in the manifest"). epubcheck 5.4.0 gives only USAGE
-  OPF-097.
+  OPF-097 ([w3c/epubcheck#1779](https://github.com/w3c/epubcheck/issues/1779)).
 - **SPEC-007 and SPEC-008: bit 3 set with no data descriptor, and a central
   directory header that points at no local file header** (ZIP application
   note §§ 4.3.9.1 and 4.3.2, through EPUB 3.3 § 4.3.2 and OCF 2.0.1 § 4).
-  epubcheck 5.4.0 reads both books as valid.
+  epubcheck 5.4.0 reads both books as valid
+  ([w3c/epubcheck#1779](https://github.com/w3c/epubcheck/issues/1779)).
 - **EPUB 3: one `media:duration` per publication and per overlay, and
   `media:active-class` is a class name, not a selector** (D.8.2 with D.2;
   § 9.3.4). epubcheck 5.4.0 checks neither ([w3c/epubcheck#1778](https://github.com/w3c/epubcheck/issues/1778)).

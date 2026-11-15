@@ -12390,7 +12390,7 @@ fn check_text(
                         .into_iter()
                         .map(|s| s.node)
                         .collect();
-                for crate::css::CssUrl { url: u, nested } in crate::css::stylesheet_urls(&sheet) {
+                for crate::css::CssUrl { url: u, .. } in crate::css::stylesheet_urls(&sheet) {
                     // A stylesheet's url()/@import targets are consumed
                     // resources too (fonts, images, imported sheets) - see
                     // OPF-097 below. Inline <style> resolves against this
@@ -12413,12 +12413,10 @@ fn check_text(
                         }
                         resource_refs.insert(target);
                     }
-                    // A url inside another function counts as a use and is
-                    // asked nothing more here: epubcheck never reads it, and
-                    // its target is `css::check`'s (`push_url_finding`).
-                    if nested {
-                        continue;
-                    }
+                    // A url inside another function is asked the same: CSS
+                    // reads it, and the remote-resource rules (EPUB 3.3 § 3.6,
+                    // § 5.6.2.1) ask of every resource a document uses.
+                    // epubcheck never reads one (see `css::CssUrl::nested`).
                     // **An import is not a remote-resources dependency.**
                     // The property exists for remote resources a reading
                     // system may fetch *with permission*; a remote stylesheet
@@ -13274,12 +13272,13 @@ fn check_text(
             let sheet = styloria::parse_stylesheet(&css_text).0;
             let imports: HashSet<String> = crate::css::import_targets(&sheet).into_iter().collect();
             let mut uses_remote = false;
-            for crate::css::CssUrl { url: u, nested } in crate::css::stylesheet_urls(&sheet) {
+            for crate::css::CssUrl { url: u, .. } in crate::css::stylesheet_urls(&sheet) {
                 if is_remote_url(&u) {
                     remote_resource_refs.insert(strip_url_fragment(&u));
-                    // Used, but never a reason for OPF-014: epubcheck does not
-                    // read a url inside another function.
-                    if !imports.contains(&u) && !nested {
+                    // A reason for OPF-014 inside another function too: the
+                    // property is for any remote resource the document uses
+                    // (EPUB 3.3 § 5.6.2.1), and CSS reads a nested url.
+                    if !imports.contains(&u) {
                         uses_remote = true;
                     }
                 } else if !is_external(&u) {
@@ -13707,14 +13706,11 @@ fn check_text(
             if !is_external(&u) {
                 resource_refs.insert(nfc(&resolve(&dir, &strip_url_fragment(&u))));
             }
-            // A url inside another function counts as a use and is asked
-            // nothing more: epubcheck never reads it, so RSC-020/032/033 and
-            // the remote-resources property would be ours alone. Unlike the
-            // resource checks in `css::check`, these are not reported under
-            // `--advisory` either (`css::check` asks of the target, not its form).
-            if nested {
-                continue;
-            }
+            // A url inside another function is asked the same questions,
+            // because the specifications ask them of every url (EPUB 3.3
+            // § 4.2.5 for RSC-020/033, § 3.6 and § 5.6.2.1 for RSC-006 and
+            // OPF-014). epubcheck never reads one. The one exception is
+            // RSC-032, below; see `css::CssUrl::nested`.
             // RSC-020, same reasoning as the guide and the NCX: a `url()` is a
             // registered reference and epubcheck strict-parses every one,
             // remote and `data:` ones included - `url(i m.png)`,
@@ -13793,7 +13789,11 @@ fn check_text(
                 // RSC-008 arm. It has one now. This loop keeps only the two
                 // questions nothing else asks of a `url()` - the query
                 // component and the fallback below.
+                // Not asked of a nested url: `image-set(url(a.foo) type(..),
+                // url(a.png))` carries its own fallback, so "no fallback"
+                // would not be true of every one.
                 if let Some((id, mt)) = items_by_path.get(target.as_str())
+                    && !nested
                     && !font_srcs.contains(&u)
                     && !crate::cmt::is_core_media_type(mt)
                     && !crate::foreign::fallback_reaches_core(id, &items, &fallback_map)
@@ -28399,6 +28399,65 @@ mod tests {
         assert_eq!(opf_097("", "<p>x</p>"), 1);
         // Used, then the break.
         assert_eq!(opf_097(link, "<p>a&nbsp;b</p>"), 0);
+    }
+
+    /// A url inside another function is asked what the specifications ask of
+    /// every url, which epubcheck 5.4.0 does not: its form (RSC-020, RSC-033)
+    /// and a remote target (RSC-006, and OPF-014 when the property is
+    /// missing). Not RSC-032, since `image-set()` can carry its own fallback,
+    /// and not CSS-002, which is epubcheck's rule. Each case is the same at the
+    /// top level, which is the control.
+    #[test]
+    fn a_nested_url_is_asked_its_form_and_its_remoteness() {
+        use crate::ids::{CSS_002, OPF_014, RSC_006, RSC_020, RSC_032, RSC_033};
+        let opf = |extra_item: &str, props: &str| {
+            format!(
+                r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="id">urn:uuid:12345678-1234-1234-1234-123456789abc</dc:identifier><dc:title>T</dc:title><dc:language>en</dc:language><meta property="dcterms:modified">2020-01-01T00:00:00Z</meta></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="c" href="c.xhtml" media-type="application/xhtml+xml"{props}/><item id="s" href="s.css" media-type="text/css"/><item id="i" href="i.png" media-type="image/png"/>{extra_item}</manifest><spine><itemref idref="c"/></spine></package>"#
+            )
+        };
+        let nav = r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><head><title>t</title></head><body><nav epub:type="toc"><ol><li><a href="c.xhtml">c</a></li></ol></nav></body></html>"#;
+        let ids = |css: &str, style: &str, extra_item: &str, props: &str| {
+            let c = format!(
+                r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title><link rel="stylesheet" href="s.css"/>{style}</head><body><p>x</p></body></html>"#
+            );
+            let mut v: Vec<&str> = crate::validate_bytes(zip_book(&[
+                ("content.opf", &opf(extra_item, props)),
+                ("nav.xhtml", nav),
+                ("c.xhtml", &c),
+                ("s.css", css),
+                ("i.png", "png"),
+                ("f.foo", "foo"),
+            ]))
+            .messages
+            .iter()
+            .map(|m| m.id)
+            .filter(|id| [CSS_002, OPF_014, RSC_006, RSC_020, RSC_032, RSC_033].contains(id))
+            .collect();
+            v.sort_unstable();
+            v.dedup();
+            v
+        };
+        let nested = |u: &str| format!("p {{ background: image-set(url({u}) 1x) }}");
+        let top = |u: &str| format!("p {{ background: url({u}) }}");
+        for css in [nested, top] {
+            assert_eq!(ids(&css("\"i m.png\""), "", "", ""), vec![RSC_020]);
+            assert_eq!(ids(&css("i.png?v=1"), "", "", ""), vec![RSC_033]);
+            assert_eq!(
+                ids(&css("https://example.com/a.png"), "", "", ""),
+                vec![OPF_014, RSC_006]
+            );
+        }
+        // The same remote url in an inline <style>, nested.
+        let inline =
+            r#"<style>p { background: image-set(url(https://example.com/a.png) 1x) }</style>"#;
+        assert_eq!(ids("p {}", inline, "", ""), vec![OPF_014, RSC_006]);
+        // A foreign target: RSC-032 at the top level only.
+        let foo = r#"<item id="f" href="f.foo" media-type="application/x-foo"/>"#;
+        assert_eq!(ids(&top("f.foo"), "", foo, ""), vec![RSC_032]);
+        assert!(!ids(&nested("f.foo"), "", foo, "").contains(&RSC_032));
+        // An empty url: CSS-002 at the top level only.
+        assert!(ids("p { background: url(\"\") }", "", "", "").contains(&CSS_002));
+        assert!(!ids(&nested("\"\""), "", "", "").contains(&CSS_002));
     }
 
     /// A zip from `(name, body)` pairs, `mimetype` first and stored. The

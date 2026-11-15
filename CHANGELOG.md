@@ -10,6 +10,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **A `url()` inside another CSS function is asked the rest of what the
+  specifications ask of every url.** `image-set(url("i m.png") 1x)` is
+  RSC-020, `url(x.png?v=1)` there is RSC-033 (EPUB 3.3 § 4.2.5), and a
+  remote target is RSC-006, plus OPF-014 when the document lacks the
+  `remote-resources` property (§§ 3.6, 5.6.2.1). Its target was already
+  checked (RSC-007, RSC-008, RSC-026, RSC-030). epubcheck 5.4.0 reads none of
+  these ([w3c/epubcheck#1743](https://github.com/w3c/epubcheck/issues/1743)).
+  - RSC-032 (a foreign target with no fallback) stays top-level only:
+    `image-set()` can list its own fallback, so the finding would not be true
+    of every nested url. CSS-002 (an empty url) is epubcheck's rule, not a
+    specification's, and stays top-level only too.
+  - No shelf book (562), no epub-test-books book (626), no epubcheck fixture
+    and no W3C epub-tests publication holds a nested url, so no output
+    changed on any of them; the behaviour is covered by a test.
+
 ### Added
 
 - **`--advisory`: a reference that names its file only once it is
