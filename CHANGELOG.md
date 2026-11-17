@@ -23,12 +23,18 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   switch's parent and `case` is not checked. A switch with no `default` is
   now "incomplete content; missing required element \"default\"", as in
   epubcheck 5.4.0.
-  - Still not covered: a switch where the parent takes only particular
-    children (`ul`, `ol`, `dl`, a table and its rows, `map`). There it is
-    still "not allowed here".
+  - Where the parent takes only particular children, the switch's
+    `default` holds a run of them: `li` in `ul` and `ol`, `dt` and `dd` in
+    `dl`, areas and blocks in `map`, and in a table its columns, `tbody`
+    elements, rows and cells.
+  - Still not covered: a switch standing for a table's `caption`, `thead` or
+    `tfoot`, or one whose `default` mixes two of a table's kinds. Those are
+    still "not allowed here". An empty `default` is accepted even where the
+    parent is then left empty, which epubcheck reports as incomplete.
   - "expected one of" lists never name `switch`, in EPUB 2 or EPUB 3, in the
     message or in `params`. epubcheck's EPUB 2 lists do not hold it, because
-    its `ops20.nvdl` takes the switch out before the XHTML grammar runs.
+    its `ops20.nvdl` takes the switch out before the XHTML grammar runs. An
+    empty `ul` is still "missing required element \"li\"".
   - Output is byte-identical to 0.44.0 on the shelf (562 books), its 76
     EPUB 3 books re-declared as EPUB 2, the epubcheck fixtures and the W3C
     epub-tests. None of the first three holds an EPUB 2 switch, so a test

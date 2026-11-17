@@ -510,6 +510,13 @@ impl<'a> Env<'a> {
                 self.required_names(a, out, visited);
                 self.required_names(b, out, visited);
             }
+            // An OPS switch standing beside the real children (`li` or a
+            // switch whose default holds `li`) is not a second road: a
+            // switch only ever stands for those children, and epubcheck's
+            // grammar never sees it. Without this, an empty EPUB 2 `<ul>`
+            // lost "missing required element li" for "expected li".
+            Pattern::Choice(a, b) if self.is_ops_element(a) => self.required_names(b, out, visited),
+            Pattern::Choice(a, b) if self.is_ops_element(b) => self.required_names(a, out, visited),
             Pattern::Choice(a, b) => {
                 // Only what holds down *either* road. Collected separately and
                 // intersected, keeping `a`'s order.
@@ -532,6 +539,20 @@ impl<'a> Env<'a> {
             }
             _ => {}
         }
+    }
+
+    /// Is `p` an element in the OPS namespace, directly or through a chain
+    /// of `Ref`s (the `opsSwitch-*` defines in `schemas/xhtml.rng`)?
+    fn is_ops_element(&self, p: &Pat) -> bool {
+        let mut p = p;
+        for _ in 0..8 {
+            match &**p {
+                Pattern::Element(NameClass::Name { ns, .. }, _) => return ns == OPS_NS,
+                Pattern::Ref(i) => p = &self.defs[*i],
+                _ => return false,
+            }
+        }
+        false
     }
 
     /// The attribute names still demanded when the start tag closed.

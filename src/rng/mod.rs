@@ -326,6 +326,60 @@ mod tests {
                     "<ops:switch>{case}<ops:default><ops:switch>{case}<ops:default><p>x</p></ops:default></ops:switch></ops:default></ops:switch>"
                 ),
             ),
+            (
+                "li run in ul",
+                format!(
+                    "<ul><ops:switch>{case}<ops:default><li>a</li><li>b</li></ops:default></ops:switch></ul>"
+                ),
+            ),
+            (
+                "li in ol beside a real li",
+                format!(
+                    "<ol><li>a</li><ops:switch>{case}<ops:default><li>b</li></ops:default></ops:switch></ol>"
+                ),
+            ),
+            (
+                "dt/dd in dl",
+                format!(
+                    "<dl><ops:switch>{case}<ops:default><dt>t</dt><dd>d</dd></ops:default></ops:switch></dl>"
+                ),
+            ),
+            (
+                "area in map",
+                format!(
+                    "<p><map name=\"m\"><ops:switch>{case}<ops:default><area alt=\"a\" href=\"#x\"/></ops:default></ops:switch></map></p>"
+                ),
+            ),
+            (
+                "cells in tr",
+                format!(
+                    "<table><tr><td>a</td><ops:switch>{case}<ops:default><td>b</td></ops:default></ops:switch></tr></table>"
+                ),
+            ),
+            (
+                "rows in tbody",
+                format!(
+                    "<table><tbody><ops:switch>{case}<ops:default><tr><td>a</td></tr></ops:default></ops:switch></tbody></table>"
+                ),
+            ),
+            (
+                "rows in bare table",
+                format!(
+                    "<table><ops:switch>{case}<ops:default><tr><td>a</td></tr></ops:default></ops:switch></table>"
+                ),
+            ),
+            (
+                "tbody run in table",
+                format!(
+                    "<table><ops:switch>{case}<ops:default><tbody><tr><td>a</td></tr></tbody></ops:default></ops:switch></table>"
+                ),
+            ),
+            (
+                "col before rows",
+                format!(
+                    "<table><ops:switch>{case}<ops:default><col/></ops:default></ops:switch><tr><td>a</td></tr></table>"
+                ),
+            ),
         ];
         for (label, body) in &ok {
             assert!(report(body).is_empty(), "{label}: {:?}", report(body));
@@ -361,12 +415,49 @@ mod tests {
                 "text default in block position",
                 format!("<ops:switch>{case}<ops:default>loose</ops:default></ops:switch>"),
             ),
+            (
+                "p where ul wants li",
+                format!(
+                    "<ul><ops:switch>{case}<ops:default><p>x</p></ops:default></ops:switch></ul>"
+                ),
+            ),
+            (
+                "li where tr wants cells",
+                format!(
+                    "<table><tr><ops:switch>{case}<ops:default><li>x</li></ops:default></ops:switch></tr></table>"
+                ),
+            ),
+            (
+                "td where tbody wants rows",
+                format!(
+                    "<table><tbody><ops:switch>{case}<ops:default><td>x</td></ops:default></ops:switch></tbody></table>"
+                ),
+            ),
         ];
         for (label, body) in &bad {
             assert!(!report(body).is_empty(), "{label} must be reported");
         }
         // The switch is never offered as what was expected: epubcheck's
         // XHTML 1.1 lists do not hold it (ops20.nvdl lifts it out first).
+        // Nor does it blur what an empty list is missing: `li` stays the one
+        // required element, though a switch may stand in for it.
+        let empty_ul = {
+            let xml = "<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>t</title></head>\
+                       <body><ul></ul></body></html>";
+            let d = crate::ocf::parse_xml(xml).unwrap();
+            crate::rng::validate_node_report(&g2, d.root_element())
+                .into_iter()
+                .any(|b| {
+                    matches!(
+                        b,
+                        crate::rng::Blame::Element(
+                            _,
+                            crate::rng::ElementFault::IncompleteContent { missing: Some(ref m), .. }
+                        ) if m == "li"
+                    )
+                })
+        };
+        assert!(empty_ul, "an empty ul is missing li");
         let r = report("<span>x</span>");
         assert!(
             r.iter().any(|m| m.contains("\"p\"")),
