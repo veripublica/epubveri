@@ -333,9 +333,9 @@ compared **54,514 findings across the 364 books that produced at least one**.
 
 ## The `schemas/` directory
 
-`schemas/package.rng` and `schemas/xhtml.rng` (RELAX NG grammars) and
-`schemas/package.sch` (Schematron rules) are all **authored from
-scratch for this project** — not derived from, or copied out of,
+`schemas/package.rng`, `schemas/xhtml.rng` and `schemas/ops-switch.rng`
+(RELAX NG grammars) and `schemas/package.sch` (Schematron rules) are all
+**authored from scratch for this project** — not derived from, or copied out of,
 epubcheck's or W3C's own schema files. This is a deliberate provenance
 decision: it keeps the entire codebase's copyright clean for the dual
 AGPL/commercial licensing model (see [`LICENSING.md`](../LICENSING.md)),
@@ -345,6 +345,12 @@ test fixtures (see "Testing and measurement" below), which is also why
 they lean permissive in places a stricter schema wouldn't (favoring
 "don't false-positive on a valid real-world book" over "reject anything
 even slightly unusual").
+
+`schemas/ops-switch.rng` is the one grammar that is not a content model. An
+EPUB 2 `ops:switch` (OPS 2.0.1 § 2.6.3) is checked against it, and then the
+switch is unwrapped: its `default`'s children are validated against
+`xhtml.rng` in its place (`rng::Grammar::ops_switch`). § 2.6.3.1.3 defines
+validity that way, as a rewrite of the document, and RELAX NG cannot say it.
 
 ## Testing and measurement
 

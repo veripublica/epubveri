@@ -33,6 +33,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     epub-tests. None of the first three holds an EPUB 2 switch, so a test
     covers the behaviour. Speed on the shelf is unchanged (+0.1% CPU).
 
+### Changed
+
+- **Breaking, and the reason for the minor bump:** `rng::Grammar` gained a
+  public field, `ops_switch: Option<Box<Grammar>>`, so a struct literal that
+  builds a `Grammar` no longer compiles. Add `ops_switch: None`, or build it
+  with `Grammar::single` or `rng::load`.
+
 ## [0.44.0] - 2026-11-15
 
 ### Changed
