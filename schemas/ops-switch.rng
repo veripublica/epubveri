@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  epubveri - the structure of an OPS 2.0.1 `switch` (Inline XML Islands,
+  § 2.6.3), for EPUB 2 content documents.
+
+  Authored for epubveri (copyright the project owner; ships under the
+  project's dual AGPL/commercial license), from the specification's Appendix
+  B, which § 2.6.3.1 names as the normative definition: one or more `case`,
+  then exactly one `default`; `id` on all three, `required-namespace`
+  (required) and `required-modules` on `case`, and no other attribute. The
+  prose of § 2.6.3.1.1 says "zero or more case elements"; the schema it names
+  as normative, and epubcheck's `ops-switch.rng`, say one or more.
+
+  Until 0.44.0 there was no switch for EPUB 2 at all, and every one was
+  "not allowed here", a valid cover page included (413Michele, MobileRead
+  374286 #387).
+
+  This grammar checks the switch's own structure and nothing inside it. The
+  rest is § 2.6.3.1.3: "a document is considered valid if and only if
+  replacing all switch elements with the content of their child default
+  elements yields a valid document". `Grammar::ops_switch` does that
+  replacement while validating against `xhtml.rng`'s EPUB 2 grammar, as
+  epubcheck's `ops20.nvdl` does with NVDL's unwrap. So `case` content is never
+  validated (epubcheck's `useMode="anything"`), and `default` content is
+  validated where it lands. A separate file, not a define in `xhtml.rng`,
+  because the grammar is built per book and parsing that file twice cost 3%.
+-->
+<grammar xmlns="http://relaxng.org/ns/structure/1.0"
+         ns="http://www.idpf.org/2007/ops"
+         datatypeLibrary="http://www.w3.org/2001/XMLSchema-datatypes">
+
+  <start>
+    <element name="switch">
+      <optional><attribute name="id" ns=""><data type="ID"/></attribute></optional>
+      <oneOrMore>
+        <element name="case">
+          <optional><attribute name="id" ns=""><data type="ID"/></attribute></optional>
+          <attribute name="required-namespace" ns=""><text/></attribute>
+          <optional><attribute name="required-modules" ns=""><text/></attribute></optional>
+          <ref name="anything"/>
+        </element>
+      </oneOrMore>
+      <element name="default">
+        <optional><attribute name="id" ns=""><data type="ID"/></attribute></optional>
+        <ref name="anything"/>
+      </element>
+    </element>
+  </start>
+
+  <define name="anything">
+    <mixed>
+      <zeroOrMore>
+        <element>
+          <anyName/>
+          <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
+          <ref name="anything"/>
+        </element>
+      </zeroOrMore>
+    </mixed>
+  </define>
+</grammar>

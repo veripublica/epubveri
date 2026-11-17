@@ -83,7 +83,13 @@ pub fn svg_title_content_grammar() -> Grammar {
 /// version-independent machinery and differs only in the element pool (issue
 /// #24). See the EPUB 2 section of `schemas/xhtml.rng`.
 pub fn xhtml_grammar_epub2() -> Grammar {
-    load_from_define(XHTML_RNG, "htmlEl-epub2").expect("built-in xhtml.rng epub2 root must parse")
+    let mut g = load_from_define(XHTML_RNG, "htmlEl-epub2")
+        .expect("built-in xhtml.rng epub2 root must parse");
+    // OPS 2.0.1 § 2.6.3 islands: see `Grammar::ops_switch`.
+    g.ops_switch = Some(Box::new(
+        load(OPS_SWITCH_RNG).expect("built-in ops-switch.rng must parse"),
+    ));
+    g
 }
 
 /// Our own NCX (EPUB 2 navigation control file) RNG, embedded at build time
@@ -92,6 +98,11 @@ pub fn xhtml_grammar_epub2() -> Grammar {
 /// `schemas/ncx.rng` for the scope notes and the three deliberate divergences
 /// from epubcheck's own grammar.
 pub const NCX_RNG: &str = include_str!("../../schemas/ncx.rng");
+
+/// The structure of an OPS 2.0.1 `switch` (EPUB 2), authored for epubveri
+/// from the specification's Appendix B. See `schemas/ops-switch.rng` and
+/// `Grammar::ops_switch`.
+pub const OPS_SWITCH_RNG: &str = include_str!("../../schemas/ops-switch.rng");
 
 /// Load the built-in NCX grammar. Applies to both EPUB versions: epubcheck
 /// validates the NCX identically in an EPUB 3 book, where it is a legacy
@@ -380,6 +391,28 @@ mod tests {
                     "<table><ops:switch>{case}<ops:default><col/></ops:default></ops:switch><tr><td>a</td></tr></table>"
                 ),
             ),
+            (
+                "caption",
+                format!(
+                    "<table><ops:switch>{case}<ops:default><caption>c</caption></ops:default></ops:switch><tr><td>a</td></tr></table>"
+                ),
+            ),
+            (
+                "thead then tbody in one default",
+                format!(
+                    "<table><ops:switch>{case}<ops:default><thead><tr><th>h</th></tr></thead><tbody><tr><td>a</td></tr></tbody></ops:default></ops:switch></table>"
+                ),
+            ),
+            (
+                "tfoot",
+                format!(
+                    "<table><ops:switch>{case}<ops:default><tfoot><tr><td>f</td></tr></tfoot></ops:default></ops:switch><tbody><tr><td>a</td></tr></tbody></table>"
+                ),
+            ),
+            (
+                "text in default inside p",
+                format!("<p><ops:switch>{case}<ops:default>t</ops:default></ops:switch></p>"),
+            ),
         ];
         for (label, body) in &ok {
             assert!(report(body).is_empty(), "{label}: {:?}", report(body));
@@ -431,6 +464,20 @@ mod tests {
                 "td where tbody wants rows",
                 format!(
                     "<table><tbody><ops:switch>{case}<ops:default><td>x</td></ops:default></ops:switch></tbody></table>"
+                ),
+            ),
+            (
+                "empty default leaves ul empty",
+                format!("<ul><ops:switch>{case}<ops:default></ops:default></ops:switch></ul>"),
+            ),
+            (
+                "empty default leaves body empty",
+                format!("<ops:switch>{case}<ops:default></ops:default></ops:switch>"),
+            ),
+            (
+                "tbody before thead across the switch",
+                format!(
+                    "<table><tbody><tr><td>a</td></tr></tbody><ops:switch>{case}<ops:default><thead><tr><th>h</th></tr></thead></ops:default></ops:switch></table>"
                 ),
             ),
         ];

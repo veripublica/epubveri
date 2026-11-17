@@ -15,30 +15,23 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 - **EPUB 2: `ops:switch` is valid as OPS 2.0.1 § 2.6.3 defines it.** Every
   switch in an EPUB 2 content document was RSC-005 "element \"switch\" is not
   allowed here", including a well-formed one, a wrong error on a valid book
-  (413Michele, MobileRead 374286 #387). Appendix B, which § 2.6.3.1 names as
-  the normative definition, gives one or more `case` then one `default`, with
-  `id`, `required-namespace` and `required-modules` as the only attributes.
-  § 2.6.3.1.3 makes a document valid iff replacing each switch by its
-  `default`'s content is, so `default` is checked as the content of the
-  switch's parent and `case` is not checked. A switch with no `default` is
-  now "incomplete content; missing required element \"default\"", as in
-  epubcheck 5.4.0.
-  - Where the parent takes only particular children, the switch's
-    `default` holds a run of them: `li` in `ul` and `ol`, `dt` and `dd` in
-    `dl`, areas and blocks in `map`, and in a table its columns, `tbody`
-    elements, rows and cells.
-  - Still not covered: a switch standing for a table's `caption`, `thead` or
-    `tfoot`, or one whose `default` mixes two of a table's kinds. Those are
-    still "not allowed here". An empty `default` is accepted even where the
-    parent is then left empty, which epubcheck reports as incomplete.
-  - "expected one of" lists never name `switch`, in EPUB 2 or EPUB 3, in the
-    message or in `params`. epubcheck's EPUB 2 lists do not hold it, because
-    its `ops20.nvdl` takes the switch out before the XHTML grammar runs. An
-    empty `ul` is still "missing required element \"li\"".
+  (413Michele, MobileRead 374286 #387).
+  - The switch's own structure is Appendix B's, which § 2.6.3.1 names as the
+    normative definition: one or more `case`, then one `default`, with `id`,
+    `required-namespace` and `required-modules` as the only attributes. A
+    switch with no `default` is "incomplete content; missing required element
+    \"default\"", as in epubcheck 5.4.0.
+  - The rest is § 2.6.3.1.3: a document is valid iff it is valid with every
+    switch replaced by its `default`'s content. epubveri validates it that
+    way, as epubcheck's `ops20.nvdl` does, so a switch may stand wherever its
+    `default`'s content may: in a list for `li`, in a table for a `caption`,
+    rows or row groups, in a paragraph for text. A `default` that leaves its
+    parent empty leaves it incomplete. `case` content is not checked.
+  - The grammar is the new `schemas/ops-switch.rng`. No EPUB 3 rule changed.
   - Output is byte-identical to 0.44.0 on the shelf (562 books), its 76
     EPUB 3 books re-declared as EPUB 2, the epubcheck fixtures and the W3C
     epub-tests. None of the first three holds an EPUB 2 switch, so a test
-    covers the behaviour.
+    covers the behaviour. Speed on the shelf is unchanged (+0.1% CPU).
 
 ## [0.44.0] - 2026-11-15
 

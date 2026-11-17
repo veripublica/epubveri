@@ -10512,8 +10512,8 @@ fn check_text(
         // EPUB 3 only: the deprecation rule in `epub-xhtml-30.sch` exists
         // only under `schema/30`. In EPUB 2 the element is OPS 2.0.1's own
         // `ops:switch` (§ 2.6.3), current there and not deprecated, so
-        // epubcheck reports nothing here. Its grammar is
-        // `opsSwitch-epub2Block` in schemas/xhtml.rng.
+        // epubcheck reports nothing here. See `Grammar::ops_switch` and
+        // `schemas/ops-switch.rng`.
         const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
         for n in d.descendants().filter(|n| {
             is_epub3

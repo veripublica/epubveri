@@ -57,6 +57,22 @@ pub struct Grammar {
     /// hyphen (`<mywidget>`), and rejected in EPUB 2 even with one ("not
     /// allowed *anywhere*" there - `schema/20` has no web-components module).
     pub custom_elements: bool,
+    /// OPS 2.0.1 § 2.6.3 Inline XML Islands, for the EPUB 2 XHTML grammar
+    /// only: the grammar a `switch` in the OPS namespace is checked against
+    /// (Appendix B), after which the switch is **transparent** - its
+    /// `default`'s children are validated as the children of the switch's
+    /// parent, in its place. `None` everywhere else.
+    ///
+    /// This lives here rather than in the schema for the same reason as
+    /// `custom_elements`: § 2.6.3.1.3 defines validity as "replacing all
+    /// switch elements with the content of their child default elements
+    /// yields a valid document", and that is a rewrite of the document, not
+    /// a content model. epubcheck does the rewrite with NVDL (`ops20.nvdl`
+    /// unwraps the switch and attaches `default`'s children to the parent).
+    /// Modelling it in RELAX NG took one switch define per parent and still
+    /// could not stand in for `thead`, mix row-group kinds, or see that an
+    /// empty `default` leaves its parent empty.
+    pub ops_switch: Option<Box<Grammar>>,
 }
 
 impl Grammar {
@@ -66,6 +82,7 @@ impl Grammar {
             start,
             defs: Vec::new(),
             custom_elements: false,
+            ops_switch: None,
         }
     }
 }
@@ -73,8 +90,29 @@ impl Grammar {
 /// The XHTML namespace, for the custom-element rule above.
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 
-/// The OPS namespace, home of `ops:switch` / `epub:switch`.
-const OPS_NS: &str = "http://www.idpf.org/2007/ops";
+/// A parent's children as the content model sees them: as written, or with
+/// OPS switches unwrapped (see `Env::island_children`).
+enum Kids<'d, 'i> {
+    Plain(roxmltree::Children<'d, 'i>),
+    Flat(std::vec::IntoIter<roxmltree::Node<'d, 'i>>),
+}
+
+impl<'d, 'i> Iterator for Kids<'d, 'i> {
+    type Item = roxmltree::Node<'d, 'i>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Kids::Plain(c) => c.next(),
+            Kids::Flat(v) => v.next(),
+        }
+    }
+}
+
+/// Is `n` the OPS-namespace element `local` (`switch`, `default`)?
+fn is_ops(n: roxmltree::Node, local: &str) -> bool {
+    n.is_element()
+        && n.tag_name().name() == local
+        && n.tag_name().namespace() == Some("http://www.idpf.org/2007/ops")
+}
 
 /// Is this text run whitespace RELAX NG may ignore? XML whitespace only: a
 /// NO-BREAK SPACE is text, and Jing reports `<ul>&#160;<li>` as text where
@@ -132,6 +170,8 @@ struct Env<'a> {
     elem_memo: RefCell<HashMap<(String, String), Option<Pat>>>,
     /// See `Grammar::custom_elements`.
     custom_elements: bool,
+    /// See `Grammar::ops_switch`.
+    ops_switch: Option<&'a Grammar>,
     /// A small id for each attribute name seen, so [`Env::may_carry`] can key
     /// its memo on `(pattern, name)` without hashing two strings per node.
     attr_ids: RefCell<HashMap<String, HashMap<String, u32, FastHash>, FastHash>>,
@@ -179,6 +219,7 @@ impl<'a> Env<'a> {
             defs,
             start,
             custom_elements,
+            ops_switch: None,
             nullable_memo: RefCell::new(HashMap::new()),
             nullable_busy: RefCell::new(HashSet::new()),
             open_memo: RefCell::new(HashMap::new()),
@@ -436,13 +477,6 @@ impl<'a> Env<'a> {
     /// trap rather than the next instance of it.
     fn expected_names(&self, p: &Pat, out: &mut Vec<String>, visited: &mut HashSet<usize>) {
         match &**p {
-            // An OPS switch is never named as what was expected. In EPUB 2 it
-            // is transparent: epubcheck's `ops20.nvdl` lifts it out before
-            // the XHTML grammar runs, so that grammar's lists never hold it.
-            // In EPUB 3 it is deprecated. Naming it made XHTML 1.1's
-            // body-level list 22 names instead of 21 on every EPUB 2 "not
-            // allowed here", in the message and in `params`.
-            Pattern::Element(NameClass::Name { ns, .. }, _) if ns == OPS_NS => {}
             Pattern::Element(nc, _) => {
                 let mut locals = Vec::new();
                 nc.concrete_locals(&mut locals);
@@ -510,13 +544,6 @@ impl<'a> Env<'a> {
                 self.required_names(a, out, visited);
                 self.required_names(b, out, visited);
             }
-            // An OPS switch standing beside the real children (`li` or a
-            // switch whose default holds `li`) is not a second road: a
-            // switch only ever stands for those children, and epubcheck's
-            // grammar never sees it. Without this, an empty EPUB 2 `<ul>`
-            // lost "missing required element li" for "expected li".
-            Pattern::Choice(a, b) if self.is_ops_element(a) => self.required_names(b, out, visited),
-            Pattern::Choice(a, b) if self.is_ops_element(b) => self.required_names(a, out, visited),
             Pattern::Choice(a, b) => {
                 // Only what holds down *either* road. Collected separately and
                 // intersected, keeping `a`'s order.
@@ -539,20 +566,6 @@ impl<'a> Env<'a> {
             }
             _ => {}
         }
-    }
-
-    /// Is `p` an element in the OPS namespace, directly or through a chain
-    /// of `Ref`s (the `opsSwitch-*` defines in `schemas/xhtml.rng`)?
-    fn is_ops_element(&self, p: &Pat) -> bool {
-        let mut p = p;
-        for _ in 0..8 {
-            match &**p {
-                Pattern::Element(NameClass::Name { ns, .. }, _) => return ns == OPS_NS,
-                Pattern::Ref(i) => p = &self.defs[*i],
-                _ => return false,
-            }
-        }
-        false
     }
 
     /// The attribute names still demanded when the start tag closed.
@@ -1164,7 +1177,7 @@ impl<'a> Env<'a> {
         in_rejected: bool,
     ) -> Pat {
         let mut cur = p.clone();
-        for n in parent.children() {
+        for n in self.island_children(parent, blames) {
             if n.is_element() && self.is_removed_ns(n.tag_name().namespace().unwrap_or("")) {
                 continue;
             }
@@ -1330,6 +1343,50 @@ impl<'a> Env<'a> {
         cur
     }
 
+    /// `parent`'s children with every OPS `switch` replaced by its
+    /// `default`'s children (OPS 2.0.1 § 2.6.3.1.3), recursively; the plain
+    /// child list when the grammar has no `ops_switch`. Each switch is
+    /// checked against Appendix B on the way, its findings added to
+    /// `blames`. A switch with no `default` contributes nothing, so the
+    /// parent is judged as if the switch were absent - after the switch
+    /// itself has been reported incomplete.
+    ///
+    /// The plain case allocates nothing: it is every element of every
+    /// document, and a switch is rare even in EPUB 2.
+    fn island_children<'d, 'i>(
+        &self,
+        parent: roxmltree::Node<'d, 'i>,
+        blames: &mut Vec<Blame<'d, 'i>>,
+    ) -> Kids<'d, 'i> {
+        match self.ops_switch {
+            Some(sw) if parent.children().any(|c| is_ops(c, "switch")) => {
+                let mut out = Vec::new();
+                self.push_island_children(sw, parent, blames, &mut out);
+                Kids::Flat(out.into_iter())
+            }
+            _ => Kids::Plain(parent.children()),
+        }
+    }
+
+    fn push_island_children<'d, 'i>(
+        &self,
+        sw: &Grammar,
+        parent: roxmltree::Node<'d, 'i>,
+        blames: &mut Vec<Blame<'d, 'i>>,
+        out: &mut Vec<roxmltree::Node<'d, 'i>>,
+    ) {
+        for n in parent.children() {
+            if is_ops(n, "switch") {
+                blames.extend(validate_node_report(sw, n));
+                if let Some(d) = n.children().find(|c| is_ops(*c, "default")) {
+                    self.push_island_children(sw, d, blames, out);
+                }
+            } else {
+                out.push(n);
+            }
+        }
+    }
+
     /// Walk the subtree of an element the grammar defines **nowhere**, blaming
     /// nothing for being misplaced.
     ///
@@ -1370,7 +1427,10 @@ impl<'a> Env<'a> {
         parent: roxmltree::Node<'d, 'i>,
         blames: &mut Vec<Blame<'d, 'i>>,
     ) {
-        for n in parent.children().filter(|n| n.is_element()) {
+        for n in self
+            .island_children(parent, blames)
+            .filter(|n| n.is_element())
+        {
             let ns = n.tag_name().namespace().unwrap_or("");
             if self.is_removed_ns(ns) {
                 continue;
@@ -2032,11 +2092,12 @@ pub fn validate_node_report<'d, 'i>(
     grammar: &Grammar,
     root: roxmltree::Node<'d, 'i>,
 ) -> Vec<Blame<'d, 'i>> {
-    let env = Env::new(
+    let mut env = Env::new(
         &grammar.defs,
         grammar.start.clone(),
         grammar.custom_elements,
     );
+    env.ops_switch = grammar.ops_switch.as_deref();
     let mut blames = Vec::new();
     let p = env.child_deriv(&grammar.start, root, &mut blames);
     // Validity is "no blames": recovery may leave `p` nullable even after
@@ -2073,6 +2134,7 @@ pub fn validate_node_report_in_namespaces<'d, 'i>(
         grammar.custom_elements,
     );
     env.keep_ns = Some(keep);
+    env.ops_switch = grammar.ops_switch.as_deref();
     let mut blames = Vec::new();
     let p = env.child_deriv(&grammar.start, root, &mut blames);
     if !env.nullable(&p) && blames.is_empty() {
@@ -2101,11 +2163,12 @@ pub fn validate_misplaced_element<'d, 'i>(
     grammar: &Grammar,
     node: roxmltree::Node<'d, 'i>,
 ) -> Vec<Blame<'d, 'i>> {
-    let env = Env::new(
+    let mut env = Env::new(
         &grammar.defs,
         grammar.start.clone(),
         grammar.custom_elements,
     );
+    env.ops_switch = grammar.ops_switch.as_deref();
     let mut blames = Vec::new();
     let ns = node.tag_name().namespace().unwrap_or("");
     if let Some(model) = env.element_model(ns, node.tag_name().name()) {

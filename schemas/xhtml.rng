@@ -1601,7 +1601,6 @@
         <choice>
           <ref name="areaEl-epub2"/>
           <ref name="epub2BlockChoice"/>
-          <ref name="opsSwitch-epub2MapItem"/>
         </choice>
       </oneOrMore>
     </element>
@@ -3558,8 +3557,8 @@
   <!-- `tt` being valid here but removed in HTML5 is the false       -->
   <!-- positive. Both fall out of the vocabulary, with no per-        -->
   <!-- element code. `math` is not in this pool, since OPS 2.0.1 has  -->
-  <!-- no MathML at all (see `epub2BothChoice`); `ops:switch` is, as  -->
-  <!-- OPS 2.0.1 defines it (see `opsSwitch-epub2Block`).             -->
+  <!-- no MathML at all (see `epub2BothChoice`). Nor is `ops:switch`: -->
+  <!-- it is transparent, not a member (`schemas/ops-switch.rng`).    -->
   <!-- ============================================================ -->
 
   <!-- The EPUB 2 branch's globals: everything `globalAttrs` grants except
@@ -3716,11 +3715,15 @@
        epubcheck also reports the body itself as incomplete (issue #65; the
        nav document in DNSB's MobileRead #134 comparison). Used by `body`
        alone; the flow containers keep their own permissive models. -->
+  <!-- `ops:switch` (OPS 2.0.1 § 2.6.3) is not in any pool here: it is
+       transparent, and its own structure is `schemas/ops-switch.rng`. See
+       `Grammar::ops_switch`. -->
+
   <define name="epub2Block">
-    <oneOrMore><choice><ref name="epub2BlockChoice"/><ref name="opsSwitch-epub2Block"/></choice></oneOrMore>
+    <oneOrMore><ref name="epub2BlockChoice"/></oneOrMore>
   </define>
   <define name="epub2Inline">
-    <mixed><zeroOrMore><choice><ref name="epub2InlineChoice"/><ref name="opsSwitch-epub2Inline"/></choice></zeroOrMore></mixed>
+    <mixed><zeroOrMore><ref name="epub2InlineChoice"/></zeroOrMore></mixed>
   </define>
   <define name="epub2Flow">
     <mixed>
@@ -3728,177 +3731,9 @@
         <choice>
           <ref name="epub2InlineChoice"/>
           <ref name="epub2BlockChoice"/>
-          <ref name="opsSwitch-epub2Flow"/>
         </choice>
       </zeroOrMore>
     </mixed>
-  </define>
-
-  <!-- ============ ops:switch (OPS 2.0.1 § 2.6.3, Appendix B) ============ -->
-
-  <!-- OPS 2.0.1's Inline XML Islands. This pool said "`epub:switch` is an
-       EPUB 3 construct" until 0.44.0, and rejected every switch in an EPUB 2
-       book as "not allowed here" - a valid cover page included (413Michele,
-       MobileRead 374286 #387). EPUB 3 inherited the element from here, in the
-       same namespace.
-
-       Appendix B, which § 2.6.3.1 calls the normative definition: `switch`
-       holds one or more `case` then exactly one `default`; the three take
-       `id`, `case` also `required-namespace` (required) and
-       `required-modules`, and nothing else takes any attribute. (The prose of
-       § 2.6.3.1.1 says "zero or more case elements"; the schema it names as
-       normative, and epubcheck's `ops-switch.rng`, say one or more.)
-
-       Where it may stand and what `default` holds is § 2.6.3.1.3: "a document
-       is considered valid if and only if replacing all switch elements with
-       the content of their child default elements yields a valid document".
-       epubcheck does exactly that (`ops20.nvdl` unwraps the switch and
-       attaches `default`'s children to the parent). So there is one switch
-       per content pool, and its `default` holds that pool's content. `case`
-       is not validated at all (`useMode="anything"` there).
-
-       Where the parent takes only particular children (`ul`, `ol`, `dl`,
-       `map`, a table's columns, row groups, rows and cells) the switch has
-       its own define below, whose `default` holds a run of those children.
-
-       Not covered: a switch standing for a table's `caption`, `thead` or
-       `tfoot`, or one whose `default` mixes two of a table's kinds (`thead`
-       then `tbody`). Those are still "not allowed here". An empty `default`
-       is accepted even where the parent then holds nothing (a `ul` whose
-       only child is a switch with an empty `default`), which epubcheck
-       reports as incomplete. -->
-  <define name="opsSwitchCase-epub2">
-    <oneOrMore>
-      <element name="epub:case">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <attribute name="required-namespace"><text/></attribute>
-        <optional><attribute name="required-modules"><text/></attribute></optional>
-        <ref name="foreignChildren"/>
-      </element>
-    </oneOrMore>
-  </define>
-
-  <define name="opsSwitch-epub2Block">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><ref name="epub2BlockChoice"/><ref name="opsSwitch-epub2Block"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2Inline">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <ref name="epub2Inline"/>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2Flow">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <ref name="epub2Flow"/>
-      </element>
-    </element>
-  </define>
-
-  <!-- The same switch where the parent takes only particular children: its
-       `default` holds a run of those children (§ 2.6.3.1.3 again). -->
-  <define name="opsSwitch-epub2Li">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><ref name="liEl-epub2"/><ref name="opsSwitch-epub2Li"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2DlItem">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><element name="dt"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element><element name="dd"><ref name="globalAttrs-epub2"/><ref name="epub2Flow"/></element><ref name="opsSwitch-epub2DlItem"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2MapItem">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><ref name="areaEl-epub2"/><ref name="epub2BlockChoice"/><ref name="opsSwitch-epub2MapItem"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2Col">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><ref name="colEl-epub2"/><ref name="opsSwitch-epub2Col"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2ColOrGroup">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><choice><ref name="colEl-epub2"/><ref name="opsSwitch-epub2Col"/></choice></zeroOrMore></element><ref name="colEl-epub2"/><ref name="opsSwitch-epub2ColOrGroup"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2Tbody">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><element name="tbody"><ref name="rowGroupAttrs-epub2"/><oneOrMore><choice><ref name="trEl-epub2"/><ref name="opsSwitch-epub2Tr"/></choice></oneOrMore></element><ref name="opsSwitch-epub2Tbody"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2Tr">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><ref name="trEl-epub2"/><ref name="opsSwitch-epub2Tr"/></choice></zeroOrMore>
-      </element>
-    </element>
-  </define>
-
-  <define name="opsSwitch-epub2Cell">
-    <element name="epub:switch">
-      <optional><attribute name="id"><data type="ID"/></attribute></optional>
-      <ref name="opsSwitchCase-epub2"/>
-      <element name="epub:default">
-        <optional><attribute name="id"><data type="ID"/></attribute></optional>
-        <zeroOrMore><choice><ref name="cellEl-epub2"/><ref name="opsSwitch-epub2Cell"/></choice></zeroOrMore>
-      </element>
-    </element>
   </define>
 
   <!-- Inline vocabulary: XHTML 1.1 + OPS - note big/tt/acronym present, and
@@ -4107,12 +3942,12 @@
   <define name="olEl-epub2">
     <element name="ol">
       <ref name="globalAttrs-epub2"/>
-      <oneOrMore><choice><ref name="liEl-epub2"/><ref name="opsSwitch-epub2Li"/></choice></oneOrMore>
+      <oneOrMore><ref name="liEl-epub2"/></oneOrMore>
     </element>
   </define>
 
   <define name="ulEl-epub2">
-    <element name="ul"><ref name="globalAttrs-epub2"/><oneOrMore><choice><ref name="liEl-epub2"/><ref name="opsSwitch-epub2Li"/></choice></oneOrMore></element>
+    <element name="ul"><ref name="globalAttrs-epub2"/><oneOrMore><ref name="liEl-epub2"/></oneOrMore></element>
   </define>
 
   <define name="liEl-epub2">
@@ -4128,7 +3963,6 @@
         <choice>
           <element name="dt"><ref name="globalAttrs-epub2"/><ref name="epub2Inline"/></element>
           <element name="dd"><ref name="globalAttrs-epub2"/><ref name="epub2Flow"/></element>
-          <ref name="opsSwitch-epub2DlItem"/>
         </choice>
       </oneOrMore>
     </element>
@@ -4180,9 +4014,8 @@
            row groups at all. -->
       <zeroOrMore>
         <choice>
-          <element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><choice><ref name="colEl-epub2"/><ref name="opsSwitch-epub2Col"/></choice></zeroOrMore></element>
+          <element name="colgroup"><ref name="colAttrs-epub2"/><zeroOrMore><ref name="colEl-epub2"/></zeroOrMore></element>
           <ref name="colEl-epub2"/>
-          <ref name="opsSwitch-epub2ColOrGroup"/>
         </choice>
       </zeroOrMore>
       <choice>
@@ -4193,19 +4026,16 @@
                it, which is why the EPUB 3 shapes above stay permissive - the
                same split `ol`/`ul`/`dl` already have here. -->
           <optional>
-            <element name="thead"><ref name="rowGroupAttrs-epub2"/><oneOrMore><choice><ref name="trEl-epub2"/><ref name="opsSwitch-epub2Tr"/></choice></oneOrMore></element>
+            <element name="thead"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="trEl-epub2"/></oneOrMore></element>
           </optional>
           <optional>
-            <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><oneOrMore><choice><ref name="trEl-epub2"/><ref name="opsSwitch-epub2Tr"/></choice></oneOrMore></element>
+            <element name="tfoot"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="trEl-epub2"/></oneOrMore></element>
           </optional>
           <oneOrMore>
-            <choice>
-            <ref name="opsSwitch-epub2Tbody"/>
-            <element name="tbody"><ref name="rowGroupAttrs-epub2"/><oneOrMore><choice><ref name="trEl-epub2"/><ref name="opsSwitch-epub2Tr"/></choice></oneOrMore></element>
-            </choice>
+            <element name="tbody"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="trEl-epub2"/></oneOrMore></element>
           </oneOrMore>
         </group>
-        <oneOrMore><choice><ref name="trEl-epub2"/><ref name="opsSwitch-epub2Tr"/></choice></oneOrMore>
+        <oneOrMore><ref name="trEl-epub2"/></oneOrMore>
       </choice>
     </element>
   </define>
@@ -4248,7 +4078,7 @@
        `table.rng` only ever *references* `tr`, so grepping it alone says the
        element is undefined. -->
   <define name="trEl-epub2">
-    <element name="tr"><ref name="rowGroupAttrs-epub2"/><oneOrMore><choice><ref name="cellEl-epub2"/><ref name="opsSwitch-epub2Cell"/></choice></oneOrMore></element>
+    <element name="tr"><ref name="rowGroupAttrs-epub2"/><oneOrMore><ref name="cellEl-epub2"/></oneOrMore></element>
   </define>
 
   <define name="cellEl-epub2">
