@@ -8,7 +8,7 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
-## [Unreleased]
+## [0.45.0] - 2026-11-17
 
 ### Fixed
 
@@ -25,13 +25,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
     switch replaced by its `default`'s content. epubveri validates it that
     way, as epubcheck's `ops20.nvdl` does, so a switch may stand wherever its
     `default`'s content may: in a list for `li`, in a table for a `caption`,
-    rows or row groups, in a paragraph for text. A `default` that leaves its
-    parent empty leaves it incomplete. `case` content is not checked.
+    rows or row groups, in a paragraph for inline elements. A `default` that
+    leaves its parent empty leaves it incomplete. The elements inside a
+    `case` are not checked.
+  - `case` and `default` hold elements, not text. Appendix B gives them only
+    nested switches, and Appendix A's NVDL attaches their element children elsewhere,
+    so a text node there fails the switch's own schema, even where the
+    parent takes text. epubcheck 5.4.0 says the same.
   - The grammar is the new `schemas/ops-switch.rng`. No EPUB 3 rule changed.
   - Output is byte-identical to 0.44.0 on the shelf (562 books), its 76
     EPUB 3 books re-declared as EPUB 2, the epubcheck fixtures and the W3C
     epub-tests. None of the first three holds an EPUB 2 switch, so a test
-    covers the behaviour. Speed on the shelf is unchanged (+0.1% CPU).
+    covers the behaviour. On 27 switch shapes built for this, epubveri and
+    epubcheck 5.4.0 give the same verdict and the same number of errors.
+    Speed on the shelf is unchanged (+0.1% CPU).
 
 ### Changed
 
