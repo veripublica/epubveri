@@ -10509,11 +10509,11 @@ fn check_text(
         // unrelated native <switch> element (conditional rendering), which
         // a local-name-only match would misidentify as epub:switch.
         //
-        // EPUB 3 only: `epub-switch.rnc` and the deprecation rule in
-        // `epub-xhtml-30.sch` exist only under `schema/30`, and `schema/20`
-        // has no epub:switch at all - so on an EPUB 2 book epubcheck reports
-        // nothing here while the element is separately an unknown-element
-        // error. Found by re-declaring the shelf's EPUB 3 books as EPUB 2.
+        // EPUB 3 only: the deprecation rule in `epub-xhtml-30.sch` exists
+        // only under `schema/30`. In EPUB 2 the element is OPS 2.0.1's own
+        // `ops:switch` (§ 2.6.3), current there and not deprecated, so
+        // epubcheck reports nothing here. Its grammar is
+        // `opsSwitch-epub2Block` in schemas/xhtml.rng.
         const EPUB_NS: &str = "http://www.idpf.org/2007/ops";
         for n in d.descendants().filter(|n| {
             is_epub3

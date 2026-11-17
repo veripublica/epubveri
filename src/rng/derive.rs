@@ -73,6 +73,9 @@ impl Grammar {
 /// The XHTML namespace, for the custom-element rule above.
 const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
 
+/// The OPS namespace, home of `ops:switch` / `epub:switch`.
+const OPS_NS: &str = "http://www.idpf.org/2007/ops";
+
 /// Is this text run whitespace RELAX NG may ignore? XML whitespace only: a
 /// NO-BREAK SPACE is text, and Jing reports `<ul>&#160;<li>` as text where
 /// none is allowed.
@@ -433,6 +436,13 @@ impl<'a> Env<'a> {
     /// trap rather than the next instance of it.
     fn expected_names(&self, p: &Pat, out: &mut Vec<String>, visited: &mut HashSet<usize>) {
         match &**p {
+            // An OPS switch is never named as what was expected. In EPUB 2 it
+            // is transparent: epubcheck's `ops20.nvdl` lifts it out before
+            // the XHTML grammar runs, so that grammar's lists never hold it.
+            // In EPUB 3 it is deprecated. Naming it made XHTML 1.1's
+            // body-level list 22 names instead of 21 on every EPUB 2 "not
+            // allowed here", in the message and in `params`.
+            Pattern::Element(NameClass::Name { ns, .. }, _) if ns == OPS_NS => {}
             Pattern::Element(nc, _) => {
                 let mut locals = Vec::new();
                 nc.concrete_locals(&mut locals);

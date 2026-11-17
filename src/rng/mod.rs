@@ -274,6 +274,107 @@ mod tests {
         );
     }
 
+    /// OPS 2.0.1 § 2.6.3 `ops:switch` in an EPUB 2 document: one or more
+    /// `case`, then one `default` (Appendix B), and the document is valid iff
+    /// replacing each switch by its `default`'s content is (§ 2.6.3.1.3).
+    /// Until 0.44.0 every switch here was "not allowed here" (413Michele,
+    /// MobileRead 374286 #387).
+    #[test]
+    fn epub2_ops_switch_follows_ops_2_0_1() {
+        let g2 = crate::rng::xhtml_grammar_epub2();
+        let report = |body: &str| -> Vec<String> {
+            let xml = format!(
+                "<html xmlns=\"http://www.w3.org/1999/xhtml\" \
+                 xmlns:ops=\"http://www.idpf.org/2007/ops\">\
+                 <head><title>t</title></head><body>{body}</body></html>"
+            );
+            let d = crate::ocf::parse_xml(&xml).unwrap();
+            crate::rng::validate_node_report(&g2, d.root_element())
+                .into_iter()
+                .map(|b| match b {
+                    crate::rng::Blame::Element(_, crate::rng::ElementFault::NotAllowed(n)) => {
+                        format!("not allowed; expected {n:?}")
+                    }
+                    _ => "finding".to_string(),
+                })
+                .collect()
+        };
+        let case = "<ops:case required-namespace=\"http://www.w3.org/2000/svg\">\
+                    <svg xmlns=\"http://www.w3.org/2000/svg\"/><li>any</li></ops:case>";
+        let ok = [
+            (
+                "block, in body",
+                format!(
+                    "<ops:switch id=\"s\">{case}<ops:default><div><p>c</p></div></ops:default></ops:switch>"
+                ),
+            ),
+            (
+                "inline, in p",
+                format!(
+                    "<p>a <ops:switch>{case}<ops:default><em>b</em> c</ops:default></ops:switch></p>"
+                ),
+            ),
+            (
+                "flow, in div",
+                format!(
+                    "<div><ops:switch>{case}<ops:default>t <p>x</p></ops:default></ops:switch></div>"
+                ),
+            ),
+            (
+                "nested in default",
+                format!(
+                    "<ops:switch>{case}<ops:default><ops:switch>{case}<ops:default><p>x</p></ops:default></ops:switch></ops:default></ops:switch>"
+                ),
+            ),
+        ];
+        for (label, body) in &ok {
+            assert!(report(body).is_empty(), "{label}: {:?}", report(body));
+        }
+        let bad = [
+            ("no default", format!("<ops:switch>{case}</ops:switch>")),
+            (
+                "no case",
+                "<ops:switch><ops:default><p>x</p></ops:default></ops:switch>".to_string(),
+            ),
+            (
+                "case after default",
+                format!("<ops:switch><ops:default><p>x</p></ops:default>{case}</ops:switch>"),
+            ),
+            (
+                "case without required-namespace",
+                "<ops:switch><ops:case/><ops:default><p>x</p></ops:default></ops:switch>"
+                    .to_string(),
+            ),
+            (
+                "attribute outside Appendix B",
+                format!(
+                    "<ops:switch class=\"c\">{case}<ops:default><p>x</p></ops:default></ops:switch>"
+                ),
+            ),
+            (
+                "block default in inline position",
+                format!(
+                    "<p><ops:switch>{case}<ops:default><div>x</div></ops:default></ops:switch></p>"
+                ),
+            ),
+            (
+                "text default in block position",
+                format!("<ops:switch>{case}<ops:default>loose</ops:default></ops:switch>"),
+            ),
+        ];
+        for (label, body) in &bad {
+            assert!(!report(body).is_empty(), "{label} must be reported");
+        }
+        // The switch is never offered as what was expected: epubcheck's
+        // XHTML 1.1 lists do not hold it (ops20.nvdl lifts it out first).
+        let r = report("<span>x</span>");
+        assert!(
+            r.iter().any(|m| m.contains("\"p\"")),
+            "the list is printed: {r:?}"
+        );
+        assert!(r.iter().all(|m| !m.contains("\"switch\"")), "{r:?}");
+    }
+
     /// The "expected one of …" set names what may appear *here*, not what may
     /// follow this element's end tag.
     ///

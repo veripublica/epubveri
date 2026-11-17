@@ -3556,9 +3556,9 @@
   <!-- here is exactly the false-negative Doitsu reported; `big`/    -->
   <!-- `tt` being valid here but removed in HTML5 is the false       -->
   <!-- positive. Both fall out of the vocabulary, with no per-        -->
-  <!-- element code. `epub:switch` is an EPUB 3 construct and is not  -->
-  <!-- in this pool; neither is `math`, since OPS 2.0.1 has no        -->
-  <!-- MathML at all (see `epub2BothChoice`).                         -->
+  <!-- element code. `math` is not in this pool, since OPS 2.0.1 has  -->
+  <!-- no MathML at all (see `epub2BothChoice`); `ops:switch` is, as  -->
+  <!-- OPS 2.0.1 defines it (see `opsSwitch-epub2Block`).             -->
   <!-- ============================================================ -->
 
   <!-- The EPUB 2 branch's globals: everything `globalAttrs` grants except
@@ -3716,10 +3716,10 @@
        nav document in DNSB's MobileRead #134 comparison). Used by `body`
        alone; the flow containers keep their own permissive models. -->
   <define name="epub2Block">
-    <oneOrMore><ref name="epub2BlockChoice"/></oneOrMore>
+    <oneOrMore><choice><ref name="epub2BlockChoice"/><ref name="opsSwitch-epub2Block"/></choice></oneOrMore>
   </define>
   <define name="epub2Inline">
-    <mixed><zeroOrMore><ref name="epub2InlineChoice"/></zeroOrMore></mixed>
+    <mixed><zeroOrMore><choice><ref name="epub2InlineChoice"/><ref name="opsSwitch-epub2Inline"/></choice></zeroOrMore></mixed>
   </define>
   <define name="epub2Flow">
     <mixed>
@@ -3727,9 +3727,80 @@
         <choice>
           <ref name="epub2InlineChoice"/>
           <ref name="epub2BlockChoice"/>
+          <ref name="opsSwitch-epub2Flow"/>
         </choice>
       </zeroOrMore>
     </mixed>
+  </define>
+
+  <!-- ============ ops:switch (OPS 2.0.1 § 2.6.3, Appendix B) ============ -->
+
+  <!-- OPS 2.0.1's Inline XML Islands. This pool said "`epub:switch` is an
+       EPUB 3 construct" until 0.44.0, and rejected every switch in an EPUB 2
+       book as "not allowed here" - a valid cover page included (413Michele,
+       MobileRead 374286 #387). EPUB 3 inherited the element from here, in the
+       same namespace.
+
+       Appendix B, which § 2.6.3.1 calls the normative definition: `switch`
+       holds one or more `case` then exactly one `default`; the three take
+       `id`, `case` also `required-namespace` (required) and
+       `required-modules`, and nothing else takes any attribute. (The prose of
+       § 2.6.3.1.1 says "zero or more case elements"; the schema it names as
+       normative, and epubcheck's `ops-switch.rng`, say one or more.)
+
+       Where it may stand and what `default` holds is § 2.6.3.1.3: "a document
+       is considered valid if and only if replacing all switch elements with
+       the content of their child default elements yields a valid document".
+       epubcheck does exactly that (`ops20.nvdl` unwraps the switch and
+       attaches `default`'s children to the parent). So there is one switch
+       per content pool, and its `default` holds that pool's content. `case`
+       is not validated at all (`useMode="anything"` there).
+
+       Not covered: a switch where the parent takes only particular children
+       (`ul`, `ol`, `dl`, `table` and its rows, `map`'s areas). An `li` inside
+       a switch inside a `ul` is still "not allowed here" here. -->
+  <define name="opsSwitchCase-epub2">
+    <oneOrMore>
+      <element name="epub:case">
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <attribute name="required-namespace"><text/></attribute>
+        <optional><attribute name="required-modules"><text/></attribute></optional>
+        <ref name="foreignChildren"/>
+      </element>
+    </oneOrMore>
+  </define>
+
+  <define name="opsSwitch-epub2Block">
+    <element name="epub:switch">
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <ref name="opsSwitchCase-epub2"/>
+      <element name="epub:default">
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <zeroOrMore><choice><ref name="epub2BlockChoice"/><ref name="opsSwitch-epub2Block"/></choice></zeroOrMore>
+      </element>
+    </element>
+  </define>
+
+  <define name="opsSwitch-epub2Inline">
+    <element name="epub:switch">
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <ref name="opsSwitchCase-epub2"/>
+      <element name="epub:default">
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <ref name="epub2Inline"/>
+      </element>
+    </element>
+  </define>
+
+  <define name="opsSwitch-epub2Flow">
+    <element name="epub:switch">
+      <optional><attribute name="id"><data type="ID"/></attribute></optional>
+      <ref name="opsSwitchCase-epub2"/>
+      <element name="epub:default">
+        <optional><attribute name="id"><data type="ID"/></attribute></optional>
+        <ref name="epub2Flow"/>
+      </element>
+    </element>
   </define>
 
   <!-- Inline vocabulary: XHTML 1.1 + OPS - note big/tt/acronym present, and
