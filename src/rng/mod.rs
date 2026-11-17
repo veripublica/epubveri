@@ -322,13 +322,13 @@ mod tests {
             (
                 "inline, in p",
                 format!(
-                    "<p>a <ops:switch>{case}<ops:default><em>b</em> c</ops:default></ops:switch></p>"
+                    "<p>a <ops:switch>{case}<ops:default><em>b</em></ops:default></ops:switch> c</p>"
                 ),
             ),
             (
                 "flow, in div",
                 format!(
-                    "<div><ops:switch>{case}<ops:default>t <p>x</p></ops:default></ops:switch></div>"
+                    "<div>t <ops:switch>{case}<ops:default><span>s</span> <p>x</p></ops:default></ops:switch></div>"
                 ),
             ),
             (
@@ -409,10 +409,6 @@ mod tests {
                     "<table><ops:switch>{case}<ops:default><tfoot><tr><td>f</td></tr></tfoot></ops:default></ops:switch><tbody><tr><td>a</td></tr></tbody></table>"
                 ),
             ),
-            (
-                "text in default inside p",
-                format!("<p><ops:switch>{case}<ops:default>t</ops:default></ops:switch></p>"),
-            ),
         ];
         for (label, body) in &ok {
             assert!(report(body).is_empty(), "{label}: {:?}", report(body));
@@ -443,6 +439,16 @@ mod tests {
                 format!(
                     "<p><ops:switch>{case}<ops:default><div>x</div></ops:default></ops:switch></p>"
                 ),
+            ),
+            // Appendix B: `case` and `default` hold elements, never text,
+            // even where the parent takes text (epubcheck 5.4.0 agrees).
+            (
+                "text in default inside p",
+                format!("<p><ops:switch>{case}<ops:default>t</ops:default></ops:switch></p>"),
+            ),
+            (
+                "text in case",
+                "<ops:switch><ops:case required-namespace=\"x\">t</ops:case><ops:default><p>x</p></ops:default></ops:switch>".to_string(),
             ),
             (
                 "text default in block position",

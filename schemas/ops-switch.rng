@@ -15,6 +15,15 @@
   "not allowed here", a valid cover page included (413Michele, MobileRead
   374286 #387).
 
+  `case` and `default` hold elements, not text: Appendix B gives both only
+  nested switches, and Appendix A's NVDL attaches the element children
+  elsewhere, so a text node there is checked against this schema and fails.
+  The prose of § 2.6.3.1.3 ("only XML nodes that would be allowed at the
+  point of the document where its parent switch element was used") reads as
+  if text could stand in a `default` inside a paragraph; the definition it
+  names as normative says it cannot, and so does epubcheck 5.4.0 ("text not
+  allowed here"). Whitespace is not text here.
+
   This grammar checks the switch's own structure and nothing inside it. The
   rest is § 2.6.3.1.3: "a document is considered valid if and only if
   replacing all switch elements with the content of their child default
@@ -37,15 +46,26 @@
           <optional><attribute name="id" ns=""><data type="ID"/></attribute></optional>
           <attribute name="required-namespace" ns=""><text/></attribute>
           <optional><attribute name="required-modules" ns=""><text/></attribute></optional>
-          <ref name="anything"/>
+          <ref name="elements"/>
         </element>
       </oneOrMore>
       <element name="default">
         <optional><attribute name="id" ns=""><data type="ID"/></attribute></optional>
-        <ref name="anything"/>
+        <ref name="elements"/>
       </element>
     </element>
   </start>
+
+  <!-- Any elements, with anything inside them, and no text of its own. -->
+  <define name="elements">
+    <zeroOrMore>
+      <element>
+        <anyName/>
+        <zeroOrMore><attribute><anyName/></attribute></zeroOrMore>
+        <ref name="anything"/>
+      </element>
+    </zeroOrMore>
+  </define>
 
   <define name="anything">
     <mixed>

@@ -1361,7 +1361,7 @@ impl<'a> Env<'a> {
         match self.ops_switch {
             Some(sw) if parent.children().any(|c| is_ops(c, "switch")) => {
                 let mut out = Vec::new();
-                self.push_island_children(sw, parent, blames, &mut out);
+                self.push_island_children(sw, parent, blames, &mut out, false);
                 Kids::Flat(out.into_iter())
             }
             _ => Kids::Plain(parent.children()),
@@ -1374,14 +1374,17 @@ impl<'a> Env<'a> {
         parent: roxmltree::Node<'d, 'i>,
         blames: &mut Vec<Blame<'d, 'i>>,
         out: &mut Vec<roxmltree::Node<'d, 'i>>,
+        elements_only: bool,
     ) {
         for n in parent.children() {
             if is_ops(n, "switch") {
                 blames.extend(validate_node_report(sw, n));
                 if let Some(d) = n.children().find(|c| is_ops(*c, "default")) {
-                    self.push_island_children(sw, d, blames, out);
+                    // Elements only: text in a `default` is the switch's own
+                    // fault, already blamed against Appendix B above.
+                    self.push_island_children(sw, d, blames, out, true);
                 }
-            } else {
+            } else if !elements_only || n.is_element() {
                 out.push(n);
             }
         }
