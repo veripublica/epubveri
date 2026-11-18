@@ -321,10 +321,9 @@ fn check_in(
     // inside it is not what the author wrote as one block, and every shape
     // complaint it produces is a consequence of the one defect it has.
     //
-    // styloria 0.20 no longer reports such a block (CSS Syntax §5.5 closes it
-    // at the end of input without naming a parse error), so whether a block
-    // closed is read off the tree here: see `Ctx::never_closed`. The CSS-008
-    // the error used to draw went with it.
+    // styloria reports no syntax error for such a block (CSS Syntax §5.5
+    // closes it at the end of input without naming one), so whether a block
+    // closed is read off the tree here: see `Ctx::never_closed`.
     //
     // Measured on `content-css-syntax-error`, which has two unclosed blocks:
     // styloria reports exactly two errors and so does epubcheck; the third
@@ -1005,21 +1004,15 @@ impl Ctx<'_> {
         syntax_severity(self.is_epub3)
     }
 
-    /// Whether `block`, or a bracket inside it, was still open at the end of
-    /// input.
+    /// Whether `block` was still open at the end of input.
     ///
-    /// styloria reports no error for such a block (CSS Syntax §5.5 closes it
-    /// there), so it is read off the tree. A block that closed ends in its own
-    /// `}`, after its last item. One that did not ends with its last token: a
-    /// byte other than `}`, or a `}` its last item holds (`p { a { b: c }`, or
-    /// a `(` or `[` left open in a value). Not "ends at the end of input": a
-    /// comment is no token, so `p { a: b /* c */` ends at the `b`.
+    /// CSS Syntax §5.5 closes such a block there without naming a parse
+    /// error, so no syntax error says it; styloria 0.21 records it on the
+    /// block instead. The source text cannot answer it alone: `p { "}`,
+    /// `p { ; \}` and `p { a: b; [}` end in a `}` byte that a dropped token
+    /// holds, and stay open.
     fn never_closed(&self, block: &Block) -> bool {
-        let Some(close) = block.span.end.checked_sub(1) else {
-            return true;
-        };
-        self.css.as_bytes().get(close) != Some(&b'}')
-            || block.node.last().is_some_and(|i| i.span().end > close)
+        !block.closed
     }
 }
 
@@ -1664,7 +1657,7 @@ fn walk_rule_block(block: &Block, ctx: Ctx, quiet: &mut Quiet, report: &mut Repo
 /// A CSS-008 for a block that never closed, and whether it did not.
 ///
 /// CSS Syntax §5.5 closes such a block at the end of input without naming a
-/// parse error, so styloria 0.20 reports none and the tree is asked instead
+/// parse error, so styloria reports none and records it on the block instead
 /// (`Ctx::never_closed`). The finding stays because it is true and it
 /// matters: everything after the `{` becomes part of that block, nested rules
 /// included. epubsana's `fix.css_unterminated` dispatches on its key. An
@@ -4249,6 +4242,16 @@ mod tests {
             "a { b { color: blue }",
         ] {
             assert_eq!(slugs(css), vec!["css.stylesheet.unterminated"], "{css:?}");
+        }
+        // Open at the end although the last byte is a `}`: a dropped token
+        // holds it. The byte test before styloria 0.21's `Block::closed` read
+        // each of these as closed.
+        for css in ["p { \"}", "p { ; \\}", "p { a: b; [}", "p { url(}"] {
+            assert!(
+                slugs(css).contains(&"css.stylesheet.unterminated"),
+                "{css:?}: {:?}",
+                slugs(css)
+            );
         }
         assert_eq!(
             slugs("a { b { } }"),

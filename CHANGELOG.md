@@ -8,6 +8,39 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Changed
+
+- **styloria 0.21.0.** Under `--advisory` only; no verdict and no default
+  output moves, on any of the shelf's books or epubcheck's fixtures.
+  - A pseudo-class after a pseudo-element that Selectors 4 § 3.6.3 does not
+    allow there is ADV-017: `p::before:first-child`, `p::after:checked`,
+    `p::before:has(a)`, `::slotted(*):first-child`. User-action
+    pseudo-classes, `:is()`, `:where()`, and anything after `::part()` stay
+    valid.
+  - `::part(a)::part(b)` no longer draws ADV-017. CSS Pseudo-Elements 4 § 5
+    allows any pseudo-element after an element-backed one (epub-test-books'
+    `part-after-part`).
+  - `::-webkit-scrollbar:horizontal` no longer draws ADV-019. Its text said
+    browsers drop the rule, which WebKit and Blink do not.
+  - ADV-024 on `column-width` and `columns` with `stretch`, `min-content`,
+    `max-content`, `fit-content` or `contain`, which the CSSWG dropped from
+    the spec (w3c/csswg-drafts#14574), and on `ui-serif`, `ui-sans-serif`,
+    `ui-monospace` or `ui-rounded` used as a family name (`@font-face {
+    font-family: ui-serif }`, `font-family: ui-serif foo`; CSS Fonts 4
+    § 2.1.1).
+
+### Fixed
+
+- **A block left open at the end of a stylesheet is found when its last byte
+  is a `}`.** `p { "}`, `p { ; \}`, `p { a: b; [}` and `p { url(}` never
+  close: the `}` belongs to a token the block dropped. epubveri read a final
+  `}` as the block's own and said nothing. It now asks styloria's
+  `Block::closed`, so these draw `css.stylesheet.unterminated` like any
+  other unclosed block: an error in EPUB 2, usage in EPUB 3. No book on the
+  shelf or in epubcheck's fixtures has this shape.
+
 ## [0.45.0] - 2026-11-17
 
 ### Fixed
