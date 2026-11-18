@@ -8,6 +8,25 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **EPUB 2: what an unclosed block holds before the first rule it swallowed
+  is reported, as it is once the block is closed.** CSS 2.1 § 4.2 closes the
+  block at the end of the style sheet, so it is the same block with or
+  without its `}`. epubveri quieted the whole block, so `p { color: red;
+  12px` drew only `css.stylesheet.unterminated`, and a `}` added at the end
+  revealed the `css.declaration.malformed_shape` on `12px`. Both are now
+  reported in both states (CSS-008, error in EPUB 2). From the first rule
+  inside the block on, the text is still quiet: CSS 2 has no nesting, so
+  that rule is where the author meant the block to end, and what follows is
+  the next rules swallowed by the one missing `}`. EPUB 3 is unchanged; it
+  already walked the whole block. Changed key: `css.declaration.malformed_shape`,
+  on EPUB 2 books only, and only on books that already fail on
+  `css.stylesheet.unterminated`, so no verdict moves. epubcheck's fixtures
+  give identical results (1086 scenarios).
+
 ## [0.46.0] - 2026-11-18
 
 ### Changed

@@ -1642,13 +1642,33 @@ fn walk_style_block(
     }
 }
 
-/// Walk a style rule's block. In EPUB 2, a block that never closed is
-/// quieted instead: what the parser found in it is the unclosed brace's doing
-/// (see `check`). In EPUB 3 it is walked like any other, since CSS reads what
-/// it swallowed as its contents and so does a reading system.
+/// Walk a style rule's block. In EPUB 3 a block that never closed is walked
+/// like any other, since CSS reads what it swallowed as its contents and so
+/// does a reading system.
+///
+/// **In EPUB 2 it is walked up to the first rule inside it, and quieted from
+/// there.** CSS 2.1 §4.2 closes the block at the end of the style sheet, so
+/// it is the same block it would be with its `}`, and a reader drops the same
+/// declarations either way: `p { color: red; 12px` is a broken declaration
+/// whether or not a `}` follows, and is reported in both. What changes is
+/// everything after the first rule inside it. CSS 2 has no nesting, so that
+/// rule is where the author meant the block to end, and the rest (its
+/// selector and braces, and every rule after it) is the next rules swallowed,
+/// each finding there a consequence of the one missing `}` (see `check`).
 fn walk_rule_block(block: &Block, ctx: Ctx, quiet: &mut Quiet, report: &mut Report) {
     if report_unclosed(block, ctx, report) && !ctx.is_epub3 {
-        quiet.push(block.span);
+        let items = &block.node;
+        let cut = items
+            .iter()
+            .position(|it| matches!(it, BlockItem::Rule(_)))
+            .unwrap_or(items.len());
+        if let Some(swallowed) = items.get(cut) {
+            quiet.push(Span {
+                start: swallowed.span().start,
+                end: block.span.end,
+            });
+        }
+        walk_style_block(&items[..cut], ctx, false, quiet, report);
     } else {
         walk_style_block(&block.node, ctx, ctx.is_epub3, quiet, report);
     }
@@ -4251,6 +4271,29 @@ mod tests {
                 slugs(css).contains(&"css.stylesheet.unterminated"),
                 "{css:?}: {:?}",
                 slugs(css)
+            );
+        }
+        // **What the author wrote before the first swallowed rule is the
+        // block's own, closed or not** (CSS 2.1 §4.2), so it says the same
+        // with and without its `}`: epubsana's `fix.css_unterminated` adds
+        // the `}` and must not reveal findings the open block hid.
+        for (open, broken) in [
+            ("p { color: red; 12px; margin: 0", true),
+            ("p { ; \\}", true),
+            ("a {\n  color: red;\n  12px;\n\nb { color: blue }\n", true),
+            ("p { color: red; margin: 0", false),
+        ] {
+            let mut want = vec!["css.stylesheet.unterminated"];
+            if broken {
+                want.push("css.declaration.malformed_shape");
+            }
+            assert_eq!(slugs(open), want, "{open:?}");
+            let closed = format!("{open}}}");
+            assert_eq!(
+                slugs(&closed).contains(&"css.declaration.malformed_shape"),
+                broken,
+                "{closed:?}: {:?}",
+                slugs(&closed)
             );
         }
         assert_eq!(
