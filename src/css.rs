@@ -4296,6 +4296,23 @@ mod tests {
                 slugs(&closed)
             );
         }
+        // And nothing the next rule brings is read as the open block's own:
+        // a swallowed selector that looks like a declaration (`b:hover`, or
+        // `color: red` run into it with no `;`), an at-rule, an empty
+        // selector, a broken one, a list.
+        for css in [
+            "a { color: red\nb:hover { color: blue }\n",
+            "a { color: red;\nb:hover { color: blue }\n",
+            "a { color: red;\n@media print { b { color: blue } }\n",
+            "a { color: red;\n@import \"x.css\";\n",
+            "a { color: red;\n{ color: blue }\n",
+            "a { color: red;\n.b { 12px }\n",
+            "a { color: red;\nb.\n{ color: blue }\n",
+            "a { color: red;\nb, c { color: blue }\n",
+            "a { color: red\n",
+        ] {
+            assert_eq!(slugs(css), vec!["css.stylesheet.unterminated"], "{css:?}");
+        }
         assert_eq!(
             slugs("a { b { } }"),
             vec!["css.declaration.nested_rule"],
