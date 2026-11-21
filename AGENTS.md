@@ -138,6 +138,16 @@ Each line is a place where epubveri follows the specification and epubcheck
   (CSS Syntax § 4.3.6), so it draws no RSC-007 or RSC-020. epubcheck 5.4.0
   reports CSS-008, RSC-007 and RSC-020 as errors
   ([w3c/epubcheck#1768](https://github.com/w3c/epubcheck/issues/1768)).
+- **CSS-001 only on a `direction` or `unicode-bidi` the parsed sheet keeps.**
+  EPUB 3.3 § 6.3.1.2, as read when w3c/epub-specs#3115 closed: the property
+  is forbidden when the parsed style sheet holds it, `style` attributes
+  included. A declaration CSS drops never gets there: an invalid value, a
+  selector that does not parse or uses an undeclared prefix, an unknown
+  at-rule, `@supports foo`, or a descriptor `@font-face` does not have. A
+  false `@supports` or `@media` condition drops nothing, and `@page` keeps
+  `direction` (css-page-3 Appendix A). styloria decides what is kept.
+  epubcheck 5.4.0 reports CSS-001 on dropped declarations too
+  ([w3c/epubcheck#1781](https://github.com/w3c/epubcheck/issues/1781)).
 - **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** § 3.3 does not
   forbid `|`, controls or private use, and lets two names differ only by
   normalization; § 3.5.1 says only one package rootfile SHOULD be included,

@@ -8,6 +8,30 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **CSS-001 is reported only on a `direction` or `unicode-bidi` declaration
+  the parsed style sheet keeps** (see #144). w3c/epub-specs#3115 closed with
+  EPUB 3.3 § 6.3.1.2 read that way, `style` attributes included. epubveri
+  reported every such declaration it parsed, so eight valid books in
+  epub-test-books were rejected: an invalid value (`direction: sideways`),
+  an unknown at-rule (`@foo { … }`), a selector that does not parse
+  (`} p`, `p:foo`, `p, :foo`), an undeclared namespace prefix,
+  `@supports foo { … }`, and `direction` in `@font-face`. A rule under a
+  false `@supports` or `@media` condition is still in the parsed sheet and
+  still draws CSS-001. So do `@keyframes` and `@page`. Which declarations are
+  kept is styloria's answer (`cssom_declarations`). epubcheck 5.4.0 rejects
+  these books too, so this is a new known difference
+  (w3c/epubcheck#1781). Of epub-test-books' 683 books, only those eight
+  change; each is now valid.
+
+### Changed
+
+- **styloria 0.22.0**, for the `cssom` module above. Nothing else moves:
+  byte-identical output on 2763 books, in both modes.
+
 ## [0.47.0] - 2026-11-18
 
 ### Fixed

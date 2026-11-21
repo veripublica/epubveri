@@ -335,11 +335,13 @@ fn check_in(
     //
     // It holds at any depth: a rule inside `@media` whose block a broken
     // string left open is the same case one level down.
+    let kept = kept_declarations(styloria::cssom_declarations(&sheet));
     let ctx = Ctx {
         css,
         css_path,
         origin,
         is_epub3,
+        kept: &kept,
     };
     // Spans whose inner syntax errors are already accounted for: see
     // `Quiet`.
@@ -875,10 +877,12 @@ pub(crate) fn check_style_attribute(
             Vec::new(),
         );
     }
+    let kept = kept_declarations(styloria::cssom_block_declarations(&items));
     for item in &items {
         match item {
             BlockItem::Declaration(d) => {
-                check_style_attribute_declaration(&d.node, path, is_epub3, report)
+                let kept = is_kept(&kept, d.span.start);
+                check_style_attribute_declaration(&d.node, path, is_epub3, kept, report)
             }
             BlockItem::Rule(r) => {
                 let text = match value.get(r.span.start..r.span.end).and_then(quote_css) {
@@ -913,10 +917,14 @@ pub(crate) fn check_style_attribute(
 
 /// The EPUB rules about one declaration in a `style` attribute: the
 /// stylesheet walk's [`check_declaration`] without positions.
+///
+/// `kept` is whether the attribute's parsed declarations keep this one: see
+/// [`kept_declarations`].
 fn check_style_attribute_declaration(
     d: &Declaration,
     path: &str,
     is_epub3: bool,
+    kept: bool,
     report: &mut Report,
 ) {
     let name = &d.name;
@@ -950,12 +958,14 @@ fn check_style_attribute_declaration(
             .iter()
             .any(|p| name.eq_ignore_ascii_case(p))
     {
-        report.push_at(
-            CSS_001,
-            Severity::Error,
-            format!("use of the '{name}' property is not recommended"),
-            path,
-        );
+        if kept {
+            report.push_at(
+                CSS_001,
+                Severity::Error,
+                format!("use of the '{name}' property is not recommended"),
+                path,
+            );
+        }
     } else if name.eq_ignore_ascii_case("position") && is_position_fixed(&d.value) {
         report.push_at(
             CSS_006,
@@ -996,6 +1006,35 @@ struct Ctx<'a> {
     css_path: &'a str,
     origin: CssOrigin<'a>,
     is_epub3: bool,
+    /// Where each declaration the parsed stylesheet keeps begins: see
+    /// [`kept_declarations`].
+    kept: &'a [usize],
+}
+
+/// Where each declaration the parsed stylesheet keeps begins, in source
+/// order, from styloria's answer ([`styloria::cssom_declarations`]).
+///
+/// **CSS-001 asks what the parsed sheet holds, not what the bytes say.**
+/// w3c/epub-specs#3115 closed on 2026-11-19 with EPUB 3.3 § 6.3.1.2 read as
+/// "if the parsed sheet produces an object that contains a property with the
+/// name 'direction'", a `style` attribute included. A declaration CSS drops
+/// (an invalid value, a selector that does not parse, an undeclared prefix,
+/// an unknown at-rule, `@supports foo`, a descriptor `@font-face` does not
+/// have) never reaches it, and was an invented error on eight valid books
+/// (#144). Only `Kept::Yes` counts: `Unknown` is a doubt, and a doubt is not
+/// an error. A false condition does not drop a rule, so `@supports not …`
+/// and `@media not all` still give CSS-001. Which declarations CSS keeps is
+/// styloria's to say, not ours.
+fn kept_declarations(all: Vec<styloria::CssomDeclaration>) -> Vec<usize> {
+    all.into_iter()
+        .filter(|c| c.kept == styloria::Kept::Yes)
+        .map(|c| c.declaration.span.start)
+        .collect()
+}
+
+/// Whether the declaration at `start` is one [`kept_declarations`] listed.
+fn is_kept(kept: &[usize], start: usize) -> bool {
+    kept.binary_search(&start).is_ok()
 }
 
 impl Ctx<'_> {
@@ -1808,7 +1847,7 @@ fn check_declaration(d: &Spanned<Declaration>, ctx: Ctx, report: &mut Report) {
         css_path,
         origin,
         is_epub3,
-        ..
+        kept,
     } = ctx;
     let name = &d.node.name;
     let at = origin.position(css, d.node.name_span.start);
@@ -1845,18 +1884,24 @@ fn check_declaration(d: &Spanned<Declaration>, ctx: Ctx, report: &mut Report) {
     // work - are not guarded, so this is the whole class, not a sample.
     // We had no gate at all, which invented an error on an EPUB 2 book
     // carrying `<h1 style="direction: inherit">`.
+    //
+    // And only on a declaration the parsed sheet keeps: see
+    // [`kept_declarations`]. The `else` below is unchanged by that: a dropped
+    // `direction` is still not a `position`.
     if is_epub3
         && FLAGGED_PROPERTIES
             .iter()
             .any(|p| name.eq_ignore_ascii_case(p))
     {
-        report.push_at_pos(
-            CSS_001,
-            Severity::Error,
-            format!("use of the '{name}' property is not recommended"),
-            css_path,
-            at,
-        );
+        if is_kept(kept, d.span.start) {
+            report.push_at_pos(
+                CSS_001,
+                Severity::Error,
+                format!("use of the '{name}' property is not recommended"),
+                css_path,
+                at,
+            );
+        }
     } else if name.eq_ignore_ascii_case("position") && is_position_fixed(&d.node.value) {
         // CSS-006: `position: fixed` (matches epubcheck, which compares
         // the first value component to "fixed", case-insensitively).
@@ -3584,6 +3629,56 @@ mod tests {
         };
         assert_eq!(count(false), 0);
         assert_eq!(count(true), 1);
+    }
+
+    /// CSS-001 fires only on a declaration the parsed sheet keeps
+    /// (w3c/epub-specs#3115; #144). The first eight are the valid books of
+    /// epub-test-books that 0.47.0 rejected; the rest keep the declaration and
+    /// keep the error, conditions and `@page` included.
+    #[test]
+    fn css001_only_on_a_declaration_the_parsed_sheet_keeps() {
+        let css001 = |css: &str| {
+            run(css, &empty_index())
+                .iter()
+                .filter(|id| **id == CSS_001)
+                .count()
+        };
+        for css in [
+            "p { direction: sideways; }",
+            "@foo { p { direction: rtl; } }",
+            "} p { direction: rtl; }",
+            "p:foo { direction: rtl; }",
+            "p, :foo { direction: rtl; }",
+            "[epub|type~=\"footnote\"] { direction: rtl; }",
+            "@supports foo { p { direction: rtl; } }",
+            "@font-face { font-family: x; direction: rtl; }",
+            "@media all { p:foo { unicode-bidi: plaintext; } }",
+            "p:foo { span { direction: rtl; } }",
+        ] {
+            assert_eq!(css001(css), 0, "dropped, so no error: {css}");
+        }
+        for css in [
+            "p { direction: rtl; }",
+            "p { direction: var(--d); }",
+            ":where(:foo) { direction: rtl; }",
+            "@supports not (display: block) { p { direction: rtl; } }",
+            "@media not all { p { direction: rtl; } }",
+            "@keyframes k { from { direction: rtl; } }",
+            "@page { direction: rtl; }",
+            "@page { @top-center { unicode-bidi: plaintext; } }",
+            "p { span { direction: rtl; } }",
+        ] {
+            assert_eq!(css001(css), 1, "kept, so an error: {css}");
+        }
+        // A `style` attribute asks the same question of its own declarations.
+        let attr = |value: &str| {
+            let mut report = Report::new();
+            check_style_attribute(value, "doc.xhtml", false, true, &mut report);
+            report.messages.iter().filter(|m| m.id == CSS_001).count()
+        };
+        assert_eq!(attr("direction: sideways"), 0);
+        assert_eq!(attr("direction: rtl; unicode-bidi: banana"), 1);
+        assert_eq!(attr("direction: var(--d)"), 1);
     }
 
     #[test]
