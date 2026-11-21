@@ -251,14 +251,12 @@
        declaration, is a Schematron assertion rather than a grammar rule and
        lives in `opf.rs` where epubcheck keeps it too.
 
-       What is deliberately NOT copied is epubcheck's disjointness: it models
-       `<meta>` as four alternatives that cannot mix, so `name` beside
-       `http-equiv`, or `charset` beside either, is an error there and is
-       accepted here; likewise `<meta name>` or `<meta itemprop>` with no
-       `@content`, and a bare `<meta/>`. Those are false negatives of ours,
-       measured and left: they are a different family from the reported one
-       and every extra restriction on the single commonest element in a head
-       is its own false-positive risk. -->
+       What is deliberately NOT modelled here is epubcheck's disjointness: it
+       models `<meta>` as four alternatives that cannot mix. HTML's rules
+       behind it are checked in `htm.rs` instead (`check_meta_attributes`,
+       see #147, MobileRead 374286 #394), each fact once: no key attribute
+       at all, two of HTML's four together, and `name` or `itemprop` without
+       `@content`. `http-equiv` without `@content` stays here. -->
   <define name="metaEl">
     <element name="meta">
       <ref name="globalAttrsCoreNoContent"/>

@@ -9729,6 +9729,7 @@ fn check_text(
                 // the Schematron's XPath 1.0 core can't do). EPUB 3 only.
                 crate::htm::check_idref_resolution(&d, &path, report);
                 crate::htm::check_role_placement(&d, &path, report);
+                crate::htm::check_meta_attributes(&d, &path, report);
             }
         }
 

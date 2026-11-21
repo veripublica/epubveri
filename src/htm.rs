@@ -3219,6 +3219,95 @@ mod scan_reference_tests {
     }
 }
 
+/// HTML's two `<meta>` MUSTs (§ 4.2.5, see #147, MobileRead 374286 #394):
+/// "Exactly one of the name, http-equiv, charset, and itemprop attributes
+/// must be specified. If either name, http-equiv, or itemprop is specified,
+/// then the content attribute must also be specified."
+///
+/// `schemas/xhtml.rng` does not model epubcheck's four disjoint `<meta>`
+/// alternatives, on purpose (see its `metaEl`), so the three facts are
+/// checked here, each once per element:
+/// - none of the key attributes (`<meta content="true"/>` in a cover page);
+///   RDFa's `property` counts as one, since a `meta` with `property` needs no
+///   `name` (HTML+RDFa § 3.1, epubcheck's `meta.property.elem`);
+/// - more than one of HTML's four, reported at the second;
+/// - `name` or `itemprop` without `content` (`http-equiv` without it is
+///   already the schema's RSC-005).
+///
+/// epubcheck 5.4.0 reports each as RSC-005. EPUB 3 only: XHTML 1.1 requires
+/// only `content`, and epubcheck agrees.
+pub(crate) fn check_meta_attributes(doc: &roxmltree::Document, path: &str, report: &mut Report) {
+    const XHTML_NS: &str = "http://www.w3.org/1999/xhtml";
+    for el in doc.descendants().filter(|n| {
+        n.is_element()
+            && n.tag_name().name() == "meta"
+            && n.tag_name().namespace() == Some(XHTML_NS)
+    }) {
+        if META_KEY_ATTRIBUTES
+            .iter()
+            .all(|a| el.attr_no_ns(a).is_none())
+        {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                "element \"meta\" missing one or more required attributes; expected attribute \"name\", \"http-equiv\", \"charset\", \"itemprop\" or \"property\"",
+                path,
+                el,
+                "htm.meta.missing_key_attribute",
+                Vec::new(),
+            );
+            continue;
+        }
+        let mut keys = el
+            .attributes()
+            .filter(|a| a.namespace().is_none() && HTML_META_KEYS.contains(&a.name()));
+        if let (Some(first), Some(second)) = (keys.next(), keys.next()) {
+            report.push_node_attr(
+                RSC_005,
+                Severity::Error,
+                format!(
+                    "attribute \"{}\" not allowed here; element \"meta\" takes only one of \"name\", \"http-equiv\", \"charset\" and \"itemprop\", and already has \"{}\"",
+                    second.name(),
+                    first.name()
+                ),
+                path,
+                el,
+                second,
+                "htm.meta.more_than_one_key_attribute",
+                vec![first.name().to_string(), second.name().to_string()],
+            );
+        }
+        // With `http-equiv` present the schema (`metaEl`) already reports the
+        // missing `content`; one fact, said once.
+        let no_content_key = ["name", "itemprop"]
+            .into_iter()
+            .find(|a| el.attr_no_ns(a).is_some());
+        if let (Some(key), None, None) = (
+            no_content_key,
+            el.attr_no_ns("content"),
+            el.attr_no_ns("http-equiv"),
+        ) {
+            report.push_node(
+                RSC_005,
+                Severity::Error,
+                format!(
+                    "element \"meta\" missing required attribute \"content\"; \"{key}\" requires it"
+                ),
+                path,
+                el,
+                "htm.meta.missing_content",
+                vec![key.to_string()],
+            );
+        }
+    }
+}
+
+/// HTML's four (§ 4.2.5), of which exactly one must be specified.
+const HTML_META_KEYS: [&str; 4] = ["name", "http-equiv", "charset", "itemprop"];
+
+/// What makes a `<meta>` mean something: HTML's four and RDFa's `property`.
+const META_KEY_ATTRIBUTES: [&str; 5] = ["name", "http-equiv", "charset", "itemprop", "property"];
+
 /// RSC-005: a `role` the element may not take, and an ARIA attribute its role
 /// requires (`aria_roles` has the tables and where they come from). EPUB 3
 /// content documents only, XHTML elements only.
@@ -3300,6 +3389,82 @@ pub(crate) fn check_role_placement(doc: &roxmltree::Document, path: &str, report
                     vec![attr.to_string(), role.to_string()],
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod meta_attribute_tests {
+    use crate::report::Report;
+
+    /// The rule keys of what `check_meta_attributes` says about `head`.
+    fn rules(head: &str) -> Vec<&'static str> {
+        let xml = format!(
+            r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title>{head}</head><body><p itemscope=""><meta itemprop="a" content="b"/></p></body></html>"#
+        );
+        let d = crate::ocf::parse_xml(&xml).unwrap();
+        let mut report = Report::new();
+        super::check_meta_attributes(&d, "c.xhtml", &mut report);
+        report.messages.iter().filter_map(|m| m.rule).collect()
+    }
+
+    const NO_KEY: &str = "htm.meta.missing_key_attribute";
+    const TWO_KEYS: &str = "htm.meta.more_than_one_key_attribute";
+    const NO_CONTENT: &str = "htm.meta.missing_content";
+
+    #[test]
+    fn a_meta_with_no_key_attribute_is_rsc005() {
+        assert_eq!(rules(r#"<meta content="true"/>"#), [NO_KEY]);
+        assert_eq!(rules(r#"<meta/>"#), [NO_KEY]);
+        assert_eq!(rules(r#"<meta id="x" lang="en" content="y"/>"#), [NO_KEY]);
+        // A `meta` in another namespace is not HTML's.
+        assert!(rules(r#"<x:meta xmlns:x="urn:x" content="y"/>"#).is_empty());
+    }
+
+    #[test]
+    fn a_meta_with_two_key_attributes_is_rsc005_at_the_second() {
+        assert_eq!(
+            rules(r#"<meta name="author" http-equiv="X-UA-Compatible" content="IE=edge"/>"#),
+            [TWO_KEYS]
+        );
+        assert_eq!(
+            rules(r#"<meta charset="utf-8" itemprop="a" content="b"/>"#),
+            [TWO_KEYS]
+        );
+        // Three keys are still one fact.
+        assert_eq!(
+            rules(r#"<meta name="a" http-equiv="b" itemprop="c" content="d"/>"#),
+            [TWO_KEYS]
+        );
+        // `property` is RDFa's, not one of HTML's four.
+        assert!(rules(r#"<meta name="a" property="dcterms:title" content="b"/>"#).is_empty());
+    }
+
+    #[test]
+    fn a_name_http_equiv_or_itemprop_without_content_is_rsc005() {
+        assert_eq!(rules(r#"<meta name="author"/>"#), [NO_CONTENT]);
+        assert_eq!(rules(r#"<meta itemprop="a"/>"#), [NO_CONTENT]);
+        // The schema says this one.
+        assert!(rules(r#"<meta http-equiv="refresh"/>"#).is_empty());
+        assert_eq!(
+            rules(r#"<meta name="Adept.resource" value="x"/>"#),
+            [NO_CONTENT]
+        );
+        // The missing `content` is the schema's once `http-equiv` is there.
+        assert_eq!(rules(r#"<meta name="a" http-equiv="b"/>"#), [TWO_KEYS]);
+    }
+
+    #[test]
+    fn conforming_metas_draw_nothing() {
+        for ok in [
+            r#"<meta charset="utf-8"/>"#,
+            r#"<meta name="cover" content="true"/>"#,
+            r#"<meta http-equiv="default-style" content="x"/>"#,
+            r#"<meta property="dcterms:title" content="x"/>"#,
+            r#"<meta name="viewport" content="width=600, height=800"/>"#,
+            r#"<meta name="a" content=""/>"#,
+        ] {
+            assert!(rules(ok).is_empty(), "{ok}");
         }
     }
 }

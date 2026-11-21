@@ -26,6 +26,27 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   these books too, so this is a new known difference
   (w3c/epubcheck#1781). Of epub-test-books' 683 books, only those eight
   change; each is now valid.
+- **EPUB 3: HTML's two rules on `<meta>` are checked, each an RSC-005
+  error** (see #147). The reported shape is `<meta content="true"/>` in a
+  cover page (MobileRead 374286 #394). HTML § 4.2.5: "Exactly one of the
+  name, http-equiv, charset, and itemprop attributes must be specified. If
+  either name, http-equiv, or itemprop is specified, then the content
+  attribute must also be specified." epubveri had left these out on
+  purpose, with the rest of epubcheck's stricter `<meta>` model. Now
+  reported:
+  - a `<meta>` with none of the four, nor RDFa's `property`
+    (`htm.meta.missing_key_attribute`);
+  - two of the four together, at the second
+    (`htm.meta.more_than_one_key_attribute`);
+  - `name` or `itemprop` without `content` (`htm.meta.missing_content`).
+    `http-equiv` without `content` was already reported.
+
+  epubcheck 5.4.0 reports all three. On epubcheck's fixtures and the
+  shelf's books, only one book draws any of them: 29 Adobe DRM
+  `<meta name="Adept.resource" value="…"/>` elements, in a book already
+  invalid in both tools. epub-test-books' four invalid `meta-*` sets now
+  agree with the spec. EPUB 2 is unchanged: XHTML 1.1 requires only
+  `content`.
 
 ### Changed
 
