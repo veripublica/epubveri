@@ -1679,6 +1679,18 @@ const NEVER_ENCRYPTED: [&str; 7] = [
     "META-INF/signatures.xml",
 ];
 
+/// `OriginalLength`'s lexical space as the compression extension uses it: a
+/// non-empty run of ASCII digits, not all zero (see #146). Leading zeros are
+/// kept, as XML Schema's `positiveInteger` keeps them (`007` is 7).
+fn is_positive_integer(v: &str) -> bool {
+    !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()) && v.bytes().any(|b| b != b'0')
+}
+
+/// `0`, `00` and so on.
+fn is_zero(v: &str) -> bool {
+    !v.is_empty() && v.bytes().all(|b| b == b'0')
+}
+
 pub fn check_encryption(
     ocf: &mut Ocf,
     opf_paths: &[String],
@@ -1762,7 +1774,12 @@ pub fn check_encryption(
     }
 
     // The IDPF compression extension's <Compression Method="0|8"
-    // OriginalLength="<non-negative integer>"/>.
+    // OriginalLength="<positive integer>"/>: EPUB 3.3 `sec-enc-compression`,
+    // "Value is a positive integer", so `0` and `00` are invalid too (see #146).
+    // The clause is EPUB 3's; for an EPUB 2 book, or one whose version is
+    // unknown, nothing says more than epubcheck's `nonNegativeInteger`, so
+    // zero stays accepted there.
+    let zero_ok = epub3 != Some(true);
     for n in doc
         .descendants()
         .filter(|n| root_ok && n.is_element() && n.tag_name().name() == "Compression")
@@ -1781,7 +1798,7 @@ pub fn check_encryption(
             );
         }
         if let Some(len) = n.attr_no_ns("OriginalLength")
-            && (len.is_empty() || !len.bytes().all(|b| b.is_ascii_digit()))
+            && !(is_positive_integer(len) || zero_ok && is_zero(len))
         {
             report.push_node(
                 RSC_005,
@@ -2430,6 +2447,21 @@ mod encryption_content_model_tests {
                 "ocf.encryption.incomplete_content",
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod original_length_tests {
+    #[test]
+    fn original_length_must_be_a_positive_integer() {
+        for ok in ["1", "42", "007", "18446744073709551616"] {
+            assert!(super::is_positive_integer(ok), "{ok}");
+        }
+        for bad in ["0", "00", "", "-1", "1.0", " 1", "abc"] {
+            assert!(!super::is_positive_integer(bad), "{bad:?}");
+        }
+        assert!(super::is_zero("0") && super::is_zero("00"));
+        assert!(!super::is_zero("") && !super::is_zero("10"));
     }
 }
 

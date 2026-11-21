@@ -148,6 +148,10 @@ Each line is a place where epubveri follows the specification and epubcheck
   `direction` (css-page-3 Appendix A). styloria decides what is kept.
   epubcheck 5.4.0 reports CSS-001 on dropped declarations too
   ([w3c/epubcheck#1781](https://github.com/w3c/epubcheck/issues/1781)).
+- **`OriginalLength="0"` is an RSC-005 error in EPUB 3.** EPUB 3.3
+  `sec-enc-compression` says its "Value is a positive integer"; epubcheck
+  5.4.0 accepts zero
+  ([w3c/epubcheck#1782](https://github.com/w3c/epubcheck/issues/1782)).
 - **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** § 3.3 does not
   forbid `|`, controls or private use, and lets two names differ only by
   normalization; § 3.5.1 says only one package rootfile SHOULD be included,

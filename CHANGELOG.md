@@ -47,6 +47,14 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   invalid in both tools. epub-test-books' four invalid `meta-*` sets now
   agree with the spec. EPUB 2 is unchanged: XHTML 1.1 requires only
   `content`.
+- **`OriginalLength="0"` on a `Compression` element in
+  `META-INF/encryption.xml` is RSC-005, an error** (see #146). EPUB 3.3
+  `sec-enc-compression`: "Value is a positive integer". epubveri checked
+  only for digits, so `0` and `00` passed. epubcheck 5.4.0 accepts them too,
+  so this is a new known difference (w3c/epubcheck#1782). EPUB 3 only:
+  for EPUB 2, and when no package document parses, zero is still
+  accepted. Of the 2763 books, four carry `OriginalLength` and none has
+  zero; epub-test-books' `aes-original-length-zero` is now invalid.
 
 ### Changed
 
