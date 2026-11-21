@@ -152,6 +152,12 @@ Each line is a place where epubveri follows the specification and epubcheck
   `sec-enc-compression` says its "Value is a positive integer"; epubcheck
   5.4.0 accepts zero
   ([w3c/epubcheck#1782](https://github.com/w3c/epubcheck/issues/1782)).
+- **An `itemprop` on an element that is no item's property is RSC-005 in
+  EPUB 3.** HTML § 5.2.5: "A document must not contain any elements that have
+  an itemprop attribute that would not be found to be a property of any of
+  the items in that document". epubcheck 5.4.0 is silent, and its own
+  `microdata-valid.xhtml` fixture has five such elements
+  ([w3c/epubcheck#1775](https://github.com/w3c/epubcheck/issues/1775)).
 - **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** § 3.3 does not
   forbid `|`, controls or private use, and lets two names differ only by
   normalization; § 3.5.1 says only one package rootfile SHOULD be included,

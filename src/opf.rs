@@ -3357,26 +3357,54 @@ fn check_prefix_usage(
     }
 }
 
-/// RSC-005: HTML's structural microdata rules (HTML § 5.2.2), in an EPUB 3
-/// XHTML content document. EPUB 3.3 § 6.1.2 holds these documents to HTML's
-/// conformance criteria, and each rule below is a "must not" there:
+/// RSC-005: HTML's structural microdata rules (HTML §§ 5.2.2, 5.2.5), in an
+/// EPUB 3 XHTML content document. EPUB 3.3 § 6.1.2 holds these documents to
+/// HTML's conformance criteria, and each rule below is a "must not" there:
 ///
 /// - `itemtype` or `itemref` on an element with no `itemscope`;
-/// - `itemid` on an element without both `itemscope` and `itemtype`.
+/// - `itemid` on an element without both `itemscope` and `itemtype`;
+/// - `itemprop` on an element that is a property of no item (§ 5.2.5: "A
+///   document must not contain any elements that have an itemprop attribute
+///   that would not be found to be a property of any of the items in that
+///   document were their properties all to be determined"). This reverses the
+///   2026-11-13 call, which read only § 5.2.3's permission wording (see #145).
+///   epubcheck's own `microdata-valid.xhtml` fails it five times; the Nu
+///   checker reports the same fact as an error (w3c/epubcheck#1775).
 ///
-/// **`itemprop` on an element that is no item's property is not asked,
-/// deliberately** (Baris, 2026-11-13). § 5.2.3 words it as a permission
-/// ("may have an itemprop attribute specified, if doing so adds one or more
-/// properties to one or more items"), not a "must not", and reading it as a
-/// requirement fails epubcheck's own `microdata-valid.xhtml` five times. The
-/// question goes to epub-test-books first.
+/// § 5.2.5's crawl puts an element on an item's pending list when its parent
+/// is the item, when an `itemref` of the item names it, or when its parent was
+/// on the list and is not itself an item. So "is on some item's list" is one
+/// pass in document order, and an `itemprop` element is a property exactly
+/// when it is on a list.
 ///
 /// The rules that depend on a vocabulary (which item types exist, whether a
-/// vocabulary has global identifiers) are not asked either. epubcheck 5.4.0
-/// reports none of these (epub-test-books, 2026-11-13).
+/// vocabulary has global identifiers) are not asked. epubcheck 5.4.0 reports
+/// none of these (epub-test-books, 2026-11-13).
 fn check_microdata(doc: &roxmltree::Document, path: &str, report: &mut Report) {
     const XHTML: &str = "http://www.w3.org/1999/xhtml";
     let is_html = |n: &roxmltree::Node| n.is_element() && n.tag_name().namespace() == Some(XHTML);
+    let is_item = |n: &roxmltree::Node| is_html(n) && n.attr_no_ns("itemscope").is_some();
+    // HTML's getElementById: the first element carrying the id.
+    let mut by_id: HashMap<&str, roxmltree::NodeId> = HashMap::new();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(id) = n.attribute("id") {
+            by_id.entry(id).or_insert(n.id());
+        }
+    }
+    let mut crawled: HashSet<roxmltree::NodeId> = doc
+        .descendants()
+        .filter(is_item)
+        .filter_map(|n| n.attr_no_ns("itemref"))
+        .flat_map(|v| v.split_ascii_whitespace())
+        .filter_map(|id| by_id.get(id).copied())
+        .collect();
+    for n in doc.descendants().filter(|n| n.is_element()) {
+        if let Some(parent) = n.parent_element()
+            && (is_item(&parent) || crawled.contains(&parent.id()))
+        {
+            crawled.insert(n.id());
+        }
+    }
     for n in doc.descendants().filter(is_html) {
         let scope = n.attr_no_ns("itemscope").is_some();
         let mut fault = |attr: &'static str, why: &str, rule: &'static str| {
@@ -3409,6 +3437,13 @@ fn check_microdata(doc: &roxmltree::Document, path: &str, report: &mut Report) {
                 "itemid",
                 "it needs both \"itemscope\" and \"itemtype\" on the same element",
                 "htm.microdata.itemid_without_typed_item",
+            );
+        }
+        if n.attr_no_ns("itemprop").is_some() && !crawled.contains(&n.id()) {
+            fault(
+                "itemprop",
+                "the element is a property of no item; it needs an ancestor with \"itemscope\" or an \"itemref\" naming it",
+                "htm.microdata.itemprop_outside_every_item",
             );
         }
     }
@@ -32481,8 +32516,29 @@ mod tests {
             rsc005("<div itemscope=\"\" itemid=\"urn:isbn:0\"><p>x</p></div>"),
             ["htm.microdata.itemid_without_typed_item"]
         );
-        // Not asked: see `check_microdata`.
-        assert!(rsc005("<p itemprop=\"name\">x</p>").is_empty());
+        assert_eq!(
+            rsc005("<p itemprop=\"name\">x</p>"),
+            ["htm.microdata.itemprop_outside_every_item"]
+        );
+        for bad in [
+            // A top-level item's own itemprop: it is nobody's property.
+            "<div itemscope=\"\" itemprop=\"x\"><p itemprop=\"name\">x</p></div>",
+            // Below a nested item, the outer item's crawl stops.
+            "<div itemscope=\"\" itemref=\"a\"></div>\
+             <div id=\"a\" itemscope=\"\" itemprop=\"x\"></div><p itemprop=\"y\">y</p>",
+            // `itemref` without `itemscope` creates no item.
+            "<div itemscope=\"\"></div><div><span id=\"a\" itemprop=\"x\">x</span></div>",
+        ] {
+            assert_eq!(
+                rsc005(bad)
+                    .iter()
+                    .filter(|r| r.ends_with("itemprop_outside_every_item"))
+                    .count(),
+                1,
+                "{bad}: {:?}",
+                rsc005(bad)
+            );
+        }
         for ok in [
             "<div itemscope=\"\" itemtype=\"https://schema.org/Book\" itemid=\"urn:isbn:0\">\
              <p itemprop=\"name\">x</p><div itemprop=\"author\" itemscope=\"\">\
@@ -32490,6 +32546,9 @@ mod tests {
             // Reached through `itemref`: the named element and its subtree.
             "<div itemscope=\"\" itemref=\"a b\"></div><p id=\"a\" itemprop=\"x\">x</p>\
              <div id=\"b\"><span itemprop=\"y\">y</span></div>",
+            // A nested item that is itself a property, and its own property.
+            "<div itemscope=\"\"><section><div itemprop=\"a\" itemscope=\"\">\
+             <p itemprop=\"b\">x</p></div></section></div>",
         ] {
             assert!(rsc005(ok).is_empty(), "{ok}: {:?}", rsc005(ok));
         }

@@ -8,6 +8,22 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Added
+
+- **EPUB 3: an `itemprop` on an element that is a property of no item is an
+  RSC-005 error** (see #145). HTML § 5.2.5 says "A document must not contain
+  any elements that have an itemprop attribute that would not be found to be
+  a property of any of the items in that document". The reported shape is
+  `<p itemprop="name">` with no `itemscope` ancestor and no `itemref` naming
+  it. The reach follows HTML's crawl: an item's children, the elements its
+  `itemref` names, and their subtrees down to the next item. 0.42.0 left this
+  out because § 5.2.3 words it as a permission; § 5.2.5 is the requirement.
+  epubcheck 5.4.0 is silent, so this is a new known difference, and its own
+  `microdata-valid.xhtml` fixture now draws five RSC-005s. No shelf book has
+  an `itemprop` at all.
+
 ## [0.48.0] - 2026-11-21
 
 ### Fixed
