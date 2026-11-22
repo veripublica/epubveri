@@ -8,6 +8,23 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Changed
+
+- **The minimum supported Rust version is now 1.95** (was 1.88), in the
+  library, the wasm bindings and the test harness. The veripublica crates
+  now share one minimum, so a single toolchain builds all of them. zip 9.8.1
+  needs 1.89 on its own. A build on 1.94 or older is refused with "requires
+  rustc 1.95"; CI's `msrv` job checks the workspace at 1.95.
+- **zip 9.8.1** (was 9.7.0). It fixes the file-header length checks on
+  reading: the central directory check ignored the file comment, and the
+  local-header check was one byte too strict. Along with it come nix 0.32.0,
+  hashbrown 0.17.2 and pin-project-lite 0.2.18. **styloria 0.23.1** changes
+  only its own minimum Rust version. Output is byte-identical on 2763 books
+  (1677 real books and 1086 of epubcheck's fixtures, in both modes), and on
+  epubcheck's own fixtures.
+
 ## [0.49.0] - 2026-11-22
 
 ### Added
