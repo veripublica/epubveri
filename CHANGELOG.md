@@ -38,6 +38,11 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   now read whole for this, not only their first 256 bytes. epubcheck 5.4.0 is
   silent (w3c/epubcheck#1784). No shelf book changes.
 
+### Changed
+
+- **styloria 0.23.0.** It adds `Element::pseudo_class`, which defaults to
+  today's answer. Output is byte-identical on 2763 books.
+
 ## [0.48.0] - 2026-11-21
 
 ### Fixed
