@@ -158,6 +158,14 @@ Each line is a place where epubveri follows the specification and epubcheck
   the items in that document". epubcheck 5.4.0 is silent, and its own
   `microdata-valid.xhtml` fixture has five such elements
   ([w3c/epubcheck#1775](https://github.com/w3c/epubcheck/issues/1775)).
+- **An XML file read as UTF-8 whose bytes are not UTF-8 is RSC-028,** in
+  both versions: one with no byte order mark and no encoding declaration, or
+  one that has a UTF-8 BOM or declares `UTF-8`. XML 1.0 § 4.3.3: "it is a
+  fatal error … for an entity which begins with neither a Byte Order Mark nor
+  an encoding declaration to use an encoding other than UTF-8"; EPUB 3.3
+  `sec-xml-constraints` and OCF 2.0.1 § 1.3 require UTF-8 or UTF-16.
+  epubcheck 5.4.0 decodes the bytes leniently and reports nothing
+  ([w3c/epubcheck#1784](https://github.com/w3c/epubcheck/issues/1784)).
 - **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** § 3.3 does not
   forbid `|`, controls or private use, and lets two names differ only by
   normalization; § 3.5.1 says only one package rootfile SHOULD be included,

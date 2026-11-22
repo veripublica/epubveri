@@ -4655,6 +4655,15 @@ fn decode_opf_bytes(
     use crate::encoding::Sniffed;
     match crate::encoding::sniff(bytes) {
         Sniffed::Utf8 => {
+            if let Some(at) = crate::encoding::invalid_utf8(bytes) {
+                crate::encoding::push_invalid_utf8(
+                    "the OPF",
+                    opf_path,
+                    at,
+                    "opf.encoding.invalid_utf8",
+                    report,
+                );
+            }
             let body = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
             Some(String::from_utf8_lossy(body).into_owned())
         }
@@ -9002,7 +9011,8 @@ fn check_text(
     // The other XML resources epubcheck parses, and so grades the encoding
     // of (`CheckerFactory.newChecker`, plus the NCX by `isNcx`): SVG and the
     // NCX in both versions, Media Overlays and search key maps in EPUB 3
-    // only. Only the head is read; nothing else here needs these bytes.
+    // only. The whole resource is read: one that is taken as UTF-8 has to be
+    // UTF-8 throughout, not only in its head.
     // DTBook is parsed too, but is out of scope with the rest of DTBook.
     for (path, mt) in &manifest_order {
         let graded = match mt.as_str() {
@@ -9016,12 +9026,25 @@ fn check_text(
         let Some(orig) = name_index.get(&nfc(path)).cloned() else {
             continue;
         };
-        if let Some(head) = ocf.read_head_content(&orig, crate::encoding::SNIFF_LEN as u64) {
-            crate::encoding::check(&head, path, mt, is_epub3, report);
+        // A resource over the read cap is graded from its head alone, as
+        // every resource used to be.
+        let read = match ocf.read_content(&orig) {
+            Some(b) => Some((b, true)),
+            None => ocf
+                .read_head_content(&orig, crate::encoding::SNIFF_LEN as u64)
+                .map(|b| (b, false)),
+        };
+        if let Some((bytes, whole)) = read {
+            if whole {
+                crate::encoding::check(&bytes, path, mt, is_epub3, report);
+            } else {
+                crate::encoding::check_head(&bytes, path, mt, is_epub3, report);
+            }
+            let head = &bytes[..bytes.len().min(crate::encoding::SNIFF_LEN)];
             // HTM-001: every XML file epubcheck parses, in both versions
             // (`XMLHandler.checkXMLVersion`; OCF 2.0.1 § 1.3). The
             // declaration is at the start, so the head holds it.
-            crate::htm::check_xml_version(&crate::encoding::decode_xml(&head), path, report);
+            crate::htm::check_xml_version(&crate::encoding::decode_xml(head), path, report);
         }
     }
     // The subset the RELAX NG grammar and the Schematron run over. Measured,

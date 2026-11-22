@@ -2117,11 +2117,30 @@ pub fn check_meta_inf_encodings(
         if !ocf.has(name) {
             continue;
         }
-        if let Some(head) = ocf.read_head_content(name, crate::encoding::SNIFF_LEN as u64) {
-            crate::encoding::check(&head, name, "application/xml", validated_as_3, report);
+        // A resource over the read cap is graded from its head alone, as
+        // every resource used to be.
+        let read = match ocf.read_content(name) {
+            Some(b) => Some((b, true)),
+            None => ocf
+                .read_head_content(name, crate::encoding::SNIFF_LEN as u64)
+                .map(|b| (b, false)),
+        };
+        if let Some((bytes, whole)) = read {
+            if whole {
+                crate::encoding::check(&bytes, name, "application/xml", validated_as_3, report);
+            } else {
+                crate::encoding::check_head(
+                    &bytes,
+                    name,
+                    "application/xml",
+                    validated_as_3,
+                    report,
+                );
+            }
+            let head = &bytes[..bytes.len().min(crate::encoding::SNIFF_LEN)];
             // HTM-001, as for every XML file epubcheck parses (OCF 2.0.1
             // § 1.3: "compatible with the XML 1.0 specification").
-            crate::htm::check_xml_version(&crate::encoding::decode_xml(&head), name, report);
+            crate::htm::check_xml_version(&crate::encoding::decode_xml(head), name, report);
         }
     }
 }

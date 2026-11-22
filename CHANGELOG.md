@@ -23,6 +23,20 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   epubcheck 5.4.0 is silent, so this is a new known difference, and its own
   `microdata-valid.xhtml` fixture now draws five RSC-005s. No shelf book has
   an `itemprop` at all.
+- **An XML file read as UTF-8 whose bytes are not UTF-8 is an RSC-028
+  error** (see #150). A file with no byte order mark and no encoding
+  declaration is UTF-8 by XML 1.0 § 4.3.3, and EPUB 3.3
+  `sec-xml-constraints` and OCF 2.0.1 § 1.3 require UTF-8 or UTF-16. A
+  Latin-1 or Windows-1252 document that did not say so was decoded leniently
+  and drew nothing; one that declared its encoding already drew RSC-028. The
+  same now holds for a file with a UTF-8 byte order mark or a declaration of
+  `UTF-8` over other bytes. It covers every XML file whose encoding is graded,
+  the package document, `container.xml` and the other `META-INF` files
+  included, in both versions. The finding points at the first byte that is
+  not UTF-8 and names no encoding, since the bytes do not say which one they
+  are in. The SVG, NCX, Media Overlay, search key map and `META-INF` files are
+  now read whole for this, not only their first 256 bytes. epubcheck 5.4.0 is
+  silent (w3c/epubcheck#1784). No shelf book changes.
 
 ## [0.48.0] - 2026-11-21
 

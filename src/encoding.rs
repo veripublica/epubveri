@@ -472,8 +472,25 @@ pub(crate) fn decode_xml(bytes: &[u8]) -> String {
 /// declared encoding (see [`parser_accepts`]). For every XML resource except
 /// the package document, whose decode needs the same answer and reports it
 /// itself.
+///
+/// `bytes` must be the whole resource: a resource taken as UTF-8 is checked
+/// to be UTF-8 throughout (see [`invalid_utf8`]).
 pub(crate) fn check(bytes: &[u8], path: &str, media_type: &str, epub3: bool, report: &mut Report) {
     let sniffed = sniff(bytes);
+    if sniffed == Sniffed::Utf8 {
+        // UTF-8 has no grade and the parser always takes it; what is left to
+        // ask is whether the bytes are UTF-8.
+        if let Some(at) = invalid_utf8(bytes) {
+            push_invalid_utf8(
+                "the document",
+                path,
+                at,
+                "xml.encoding.invalid_utf8",
+                report,
+            );
+        }
+        return;
+    }
     let Some((id, severity)) = sniffed.finding_for(media_type, epub3) else {
         // RSC-016 does not depend on the grade: UTF-16 named over bytes that
         // are not stops the parser in either version.
@@ -516,6 +533,69 @@ pub(crate) fn check(bytes: &[u8], path: &str, media_type: &str, epub3: bool, rep
     if !parser_accepts(bytes) {
         push_unparsable_declaration(&sniffed, path, report);
     }
+}
+
+/// [`check`] for the head of a resource too large to read whole: the grade
+/// and the declaration, which the head holds, but not whether a UTF-8
+/// resource is UTF-8 throughout, which it does not.
+pub(crate) fn check_head(
+    head: &[u8],
+    path: &str,
+    media_type: &str,
+    epub3: bool,
+    report: &mut Report,
+) {
+    if sniff(head) != Sniffed::Utf8 {
+        check(head, path, media_type, epub3, report);
+    }
+}
+
+/// Where a resource [`sniff`] takes as UTF-8 stops being UTF-8: the line and
+/// column of its first byte that is not part of a UTF-8 sequence, counted in
+/// characters after any byte order mark. `None` when every byte is.
+///
+/// The sniff decides from the byte order mark and the declaration, and with
+/// neither the resource is UTF-8 by XML 1.0 § 4.3.3: "it is a fatal error …
+/// for an entity which begins with neither a Byte Order Mark nor an encoding
+/// declaration to use an encoding other than UTF-8." A byte order mark or a
+/// declaration of `UTF-8` over other bytes is the same fault. The bytes used
+/// to be decoded lossily, so a Latin-1 or Windows-1252 document that said
+/// nothing drew nothing (#150). epubcheck is silent on it for the same
+/// reason: its UTF-8 branch reads through `InputStreamReader`, which replaces
+/// what it cannot decode (w3c/epubcheck#1784).
+pub(crate) fn invalid_utf8(bytes: &[u8]) -> Option<Position> {
+    let body = bytes.strip_prefix(UTF8_MAGIC).unwrap_or(bytes);
+    let err = std::str::from_utf8(body).err()?;
+    let valid = std::str::from_utf8(&body[..err.valid_up_to()]).unwrap_or_default();
+    let line = valid.matches('\n').count() + 1;
+    let column = valid.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+    Some(Position {
+        line: line as u32,
+        column: column as u32,
+    })
+}
+
+/// RSC-028 for a resource taken as UTF-8 whose bytes are not. It names no
+/// encoding: the bytes do not say which one they are in, so a repair has no
+/// target to read off this finding.
+pub(crate) fn push_invalid_utf8(
+    subject: &str,
+    path: &str,
+    at: Position,
+    rule: &'static str,
+    report: &mut Report,
+) {
+    report.push_full(
+        RSC_028,
+        Severity::Error,
+        format!(
+            "{subject} is not valid UTF-8 and declares no other encoding, which is not allowed (EPUB requires UTF-8)"
+        ),
+        path,
+        at,
+        rule,
+        Vec::new(),
+    );
 }
 
 fn push_unparsable_declaration(sniffed: &Sniffed, path: &str, report: &mut Report) {
@@ -1060,6 +1140,102 @@ mod tests {
         }
     }
 
+    /// Bytes that are not UTF-8 in a resource taken as UTF-8 are RSC-028 in
+    /// every XML resource and both versions, with no BOM and no declaration,
+    /// a BOM, or a declaration of `UTF-8` (#150). One finding, at the first
+    /// such byte, naming no encoding.
+    #[test]
+    fn bytes_that_are_not_utf8_are_rsc_028_wherever_utf8_is_assumed() {
+        let latin1 = |s: String| -> Vec<u8> { s.chars().map(|c| c as u8).collect() };
+        let undeclared = |s: &str| s.replacen(" encoding=\"UTF-8\"", "", 1);
+        let bom = |s: Vec<u8>| [UTF8_MAGIC, &s].concat();
+        let chapter_e9 = latin1(chapter("UTF-8", "caf\u{e9}"));
+        let opf3 = latin1(OPF3.replace("<dc:title>T", "<dc:title>T\u{e9}"));
+        let svg = latin1(
+            SVG.replace("{enc}", "UTF-8")
+                .replace("<rect", "<!-- \u{e9} --><rect"),
+        );
+        let nav = latin1(NAV.replace("<title>N", "<title>N\u{e9}"));
+        let container = latin1(CONTAINER.replace("<rootfiles>", "<!-- \u{e9} --><rootfiles>"));
+        let cases: Vec<(&str, Entry)> = vec![
+            ("chapter, declared", ("OEBPS/c1.xhtml", chapter_e9.clone())),
+            (
+                "chapter, undeclared",
+                (
+                    "OEBPS/c1.xhtml",
+                    latin1(undeclared(&chapter("UTF-8", "caf\u{e9}"))),
+                ),
+            ),
+            ("chapter, BOM", ("OEBPS/c1.xhtml", bom(chapter_e9.clone()))),
+            ("nav", ("OEBPS/nav.xhtml", nav)),
+            ("svg", ("OEBPS/i.svg", svg)),
+            ("opf", ("OEBPS/content.opf", opf3)),
+            ("container.xml", ("META-INF/container.xml", container)),
+        ];
+        for (name, entry) in cases {
+            let path = entry.0;
+            let report = crate::validate_bytes(probe(&[entry]));
+            let found: Vec<_> = report.messages.iter().filter(|m| m.id == RSC_028).collect();
+            assert_eq!(found.len(), 1, "{name}: {:?}", report.messages);
+            let m = found[0];
+            assert_eq!(m.severity, Severity::Error, "{name}");
+            assert_eq!(m.location.as_deref(), Some(path), "{name}");
+            assert!(m.params.is_empty(), "{name}: {:?}", m.params);
+            assert!(
+                report.messages.iter().all(|m| m.id == RSC_028),
+                "{name}: {:?}",
+                report.messages
+            );
+        }
+        // EPUB 2: the NCX, and a chapter.
+        for (name, entry) in [
+            (
+                "ncx",
+                (
+                    "OEBPS/toc.ncx",
+                    latin1(NCX.replace("<text>T", "<text>T\u{e9}")),
+                ),
+            ),
+            ("epub2 chapter", ("OEBPS/c1.xhtml", chapter_e9)),
+        ] {
+            let got = ids(probe2(&[entry]));
+            let mut want = ids(probe2(&[]));
+            want.push(RSC_028);
+            want.sort_unstable();
+            assert_eq!(got, want, "{name}");
+        }
+    }
+
+    #[test]
+    fn invalid_utf8_points_at_the_first_bad_byte_and_reads_past_the_head() {
+        assert_eq!(invalid_utf8(b"<a>caf\xc3\xa9</a>"), None);
+        assert_eq!(invalid_utf8(b"\xef\xbb\xbf<a>ok</a>"), None);
+        assert_eq!(
+            invalid_utf8(b"<a>\n  caf\xe9</a>"),
+            Some(Position { line: 2, column: 6 })
+        );
+        // Characters, not bytes, and after the BOM.
+        assert_eq!(
+            invalid_utf8(b"\xef\xbb\xbf<a>\xc3\xa9\xc3\xa9\xff"),
+            Some(Position { line: 1, column: 6 })
+        );
+        // A fault far past the sniffed head is still found; a valid two-byte
+        // character straddling the head's end is not one.
+        let mut doc = b"<a>".to_vec();
+        doc.resize(SNIFF_LEN - 1, b'x');
+        doc.extend_from_slice("\u{e9}".as_bytes());
+        doc.resize(4 * SNIFF_LEN, b'x');
+        assert_eq!(invalid_utf8(&doc), None);
+        doc.push(0xE9);
+        assert_eq!(
+            invalid_utf8(&doc),
+            Some(Position {
+                line: 1,
+                column: (4 * SNIFF_LEN) as u32
+            })
+        );
+    }
+
     #[test]
     fn probe_books_get_epubcheck_s_ids() {
         let opf = |enc: &str| {
@@ -1100,7 +1276,9 @@ mod tests {
                         .map(|c| c as u8)
                         .collect(),
                 )],
-                vec![],
+                // epubcheck draws nothing here (w3c/epubcheck#1784); the
+                // bytes are not the UTF-8 they declare (#150).
+                vec![RSC_028],
             ),
             (
                 "chapter SJIS",
