@@ -1025,10 +1025,28 @@ const KNOWN_NAMESPACES: [&str; 8] = [
 
 /// Presentational attributes HTML5 removed and epubcheck rejects (RSC-005)
 /// wherever they appear - none is valid on any element, so they're matched on
-/// every host. `link`/`vlink` are HTML4 `<body>` attributes, `clear` an HTML4
-/// `<br>` attribute; no HTML5 element defines any of them (nor does any element
-/// legitimately carry an attribute of these names elsewhere).
-const OBSOLETE_GLOBAL_ATTRS: &[&str] = &["link", "vlink", "clear"];
+/// every host. `alink`, `link`, `vlink`, `text`, `bgcolor` and `background` are
+/// HTML4 `<body>` attributes (HTML's obsolete-features list names them there
+/// together; `bgcolor` and `background` also sat on tables), `clear` an HTML4
+/// `<br>` attribute. No XHTML element defines any of them, in the EPUB 3 grammar
+/// or in OPS 2.0.1's (epubcheck's XHTML 1.1 `legacy.rng` declares several, but
+/// no driver includes it); `background` is a MathML attribute only, and this
+/// pass reads the XHTML namespace only.
+///
+/// The first four were reported by the grammar alone, under
+/// `opf.content_document.schema_violation`, until epubsana's
+/// `fix.body_link_colors` asked why `alink` was not with `link` and `vlink`
+/// (2026-11-22). Same id, severity and count either way: the grammar's
+/// finding is dropped where this one fired (`opf.rs`, `htm.obsolete_attribute`).
+const OBSOLETE_GLOBAL_ATTRS: &[&str] = &[
+    "alink",
+    "background",
+    "bgcolor",
+    "clear",
+    "link",
+    "text",
+    "vlink",
+];
 
 /// Obsolete-on-their-host attributes that stay *valid on other elements*, so
 /// they can't be denied globally (`width` is still valid on
@@ -1045,10 +1063,12 @@ const OBSOLETE_HOST_ATTRS_EPUB2: &[(&str, &[&str])] = &[("a", &["name"])];
 
 /// Obsolete/presentational HTML attributes epubcheck flags as RSC-005
 /// (MobileRead #107 / issue #30). The RELAX NG grammar's attribute handling
-/// can't stand in for this: a globally-invalid attribute aborts the whole
-/// element's content model on the first hit (leaving every later element in the
-/// document unreported - verified: `<body vlink link>` yielded a single message
-/// and nothing below it), and the host-specific ones stay valid on other
+/// couldn't stand in for this when it was written: a globally-invalid attribute
+/// aborted the whole element's content model on the first hit (`<body vlink
+/// link>` yielded a single message and nothing below it). That no longer holds
+/// (2026-11-22: `<body alink>` followed by a later bad attribute draws both,
+/// in both versions, as epubcheck does); what still holds is that the rule key
+/// is what epubsana dispatches on, and the host-specific ones stay valid on other
 /// elements, so a global denial would misfire on the near-universal
 /// `<meta name>`/`<img width>`. A direct per-attribute pass reports every
 /// occurrence at its own element, matching epubcheck's one-message-per-attribute
@@ -2779,6 +2799,30 @@ mod tests {
 <hr width="33%" size="1"/>
 </body></html>"#
         )
+    }
+
+    #[test]
+    fn obsolete_body_presentation_attributes_are_one_rule() {
+        let doc = r#"<html xmlns="http://www.w3.org/1999/xhtml"><head><title>t</title></head>
+<body alink="red" link="blue" vlink="purple" text="black" bgcolor="white" background="b.png">
+<table bgcolor="white" background="b.png"><tr><td>x</td></tr></table>
+</body></html>"#;
+        for v3 in [true, false] {
+            assert_eq!(
+                obsolete_attrs(doc, v3),
+                vec![
+                    "alink",
+                    "background",
+                    "background",
+                    "bgcolor",
+                    "bgcolor",
+                    "link",
+                    "text",
+                    "vlink"
+                ],
+                "epub3={v3}"
+            );
+        }
     }
 
     #[test]

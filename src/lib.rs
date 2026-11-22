@@ -1230,6 +1230,48 @@ mod tests {
         assert!(nav_li_findings("<li><a href=\"ch1.xhtml\">1</a></li>").is_empty());
     }
 
+    /// The HTML4 `<body>` presentation attributes draw one RSC-005 each, all
+    /// under `htm.obsolete_attribute` (the grammar's own finding is dropped),
+    /// and a later fault in the same document is still reported. epubsana's
+    /// `fix.body_link_colors` reads that rule key (2026-11-22).
+    #[test]
+    fn body_presentation_attributes_are_one_finding_each_under_one_rule() {
+        let attrs = r#"alink="red" text="black" bgcolor="white" background="b.png""#;
+        let body = format!(r#"<p {attrs}>x</p><p foo="x">y</p>"#);
+        // The EPUB 2 builder's book is not clean on its own, so each book is
+        // read against its control: same markup, no faults.
+        for (v, book, control) in [
+            ("3", epub3_with(&body), epub3_with("<p>x</p><p>y</p>")),
+            (
+                "2",
+                epub2_with_body("T", &body),
+                epub2_with_body("T", "<p>x</p><p>y</p>"),
+            ),
+        ] {
+            let base = crate::validate_bytes(control).messages.len();
+            let got = crate::validate_bytes(book).messages;
+            let rules: Vec<_> = got.iter().map(|m| (m.id, m.rule.unwrap_or(""))).collect();
+            let obsolete: Vec<_> = got
+                .iter()
+                .filter(|m| m.rule == Some("htm.obsolete_attribute"))
+                .map(|m| m.params[0].as_str())
+                .collect();
+            assert_eq!(
+                obsolete,
+                ["alink", "text", "bgcolor", "background"],
+                "EPUB {v}: {rules:?}"
+            );
+            // Four, and the later `foo` from the grammar: nothing doubled,
+            // nothing hidden.
+            let schema = got
+                .iter()
+                .filter(|m| m.rule == Some("opf.content_document.schema_violation"))
+                .count();
+            assert_eq!(schema, 1, "EPUB {v}: {rules:?}");
+            assert_eq!(got.len(), base + 5, "EPUB {v}: {rules:?}");
+        }
+    }
+
     /// Builds a minimal EPUB 3 whose `ch1.xhtml` body is `body` - a
     /// manifest-declared, spine-referenced resource, so the checks actually
     /// read it, which is what the resource-limit fixtures below need.

@@ -40,6 +40,16 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ### Changed
 
+- **`alink`, `text`, `bgcolor` and `background` are reported under
+  `htm.obsolete_attribute`, with `link`, `vlink` and `clear`.** They were
+  RSC-005 under `opf.content_document.schema_violation`, with
+  `violation_kind` `attribute_not_allowed`. The id, severity, position,
+  `element_path`, `params` and count are unchanged. What changes is the rule
+  key, the message wording and `violation_kind`, which is now absent. HTML's
+  obsolete-features list names all six `<body>` attributes together, and no
+  XHTML element allows any of them in either version. Moved rule keys: on
+  1677 books and 1086 fixtures, 12 findings in 2 books moved, all `<body
+  text>`.
 - **styloria 0.23.0.** It adds `Element::pseudo_class`, which defaults to
   today's answer. Output is byte-identical on 2763 books.
 
