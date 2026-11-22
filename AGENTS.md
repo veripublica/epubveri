@@ -166,6 +166,16 @@ Each line is a place where epubveri follows the specification and epubcheck
   `sec-xml-constraints` and OCF 2.0.1 § 1.3 require UTF-8 or UTF-16.
   epubcheck 5.4.0 decodes the bytes leniently and reports nothing
   ([w3c/epubcheck#1784](https://github.com/w3c/epubcheck/issues/1784)).
+- **An EPUB 3 `option` is held to the content model its attributes choose,**
+  and `selectedcontent` and a `select`'s `button` to their places. HTML
+  (form-elements): with `label` and `value` an `option` holds nothing; with
+  `label` alone, or inside a `datalist`, text; otherwise no interactive
+  content, `datalist`, `object` or `tabindex` descendant. `selectedcontent`
+  belongs inside the `button` that is a `select`'s first child, once; that
+  `button` only in a drop-down box; `legend` first in an `optgroup`.
+  epubcheck 5.4.0's grammar admits all of these and nothing else checks
+  them; epubveri reports RSC-005
+  ([w3c/epubcheck#1785](https://github.com/w3c/epubcheck/issues/1785)).
 - **EPUB 2 follows OCF 2.0.1 on file names and rootfiles.** § 3.3 does not
   forbid `|`, controls or private use, and lets two names differ only by
   normalization; § 3.5.1 says only one package rootfile SHOULD be included,

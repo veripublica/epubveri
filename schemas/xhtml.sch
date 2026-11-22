@@ -246,6 +246,64 @@
       <report test="count(descendant::h:option[@selected]) &gt; 1">a "select" without "multiple" must not have more than one selected "option"</report>
     </rule>
   </pattern>
+
+  <!-- HTML's `option` content model (WHATWG, form-elements, read 2026-11-22)
+       has four cases, chosen by the `label` and `value` attributes and by a
+       `datalist` ancestor. The grammar admits the widest (phrasing content
+       and `div`s); these patterns hold each `option` to its own case.
+       epubcheck 5.4.0 checks none of them (w3c/epubcheck#1785),
+       so each finding here is a known difference, by the spec's verdict. -->
+  <pattern id="option-label-value-nothing">
+    <rule context="h:option[@label and @value]">
+      <report test="* or normalize-space(.) != ''">an "option" with both "label" and "value" must be empty</report>
+    </rule>
+  </pattern>
+  <pattern id="option-label-text">
+    <rule context="h:option[@label and not(@value)]">
+      <report test="*">an "option" with a "label" and no "value" must contain text only</report>
+    </rule>
+  </pattern>
+  <pattern id="option-datalist-text">
+    <rule context="h:option[not(@label)][ancestor::h:datalist]">
+      <report test="*">an "option" inside a "datalist" must contain text only</report>
+    </rule>
+  </pattern>
+  <!-- The fourth case: phrasing content and `div`s, "but there must be no
+       interactive content descendant, datalist element descendant, object
+       element descendant, or descendant with the tabindex attribute
+       specified". Interactive content is HTML's list (dom.html,
+       "interactive content"); `type` is compared case-insensitively, as an
+       enumerated attribute is. -->
+  <pattern id="option-no-interactive">
+    <rule context="h:option[not(@label)][not(ancestor::h:datalist)]">
+      <report test="descendant::h:a[@href] or descendant::h:audio[@controls] or descendant::h:button or descendant::h:details or descendant::h:embed or descendant::h:iframe or descendant::h:img[@usemap] or descendant::h:input[not(lower-case(@type) = 'hidden')] or descendant::h:label or descendant::h:select or descendant::h:textarea or descendant::h:video[@controls]">an "option" must not contain interactive content</report>
+      <report test="descendant::h:datalist">an "option" must not contain a "datalist" element</report>
+      <report test="descendant::h:object">an "option" must not contain an "object" element</report>
+      <report test="descendant::*[@tabindex]">an "option" must not contain an element with a "tabindex" attribute</report>
+    </rule>
+  </pattern>
+  <!-- `select`: "Zero or one button elements if the select is a drop-down
+       box". `multiple` makes it a list box. So does a display size above 1,
+       but that is the `size` value read by HTML's integer parser (`1.5` is
+       1), which our XPath has no function for; `size` is not checked. -->
+  <pattern id="select-button-drop-down-only">
+    <rule context="h:button[parent::h:select]">
+      <report test="parent::h:select[@multiple]">a "select" with "multiple" must not contain a "button"</report>
+    </rule>
+  </pattern>
+  <!-- `selectedcontent`: "As a descendant of a button element which is a
+       child of a select element", and that `button` "may also have one
+       descendant selectedcontent element". -->
+  <pattern id="selectedcontent-context">
+    <rule context="h:selectedcontent">
+      <assert test="ancestor::h:button[parent::h:select]">a "selectedcontent" element must be inside the "button" of a "select"</assert>
+    </rule>
+  </pattern>
+  <pattern id="selectedcontent-one">
+    <rule context="h:button[parent::h:select]">
+      <report test="count(descendant::h:selectedcontent) &gt; 1">the "button" of a "select" must not contain more than one "selectedcontent" element</report>
+    </rule>
+  </pattern>
   <pattern id="link-sizes-icon-only">
     <rule context="h:link[@sizes]">
       <assert test="@rel='icon'">the "sizes" attribute is only allowed on a "link" whose "rel" is "icon"</assert>

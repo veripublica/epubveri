@@ -1272,6 +1272,35 @@ mod tests {
         }
     }
 
+    /// kepubverto's case: kepubify wraps the text of every `option` in a Kobo
+    /// `span`, which HTML's customizable `select` allows. EPUB 3 takes it and
+    /// the rest of that content model with no finding; EPUB 2's XHTML 1.1
+    /// `option` is still text only.
+    #[test]
+    fn customizable_select_is_valid_epub3_and_not_epub2() {
+        let body = concat!(
+            r#"<p><select><button><selectedcontent></selectedcontent></button>"#,
+            r#"<option><span class="koboSpan" id="kobo.2.1">One. </span></option><hr/>"#,
+            r#"<optgroup><legend>G</legend><div><option><div><b>Two</b></div></option></div></optgroup>"#,
+            r#"<div><option value="v">Three</option></div></select></p>"#
+        );
+        let control = crate::validate_bytes(epub3_with("<p>x</p>")).messages.len();
+        let got = crate::validate_bytes(epub3_with(body)).messages;
+        let ids: Vec<_> = got
+            .iter()
+            .map(|m| (m.id, m.rule.unwrap_or(""), &m.text))
+            .collect();
+        assert_eq!(got.len(), control, "{ids:?}");
+
+        let span = r#"<p><select><option><span>One</span></option></select></p>"#;
+        let base = crate::validate_bytes(epub2_with_body("T", "<p>x</p>"))
+            .messages
+            .len();
+        let got = crate::validate_bytes(epub2_with_body("T", span)).messages;
+        let schema = got.iter().filter(|m| m.id == crate::ids::RSC_005).count();
+        assert!(schema >= 1 && got.len() > base, "EPUB 2: {got:?}");
+    }
+
     /// Builds a minimal EPUB 3 whose `ch1.xhtml` body is `body` - a
     /// manifest-declared, spine-referenced resource, so the checks actually
     /// read it, which is what the resource-limit fixtures below need.

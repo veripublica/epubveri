@@ -711,9 +711,76 @@ mod tests {
         // ninth is `aria-role-name-prohibited`, from 5.4.0's two new DPUB
         // roles, and the tenth `bdo-dir-not-auto`, HTML's own rule — 4
         // `obsolete-*` patterns, the USAGE RSC-036 family, and
-        // `script-src-type` from 5.4.0. A change that dropped rules would
-        // trip this.
-        assert_eq!(xhtml_schema().patterns.len(), 48);
+        // `script-src-type` from 5.4.0 — and 7 for HTML's customizable
+        // `select`: four `option-*` cases, `select-button-drop-down-only` and
+        // two `selectedcontent-*`. A change that dropped rules would trip
+        // this.
+        assert_eq!(xhtml_schema().patterns.len(), 55);
+    }
+
+    /// HTML's four `option` content models, one case each, with the
+    /// boundary that keeps each from firing on the others' books.
+    #[test]
+    fn option_content_follows_its_attributes_and_datalist() {
+        let one = |body: &str, want: &str| {
+            assert_eq!(xhtml_findings(body), vec![want.to_string()], "{body}");
+        };
+        one(
+            r#"<p><select><option label="L" value="v">x</option></select></p>"#,
+            r#"an "option" with both "label" and "value" must be empty"#,
+        );
+        one(
+            r#"<p><select><option label="L"><span>x</span></option></select></p>"#,
+            r#"an "option" with a "label" and no "value" must contain text only"#,
+        );
+        one(
+            r#"<p><datalist id="d"><option><span>x</span></option></datalist></p>"#,
+            r#"an "option" inside a "datalist" must contain text only"#,
+        );
+        one(
+            r##"<p><select><option><div><a href="#">x</a></div></option></select></p>"##,
+            r#"an "option" must not contain interactive content"#,
+        );
+        one(
+            r#"<p><select><option><span tabindex="0">x</span></option></select></p>"#,
+            r#"an "option" must not contain an element with a "tabindex" attribute"#,
+        );
+        for ok in [
+            r#"<p><select><option label="L" value="v"> </option></select></p>"#,
+            r#"<p><select><option label="L">x</option></select></p>"#,
+            r#"<p><select><option value="v"><span>x</span> y</option></select></p>"#,
+            r#"<p><datalist id="d"><option label="L" value="v"></option><option>x</option></datalist></p>"#,
+            r#"<p><select><option><input type="Hidden" name="h"/><a>x</a></option></select></p>"#,
+        ] {
+            assert!(xhtml_findings(ok).is_empty(), "{ok}");
+        }
+    }
+
+    /// `selectedcontent` lives in a `select`'s `button`, once, and that
+    /// `button` belongs to a drop-down `select` only.
+    #[test]
+    fn selectedcontent_and_the_select_button_are_placed() {
+        let ok = r#"<p><select><button><selectedcontent></selectedcontent></button><option>x</option></select></p>"#;
+        assert!(xhtml_findings(ok).is_empty());
+        assert_eq!(
+            xhtml_findings(r#"<p><span><selectedcontent></selectedcontent></span></p>"#),
+            vec![
+                r#"a "selectedcontent" element must be inside the "button" of a "select""#
+                    .to_string()
+            ]
+        );
+        assert_eq!(
+            xhtml_findings(
+                r#"<p><select><button><selectedcontent></selectedcontent><selectedcontent></selectedcontent></button><option>x</option></select></p>"#
+            ),
+            vec![r#"the "button" of a "select" must not contain more than one "selectedcontent" element"#.to_string()]
+        );
+        assert_eq!(
+            xhtml_findings(
+                r#"<p><select multiple="multiple"><button>b</button><option>x</option></select></p>"#
+            ),
+            vec![r#"a "select" with "multiple" must not contain a "button""#.to_string()]
+        );
     }
 
     /// HTML § 4.5.25: `auto` must not be specified on `bdo`, in any case.

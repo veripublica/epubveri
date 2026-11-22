@@ -10,6 +10,31 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **EPUB 3: HTML's customizable `select` is valid.** An `option` may hold
+  phrasing content and `div`s, an `optgroup` a leading `legend` and `div`s
+  grouping its options, a `select` a leading `button` with a
+  `selectedcontent` in it, `hr`s and grouping `div`s, and a `datalist`
+  phrasing content. epubcheck 5.4.0 took these content models from
+  validator.nu; our grammar still had 5.3.0's, where `option` is text only,
+  so every `<option><span>…</span></option>` was an RSC-005. kepubify's
+  output has a Kobo `span` in every `option`, which is how kepubverto found
+  it. EPUB 2 is unchanged: XHTML 1.1's `option` is text.
+- **EPUB 3: what an `option` may hold now depends on its attributes, as in
+  HTML** (RSC-005, the `option-*` rules). With `label` and `value` it must
+  be empty; with `label` alone, or inside a `datalist`, it holds text only;
+  otherwise it must not contain interactive content, a `datalist`, an
+  `object` or an element with `tabindex`. A `selectedcontent` must be inside
+  the `button` of a `select`, and only once there; a `select` with
+  `multiple` takes no `button`; `button` and `legend` come first. epubcheck
+  5.4.0 checks none of these, so they are known differences
+  (w3c/epubcheck#1785). Only one of them can reject a book 0.49.0 accepted:
+  an `option` with `label` and `value` that also has text. The rest were
+  already errors, under the grammar's rule. None of the 2763 books we measure on has a `select`,
+  `option`, `optgroup` or `datalist`; a 42-book probe covers each case
+  against epubcheck 5.4.0.
+
 ### Changed
 
 - **The minimum supported Rust version is now 1.95** (was 1.88), in the

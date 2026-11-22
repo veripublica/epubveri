@@ -1286,6 +1286,10 @@
       <ref name="areaEl"/>
       <ref name="aEl"/>
       <element name="span"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
+      <!-- `common.elem.phrasing |= selectedcontent.elem`, content `empty`
+           (web-forms.rnc, 5.4.0). Its one context, inside a select's button,
+           is `xhtml.sch`'s pattern `selectedcontent-context`. -->
+      <element name="selectedcontent"><ref name="globalAttrs"/><empty/></element>
       <element name="em"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
       <element name="strong"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
       <element name="small"><ref name="globalAttrs"/><ref name="phrasingContent"/></element>
@@ -1432,6 +1436,19 @@
       <ref name="phrasingContent"/>
     </element>
   </define>
+  <!-- HTML's customizable `select` (WHATWG, form-elements, read 2026-11-22),
+       which epubcheck 5.4.0 took from validator.nu: an `option` holds phrasing
+       content and `div`s, an `optgroup` a leading `legend`, a `select` a
+       leading `button` (holding `selectedcontent`), `hr`s and grouping `div`s.
+       5.3.0 had `option` as text only, and so did we until kepubverto's
+       Kobo spans in `option` drew an RSC-005 each.
+
+       The grammar admits what 5.4.0 admits, in the spec's order (`legend` and
+       `button` first; 5.4.0 interleaves them). What `option` holds depends on
+       its attributes and on whether a `datalist` is an ancestor, and the
+       `selectedcontent` context is "a descendant of a `button` which is a
+       child of a `select`": RELAX NG cannot say either, so `xhtml.sch` does
+       (patterns `option-*` and `selectedcontent-*`). -->
   <define name="optionEl">
     <element name="option"><ref name="globalAttrs"/>
       <optional><attribute name="value"><data type="string"/></attribute></optional>
@@ -1439,7 +1456,46 @@
       <optional><attribute name="disabled"><data type="token"/></attribute></optional>
       <!-- #33: option.attrs completion (web-forms.rnc). -->
       <optional><attribute name="label"><data type="string"/></attribute></optional>
-      <text/>
+      <ref name="optionContent"/>
+    </element>
+  </define>
+  <!-- `option.inner = common.inner.phrasing & div.elem*`. A `div` inside an
+       `option` is transparent in HTML, so it holds what the `option` does. -->
+  <define name="optionContent">
+    <mixed>
+      <zeroOrMore>
+        <choice>
+          <ref name="phrasingChoice"/>
+          <element name="div"><ref name="globalAttrs"/><ref name="optionContent"/></element>
+        </choice>
+      </zeroOrMore>
+    </mixed>
+  </define>
+  <define name="optgroupEl">
+    <element name="optgroup"><ref name="globalAttrs"/>
+      <optional><attribute name="label"><data type="string"/></attribute></optional>
+      <!-- #33: optgroup.attrs completion (web-forms.rnc). -->
+      <optional><attribute name="disabled"><data type="token"/></attribute></optional>
+      <optional><element name="legend"><ref name="globalAttrs"/><ref name="phrasingContent"/></element></optional>
+      <zeroOrMore>
+        <choice>
+          <ref name="optionEl"/>
+          <ref name="optgroupDivEl"/>
+          <ref name="scriptSupportingEl"/>
+        </choice>
+      </zeroOrMore>
+    </element>
+  </define>
+  <!-- `optgroupdiv.elem`: a `div` grouping options inside an `optgroup`. -->
+  <define name="optgroupDivEl">
+    <element name="div"><ref name="globalAttrs"/>
+      <zeroOrMore>
+        <choice>
+          <ref name="optionEl"/>
+          <ref name="optgroupDivEl"/>
+          <ref name="scriptSupportingEl"/>
+        </choice>
+      </zeroOrMore>
     </element>
   </define>
   <define name="selectEl">
@@ -1451,24 +1507,22 @@
       <optional><attribute name="name"><data type="string"/></attribute></optional>
       <optional><attribute name="size"><data type="string"/></attribute></optional>
       <optional><attribute name="autocomplete"><data type="string"/></attribute></optional>
-      <zeroOrMore>
-        <choice>
-          <ref name="optionEl"/>
-          <ref name="scriptSupportingEl"/>
-          <element name="optgroup"><ref name="globalAttrs"/>
-            <optional><attribute name="label"><data type="string"/></attribute></optional>
-            <!-- #33: optgroup.attrs completion (web-forms.rnc). -->
-            <optional><attribute name="disabled"><data type="token"/></attribute></optional>
-            <zeroOrMore>
-              <choice>
-                <ref name="optionEl"/>
-                <ref name="scriptSupportingEl"/>
-              </choice>
-            </zeroOrMore>
-          </element>
-        </choice>
-      </zeroOrMore>
+      <optional><ref name="buttonEl"/></optional>
+      <ref name="selectContent"/>
     </element>
+  </define>
+  <!-- `selectdiv.inner`: what a `select` holds after its `button`, and what a
+       `div` grouping options inside it holds. -->
+  <define name="selectContent">
+    <zeroOrMore>
+      <choice>
+        <ref name="optionEl"/>
+        <ref name="optgroupEl"/>
+        <element name="hr"><ref name="globalAttrs"/></element>
+        <element name="div"><ref name="globalAttrs"/><ref name="selectContent"/></element>
+        <ref name="scriptSupportingEl"/>
+      </choice>
+    </zeroOrMore>
   </define>
   <define name="textareaEl">
     <element name="textarea"><ref name="globalAttrs"/>
@@ -1490,7 +1544,18 @@
   </define>
   <define name="datalistEl">
     <element name="datalist"><ref name="globalAttrs"/>
-      <mixed><zeroOrMore><ref name="optionEl"/></zeroOrMore></mixed>
+      <!-- `datalist.inner = option.elem* & common.inner.phrasing` (5.4.0, as
+           5.3.0). HTML's model is "either phrasing content or option and
+           script-supporting elements", not a mix of the two; the mix is not
+           checked yet (no text() node test in our XPath). -->
+      <mixed>
+        <zeroOrMore>
+          <choice>
+            <ref name="optionEl"/>
+            <ref name="phrasingChoice"/>
+          </choice>
+        </zeroOrMore>
+      </mixed>
     </element>
   </define>
   <define name="outputEl">
