@@ -17,7 +17,17 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   drops it, so the sheet a reading system holds names no file, and a missing
   target was a wrong error on a valid book. ADV-021 still reports the rule
   under `--advisory`. epubcheck 5.4.0 reports RSC-007 (#151; w3c/epubcheck#1787;
-  epub-test-books `import-after-rule-missing`).
+  epub-test-books `import-after-rule-missing`). A manifest stylesheet that only
+  such an `@import` names is now unreferenced, so it draws OPF-097 at usage
+  severity, as any other unused resource does (`import-after-rule`).
+- **Bytes that cannot begin an XML document draw RSC-016 alone** (#150's
+  follow-up). Ciphertext or obfuscated bytes with no `encryption.xml` entry
+  that is honoured were reported not well-formed at 1:1 and also RSC-028,
+  "not valid UTF-8 and declares no other encoding", a second finding for the
+  same bytes that says little about a file that is not text. When the first
+  byte after any byte order mark is neither `<` nor XML whitespace, RSC-028
+  is left to the parse. epubcheck 5.4.0 gives RSC-016 alone (epub-test-books
+  `aes-no-encryption-xml`, `package-document-obfuscated`).
 - **A content document with a media overlay and no CSS is valid,** when the
   package declares `media:active-class` or `media:playback-active-class`.
   EPUB 3.3 § 9.3.4 asks for a stylesheet with a lowercase "must", which

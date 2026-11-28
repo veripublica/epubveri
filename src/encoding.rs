@@ -563,8 +563,23 @@ pub(crate) fn check_head(
 /// nothing drew nothing (#150). epubcheck is silent on it for the same
 /// reason: its UTF-8 branch reads through `InputStreamReader`, which replaces
 /// what it cannot decode (w3c/epubcheck#1784).
+///
+/// **`None` too for bytes that are not markup at all.** A resource whose first
+/// byte after any byte order mark is neither `<` nor XML whitespace cannot
+/// begin an XML document, and the parse reports it not well-formed at 1:1
+/// (RSC-016). That finding says what is wrong with ciphertext or obfuscated
+/// bytes; RSC-028's "declares no other encoding" would be a second finding
+/// for the same bytes, and says little about a file that is not text
+/// (epub-test-books, `aes-no-encryption-xml` and
+/// `package-document-obfuscated`; epubcheck 5.4.0 gives RSC-016 alone).
 pub(crate) fn invalid_utf8(bytes: &[u8]) -> Option<Position> {
     let body = bytes.strip_prefix(UTF8_MAGIC).unwrap_or(bytes);
+    if body
+        .first()
+        .is_some_and(|b| !matches!(b, b'<' | b' ' | b'\t' | b'\n' | b'\r'))
+    {
+        return None;
+    }
     let err = std::str::from_utf8(body).err()?;
     let valid = std::str::from_utf8(&body[..err.valid_up_to()]).unwrap_or_default();
     let line = valid.matches('\n').count() + 1;
@@ -1233,6 +1248,25 @@ mod tests {
                 line: 1,
                 column: (4 * SNIFF_LEN) as u32
             })
+        );
+    }
+
+    /// Bytes that cannot begin an XML document are the parse's to report
+    /// (RSC-016 at 1:1), not RSC-028's: ciphertext with no `encryption.xml`
+    /// entry drew both (epub-test-books, `aes-no-encryption-xml`).
+    #[test]
+    fn invalid_utf8_leaves_bytes_that_are_not_markup_to_the_parse() {
+        assert_eq!(invalid_utf8(b"\xae\xd9\x36\xd1<a/>"), None);
+        assert_eq!(invalid_utf8(b"\xef\xbb\xbf\x86\x76\xd5"), None);
+        assert_eq!(invalid_utf8(b"x\xe9"), None);
+        // Markup, or whitespace before it, is still read through.
+        assert_eq!(
+            invalid_utf8(b"\n<a>\xe9</a>"),
+            Some(Position { line: 2, column: 4 })
+        );
+        assert_eq!(
+            invalid_utf8(b"\xef\xbb\xbf<\xe9"),
+            Some(Position { line: 1, column: 2 })
         );
     }
 
