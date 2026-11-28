@@ -105,6 +105,17 @@ Each line is a place where epubveri follows the specification and epubcheck
   UTF-16 XML file RSC-027. The same holds for a stylesheet with a byte order
   mark (OPS 2.0.1 § 1.4.1.5), which epubcheck 5.4.0 gives CSS-003
   ([w3c/epubcheck#1772](https://github.com/w3c/epubcheck/issues/1772)).
+- **An `@import` after a style rule names no resource.** CSS Cascade 5 makes
+  it invalid and CSS Syntax 3 drops it, so EPUB 3.3 § 4.2.5 has no URL to
+  check: a missing target is not RSC-007 (ADV-021 still says the rule is
+  ignored). epubcheck 5.4.0 reports RSC-007
+  ([w3c/epubcheck#1787](https://github.com/w3c/epubcheck/issues/1787)).
+- **An overlaid content document with no CSS passes** when the package
+  declares `media:active-class`. EPUB 3.3 § 9.3.4's "must" is lowercase,
+  which § 1.5 does not read as a requirement; `--advisory` reports it as
+  ADV-026. epubcheck 5.4.0 reports CSS-030
+  ([w3c/epubcheck#1788](https://github.com/w3c/epubcheck/issues/1788);
+  [w3c/epub-specs#3125](https://github.com/w3c/epub-specs/issues/3125)).
 - **A fixed-layout viewport `width` or `height` of `0` is HTM-057.** EPUB
   3.3 § 8.2.2.6: each "MUST have as its value a positive number [css2]".
   epubcheck 5.4.0's pattern accepts zero
@@ -314,7 +325,7 @@ Schematron files in `schemas/`. Searching `src/` alone misses the second.
 - **`ADV-*` (`spec-silent`):** no specification requires it, but the book is
   probably wrong. These never graduate.
   - ADV-001 to ADV-004, ADV-009 to ADV-012, ADV-014, ADV-015, ADV-017,
-    ADV-019 to ADV-025.
+    ADV-019 to ADV-026.
 
 `NEXT-*` (`spec-ahead`) is closed. Its rules are required by a specification,
 so since the verdict follows the specification they report without the flag:

@@ -2161,7 +2161,31 @@ fn nesting_spans(sheet: &Stylesheet) -> Vec<Span> {
 /// [`url_references`](styloria::url_references), kept to the reach these
 /// checks have always had (see [`checked_url`]). A bare string counts only as
 /// the target of a top-level `@import`.
+///
+/// **A misplaced `@import` refers to nothing.** CSS Cascade 5 makes an
+/// `@import` after any other valid rule (other than `@charset` and `@layer`
+/// statements) invalid, and CSS Syntax 3 has the parser drop it, so the
+/// sheet a reading system holds has no such rule and fetches nothing. Its
+/// target is not a reference for `sec-container-iri` to check: reading it
+/// drew RSC-007 on a valid book whose dropped `@import` names a file that
+/// does not exist (epub-test-books #700, `import-after-rule-missing`;
+/// epubcheck 5.4.0 says the same, w3c/epubcheck#1787). The same reading as
+/// the `<bad-url-token>` in [`checked_url`]. What is wrong with it is
+/// ADV-021's to say. styloria decides which rule is out of order; its
+/// diagnostic names the rule by its name span, as in `check`.
 fn sheet_urls(sheet: &Stylesheet) -> Vec<SheetUrl> {
+    let dropped: Vec<Span> = validate_parsed_stylesheet(sheet)
+        .into_iter()
+        .filter(|d| d.kind == DiagnosticKind::MisplacedAtRule)
+        .filter_map(|d| {
+            sheet.rules.iter().find_map(|r| match &r.node {
+                Rule::At(a) if a.name_span == d.span && a.name.eq_ignore_ascii_case("import") => {
+                    Some(r.span)
+                }
+                _ => None,
+            })
+        })
+        .collect();
     let tops: Vec<(Span, Under, Option<Span>)> = sheet
         .rules
         .iter()
@@ -2197,6 +2221,12 @@ fn sheet_urls(sheet: &Stylesheet) -> Vec<SheetUrl> {
     styloria::url_references(sheet)
         .iter()
         .filter_map(|r| {
+            if dropped
+                .iter()
+                .any(|s| s.start <= r.span.start && r.span.end <= s.end)
+            {
+                return None;
+            }
             let under = under(r.span.start);
             let bare = r.form == UrlForm::String;
             if bare && !(under == Under::Import && r.context == UrlContext::Import) {
@@ -4309,6 +4339,31 @@ mod tests {
         // resource whose file is missing - see the tests below).
         let findings = run("@import \"missing.css\";", &empty_index());
         assert!(findings.contains(&RSC_007));
+    }
+
+    /// An `@import` after a style rule is dropped by the parser, so its
+    /// target is no reference at all: no RSC-007, in either form, and none
+    /// from `stylesheet_urls` or `import_targets` either (epub-test-books
+    /// #700). One after only `@charset`, `@layer` statements and other
+    /// `@import`s still counts.
+    #[test]
+    fn misplaced_import_target_is_not_a_reference() {
+        for css in [
+            "p { margin: 0 }\n@import \"missing.css\";",
+            "p { margin: 0 }\n@import url(missing.css);",
+        ] {
+            let findings = run(css, &empty_index());
+            assert!(!findings.contains(&RSC_007), "{css}: {findings:?}");
+            let (sheet, _) = styloria::parse_stylesheet(css);
+            assert!(stylesheet_urls(&sheet).is_empty(), "{css}");
+            assert!(import_targets(&sheet).is_empty(), "{css}");
+        }
+        for css in [
+            "@charset \"utf-8\";\n@layer a;\n@import \"x.css\";\n@import \"missing.css\";",
+            "@import url(missing.css);\np { margin: 0 }",
+        ] {
+            assert!(run(css, &empty_index()).contains(&RSC_007), "{css}");
+        }
     }
 
     /// An unclosed block multiplies no findings, however much it swallows.

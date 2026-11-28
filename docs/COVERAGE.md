@@ -22,7 +22,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | OPF | 93 | 0 | 1 | 15 | 94 | 93/94 | reviewed |
 | RSC | 31 | 3 | 0 | 4 | 34 | 34/34 | reviewed |
 | HTM | 24 | 0 | 0 | 29 | 24 | 24/24 | reviewed |
-| CSS | 13 | 0 | 0 | 13 | 13 | 13/13 | reviewed |
+| CSS | 12 | 0 | 1 | 13 | 13 | 12/13 | reviewed |
 | MED | 15 | 0 | 0 | 3 | 15 | 15/15 | reviewed |
 | NAV | 9 | 0 | 0 | 2 | 9 | 9/9 | reviewed |
 | NCX | 3 | 0 | 0 | 3 | 3 | 3/3 | reviewed |
@@ -31,9 +31,9 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | CHK | 0 | 0 | 0 | 8 | 0 | — | reviewed |
 | INF | 0 | 0 | 0 | 1 | 0 | — | reviewed |
 | OBS | 1 | 0 | 0 | 0 | 1 | 1/1 | first-pass |
-| **All** | **214** | **3** | **1** | **105** | **218** | **217/218** | |
+| **All** | **213** | **3** | **2** | **105** | **218** | **216/218** | |
 
-**epubveri implements 217 of 218 live epubcheck checks (~100%)** — 214 fully, 3 partially — plus 28 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
+**epubveri implements 216 of 218 live epubcheck checks (~99%)** — 213 fully, 3 partially — plus 29 checks of its own (`ADV-*` and viewport/data-* extras). 105 epubcheck IDs are suppressed or non-checks and don't count.
 
 ## Per-ID detail
 
@@ -311,7 +311,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | CSS-025 | _(no message text in epubcheck's bundle)_ | ⊘ | ⊘ | epubcheck-suppressed (disabled by default) — not a gap |
 | CSS-028 | Use of Font-face declaration. | Y | Y | A `@font-face` declaration is present (usage). Known granularity difference, left as is (measured 2026-08-09): we report once per `@font-face` **rule**, epubcheck once per **declaration inside it**, so a block of four descriptors is 1 finding here and 4 there. It is informational either way and never touches the verdict. Visible on **118 of 375 shelf books** (re-measured 2026-08-20; it was 32 of 136). The ratio is exactly 4x in 104 of those and 2x or 3x in the other 14, which is the mechanism showing through rather than an exception - a block with three descriptors gives 3x. Mostly from one producer whose blocks each carry four descriptors - which is why the ratio looks like a suspiciously exact 4x. **Re-decided 2026-09-30, still left as is.** No spec clause covers this note or how often it is counted: EPUB 3.4 never mentions `@font-face` (fonts are exempt resources, §3.4) and defines no usage severity (§2.1 maps MUST to errors and SHOULD to warnings); OPS 2.0.1 §3.4 supports `@font-face` and says nothing about reporting it. CSS-028 is epubcheck's own informational note (`CSSHandler`:370), so both counts are true and the choice is a product one. Per declaration would multiply the note in the plugin panels, where users already read it as an error (374286 #206, #209). |
 | CSS-029 | Found CSS class name "%1$s" but no "%2$s" property was declared in the package document. | Y | Y | well-known media-overlay class used but its property isn't declared (usage) |
-| CSS-030 | The package document declares media overlays styling class names but no CSS was found i... | Y | Y | declared media-overlay active-class has no matching CSS selector |
+| CSS-030 | The package document declares media overlays styling class names but no CSS was found i... | Y | x | Not emitted, on the specification's reading (owner, 2026-11-28). EPUB 3.3 § 9.3.4 asks for a stylesheet in each overlaid document with a lowercase "must", which § 1.5 does not read as a requirement, so a book without one is valid. The same condition is ADV-026 under `--advisory`. Counted as a gap on purpose: it is epubcheck's check and we do not run it (w3c/epubcheck#1788, w3c/epub-specs#3125). |
 
 ### MED  _(reviewed)_
 
@@ -455,6 +455,7 @@ A per-message-ID transparency matrix: for every epubcheck message ID, does epubv
 | ADV-023 | an !important declaration inside a keyframe (usage) | — | Y |
 | ADV-024 | a declaration value its property or descriptor cannot take (usage) | — | Y |
 | ADV-025 | a reference names its file only once percent-decoded (usage) | — | Y |
+| ADV-026 | overlaid document has no CSS for the declared media-overlay classes (usage) | — | Y |
 | LIM-001 | a resource exceeds ocf::MAX_ENTRY_BYTES and was not checked | — | Y |
 | LIM-002 | the publication exceeds ocf::MAX_BOOK_BYTES in total; a resource was not checked | — | Y |
 | SPEC-001 | EPUB 3.3 §4.2.6.3.2.1: a file that must never be encrypted is declared encrypted (error) | — | Y |

@@ -182,7 +182,8 @@ pub const CSS_015: &str = "CSS-015"; // an alternate stylesheet link is missing 
 pub const CSS_019: &str = "CSS-019"; // @font-face with an empty declaration block
 pub const CSS_028: &str = "CSS-028"; // a @font-face declaration is present (usage)
 pub const CSS_029: &str = "CSS-029"; // well-known media-overlay class used but its property isn't declared (usage)
-pub const CSS_030: &str = "CSS-030"; // declared media-overlay active-class has no matching CSS selector
+// CSS-030 is not emitted: its condition is ADV-026 (below). EPUB 3.3 § 9.3.4's
+// "must" is lowercase, so no requirement is broken (owner, 2026-11-28).
 
 // --- ADV-*: advisory, and nobody says the book is wrong -----------------
 //
@@ -271,6 +272,14 @@ pub const ADV_024: &str = "ADV-024"; // a declaration value its property or desc
 // two spellings name one file, and the verdict is epubcheck's. See
 // `refspell.rs` and docs/DECISIONS.md.
 pub const ADV_025: &str = "ADV-025"; // a reference names its file only once percent-decoded (usage)
+// ADV-026 is CSS-030's condition: the package declares `media:active-class` or
+// `media:playback-active-class`, and an overlaid content document has no CSS,
+// linked or embedded. EPUB 3.3 § 9.3.4 asks creators to include one, but with
+// a lowercase "must", which § 1.5 does not read as a requirement, so the book
+// is valid (epub-test-books #701; w3c/epubcheck#1788; w3c/epub-specs#3125 asks
+// whether that is meant). Should W3C capitalise it, this goes back to CSS-030
+// as an error; an advisory never graduates otherwise.
+pub const ADV_026: &str = "ADV-026"; // overlaid document has no CSS for the declared media-overlay classes (usage)
 
 // --- NEXT-*: the specification already says it; epubcheck has not caught up --
 //

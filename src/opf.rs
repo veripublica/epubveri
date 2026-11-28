@@ -13645,17 +13645,32 @@ fn check_text(
     // (`OPSHandler30.checkOverlaysStyles`), guarded on the item having a
     // media overlay and on either property being declared — which is exactly
     // the three conditions below, in that order.
+    //
+    // **ADV-026, not CSS-030's error** (owner, 2026-11-28). The sentence in
+    // EPUB 3.3 § 9.3.4 says "EPUB creators MAY define any CSS properties for
+    // the specified CSS classes but must ensure that each EPUB content
+    // document with an associated media overlay document includes a CSS
+    // stylesheet", and its "must" is lowercase; § 1.5 reads key words as
+    // requirements "when, and only when, they appear in all capitals". So no
+    // conformance rule is broken and the book is valid (epub-test-books #701,
+    // `active-class-no-css`; w3c/epubcheck#1788, and w3c/epub-specs#3125 asks
+    // whether the lowercase is meant). What stays true every time it fires is
+    // the advisory: nothing in that document styles the declared classes.
     if media_active_class.is_some() || media_playback_active_class.is_some() {
         for doc_path in content_doc_overlay
             .keys()
             .filter(|p| xhtml_doc_paths.contains(p.as_str()) || svg_doc_paths.contains(p.as_str()))
             .filter(|p| !docs_with_css.contains(p.as_str()))
         {
-            report.push_at(
-                CSS_030,
-                Severity::Error,
-                "the package declares media-overlay styling class names, but this content document has no CSS",
+            report.push_at_rule(
+                ADV_026,
+                Severity::Usage,
+                "the package declares media-overlay styling class names, but this content \
+                 document has no CSS, so nothing styles them here"
+                    .to_string(),
                 doc_path.clone(),
+                "css.media_overlay.no_stylesheet",
+                vec![],
             );
         }
     }
@@ -16604,7 +16619,8 @@ mod tests {
         );
     }
 
-    /// CSS-030 asks whether the document has **any** CSS, once, not whether
+    /// ADV-026 (CSS-030's condition) asks whether the document has **any** CSS,
+    /// once, not whether
     /// each declared class has a matching selector.
     ///
     /// epubcheck's condition is `!hasCSS` (`OPSHandler30.checkOverlaysStyles`)
@@ -16621,12 +16637,12 @@ mod tests {
     /// C is the control — the arrangement that was always right and must stay
     /// silent.
     #[test]
-    fn css030_is_about_having_css_at_all() {
+    fn adv026_is_about_having_css_at_all() {
         fn findings(head_extra: &str) -> usize {
             crate::validate_bytes(epub_with_media_overlay(head_extra))
                 .messages
                 .iter()
-                .filter(|m| m.id == crate::ids::CSS_030)
+                .filter(|m| m.id == crate::ids::ADV_026)
                 .count()
         }
         assert_eq!(findings(""), 1, "A: no CSS, two properties, one finding");

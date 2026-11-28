@@ -8,6 +8,25 @@ epubveri is pre-1.0, so breaking changes land as minor-version bumps
 (`0.x.0`), per [Cargo's SemVer compatibility
 rules](https://doc.rust-lang.org/cargo/reference/semver.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An `@import` after a style rule is no reference** (RSC-007 and the other
+  url checks). CSS Cascade 5 makes such an `@import` invalid and CSS Syntax 3
+  drops it, so the sheet a reading system holds names no file, and a missing
+  target was a wrong error on a valid book. ADV-021 still reports the rule
+  under `--advisory`. epubcheck 5.4.0 reports RSC-007 (#151; w3c/epubcheck#1787;
+  epub-test-books `import-after-rule-missing`).
+- **A content document with a media overlay and no CSS is valid,** when the
+  package declares `media:active-class` or `media:playback-active-class`.
+  EPUB 3.3 § 9.3.4 asks for a stylesheet with a lowercase "must", which
+  § 1.5 does not read as a requirement. CSS-030 is no longer emitted; the
+  same condition is the new advisory **ADV-026** under `--advisory`, rule
+  `css.media_overlay.no_stylesheet`. epubcheck 5.4.0 reports CSS-030
+  (#152; w3c/epubcheck#1788, w3c/epub-specs#3125; epub-test-books
+  `active-class-no-css`).
+
 ## [0.50.0] - 2026-11-22
 
 ### Fixed

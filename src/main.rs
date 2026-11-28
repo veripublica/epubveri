@@ -89,7 +89,11 @@ OPTIONS:
                                      the rule; epubcheck accepts it), an
                                      EPUB 2 reference that percent-encodes
                                      a reserved character its file name
-                                     holds as it is (%27 for '), and
+                                     holds as it is (%27 for '), an overlaid
+                                     content document with no CSS for the
+                                     media-overlay class names the package
+                                     declares (EPUB 3.3's \"must\" there is
+                                     lowercase), and
                                      CSS a browser drops that epubcheck
                                      accepts: a pseudo-class like :hovr, an
                                      at-rule like @medai, an @import or
@@ -925,7 +929,7 @@ mod tests {
             .collect();
         assert_eq!(
             declared.len(),
-            18,
+            19,
             "the advisory families changed ({declared:?}) — describe the new \
              check in --advisory's help text, then update this count"
         );

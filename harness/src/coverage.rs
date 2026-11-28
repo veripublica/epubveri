@@ -159,6 +159,14 @@ const ANN: &[Ann] = &[
          overriding a different `--profile`. Emitted, and the override applied, since \
          2026-09-25; before that the type's checks ran but the message did not, and a \
          requested profile's gating check still fired on a book of another type."),
+    ("CSS-030", None,
+        "Not emitted, on the specification's reading (owner, 2026-11-28). \
+         EPUB 3.3 § 9.3.4 asks for a stylesheet in each overlaid document \
+         with a lowercase \"must\", which § 1.5 does not read as a \
+         requirement, so a book without one is valid. The same condition is \
+         ADV-026 under `--advisory`. Counted as a gap on purpose: it is \
+         epubcheck's check and we do not run it (w3c/epubcheck#1788, \
+         w3c/epub-specs#3125)."),
     ("NAV-001", Some("na"),
         "Dead ID - its only call site is `NavChecker`'s constructor under \
          `version == VERSION_2`, but a NavChecker is only built for an item \
