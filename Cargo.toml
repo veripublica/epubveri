@@ -6,7 +6,6 @@ rust-version = "1.95"
 description = "Pure-Rust EPUB validator — a fast, JVM-free, embeddable alternative to epubcheck."
 license = "AGPL-3.0-only OR LicenseRef-veripublica-Commercial"
 repository = "https://github.com/veripublica/epubveri"
-homepage = "https://github.com/veripublica/epubveri"
 readme = "README.md"
 keywords = ["epub", "epubcheck", "validator", "ebook", "ocf"]
 categories = ["parser-implementations", "command-line-utilities"]

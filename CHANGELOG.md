@@ -37,6 +37,13 @@ rules](https://doc.rust-lang.org/cargo/reference/semver.html).
   (#152; w3c/epubcheck#1788, w3c/epub-specs#3125; epub-test-books
   `active-class-no-css`).
 
+### Changed
+
+- **The crate's manifest no longer sets `homepage`.** It repeated
+  `repository`, which newer cargo warns about (`cargo::redundant_homepage`);
+  crates.io shows the repository link either way. `epubveri-wasm` keeps its
+  `homepage`, which wasm-pack copies into npm's `package.json`.
+
 ## [0.50.0] - 2026-11-22
 
 ### Fixed
